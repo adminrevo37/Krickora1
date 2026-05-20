@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Environment variables (never commit secrets)
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Build output
+dist/
+dist-ssr/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor / OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.vscode/
+.idea/
+
+# Convex generated files (regenerated on deploy)
+convex/_generated/
+
+# Misc
+*.local
+.cache/

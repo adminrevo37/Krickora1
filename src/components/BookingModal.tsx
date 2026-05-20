@@ -1,0 +1,744 @@
+import { useState, useMemo, useEffect } from 'react'
+import { useQuery } from 'convex/react'
+import {
+  LANES, canBookSlot, formatDateKey, formatTime, getCustomerPrice, getCoachPrice, getCoachPerHourRate,
+  getCoachDurations, getCustomerDurations, getValidCoachStartTimes, isWeekday,
+  generateGoogleCalendarUrl, CLOSING_HOUR, roundCoachBookingDuration, getMinCoachDurationFromAthletes,
+  type Booking, type Lane, type LaneVariant, type AthleteSlot,
+} from '../lib/booking-data'
+import { createCheckoutSession, type CheckoutSessionRequest } from '../lib/stripe'
+import { useAuth } from '../hooks/useAuth'
+import AuthModal from './AuthModal'
+import { formatAccessCode } from '../lib/access-code'
+import { useMutation } from 'convex/react'
+import { api } from '../../convex/_generated/api'
+
+// Valid discount codes and their discount percentage (100 = free)
+const DISCOUNT_CODES: Record<string, { discount: number; label: string; bypassStripe: boolean }> = {
+  julian: { discount: 100, label: '100% Off — Complimentary', bypassStripe: true },
+}
+
+interface BookingModalProps {
+  lane: Lane; date: Date; startHour: number; existingBookings: Booking[]
+  onClose: () => void; onConfirm: (booking: Booking) => void
+}
+
+export default function BookingModal({ lane, date, startHour, existingBookings, onClose, onConfirm }: BookingModalProps) {
+  const { user, isCoach, getCreditBalance, useCredit, getAllCoaches, customerRecord } = useAuth()
+  const hasVariants = !!(lane.variants && lane.variants.length > 0)
+  const [selectedVariant, setSelectedVariant] = useState<LaneVariant | null>(hasVariants ? lane.variants![0] : null)
+  const [additionalLanes, setAdditionalLanes] = useState<string[]>([])
+
+  const availableDurations = useMemo(() => {
+    if (isCoach) return getCoachDurations(existingBookings, lane.id, formatDateKey(date), startHour)
+    return getCustomerDurations(existingBookings, lane.id, formatDateKey(date), startHour)
+  }, [existingBookings, lane.id, date, startHour, isCoach])
+
+  const [duration, setDuration] = useState<number>(() => availableDurations.length > 0 ? availableDurations[0] : 60)
+  const validCoachStarts = useMemo(() => getValidCoachStartTimes(date), [date])
+  const isValidCoachStart = !isCoach || validCoachStarts.includes(startHour)
+
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [step, setStep] = useState<'details' | 'confirm' | 'processing' | 'success'>('details')
+  const [error, setError] = useState<string | null>(null)
+  const [confirmedBooking, setConfirmedBooking] = useState<Booking | null>(null)
+  const [showAuth, setShowAuth] = useState(false)
+  const [applyCredit, setApplyCredit] = useState(false)
+
+  // Discount code state
+  const [discountCode, setDiscountCode] = useState('')
+  const [appliedDiscount, setAppliedDiscount] = useState<{ code: string; discount: number; label: string; bypassStripe: boolean } | null>(null)
+  const [discountError, setDiscountError] = useState<string | null>(null)
+
+  // Coach athlete tracking
+  const [athleteSlots, setAthleteSlots] = useState<AthleteSlot[]>([])
+  const [selectedAthleteId, setSelectedAthleteId] = useState('')
+  const [newAthleteStart, setNewAthleteStart] = useState(startHour)
+  const [newAthleteDuration, setNewAthleteDuration] = useState(15)
+  const [athleteDropdownOpen, setAthleteDropdownOpen] = useState(false)
+  const [athleteSearchQuery, setAthleteSearchQuery] = useState('')
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _coachesUnused = getAllCoaches
+
+  // Rounding notice for coach
+  const [roundingNotice, setRoundingNotice] = useState<string | null>(null)
+
+  // Fetch coach's assigned athletes from Convex
+  const coachIdForQuery = customerRecord?._id ?? user?.email ?? ''
+  const coachAthletes = useQuery(
+    api.queries.listAthletesByCoach,
+    isCoach && coachIdForQuery ? { coachId: coachIdForQuery } : "skip"
+  )
+
+  const dateKey = formatDateKey(date)
+  const endHour = startHour + duration / 60
+  const price = isCoach ? getCoachPrice(duration) : getCustomerPrice(lane, selectedVariant?.id ?? null, duration)
+  const creditBalance = user ? getCreditBalance(user.id) : 0
+  const creditToApply = applyCredit ? Math.min(creditBalance, price) : 0
+  const finalPrice = price - creditToApply
+  const customerName = user?.name ?? ''
+  const customerEmail = user?.email ?? ''
+  const sendBookingEmail = useMutation(api.mutations.sendBookingEmail)
+
+  const otherLanes = LANES.filter(l => l.id !== lane.id)
+  const availableAdditionalLanes = otherLanes.filter(l => canBookSlot(existingBookings, l.id, dateKey, startHour, duration))
+
+  const toggleAdditionalLane = (laneId: string) => {
+    setAdditionalLanes(prev => prev.includes(laneId) ? prev.filter(id => id !== laneId) : [...prev, laneId])
+  }
+
+  const additionalLanePrice = additionalLanes.reduce((sum, lid) => {
+    const l = LANES.find(la => la.id === lid)
+    if (!l) return sum
+    return sum + (isCoach ? getCoachPrice(duration) : getCustomerPrice(l, null, duration))
+  }, 0)
+
+  const priceBeforeDiscount = finalPrice + additionalLanePrice
+
+  // Apply discount to total
+  const discountAmount = appliedDiscount ? Math.round(priceBeforeDiscount * appliedDiscount.discount / 100) : 0
+  const totalPrice = Math.max(0, priceBeforeDiscount - discountAmount)
+
+  const handleApplyDiscount = () => {
+    setDiscountError(null)
+    const code = discountCode.trim().toLowerCase()
+    if (!code) { setDiscountError('Please enter a discount code.'); return }
+    const match = DISCOUNT_CODES[code]
+    if (!match) { setDiscountError('Invalid discount code.'); return }
+    setAppliedDiscount({ code, ...match })
+    setDiscountError(null)
+  }
+
+  const handleRemoveDiscount = () => {
+    setAppliedDiscount(null)
+    setDiscountCode('')
+    setDiscountError(null)
+  }
+
+  // Auto-round duration when athlete slots change
+  useEffect(() => {
+    if (!isCoach || athleteSlots.length === 0) {
+      setRoundingNotice(null)
+      return
+    }
+    const minDuration = getMinCoachDurationFromAthletes(startHour, athleteSlots)
+    const rawDuration = roundCoachBookingDuration(startHour, athleteSlots)
+
+    let hasQuarterEnd = false
+    for (const slot of athleteSlots) {
+      const slotEndHour = slot.startHour + slot.durationMinutes / 60
+      const endMinutes = Math.round((slotEndHour - Math.floor(slotEndHour)) * 60)
+      if (endMinutes === 15 || endMinutes === 45) {
+        hasQuarterEnd = true
+        break
+      }
+    }
+
+    if (hasQuarterEnd && rawDuration > duration) {
+      const validDuration = availableDurations.find(d => d >= rawDuration) ?? rawDuration
+      if (availableDurations.includes(validDuration)) {
+        setDuration(validDuration)
+        const roundedEnd = startHour + validDuration / 60
+        setRoundingNotice(`Booking rounded up to ${formatTime(roundedEnd)} to cover athlete sessions ending on :15 or :45`)
+      }
+    } else if (minDuration > duration) {
+      const validDuration = availableDurations.find(d => d >= minDuration) ?? minDuration
+      if (availableDurations.includes(validDuration)) {
+        setDuration(validDuration)
+      }
+      setRoundingNotice(null)
+    } else {
+      setRoundingNotice(null)
+    }
+  }, [athleteSlots, startHour, isCoach, availableDurations])
+
+  // Get athletes already allocated (to exclude from dropdown)
+  const allocatedAthleteNames = useMemo(() => {
+    return new Set(athleteSlots.map(s => s.athleteName.toLowerCase().trim()).filter(Boolean))
+  }, [athleteSlots])
+
+  // Filter athletes for dropdown
+  const availableAthletes = useMemo(() => {
+    const all = coachAthletes ?? []
+    const filtered = all.filter(a => !allocatedAthleteNames.has(a.name.toLowerCase().trim()))
+    if (!athleteSearchQuery.trim()) return filtered
+    return filtered.filter(a =>
+      a.name.toLowerCase().includes(athleteSearchQuery.toLowerCase()) ||
+      a.email.toLowerCase().includes(athleteSearchQuery.toLowerCase())
+    )
+  }, [coachAthletes, allocatedAthleteNames, athleteSearchQuery])
+
+  const addAthleteSlot = (athleteName: string) => {
+    if (!athleteName.trim()) return
+    const bookingEnd = startHour + duration / 60
+    const slotEnd = newAthleteStart + newAthleteDuration / 60
+    if (slotEnd > bookingEnd) {
+      const neededDuration = Math.ceil((slotEnd - startHour) * 60 / 30) * 30
+      if (availableDurations.includes(neededDuration)) {
+        setDuration(neededDuration)
+      } else {
+        return
+      }
+    }
+    const newSlot: AthleteSlot = {
+      athleteName: athleteName.trim(),
+      startHour: newAthleteStart,
+      durationMinutes: newAthleteDuration,
+    }
+    setAthleteSlots(prev => [...prev, newSlot])
+    setSelectedAthleteId('')
+    setAthleteDropdownOpen(false)
+    setAthleteSearchQuery('')
+  }
+
+  const removeAthleteSlot = (idx: number) => setAthleteSlots(prev => prev.filter((_, i) => i !== idx))
+
+  const updateAthleteSlot = (idx: number, field: 'startHour' | 'durationMinutes', value: number) => {
+    setAthleteSlots(prev => prev.map((s, i) => {
+      if (i !== idx) return s
+      if (field === 'startHour') {
+        const bookingEnd = startHour + duration / 60
+        const maxDur = Math.round((bookingEnd - value) * 60)
+        return { ...s, startHour: value, durationMinutes: Math.max(15, Math.min(s.durationMinutes, maxDur)) }
+      }
+      return { ...s, durationMinutes: value }
+    }))
+  }
+
+  const getSlotStartOptions = (slotIdx: number) => {
+    const opts: number[] = []
+    const end = startHour + duration / 60
+    for (let h = startHour; h < end; h += 0.25) opts.push(Math.round(h * 100) / 100)
+    return opts
+  }
+
+  const getSlotDurationOptions = (slotStart: number) => {
+    const maxMins = Math.round((startHour + duration / 60 - slotStart) * 60)
+    const opts: number[] = []
+    for (let m = 15; m <= Math.max(maxMins, 15); m += 15) opts.push(m)
+    return opts
+  }
+
+  const athleteStartOptions = useMemo(() => {
+    const opts: number[] = []
+    for (let h = startHour; h < startHour + duration / 60; h += 0.25) opts.push(h)
+    return opts
+  }, [startHour, duration])
+
+  const athleteDurationOptions = useMemo(() => {
+    const maxMins = Math.round((startHour + duration / 60 - newAthleteStart) * 60)
+    const opts: number[] = []
+    for (let m = 15; m <= Math.max(maxMins, 15); m += 15) opts.push(m)
+    return opts
+  }, [startHour, duration, newAthleteStart])
+
+  const formatTimeDetailed = (h: number): string => {
+    const whole = Math.floor(h)
+    const mins = Math.round((h - whole) * 60)
+    const period = whole >= 12 ? 'pm' : 'am'
+    const display = whole > 12 ? whole - 12 : whole === 0 ? 12 : whole
+    return mins > 0 ? `${display}:${mins.toString().padStart(2, '0')}${period}` : `${display}${period}`
+  }
+
+  const handleContinueToPayment = () => {
+    if (!user) { setShowAuth(true); return }
+    if (isCoach) { handleCoachBooking(); return }
+    if (appliedDiscount?.bypassStripe && totalPrice === 0) {
+      handleDiscountBooking()
+      return
+    }
+    setStep('confirm')
+  }
+
+  const handleDiscountBooking = async () => {
+    if (!user) return
+    setIsSubmitting(true); setStep('processing')
+    await new Promise(r => setTimeout(r, 600))
+
+    const accessCode = Math.floor(100000 + Math.random() * 900000).toString()
+    const booking: Booking = {
+      id: crypto.randomUUID(), laneId: lane.id, variantId: selectedVariant?.id ?? null,
+      date: dateKey, startHour, duration, customerName, customerEmail, customerPhone: user.phone,
+      userId: user.id, status: 'confirmed', isCoachBooking: false,
+      additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
+      accessCode,
+      discountCode: appliedDiscount?.code,
+      creditApplied: creditToApply > 0 ? creditToApply : undefined,
+    }
+    if (applyCredit && creditToApply > 0) useCredit(user.id, creditToApply)
+    setConfirmedBooking(booking); setStep('success')
+    setTimeout(() => onConfirm(booking), 4000)
+
+    // Email is sent by createBooking mutation — no client-side duplicate
+  }
+
+  const handleCoachBooking = async () => {
+    if (!user) return
+    setIsSubmitting(true); setStep('processing')
+    await new Promise(r => setTimeout(r, 600))
+
+    let finalDuration = duration
+    if (athleteSlots.length > 0) {
+      const minRequired = getMinCoachDurationFromAthletes(startHour, athleteSlots)
+      if (minRequired > finalDuration) {
+        finalDuration = minRequired
+      }
+    }
+
+    const accessCode = Math.floor(100000 + Math.random() * 900000).toString()
+    // All athletes share the coach's door code
+    const slotsWithCodes = athleteSlots.map(s => ({
+      ...s,
+      accessCode,
+      codeGeneratedAt: new Date().toISOString(),
+    }))
+
+    const booking: Booking = {
+      id: crypto.randomUUID(), laneId: lane.id, variantId: selectedVariant?.id ?? null,
+      date: dateKey, startHour, duration: finalDuration, customerName, customerEmail, customerPhone: user.phone,
+      userId: user.id, status: 'confirmed', isCoachBooking: true, coachPrice: getCoachPrice(finalDuration),
+      additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
+      athleteSlots: slotsWithCodes.length > 0 ? slotsWithCodes : undefined,
+      accessCode,
+    }
+    setConfirmedBooking(booking); setStep('success')
+    setTimeout(() => onConfirm(booking), 4000)
+
+    // Email is sent by createBooking mutation — no client-side duplicate
+  }
+
+  const handleStripeCheckout = async () => {
+    if (!user) return
+    setIsSubmitting(true); setError(null); setStep('processing')
+    try {
+      if (applyCredit && creditToApply > 0) useCredit(user.id, creditToApply)
+      const checkoutReq: CheckoutSessionRequest = {
+        laneId: lane.id, laneName: lane.name, variantId: selectedVariant?.id ?? null,
+        variantName: selectedVariant?.name ?? null, date: dateKey, startHour, duration,
+        customerName, customerEmail, price: totalPrice,
+        additionalLanes: additionalLanes.map(lid => LANES.find(l => l.id === lid)?.shortName ?? lid),
+      }
+      const session = await createCheckoutSession(checkoutReq)
+
+      if (session.url) {
+        window.location.assign(session.url)
+        return
+      }
+
+      setError('Could not create checkout session. Please try again.')
+      setStep('confirm')
+      setIsSubmitting(false)
+    } catch {
+      setError('Payment failed. Please try again.')
+      setStep('confirm')
+      setIsSubmitting(false)
+    }
+  }
+
+  const googleCalUrl = confirmedBooking ? generateGoogleCalendarUrl({
+    laneName: lane.name, variantName: selectedVariant?.name, date: confirmedBooking.date,
+    startHour: confirmedBooking.startHour, duration: confirmedBooking.duration,
+    customerName: confirmedBooking.customerName,
+    additionalLanes: additionalLanes.map(lid => LANES.find(l => l.id === lid)?.shortName ?? lid),
+    accessCode: confirmedBooking.accessCode,
+  }) : null
+
+  if (showAuth) return <AuthModal onClose={() => setShowAuth(false)} onSuccess={() => { setShowAuth(false); setStep('confirm') }} />
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={step !== 'processing' && step !== 'success' ? onClose : undefined} />
+      <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-md overflow-hidden max-h-[90vh] overflow-y-auto">
+        {/* Header */}
+        <div className={`p-5 text-white transition-all duration-500 ${step === 'success' ? 'bg-gradient-to-r from-green-500 to-emerald-500' : step === 'processing' ? (isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500' : appliedDiscount?.bypassStripe && totalPrice === 0 ? 'bg-gradient-to-r from-purple-500 to-indigo-500' : 'bg-gradient-to-r from-blue-500 to-indigo-500') : isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500' : 'bg-gradient-to-r from-emerald-500 to-green-500'}`}>
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-bold">{step === 'success' ? 'Booking Confirmed!' : step === 'processing' ? (appliedDiscount?.bypassStripe && totalPrice === 0 ? 'Confirming Booking...' : 'Redirecting to Payment...') : 'Book a Session'}</h3>
+              <p className="text-white/80 text-sm mt-0.5">{step === 'success' ? 'Your session is booked' : step === 'processing' ? 'Please wait...' : date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
+              {isCoach && step === 'details' && <span className="inline-block mt-1 text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-semibold">🏅 Coach Rate &middot; Rolling 8-Day Window</span>}
+            </div>
+            {step !== 'processing' && step !== 'success' && (
+              <button onClick={onClose} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors">✕</button>
+            )}
+          </div>
+        </div>
+
+        {/* Processing */}
+        {step === 'processing' && (
+          <div className="p-8 flex flex-col items-center justify-center space-y-4">
+            <div className="relative"><div className={`w-16 h-16 border-4 ${isCoach ? 'border-orange-200' : appliedDiscount?.bypassStripe ? 'border-purple-200' : 'border-blue-200'} rounded-full`} /><div className={`absolute inset-0 w-16 h-16 border-4 border-transparent ${isCoach ? 'border-t-orange-500' : appliedDiscount?.bypassStripe ? 'border-t-purple-500' : 'border-t-blue-500'} rounded-full animate-spin`} /></div>
+            <p className="font-semibold text-gray-800 dark:text-gray-200">{isCoach ? 'Confirming booking...' : appliedDiscount?.bypassStripe && totalPrice === 0 ? 'Confirming complimentary booking...' : 'Redirecting to Stripe...'}</p>
+            {!isCoach && !appliedDiscount?.bypassStripe && <p className="text-xs text-gray-500 dark:text-gray-400">You will be redirected to Stripe to complete your payment securely.</p>}
+          </div>
+        )}
+
+        {/* Success */}
+        {step === 'success' && (
+          <div className="p-8 flex flex-col items-center justify-center space-y-4">
+            <div className="w-16 h-16 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center">
+              <svg className="w-8 h-8 text-green-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>
+            </div>
+            <p className="font-bold text-lg text-gray-800 dark:text-gray-200">Session Booked!</p>
+            {appliedDiscount && (
+              <div className="w-full bg-gradient-to-br from-purple-50 to-indigo-50 dark:from-purple-900/30 dark:to-indigo-900/30 rounded-xl p-3 border border-purple-200 dark:border-purple-700 text-center">
+                <span className="text-xs font-semibold text-purple-600 dark:text-purple-400">🎟️ Discount code &quot;{appliedDiscount.code}&quot; applied — {appliedDiscount.label}</span>
+              </div>
+            )}
+            {confirmedBooking?.accessCode && (
+              <div className="w-full bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/30 dark:to-indigo-900/30 rounded-xl p-4 border-2 border-blue-200 dark:border-blue-700 text-center">
+                <div className="flex items-center justify-center gap-2 mb-1">
+                  <span className="text-lg">🔑</span>
+                  <span className="text-xs font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">Door Access Code</span>
+                </div>
+                <div className="text-3xl font-mono font-bold tracking-[0.3em] text-blue-800 dark:text-blue-200">{formatAccessCode(confirmedBooking.accessCode)}</div>
+                <p className="text-[10px] text-blue-500 dark:text-blue-400 mt-2">Enter this code at the facility door keypad. Valid for your session time only.</p>
+              </div>
+            )}
+            {confirmedBooking?.athleteSlots && confirmedBooking.athleteSlots.length > 0 && (
+              <div className="w-full bg-gradient-to-br from-orange-50 to-amber-50 dark:from-orange-900/20 dark:to-amber-900/20 rounded-xl p-4 border border-orange-200 dark:border-orange-700 space-y-2">
+                <div className="text-xs font-semibold uppercase tracking-wider text-orange-600 dark:text-orange-400 text-center mb-2">🏏 Assigned Athletes</div>
+                {confirmedBooking.athleteSlots.map((s, i) => (
+                  <div key={i} className="flex items-center justify-between bg-white dark:bg-gray-900 rounded-lg px-3 py-2 border border-orange-100 dark:border-orange-800/30">
+                    <div>
+                      <div className="text-sm font-medium text-gray-800 dark:text-gray-200">{s.athleteName}</div>
+                      <div className="text-[10px] text-gray-500">{formatTime(s.startHour)} – {formatTime(s.startHour + s.durationMinutes / 60)} ({s.durationMinutes}min)</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-4 w-full space-y-2 text-sm">
+              <div className="flex justify-between"><span className="text-gray-500">Lane</span><span className="font-medium text-gray-800 dark:text-gray-200">{lane.name}{selectedVariant ? ` (${selectedVariant.name})` : ''}</span></div>
+              {additionalLanes.length > 0 && <div className="flex justify-between"><span className="text-gray-500">+ Lanes</span><span className="font-medium text-gray-800 dark:text-gray-200">{additionalLanes.map(lid => LANES.find(l => l.id === lid)?.shortName).join(', ')}</span></div>}
+              <div className="flex justify-between"><span className="text-gray-500">Time</span><span className="font-medium text-gray-800 dark:text-gray-200">{formatTime(startHour)} - {formatTime(endHour)}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Total</span><span className="font-bold text-emerald-600 dark:text-emerald-400">{totalPrice === 0 ? 'FREE' : `$${totalPrice}`}</span></div>
+            </div>
+            {googleCalUrl && (
+              <a href={googleCalUrl} target="_blank" rel="noopener noreferrer" className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-white dark:bg-gray-800 border-2 border-gray-200 dark:border-gray-700 rounded-xl hover:border-blue-400 hover:shadow-md transition-all">
+                📅 <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">Add to Google Calendar</span>
+              </a>
+            )}
+          </div>
+        )}
+
+        {/* Details Step */}
+        {step === 'details' && (
+          <div className="p-5 space-y-4">
+            {isCoach && (
+              <div className="flex items-center gap-3 bg-orange-50 dark:bg-orange-900/20 rounded-xl p-3 border border-orange-200 dark:border-orange-800/50">
+                <div className="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center text-white text-sm font-bold">🏅</div>
+                <div><div className="text-sm font-semibold text-orange-800 dark:text-orange-300">Coach Booking</div><div className="text-xs text-orange-600 dark:text-orange-400">$25/hr &middot; 1 hour minimum &middot; No payment required</div></div>
+              </div>
+            )}
+            {!isValidCoachStart && isCoach && (
+              <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-200 dark:border-red-800/50">
+                <p className="text-xs text-red-700 dark:text-red-400">⚠️ {isWeekday(date) ? 'Weekday coach bookings must start on the hour, except 3:30pm.' : 'Weekend coach bookings must start on the hour.'}</p>
+              </div>
+            )}
+
+            {roundingNotice && (
+              <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-3 border border-blue-200 dark:border-blue-800/50">
+                <p className="text-xs text-blue-700 dark:text-blue-400">⏰ {roundingNotice}</p>
+              </div>
+            )}
+
+            <div className="flex items-center gap-3 bg-gray-50 dark:bg-gray-800 rounded-xl p-3">
+              <div className="w-10 h-10 bg-white dark:bg-gray-700 rounded-lg flex items-center justify-center text-lg shadow-sm">{lane.icon}</div>
+              <div><div className="font-semibold text-gray-800 dark:text-gray-200">{lane.name}</div><div className="text-xs text-gray-500">{formatTime(startHour)} start</div></div>
+            </div>
+
+            {user && (
+              <div className={`flex items-center gap-3 rounded-xl p-3 border ${isCoach ? 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800/50' : 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800/50'}`}>
+                <div className={`w-8 h-8 ${isCoach ? 'bg-orange-500' : 'bg-emerald-500'} rounded-full flex items-center justify-center text-white text-sm font-bold`}>{user.name.charAt(0).toUpperCase()}</div>
+                <div><div className="text-sm font-semibold text-gray-800 dark:text-gray-200">{user.name}</div><div className="text-xs text-gray-500">{user.email}</div></div>
+                {creditBalance > 0 && !isCoach && <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full font-medium bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400">💰 ${creditBalance} credit</span>}
+              </div>
+            )}
+
+            {/* Variant Selection */}
+            {hasVariants && lane.variants && !isCoach && (
+              <div>
+                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Machine Type</label>
+                <div className="grid grid-cols-2 gap-3">
+                  {lane.variants.map((variant) => (
+                    <button key={variant.id} onClick={() => setSelectedVariant(variant)}
+                      className={`p-3 rounded-xl border-2 transition-all text-left ${selectedVariant?.id === variant.id ? variant.id.includes('truman') ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20 shadow-md' : 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 shadow-md' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'}`}>
+                      <div className="text-base font-bold text-gray-800 dark:text-gray-200">{variant.name}</div>
+                      <div className="text-xs text-gray-500 mt-0.5">${variant.pricePerHour}/hr</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Duration */}
+            <div>
+              <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Duration</label>
+              {isCoach ? (
+                <>
+                  <select value={duration} onChange={e => setDuration(Number(e.target.value))} className="w-full px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 text-sm">
+                    {availableDurations.map(d => {
+                      const hrs = Math.floor(d / 60); const mins = d % 60
+                      const label = hrs > 0 ? `${hrs}hr${mins > 0 ? ` ${mins}min` : ''}` : `${mins}min`
+                      const halfHours = d / 30
+                      return <option key={d} value={d}>{label} — ${getCoachPrice(d)} (${getCoachPerHourRate()}/hr)</option>
+                    })}
+                  </select>
+                  <div className="mt-2 text-[11px] text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-900/20 rounded-lg px-3 py-2 border border-orange-200 dark:border-orange-800/30">
+                    <span className="font-semibold">Coach rate:</span> ${getCoachPerHourRate()} per hour &middot; Selected: <span className="font-bold">${getCoachPrice(duration)}</span> for {duration >= 60 ? `${Math.floor(duration/60)}hr${duration%60>0?` ${duration%60}min`:''}` : `${duration}min`}
+                  </div>
+                </>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  {availableDurations.map(d => (
+                    <button key={d} onClick={() => setDuration(d)}
+                      className={`p-3 rounded-xl border-2 transition-all text-left ${duration === d ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 shadow-md' : 'border-gray-200 dark:border-gray-700'}`}>
+                      <div className="text-lg font-bold text-gray-800 dark:text-gray-200">${getCustomerPrice(lane, selectedVariant?.id ?? null, d)}</div>
+                      <div className="text-sm text-gray-600 dark:text-gray-400">{d === 60 ? '1 Hour' : d === 90 ? '1.5 Hours' : d === 120 ? '2 Hours' : `${d}min`}</div>
+                      <div className="text-xs text-gray-500 mt-1">{formatTime(startHour)} - {formatTime(startHour + d / 60)}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Multi-lane */}
+            {availableAdditionalLanes.length > 0 && (
+              <div>
+                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Add More Lanes <span className="text-xs font-normal text-gray-400">(optional)</span></label>
+                <div className="flex flex-wrap gap-2">
+                  {availableAdditionalLanes.map(l => (
+                    <button key={l.id} onClick={() => toggleAdditionalLane(l.id)}
+                      className={`text-xs px-3 py-1.5 rounded-lg border transition-all ${additionalLanes.includes(l.id) ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 font-semibold' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-300'}`}>
+                      {l.icon} {l.shortName} {additionalLanes.includes(l.id) ? '✓' : '+'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Coach: Athlete Tracking — Dropdown from Convex */}
+            {isCoach && (
+              <div>
+                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Assign Athletes <span className="text-xs font-normal text-gray-400">(15min increments &middot; auto-rounds booking)</span></label>
+                
+                {/* Existing athlete slots */}
+                {athleteSlots.map((slot, idx) => {
+                  const slotEndHour = slot.startHour + slot.durationMinutes / 60
+                  const endMins = Math.round((slotEndHour - Math.floor(slotEndHour)) * 60)
+                  const isQuarterEnd = endMins === 15 || endMins === 45
+                  return (
+                    <div key={idx} className={`mb-1.5 rounded-lg px-3 py-2 ${isQuarterEnd ? 'bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/50' : 'bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800/30'}`}>
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 bg-orange-500 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0">{slot.athleteName.charAt(0).toUpperCase()}</div>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-xs font-medium text-gray-800 dark:text-gray-200">{slot.athleteName}</span>
+                          <div className="text-[10px] text-gray-500">{formatTimeDetailed(slot.startHour)} - {formatTimeDetailed(slotEndHour)} ({slot.durationMinutes}min)</div>
+                        </div>
+                        {slot.accessCode && (
+                          <span className="text-[10px] font-mono font-bold text-orange-600 dark:text-orange-400 bg-orange-100 dark:bg-orange-900/30 px-1.5 py-0.5 rounded">🔑 {formatAccessCode(slot.accessCode)}</span>
+                        )}
+                        {isQuarterEnd && <span className="text-[9px] text-blue-600 dark:text-blue-400 font-medium">⏰</span>}
+                        <button onClick={() => removeAthleteSlot(idx)} className="text-red-400 hover:text-red-600 text-xs shrink-0">✕</button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 mt-2">
+                        <select value={slot.startHour} onChange={e => updateAthleteSlot(idx, 'startHour', Number(e.target.value))}
+                          className="w-full text-[11px] px-2 py-1 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200">
+                          {getSlotStartOptions(idx).map(h => <option key={h} value={h}>{formatTimeDetailed(h)}</option>)}
+                        </select>
+                        <select value={slot.durationMinutes} onChange={e => updateAthleteSlot(idx, 'durationMinutes', Number(e.target.value))}
+                          className="w-full text-[11px] px-2 py-1 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200">
+                          {getSlotDurationOptions(slot.startHour).map(d => <option key={d} value={d}>{d}min</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  )
+                })}
+
+                {/* Add new athlete — dropdown selector */}
+                {coachAthletes === undefined ? (
+                  <div className="flex items-center justify-center py-3 gap-2 text-xs text-gray-400">
+                    <span className="animate-spin">⏳</span> Loading athletes...
+                  </div>
+                ) : coachAthletes.length === 0 ? (
+                  <div className="bg-amber-50 dark:bg-amber-900/10 rounded-lg p-3 border border-amber-200 dark:border-amber-800/30 text-center">
+                    <p className="text-xs text-gray-500 dark:text-gray-400">No athletes assigned. Athletes need to select you as their coach in their profile.</p>
+                  </div>
+                ) : availableAthletes.length > 0 || athleteSlots.length === 0 ? (
+                  <div className="space-y-2 mt-2">
+                    {/* Time/duration for next athlete — set BEFORE selecting */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 block uppercase tracking-wider">Start Time</label>
+                        <select value={newAthleteStart} onChange={e => setNewAthleteStart(Number(e.target.value))}
+                          className="w-full text-xs px-2 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200">
+                          {athleteStartOptions.map(h => <option key={h} value={h}>{formatTimeDetailed(h)}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 block uppercase tracking-wider">Duration</label>
+                        <select value={newAthleteDuration} onChange={e => setNewAthleteDuration(Number(e.target.value))}
+                          className="w-full text-xs px-2 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200">
+                          {athleteDurationOptions.map(d => <option key={d} value={d}>{d}min</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    {/* Athlete dropdown */}
+                    <div className="relative">
+                      <button
+                        onClick={() => { setAthleteDropdownOpen(!athleteDropdownOpen); setAthleteSearchQuery('') }}
+                        className="w-full px-3 py-2.5 text-sm bg-white dark:bg-gray-800 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-gray-400 hover:border-orange-400 hover:text-orange-500 dark:hover:border-orange-500 dark:hover:text-orange-400 transition-all text-left flex items-center gap-2"
+                      >
+                        <span className="text-base">👤</span>
+                        {availableAthletes.length > 0 ? `Select athlete (${availableAthletes.length} available)...` : 'All athletes allocated'}
+                      </button>
+
+                      {athleteDropdownOpen && (
+                        <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl z-30 max-h-52 flex flex-col overflow-hidden">
+                          <div className="p-2 border-b border-gray-100 dark:border-gray-800">
+                            <div className="relative">
+                              <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs">🔍</span>
+                              <input
+                                type="text"
+                                value={athleteSearchQuery}
+                                onChange={e => setAthleteSearchQuery(e.target.value)}
+                                placeholder="Search athletes..."
+                                className="w-full pl-8 pr-3 py-2 text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-gray-800 dark:text-gray-200 placeholder-gray-400"
+                                autoFocus
+                              />
+                            </div>
+                          </div>
+                          <div className="overflow-y-auto flex-1">
+                            {availableAthletes.length === 0 ? (
+                              <div className="p-4 text-center text-xs text-gray-400">
+                                {athleteSearchQuery ? 'No athletes match your search' : 'All athletes allocated'}
+                              </div>
+                            ) : (
+                              availableAthletes.map(athlete => (
+                                <button
+                                  key={athlete._id}
+                                  onClick={() => addAthleteSlot(athlete.name)}
+                                  className="w-full flex items-center gap-2.5 px-3 py-2.5 hover:bg-orange-50 dark:hover:bg-orange-900/10 transition-colors text-left group"
+                                >
+                                  <div className="w-7 h-7 bg-emerald-500 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 group-hover:scale-105 transition-transform">
+                                    {athlete.name.charAt(0).toUpperCase()}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{athlete.name}</div>
+                                    <div className="text-[10px] text-gray-400 truncate">{athlete.email}</div>
+                                  </div>
+                                  <span className="text-orange-500 opacity-0 group-hover:opacity-100 transition-opacity text-xs">+ Add</span>
+                                </button>
+                              ))
+                            )}
+                          </div>
+                          <div className="p-1.5 border-t border-gray-100 dark:border-gray-800">
+                            <button onClick={() => { setAthleteDropdownOpen(false); setAthleteSearchQuery('') }}
+                              className="w-full py-1.5 text-xs text-gray-500 hover:text-gray-700 font-medium transition-colors rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800">Close</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+
+                  </div>
+                ) : (
+                  <div className="text-center text-xs text-gray-400 py-1 mt-1">All athletes have been allocated</div>
+                )}
+              </div>
+            )}
+
+            {/* Discount Code */}
+            {!isCoach && (
+              <div>
+                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Discount Code <span className="text-xs font-normal text-gray-400">(optional)</span></label>
+                {appliedDiscount ? (
+                  <div className="flex items-center gap-3 bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-900/20 dark:to-indigo-900/20 rounded-xl p-3 border-2 border-purple-300 dark:border-purple-700">
+                    <div className="w-8 h-8 bg-purple-500 rounded-full flex items-center justify-center text-white text-sm">🎟️</div>
+                    <div className="flex-1">
+                      <div className="text-sm font-bold text-purple-800 dark:text-purple-300 uppercase tracking-wide">{appliedDiscount.code}</div>
+                      <div className="text-xs text-purple-600 dark:text-purple-400">{appliedDiscount.label}</div>
+                    </div>
+                    <button onClick={handleRemoveDiscount} className="text-xs text-red-500 hover:text-red-700 font-semibold px-2 py-1 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">Remove</button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <input
+                      value={discountCode}
+                      onChange={e => { setDiscountCode(e.target.value); setDiscountError(null) }}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleApplyDiscount() } }}
+                      placeholder="Enter code"
+                      className="flex-1 text-sm px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 placeholder:text-gray-400"
+                    />
+                    <button onClick={handleApplyDiscount} className="px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold rounded-xl transition-colors">Apply</button>
+                  </div>
+                )}
+                {discountError && <p className="text-xs text-red-500 mt-1.5">{discountError}</p>}
+              </div>
+            )}
+
+            {/* Credit */}
+            {!isCoach && creditBalance > 0 && user && (
+              <label className="flex items-center gap-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl p-3 border border-blue-200 dark:border-blue-800/50 cursor-pointer">
+                <input type="checkbox" checked={applyCredit} onChange={e => setApplyCredit(e.target.checked)} className="rounded" />
+                <div><div className="text-sm font-medium text-blue-800 dark:text-blue-300">Apply account credit</div><div className="text-xs text-blue-600 dark:text-blue-400">Available: ${creditBalance} &middot; Saves ${creditToApply}</div></div>
+              </label>
+            )}
+
+            {/* Total */}
+            {(additionalLanes.length > 0 || creditToApply > 0 || appliedDiscount) && (
+              <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 space-y-1 text-sm">
+                <div className="flex justify-between"><span className="text-gray-500">Primary lane</span><span className="font-medium">${price}</span></div>
+                {additionalLanes.map(lid => {
+                  const l = LANES.find(la => la.id === lid)
+                  const lp = isCoach ? getCoachPrice(duration) : getCustomerPrice(l!, null, duration)
+                  return <div key={lid} className="flex justify-between"><span className="text-gray-500">+ {l?.shortName}</span><span className="font-medium">${lp}</span></div>
+                })}
+                {creditToApply > 0 && <div className="flex justify-between"><span className="text-blue-500">Credit</span><span className="font-medium text-blue-600">-${creditToApply}</span></div>}
+                {appliedDiscount && discountAmount > 0 && (
+                  <div className="flex justify-between"><span className="text-purple-500">🎟️ Discount ({appliedDiscount.code})</span><span className="font-medium text-purple-600">-${discountAmount}</span></div>
+                )}
+                <div className="border-t border-gray-200 dark:border-gray-700 pt-1 flex justify-between"><span className="font-semibold">Total</span><span className="font-bold text-emerald-600">{totalPrice === 0 ? 'FREE' : `$${totalPrice}`}</span></div>
+              </div>
+            )}
+
+            <button onClick={handleContinueToPayment} disabled={availableDurations.length === 0 || (isCoach && !isValidCoachStart)}
+              className={`w-full py-3 font-semibold rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600' : appliedDiscount?.bypassStripe && totalPrice === 0 ? 'bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600' : 'bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600'}`}>
+              {!user ? 'Sign In to Book →' : isCoach ? `Confirm — $${totalPrice} →` : appliedDiscount?.bypassStripe && totalPrice === 0 ? 'Confirm Free Booking →' : `Continue to Payment — $${totalPrice} →`}
+            </button>
+          </div>
+        )}
+
+        {/* Confirm Step */}
+        {step === 'confirm' && !isCoach && (
+          <div className="p-5 space-y-4">
+            {error && <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-200 dark:border-red-800/50"><p className="text-sm text-red-700 dark:text-red-400">⚠️ {error}</p></div>}
+            <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-4 space-y-2 text-sm">
+              <h4 className="font-semibold text-gray-800 dark:text-gray-200 text-xs uppercase tracking-wider">Booking Summary</h4>
+              <div className="flex justify-between"><span className="text-gray-500">Lane</span><span className="font-medium text-gray-800 dark:text-gray-200">{lane.name}{selectedVariant ? ` (${selectedVariant.name})` : ''}</span></div>
+              {additionalLanes.length > 0 && <div className="flex justify-between"><span className="text-gray-500">+ Lanes</span><span className="font-medium">{additionalLanes.map(lid => LANES.find(l => l.id === lid)?.shortName).join(', ')}</span></div>}
+              <div className="flex justify-between"><span className="text-gray-500">Time</span><span className="font-medium">{formatTime(startHour)} - {formatTime(endHour)}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Duration</span><span className="font-medium">{duration >= 60 ? `${Math.floor(duration / 60)}hr${duration % 60 > 0 ? ` ${duration % 60}min` : ''}` : `${duration}min`}</span></div>
+              {creditToApply > 0 && <div className="flex justify-between"><span className="text-blue-500">Credit Applied</span><span className="font-medium text-blue-600">-${creditToApply}</span></div>}
+              {appliedDiscount && discountAmount > 0 && (
+                <div className="flex justify-between"><span className="text-purple-500">🎟️ Discount ({appliedDiscount.code})</span><span className="font-medium text-purple-600">-${discountAmount}</span></div>
+              )}
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-2"><div className="flex justify-between items-center"><span className="font-semibold">Total</span><span className="text-xl font-bold text-emerald-600">{totalPrice === 0 ? 'FREE' : `$${totalPrice}`}</span></div></div>
+            </div>
+            <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-3 border border-blue-200 dark:border-blue-800/50">
+              <p className="text-xs text-blue-700 dark:text-blue-400"><strong>Cancellation Policy:</strong> Cancel 2+ hours before for account credit.</p>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => { setStep('details'); setError(null) }} className="flex-1 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all">← Back</button>
+              <button onClick={handleStripeCheckout} disabled={isSubmitting}
+                className="flex-[2] py-3 bg-[#635BFF] hover:bg-[#5851e0] text-white font-semibold rounded-xl shadow-lg transition-all disabled:opacity-70 flex items-center justify-center gap-2">
+                {isSubmitting ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Redirecting...</> : <>Pay ${totalPrice} with Stripe</>}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

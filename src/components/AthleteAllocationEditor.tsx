@@ -1,0 +1,481 @@
+import { useState, useCallback, useEffect } from 'react'
+import { useQuery } from 'convex/react'
+import { api } from '../../convex/_generated/api'
+import { formatTime, type AthleteSlot } from '../lib/booking-data'
+
+interface AthleteAllocationEditorProps {
+  bookingId: string
+  bookingStartHour: number
+  bookingDuration: number // in minutes
+  currentSlots: AthleteSlot[]
+  coachId: string // The coach's customer _id or email to fetch their athletes
+  onSave: (slots: AthleteSlot[]) => Promise<{ success: boolean; error?: string }>
+  onClose: () => void
+}
+
+export default function AthleteAllocationEditor({
+  bookingId,
+  bookingStartHour,
+  bookingDuration,
+  currentSlots,
+  coachId,
+  onSave,
+  onClose,
+}: AthleteAllocationEditorProps) {
+  const [slots, setSlots] = useState<AthleteSlot[]>(
+    currentSlots.length > 0 ? currentSlots.map(s => ({ ...s })) : []
+  )
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [successMsg, setSuccessMsg] = useState<string | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [activeDropdown, setActiveDropdown] = useState<number | null>(null)
+  const [loadingTimedOut, setLoadingTimedOut] = useState(false)
+
+  // Fetch athletes assigned to this coach from Convex
+  const athletes = useQuery(api.queries.listAthletesByCoach, coachId ? { coachId } : "skip")
+
+  // Timeout for loading state — if athletes haven't loaded in 5 seconds, show fallback
+  useEffect(() => {
+    if (athletes !== undefined) {
+      setLoadingTimedOut(false)
+      return
+    }
+    const timer = setTimeout(() => setLoadingTimedOut(true), 5000)
+    return () => clearTimeout(timer)
+  }, [athletes])
+
+  const bookingEndHour = bookingStartHour + bookingDuration / 60
+
+  const getValidStartTimes = useCallback(() => {
+    const times: number[] = []
+    for (let h = bookingStartHour; h < bookingEndHour; h += 0.25) {
+      times.push(Math.round(h * 100) / 100)
+    }
+    return times
+  }, [bookingStartHour, bookingEndHour])
+
+  const getValidDurations = useCallback((startHour: number) => {
+    const maxMinutes = Math.round((bookingEndHour - startHour) * 60)
+    const durations: number[] = []
+    for (let m = 15; m <= maxMinutes; m += 15) {
+      durations.push(m)
+    }
+    return durations
+  }, [bookingEndHour])
+
+  const getSelectedAthleteNames = useCallback((excludeIndex: number) => {
+    return slots
+      .filter((_, i) => i !== excludeIndex)
+      .map(s => s.athleteName.toLowerCase().trim())
+      .filter(Boolean)
+  }, [slots])
+
+  const addSlot = () => {
+    const defaultDuration = Math.min(30, bookingDuration)
+    setSlots([...slots, {
+      athleteName: '',
+      startHour: bookingStartHour,
+      durationMinutes: defaultDuration,
+    }])
+    setError(null)
+    setSuccessMsg(null)
+    setActiveDropdown(slots.length)
+    setSearchQuery('')
+  }
+
+  const removeSlot = (index: number) => {
+    setSlots(slots.filter((_, i) => i !== index))
+    setError(null)
+    setSuccessMsg(null)
+    if (activeDropdown === index) setActiveDropdown(null)
+  }
+
+  const selectAthlete = (index: number, name: string) => {
+    const updated = [...slots]
+    updated[index] = {
+      ...updated[index],
+      athleteName: name,
+    }
+    setSlots(updated)
+    setActiveDropdown(null)
+    setSearchQuery('')
+    setError(null)
+    setSuccessMsg(null)
+  }
+
+  const updateSlot = (index: number, field: 'startHour' | 'durationMinutes', value: number) => {
+    const updated = [...slots]
+    const oldSlot = updated[index]
+    if (field === 'startHour') {
+      const newStart = value
+      const maxDur = Math.round((bookingEndHour - newStart) * 60)
+      const newDur = Math.min(oldSlot.durationMinutes, maxDur)
+      updated[index] = {
+        ...oldSlot,
+        startHour: newStart,
+        durationMinutes: Math.max(15, newDur),
+      }
+    } else if (field === 'durationMinutes') {
+      updated[index] = {
+        ...oldSlot,
+        durationMinutes: value,
+      }
+    }
+    setSlots(updated)
+    setError(null)
+    setSuccessMsg(null)
+  }
+
+  const validate = (): string | null => {
+    if (slots.length === 0) return null
+    for (let i = 0; i < slots.length; i++) {
+      const s = slots[i]
+      if (!s.athleteName.trim()) return `Athlete ${i + 1} needs to be selected.`
+      if (s.startHour < bookingStartHour) return `${s.athleteName}'s start time is before the booking starts.`
+      const slotEnd = s.startHour + s.durationMinutes / 60
+      if (slotEnd > bookingEndHour + 0.001) return `${s.athleteName}'s session extends past the booking end.`
+      if (s.durationMinutes < 15) return `${s.athleteName}'s session must be at least 15 minutes.`
+    }
+    const names = slots.map(s => s.athleteName.toLowerCase().trim()).filter(Boolean)
+    const uniqueNames = new Set(names)
+    if (uniqueNames.size !== names.length) return 'Each athlete can only be allocated once.'
+    return null
+  }
+
+  const handleSave = async () => {
+    const validationError = validate()
+    if (validationError) {
+      setError(validationError)
+      return
+    }
+    setSaving(true)
+    setError(null)
+    setSuccessMsg(null)
+    const cleanSlots = slots.filter(s => s.athleteName.trim()).map(s => ({
+      athleteName: s.athleteName.trim(),
+      startHour: s.startHour,
+      durationMinutes: s.durationMinutes,
+    }))
+    const result = await onSave(cleanSlots)
+    setSaving(false)
+    if (result.success) {
+      setSuccessMsg('Athlete allocations saved!')
+      setTimeout(() => onClose(), 1200)
+    } else {
+      setError(result.error ?? 'Failed to save.')
+    }
+  }
+
+  const totalAthleteMinutes = slots.reduce((sum, s) => sum + s.durationMinutes, 0)
+  const validStartTimes = getValidStartTimes()
+
+  const getSlotPosition = (startHour: number, durationMinutes: number) => {
+    const totalMinutes = bookingDuration
+    const offsetMinutes = (startHour - bookingStartHour) * 60
+    const left = (offsetMinutes / totalMinutes) * 100
+    const width = (durationMinutes / totalMinutes) * 100
+    return { left: `${left}%`, width: `${width}%` }
+  }
+
+  const slotColors = [
+    'bg-orange-400 dark:bg-orange-500',
+    'bg-blue-400 dark:bg-blue-500',
+    'bg-emerald-400 dark:bg-emerald-500',
+    'bg-purple-400 dark:bg-purple-500',
+    'bg-pink-400 dark:bg-pink-500',
+    'bg-cyan-400 dark:bg-cyan-500',
+    'bg-amber-400 dark:bg-amber-500',
+    'bg-indigo-400 dark:bg-indigo-500',
+  ]
+
+  const getFilteredAthletes = (slotIndex: number) => {
+    const selectedNames = getSelectedAthleteNames(slotIndex)
+    const available = (athletes ?? []).filter(
+      a => !selectedNames.includes(a.name.toLowerCase().trim())
+    )
+    if (!searchQuery.trim()) return available
+    return available.filter(a =>
+      a.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      a.email.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+  }
+
+  const availableAthleteCount = (athletes ?? []).length - slots.filter(s => s.athleteName.trim()).length
+  const isLoading = athletes === undefined && !loadingTimedOut
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="sticky top-0 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 p-4 rounded-t-2xl z-10">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2">
+                🏏 Athlete Allocations
+              </h3>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                {formatTime(bookingStartHour)} – {formatTime(bookingEndHour)} ({bookingDuration}min window)
+              </p>
+            </div>
+            <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 transition-colors">✕</button>
+          </div>
+        </div>
+
+        <div className="p-4 space-y-4">
+          {/* Loading state */}
+          {isLoading && (
+            <div className="flex items-center justify-center py-6 gap-2 text-sm text-gray-400">
+              <span className="animate-spin">⏳</span> Loading your athletes...
+            </div>
+          )}
+
+          {/* Timed out — no athletes found or coachId issue */}
+          {loadingTimedOut && athletes === undefined && (
+            <div className="bg-amber-50 dark:bg-amber-900/10 rounded-xl p-4 border border-amber-200 dark:border-amber-800/30 text-center">
+              <div className="text-2xl mb-2">⚠️</div>
+              <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">Could not load athletes</h4>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Please check your connection and try again. If the issue persists, athletes may need to assign you as their coach in their profile.
+              </p>
+            </div>
+          )}
+
+          {/* Empty state — query resolved but no athletes */}
+          {athletes !== undefined && athletes.length === 0 && (
+            <div className="bg-amber-50 dark:bg-amber-900/10 rounded-xl p-4 border border-amber-200 dark:border-amber-800/30 text-center">
+              <div className="text-2xl mb-2">👥</div>
+              <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1">No athletes assigned</h4>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Athletes need to select you as their coach in their profile before they appear here.
+              </p>
+            </div>
+          )}
+
+          {/* Timeline visualization */}
+          {slots.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Timeline</div>
+              <div className="relative bg-gray-100 dark:bg-gray-800 rounded-lg h-10 overflow-hidden">
+                {Array.from({ length: Math.ceil(bookingDuration / 30) + 1 }, (_, i) => {
+                  const markerHour = bookingStartHour + (i * 30) / 60
+                  if (markerHour > bookingEndHour) return null
+                  const pos = ((i * 30) / bookingDuration) * 100
+                  return (
+                    <div key={i} className="absolute top-0 h-full flex flex-col items-center" style={{ left: `${pos}%` }}>
+                      <div className="w-px h-2 bg-gray-300 dark:bg-gray-600" />
+                      <span className="text-[8px] text-gray-400 mt-0.5 -translate-x-1/2">{formatTime(markerHour)}</span>
+                    </div>
+                  )
+                })}
+                {slots.map((slot, i) => {
+                  if (!slot.athleteName.trim()) return null
+                  const pos = getSlotPosition(slot.startHour, slot.durationMinutes)
+                  return (
+                    <div
+                      key={i}
+                      className={`absolute top-1 h-5 ${slotColors[i % slotColors.length]} rounded text-[9px] text-white font-semibold flex items-center justify-center overflow-hidden px-1 shadow-sm`}
+                      style={{ left: pos.left, width: pos.width, minWidth: '2px' }}
+                      title={`${slot.athleteName}: ${formatTime(slot.startHour)}–${formatTime(slot.startHour + slot.durationMinutes / 60)}`}
+                    >
+                      <span className="truncate">{slot.athleteName}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Athlete slots */}
+          <div className="space-y-3">
+            {slots.map((slot, index) => {
+              const filteredAthletes = getFilteredAthletes(index)
+              const isDropdownOpen = activeDropdown === index
+
+              return (
+                <div key={index} className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-3 border border-gray-200 dark:border-gray-700 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className={`w-3 h-3 rounded-full ${slotColors[index % slotColors.length]}`} />
+                      <span className="text-xs font-semibold text-gray-600 dark:text-gray-400">Athlete {index + 1}</span>
+                    </div>
+                    <button onClick={() => removeSlot(index)} className="text-xs text-red-400 hover:text-red-600 transition-colors px-2 py-0.5 rounded hover:bg-red-50 dark:hover:bg-red-900/20">Remove</button>
+                  </div>
+
+                  {/* Athlete selector */}
+                  <div className="relative">
+                    {slot.athleteName.trim() ? (
+                      <div className="flex items-center justify-between bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <div className={`w-7 h-7 ${slotColors[index % slotColors.length]} rounded-full flex items-center justify-center text-white text-xs font-bold`}>
+                            {slot.athleteName.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <div className="text-sm font-medium text-gray-800 dark:text-gray-200">{slot.athleteName}</div>
+                            {athletes && (() => {
+                              const match = athletes.find(a => a.name === slot.athleteName)
+                              return match ? <div className="text-[10px] text-gray-400">{match.email}</div> : null
+                            })()}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => { setActiveDropdown(index); setSearchQuery('') }}
+                          className="text-xs text-orange-500 hover:text-orange-700 dark:hover:text-orange-300 font-medium transition-colors"
+                        >
+                          Change
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => { setActiveDropdown(isDropdownOpen ? null : index); setSearchQuery('') }}
+                        className="w-full px-3 py-2.5 text-sm bg-white dark:bg-gray-900 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-gray-400 hover:border-orange-400 hover:text-orange-500 dark:hover:border-orange-500 dark:hover:text-orange-400 transition-all text-left flex items-center gap-2"
+                      >
+                        <span className="text-base">👤</span> Select an athlete...
+                      </button>
+                    )}
+
+                    {/* Dropdown */}
+                    {isDropdownOpen && (
+                      <div className="relative mt-1 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl z-20 max-h-64 flex flex-col overflow-hidden">
+                        <div className="p-2 border-b border-gray-100 dark:border-gray-800">
+                          <div className="relative">
+                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs">🔍</span>
+                            <input
+                              type="text"
+                              value={searchQuery}
+                              onChange={e => setSearchQuery(e.target.value)}
+                              placeholder="Search athletes..."
+                              className="w-full pl-8 pr-3 py-2 text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-gray-800 dark:text-gray-200 placeholder-gray-400"
+                              autoFocus
+                            />
+                          </div>
+                        </div>
+                        <div className="overflow-y-auto flex-1">
+                          {filteredAthletes.length === 0 ? (
+                            <div className="p-4 text-center text-xs text-gray-400">
+                              {searchQuery ? 'No athletes match your search' : 'No more athletes available'}
+                            </div>
+                          ) : (
+                            filteredAthletes.map(athlete => (
+                              <button
+                                key={athlete._id}
+                                onClick={() => selectAthlete(index, athlete.name)}
+                                className="w-full flex items-center gap-2.5 px-3 py-2.5 hover:bg-orange-50 dark:hover:bg-orange-900/10 transition-colors text-left group"
+                              >
+                                <div className="w-8 h-8 bg-emerald-500 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 group-hover:scale-105 transition-transform">
+                                  {athlete.name.charAt(0).toUpperCase()}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{athlete.name}</div>
+                                  <div className="text-[10px] text-gray-400 truncate">{athlete.email}</div>
+                                </div>
+                                <span className="text-orange-500 opacity-0 group-hover:opacity-100 transition-opacity text-xs">Select</span>
+                              </button>
+                            ))
+                          )}
+                        </div>
+                        <div className="p-1.5 border-t border-gray-100 dark:border-gray-800">
+                          <button
+                            onClick={() => { setActiveDropdown(null); setSearchQuery('') }}
+                            className="w-full py-1.5 text-xs text-gray-500 hover:text-gray-700 font-medium transition-colors rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800"
+                          >
+                            Close
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Start time & Duration */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1 block">Start Time</label>
+                      <select
+                        value={slot.startHour}
+                        onChange={e => updateSlot(index, 'startHour', parseFloat(e.target.value))}
+                        className="w-full px-2 py-1.5 text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none text-gray-800 dark:text-gray-200"
+                      >
+                        {validStartTimes.map(h => (
+                          <option key={h} value={h}>{formatTime(h)}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1 block">Duration</label>
+                      <select
+                        value={slot.durationMinutes}
+                        onChange={e => updateSlot(index, 'durationMinutes', parseInt(e.target.value))}
+                        className="w-full px-2 py-1.5 text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none text-gray-800 dark:text-gray-200"
+                      >
+                        {getValidDurations(slot.startHour).map(d => (
+                          <option key={d} value={d}>{d}min</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="text-[10px] text-gray-400 dark:text-gray-500">
+                    {formatTime(slot.startHour)} – {formatTime(slot.startHour + slot.durationMinutes / 60)}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Add athlete button */}
+          {(athletes !== undefined && athletes.length > 0 && availableAthleteCount > 0) && (
+            <button
+              onClick={addSlot}
+              className="w-full py-2.5 border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-xl text-sm font-semibold text-gray-500 dark:text-gray-400 hover:border-orange-400 hover:text-orange-500 dark:hover:border-orange-500 dark:hover:text-orange-400 transition-all flex items-center justify-center gap-2"
+            >
+              <span className="text-lg">+</span> Add Athlete ({availableAthleteCount} available)
+            </button>
+          )}
+
+          {athletes !== undefined && athletes.length > 0 && availableAthleteCount <= 0 && slots.length > 0 && (
+            <div className="text-center text-xs text-gray-400 py-1">All your athletes have been allocated</div>
+          )}
+
+          {/* Summary */}
+          {slots.length > 0 && (
+            <div className="bg-orange-50 dark:bg-orange-900/10 rounded-xl p-3 border border-orange-200 dark:border-orange-800/30">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-orange-700 dark:text-orange-400 font-medium">{slots.filter(s => s.athleteName.trim()).length} athlete{slots.filter(s => s.athleteName.trim()).length !== 1 ? 's' : ''}</span>
+                <span className="text-orange-600 dark:text-orange-400 font-semibold">{totalAthleteMinutes}min total</span>
+              </div>
+              {totalAthleteMinutes > bookingDuration && (
+                <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">⚠️ Overlapping slots — athletes share lane time</p>
+              )}
+            </div>
+          )}
+
+          {/* Error / Success */}
+          {error && (
+            <div className="flex items-center gap-2 bg-red-50 dark:bg-red-900/20 rounded-lg p-3 border border-red-200 dark:border-red-800/50">
+              <span>⚠️</span>
+              <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
+            </div>
+          )}
+          {successMsg && (
+            <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-3 border border-emerald-200 dark:border-emerald-800/50">
+              <span>✅</span>
+              <p className="text-sm text-emerald-700 dark:text-emerald-400">{successMsg}</p>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="sticky bottom-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 p-4 rounded-b-2xl flex items-center justify-between gap-3">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors">Cancel</button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="px-6 py-2 bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 text-white font-semibold text-sm rounded-lg shadow-md transition-all disabled:cursor-not-allowed"
+          >
+            {saving ? 'Saving...' : 'Save Allocations'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
