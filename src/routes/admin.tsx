@@ -1,11 +1,10 @@
 import { useState } from 'react'
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { useAuth } from '../hooks/useAuth'
 import AdminBookingCalendar from '../components/AdminBookingCalendar'
 import ClosureManager from '../components/ClosureManager'
 import SettingsPanel from '../components/SettingsPanel'
 import CoachStatementTable from '../components/CoachStatementTable'
-import AdminAnalyticsDashboard from '../components/AdminAnalyticsDashboard'
 import AdminDiscountCodesTab from '../components/AdminDiscountCodesTab'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
@@ -18,11 +17,11 @@ type Section =
   | 'bookings' | 'closures'
   | 'customers' | 'coaches'
   | 'statements' | 'discounts'
-  | 'settings' | 'analytics'
+  | 'settings'
 
 const VALID_SECTIONS: Section[] = [
   'bookings', 'closures', 'customers', 'coaches',
-  'statements', 'discounts', 'settings', 'analytics',
+  'statements', 'discounts', 'settings',
 ]
 
 export const Route = createFileRoute('/admin')({
@@ -38,33 +37,35 @@ export const Route = createFileRoute('/admin')({
 // Sidebar navigation definition
 // ---------------------------------------------------------------------------
 
-const NAV_GROUPS = [
+const NAV_GROUPS: Array<{
+  label: string
+  items: Array<{ id: Section; label: string; icon: string; href?: string }>
+}> = [
   {
     label: 'Operations',
     items: [
-      { id: 'bookings' as Section,   label: 'Bookings',   icon: '📅' },
-      { id: 'closures' as Section,   label: 'Closures',   icon: '🚫' },
+      { id: 'bookings',   label: 'Bookings',   icon: '📅' },
+      { id: 'closures',   label: 'Closures',   icon: '🚫' },
     ],
   },
   {
     label: 'People',
     items: [
-      { id: 'customers' as Section,  label: 'Customers',  icon: '👥' },
-      { id: 'coaches' as Section,    label: 'Coaches',    icon: '🏏' },
+      { id: 'customers',  label: 'Customers',  icon: '👥' },
+      { id: 'coaches',    label: 'Coaches',    icon: '🏏' },
     ],
   },
   {
     label: 'Finance',
     items: [
-      { id: 'statements' as Section, label: 'Statements', icon: '💰' },
-      { id: 'discounts' as Section,  label: 'Discounts',  icon: '🏷️' },
+      { id: 'statements', label: 'Statements', icon: '💰' },
+      { id: 'discounts',  label: 'Discounts',  icon: '🏷️' },
     ],
   },
   {
     label: 'Configure',
     items: [
-      { id: 'settings' as Section,   label: 'Settings',   icon: '⚙️' },
-      { id: 'analytics' as Section,  label: 'Analytics',  icon: '📊' },
+      { id: 'settings',   label: 'Settings',   icon: '⚙️' },
     ],
   },
 ]
@@ -77,7 +78,6 @@ const SECTION_TITLES: Record<Section, string> = {
   statements: 'Statements',
   discounts:  'Discounts',
   settings:   'Settings',
-  analytics:  'Analytics',
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +129,21 @@ function Sidebar({
             })}
           </div>
         ))}
+      </div>
+
+      {/* Analytics — own page */}
+      <div className="px-2 pb-4 border-t border-gray-100 pt-3">
+        <Link
+          to="/admin/analytics"
+          onClick={onClose}
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors"
+        >
+          <span className="text-base leading-none">📊</span>
+          <span>Analytics</span>
+          <svg className="ml-auto w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+          </svg>
+        </Link>
       </div>
     </nav>
   )
@@ -209,7 +224,7 @@ function AdminPage() {
         </div>
 
         {/* Section content */}
-        <div className={section === 'analytics' ? '' : 'p-6 space-y-6'}>
+        <div className="p-6 space-y-6">
           {section === 'bookings'   && <AdminBookingCalendar />}
           {section === 'closures'   && <ClosureManager selectedDate={new Date()} />}
           {section === 'customers'  && <CustomersTab />}
@@ -217,11 +232,6 @@ function AdminPage() {
           {section === 'statements' && <StatementsTab />}
           {section === 'discounts'  && <AdminDiscountCodesTab />}
           {section === 'settings'   && <SettingsPanel />}
-          {section === 'analytics'  && (
-            <div className="p-6">
-              <AdminAnalyticsDashboard />
-            </div>
-          )}
         </div>
       </main>
     </div>

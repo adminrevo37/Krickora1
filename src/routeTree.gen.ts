@@ -13,6 +13,7 @@ import { Route as StatementsRouteImport } from './routes/statements'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as BookingsRouteImport } from './routes/bookings'
 import { Route as AdminRouteImport } from './routes/admin'
+import { Route as AdminAnalyticsRouteImport } from './routes/admin.analytics'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CheckoutSuccessRouteImport } from './routes/checkout/success'
 
@@ -36,6 +37,13 @@ const AdminRoute = AdminRouteImport.update({
   path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
+// Analytics lives at /admin/analytics but is a sibling of /admin (not a child),
+// so it renders with the root layout (header/footer) but NOT the admin sidebar.
+const AdminAnalyticsRoute = AdminAnalyticsRouteImport.update({
+  id: '/admin/analytics',
+  path: '/admin/analytics',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -50,6 +58,7 @@ const CheckoutSuccessRoute = CheckoutSuccessRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/admin/analytics': typeof AdminAnalyticsRoute
   '/bookings': typeof BookingsRoute
   '/profile': typeof ProfileRoute
   '/statements': typeof StatementsRoute
@@ -58,6 +67,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/admin/analytics': typeof AdminAnalyticsRoute
   '/bookings': typeof BookingsRoute
   '/profile': typeof ProfileRoute
   '/statements': typeof StatementsRoute
@@ -67,6 +77,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/admin/analytics': typeof AdminAnalyticsRoute
   '/bookings': typeof BookingsRoute
   '/profile': typeof ProfileRoute
   '/statements': typeof StatementsRoute
@@ -77,6 +88,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
+    | '/admin/analytics'
     | '/bookings'
     | '/profile'
     | '/statements'
@@ -85,6 +97,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/admin'
+    | '/admin/analytics'
     | '/bookings'
     | '/profile'
     | '/statements'
@@ -93,6 +106,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/admin'
+    | '/admin/analytics'
     | '/bookings'
     | '/profile'
     | '/statements'
@@ -102,6 +116,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRoute
+  AdminAnalyticsRoute: typeof AdminAnalyticsRoute
   BookingsRoute: typeof BookingsRoute
   ProfileRoute: typeof ProfileRoute
   StatementsRoute: typeof StatementsRoute
@@ -158,6 +173,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRoute,
+  AdminAnalyticsRoute: AdminAnalyticsRoute,
   BookingsRoute: BookingsRoute,
   ProfileRoute: ProfileRoute,
   StatementsRoute: StatementsRoute,
