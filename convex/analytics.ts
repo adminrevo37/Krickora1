@@ -115,6 +115,7 @@ export const getAdminAnalytics = query({
     const pad = (n: number) => String(n).padStart(2, "0");
 
     // Helper: YYYY-MM string for a given offset from today's month
+    const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     const now = new Date();
     const monthKey = (offsetFromNow: number): string => {
       const d = new Date(now.getFullYear(), now.getMonth() + offsetFromNow, 1);
@@ -122,7 +123,7 @@ export const getAdminAnalytics = query({
     };
     const monthLabel = (key: string): string => {
       const [y, m] = key.split("-").map(Number);
-      return new Date(y, m - 1, 1).toLocaleString("en-US", { month: "short", year: "numeric" });
+      return `${MONTH_ABBR[m - 1]} ${y}`;
     };
 
     // Cutoff: first day of the earliest month in the window
