@@ -5,6 +5,7 @@ import AdminBookingCalendar from '../components/AdminBookingCalendar'
 import ClosureManager from '../components/ClosureManager'
 import SettingsPanel from '../components/SettingsPanel'
 import CoachStatementTable from '../components/CoachStatementTable'
+import AdminAnalyticsDashboard from '../components/AdminAnalyticsDashboard'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 
@@ -12,7 +13,7 @@ export const Route = createFileRoute('/admin')({
   component: AdminPage,
 })
 
-type Tab = 'bookings' | 'customers' | 'coaches' | 'statements' | 'closures' | 'hours' | 'pricing' | 'settings'
+type Tab = 'bookings' | 'customers' | 'coaches' | 'statements' | 'closures' | 'hours' | 'pricing' | 'settings' | 'analytics'
 
 function AdminPage() {
   const { isAdmin, isLoading } = useAuth()
@@ -42,6 +43,7 @@ function AdminPage() {
     { id: 'hours', label: 'Opening Hours', icon: '🕒' },
     { id: 'pricing', label: 'Pricing', icon: '💲' },
     { id: 'settings', label: 'Settings', icon: '⚙️' },
+    { id: 'analytics', label: 'Analytics', icon: '📊' },
   ]
 
   return (
@@ -76,6 +78,7 @@ function AdminPage() {
         {tab === 'hours' && <SettingsPanel />}
         {tab === 'pricing' && <SettingsPanel />}
         {tab === 'settings' && <SettingsPanel />}
+        {tab === 'analytics' && <AdminAnalyticsDashboard />}
       </div>
     </div>
   )
