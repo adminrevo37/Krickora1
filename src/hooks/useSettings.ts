@@ -35,6 +35,7 @@ export function useSettings() {
       'coachRescheduleFreezeHours', 'extensionNoticeMinutes',
       'customerMaxDurationMinutes', 'coachMaxDurationMinutes',
       'minAthleteDurationMinutes',
+      'customerCancellationHours', 'coachLateCancellationHours',
     ]
     for (const k of keys) {
       const v = (remoteSettings as any)[k]
@@ -72,6 +73,8 @@ export function useSettings() {
       customerMaxDurationMinutes: (remoteSettings as any).customerMaxDurationMinutes ?? localSettings.customerMaxDurationMinutes,
       coachMaxDurationMinutes: (remoteSettings as any).coachMaxDurationMinutes ?? localSettings.coachMaxDurationMinutes,
       minAthleteDurationMinutes: (remoteSettings as any).minAthleteDurationMinutes ?? localSettings.minAthleteDurationMinutes,
+      customerCancellationHours: (remoteSettings as any).customerCancellationHours ?? localSettings.customerCancellationHours,
+      coachLateCancellationHours: (remoteSettings as any).coachLateCancellationHours ?? localSettings.coachLateCancellationHours,
     }
   }, [remoteSettings, localSettings])
 
@@ -87,6 +90,7 @@ export function useSettings() {
     'coachRescheduleFreezeHours', 'extensionNoticeMinutes',
     'customerMaxDurationMinutes', 'coachMaxDurationMinutes',
     'minAthleteDurationMinutes',
+    'customerCancellationHours', 'coachLateCancellationHours',
   ])
 
   const updateSettings = (updates: Partial<SiteSettings>) => {

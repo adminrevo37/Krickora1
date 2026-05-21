@@ -45,6 +45,9 @@ export interface SiteSettings {
   customerMaxDurationMinutes: number
   coachMaxDurationMinutes: number
   minAthleteDurationMinutes: number
+  // Cancellation rules (separated by user type)
+  customerCancellationHours: number
+  coachLateCancellationHours: number
 }
 
 const DEFAULT_DAILY_HOURS: Record<DayKey, DailyHours> = {
@@ -81,6 +84,8 @@ const DEFAULT_SETTINGS: SiteSettings = {
   customerMaxDurationMinutes: 120,
   coachMaxDurationMinutes: 600,
   minAthleteDurationMinutes: 15,
+  customerCancellationHours: 2,
+  coachLateCancellationHours: 24,
 }
 
 const JS_DAY_TO_KEY: DayKey[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']

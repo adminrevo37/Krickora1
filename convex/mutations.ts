@@ -500,6 +500,33 @@ export const cancelBooking = mutation({
       }
     }
 
+    // Time-based policy enforcement for customer bookings
+    if (booking.status !== "tentative" && !booking.isCoachBooking) {
+      const siteSettings = await ctx.db
+        .query("siteSettings")
+        .withIndex("by_key", (q: any) => q.eq("key", "global"))
+        .first();
+      const customerCancellationHours = (siteSettings as any)?.customerCancellationHours ?? siteSettings?.cancellationHoursBefore ?? 2;
+      const [cYear, cMonth, cDay] = booking.date.split("-").map(Number);
+      const cWhole = Math.floor(booking.startHour);
+      const cMins = Math.round((booking.startHour - cWhole) * 60);
+      const bookingStart = new Date(cYear, cMonth - 1, cDay, cWhole, cMins, 0);
+      const awstNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Australia/Perth" }));
+      const hoursUntil = (bookingStart.getTime() - awstNow.getTime()) / (1000 * 60 * 60);
+      if (hoursUntil < customerCancellationHours) {
+        // Admin bypass — admins can always cancel
+        const callerCheck = await ctx.db
+          .query("customers")
+          .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
+          .first();
+        if (callerCheck?.role !== "admin") {
+          throw new Error(
+            `Bookings can only be cancelled at least ${customerCancellationHours} hour${customerCancellationHours !== 1 ? "s" : ""} before the session starts.`
+          );
+        }
+      }
+    }
+
     await ctx.db.patch(args.id, {
       status: "cancelled",
       cancelledAt: new Date().toISOString(),
@@ -773,9 +800,9 @@ export const editBookingDuration = mutation({
       }
     }
 
-    // If shortening, apply cancellation terms from site settings
+    // If shortening, apply cancellation terms from site settings (coach-specific threshold)
     if (isShortening) {
-      const cancellationHours = editDurSettings?.cancellationHoursBefore ?? 2;
+      const cancellationHours = (editDurSettings as any)?.coachLateCancellationHours ?? editDurSettings?.cancellationHoursBefore ?? 24;
       const hoursUntil = minutesUntil / 60;
       if (hoursUntil < cancellationHours) {
         throw new Error(
@@ -871,7 +898,7 @@ export const rescheduleBooking = mutation({
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
       .first();
-    const cancellationHours = settings?.cancellationHoursBefore ?? 2;
+    const cancellationHours = (settings as any)?.customerCancellationHours ?? settings?.cancellationHoursBefore ?? 2;
 
     const [oYear, oMonth, oDay] = booking.date.split("-").map(Number);
     const oWhole = Math.floor(booking.startHour);
@@ -1820,6 +1847,8 @@ export const updateSiteSettings = mutation({
     customerMaxDurationMinutes: v.optional(v.number()),
     coachMaxDurationMinutes: v.optional(v.number()),
     minAthleteDurationMinutes: v.optional(v.number()),
+    customerCancellationHours: v.optional(v.number()),
+    coachLateCancellationHours: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
@@ -1992,6 +2021,8 @@ export const resetSiteSettings = mutation({
       customerMaxDurationMinutes: 120,
       coachMaxDurationMinutes: 600,
       minAthleteDurationMinutes: 15,
+      customerCancellationHours: 2,
+      coachLateCancellationHours: 24,
     };
 
     if (existing) {

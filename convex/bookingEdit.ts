@@ -73,7 +73,7 @@ export const _requestBookingEdit = internalMutation({
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
       .first();
-    const cancellationHours = settings?.cancellationHoursBefore ?? 2;
+    const cancellationHours = (settings as any)?.customerCancellationHours ?? settings?.cancellationHoursBefore ?? 2;
     const CLOSING_HOUR = settings?.closingHour ?? 21;
 
     const [year, month, day] = booking.date.split("-").map(Number);

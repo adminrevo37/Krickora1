@@ -216,6 +216,9 @@ export default defineSchema({
     customerMaxDurationMinutes: v.optional(v.number()),   // default 120
     coachMaxDurationMinutes: v.optional(v.number()),      // default 600
     minAthleteDurationMinutes: v.optional(v.number()),    // default 15
+    // Cancellation rules (separated by user type)
+    customerCancellationHours: v.optional(v.number()),   // default 2 — customers cannot cancel within N hours
+    coachLateCancellationHours: v.optional(v.number()),  // default 24 — coach charged if they cancel within N hours
   }).index("by_key", ["key"]),
 
   // Discount codes
