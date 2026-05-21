@@ -13,7 +13,6 @@ function HomePage() {
         <p className="text-gray-500 mt-1">Reserve your lane and start training</p>
       </div>
       <BookingCalendar />
-      {/* Pricing table removed */}
     </div>
   )
 }
