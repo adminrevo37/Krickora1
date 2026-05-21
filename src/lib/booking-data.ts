@@ -294,7 +294,12 @@ export function getCustomerDurations(bookings: Booking[], laneId: string, dateKe
   const lastMinute = isLastMinuteBooking(dateKey, startHour)
   const durations: number[] = []
 
-  for (const d of [60, 90, 120]) {
+  // Build candidate durations dynamically from settings (60, 90, 120 ... up to customerMaxDurationMinutes)
+  const customerMax = getSettingsStore().get().customerMaxDurationMinutes ?? 120
+  const candidates: number[] = []
+  for (let d = 60; d <= customerMax; d += 30) candidates.push(d)
+
+  for (const d of candidates) {
     if (d > maxMins) continue
     const createsGap = wouldCreateDeadGap(startHour, d, nextStart)
     if (!createsGap) {
@@ -320,8 +325,9 @@ export function getCustomerDurations(bookings: Booking[], laneId: string, dateKe
 // Coach durations
 export function getCoachDurations(bookings: Booking[], laneId: string, dateKey: string, startHour: number): number[] {
   const maxMins = getMaxDuration(bookings, laneId, dateKey, startHour, true)
+  const coachMax = getSettingsStore().get().coachMaxDurationMinutes ?? 600
   const durations: number[] = []
-  for (let m = 60; m <= Math.min(maxMins, 600); m += 30) durations.push(m)
+  for (let m = 60; m <= Math.min(maxMins, coachMax); m += 30) durations.push(m)
   return durations
 }
 
@@ -381,7 +387,8 @@ export function getMaxDuration(bookings: Booking[], laneId: string, dateKey: str
     if (b.startHour > startHour && b.startHour < maxEnd) maxEnd = b.startHour
   }
   const maxMinutes = Math.round((maxEnd - startHour) * 60)
-  const absoluteMax = isCoach ? 600 : 120
+  const s = getSettingsStore().get()
+  const absoluteMax = isCoach ? (s.coachMaxDurationMinutes ?? 600) : (s.customerMaxDurationMinutes ?? 120)
   return Math.min(maxMinutes, absoluteMax)
 }
 

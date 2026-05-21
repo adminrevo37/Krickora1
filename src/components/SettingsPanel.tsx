@@ -95,6 +95,7 @@ export default function SettingsPanel() {
           {numberInput('Customer / hour ($)', settings.customerPricePerHour, (v) => updateSettings({ customerPricePerHour: v }))}
           {numberInput('Truman / hour ($)', settings.trumanPricePerHour, (v) => updateSettings({ trumanPricePerHour: v }))}
           {numberInput('Coach / hour ($)', settings.coachPerHour, (v) => updateSettings({ coachPerHour: v }))}
+          {numberInput('Coach / 30 min ($)', settings.coachPer30Min, (v) => updateSettings({ coachPer30Min: v }))}
         </div>
       </div>
 
@@ -162,6 +163,28 @@ export default function SettingsPanel() {
               {numberInput('Open hour', settings.l2CoachOpenHour, (v) => updateSettings({ l2CoachOpenHour: v }))}
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Advanced Booking Rules */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h3 className="text-lg font-bold text-gray-800">🔧 Advanced Booking Rules</h3>
+          <p className="text-sm text-gray-500 mt-0.5">Fine-tune duration limits, notice windows, and athlete session minimums</p>
+        </div>
+        <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {numberInput('Customer max duration (min)', settings.customerMaxDurationMinutes, (v) => updateSettings({ customerMaxDurationMinutes: v }), 30, 30)}
+          {numberInput('Coach max duration (min)', settings.coachMaxDurationMinutes, (v) => updateSettings({ coachMaxDurationMinutes: v }), 30, 30)}
+          {numberInput('Min athlete session (min)', settings.minAthleteDurationMinutes, (v) => updateSettings({ minAthleteDurationMinutes: v }), 5, 5)}
+          {numberInput('Extension notice (min)', settings.extensionNoticeMinutes, (v) => updateSettings({ extensionNoticeMinutes: v }))}
+          {numberInput('Coach reschedule freeze (hours)', settings.coachRescheduleFreezeHours, (v) => updateSettings({ coachRescheduleFreezeHours: v }))}
+        </div>
+        <div className="px-6 pb-4 text-xs text-gray-400 space-y-1">
+          <p>• <strong>Customer max duration</strong> — longest session a customer can book (default 120 min)</p>
+          <p>• <strong>Coach max duration</strong> — longest coach booking slot (default 600 min)</p>
+          <p>• <strong>Min athlete session</strong> — shortest individual athlete slot in a coach booking (default 15 min)</p>
+          <p>• <strong>Extension notice</strong> — customer must extend a booking more than N minutes before it starts (default 20)</p>
+          <p>• <strong>Coach reschedule freeze</strong> — coaches cannot self-reschedule within N hours of session start (default 24)</p>
         </div>
       </div>
 

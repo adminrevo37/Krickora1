@@ -765,10 +765,11 @@ export const editBookingDuration = mutation({
     const awstNow = new Date(awstStr);
     const minutesUntil = (bookingStart.getTime() - awstNow.getTime()) / (1000 * 60);
 
-    // Extending: allowed within 2-hour window before start, but must be >20 min before start
+    // Extending: allowed within 2-hour window before start, but must be >N min before start
     if (isExtending) {
-      if (minutesUntil <= 20) {
-        throw new Error("Extensions must be made more than 20 minutes before the booking starts.");
+      const extensionNoticeMin = editDurSettings?.extensionNoticeMinutes ?? 20;
+      if (minutesUntil <= extensionNoticeMin) {
+        throw new Error(`Extensions must be made more than ${extensionNoticeMin} minutes before the booking starts.`);
       }
     }
 
@@ -808,9 +809,10 @@ export const editBookingDuration = mutation({
       }
     }
 
-    // Recalculate coach price based on new duration
+    // Recalculate coach price based on new duration (DI-6: use settings rate)
     const halfHours = args.newDuration / 30;
-    const newCoachPrice = halfHours * 15;
+    const coachPer30MinEdit = editDurSettings?.coachPer30Min ?? 15;
+    const newCoachPrice = halfHours * coachPer30MinEdit;
 
     await ctx.db.patch(args.id, {
       duration: args.newDuration,
@@ -886,8 +888,9 @@ export const rescheduleBooking = mutation({
       );
     }
 
-    // Coaches cannot reschedule within 24 hours of booking start
-    if (booking.isCoachBooking && hoursUntilOriginal < 24) {
+    // Coaches cannot self-reschedule within N hours of booking start
+    const coachFreezeHours = settings?.coachRescheduleFreezeHours ?? 24;
+    if (booking.isCoachBooking && hoursUntilOriginal < coachFreezeHours) {
       // SEC-7: Use identity email (already fetched above) — no full table scan
       const coachAdminCheck = reschedCallerEmail ? await ctx.db
         .query("customers")
@@ -895,7 +898,7 @@ export const rescheduleBooking = mutation({
         .first() : null;
       if (coachAdminCheck?.role !== "admin") {
         throw new Error(
-          "Coach bookings cannot be rescheduled within 24 hours of the session start time."
+          `Coach bookings cannot be rescheduled within ${coachFreezeHours} hours of the session start time.`
         );
       }
     }
@@ -952,12 +955,13 @@ export const rescheduleBooking = mutation({
       }
     }
 
-    // Calculate new price
+    // Calculate new price (use settings-driven rate — fixes hardcoded * 15 bug)
     const isCoach = booking.isCoachBooking;
     let newCoachPrice = booking.coachPrice;
     if (isCoach) {
       const halfHours = args.newDuration / 30;
-      newCoachPrice = halfHours * 15;
+      const coachRatePer30 = settings?.coachPer30Min ?? 15;
+      newCoachPrice = halfHours * coachRatePer30;
     }
 
     // Adjust athlete slots if start time changed
@@ -1106,14 +1110,19 @@ export const updateBookingAthleteSlots = mutation({
     }
 
     // Validate athlete slots fit within booking window
+    const athleteSettings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    const minAthleteMins = athleteSettings?.minAthleteDurationMinutes ?? 15;
     const bookingEnd = booking.startHour + booking.duration / 60;
     for (const slot of args.athleteSlots) {
       const slotEnd = slot.startHour + slot.durationMinutes / 60;
       if (slot.startHour < booking.startHour || slotEnd > bookingEnd + 0.001) {
         throw new Error(`Athlete "${slot.athleteName}" session falls outside the booking window.`);
       }
-      if (slot.durationMinutes < 15) {
-        throw new Error(`Minimum athlete session is 15 minutes.`);
+      if (slot.durationMinutes < minAthleteMins) {
+        throw new Error(`Minimum athlete session is ${minAthleteMins} minutes.`);
       }
     }
 
@@ -1806,6 +1815,11 @@ export const updateSiteSettings = mutation({
     l2CoachOpenDay: v.optional(v.string()),
     l2CoachOpenHour: v.optional(v.number()),
     registrationLocked: v.optional(v.boolean()),
+    coachRescheduleFreezeHours: v.optional(v.number()),
+    extensionNoticeMinutes: v.optional(v.number()),
+    customerMaxDurationMinutes: v.optional(v.number()),
+    coachMaxDurationMinutes: v.optional(v.number()),
+    minAthleteDurationMinutes: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
@@ -1973,6 +1987,11 @@ export const resetSiteSettings = mutation({
       coachBookingWindowDays: 7,
       customerOpenDay: "sunday",
       customerOpenHour: 19,
+      coachRescheduleFreezeHours: 24,
+      extensionNoticeMinutes: 20,
+      customerMaxDurationMinutes: 120,
+      coachMaxDurationMinutes: 600,
+      minAthleteDurationMinutes: 15,
     };
 
     if (existing) {
@@ -1981,6 +2000,71 @@ export const resetSiteSettings = mutation({
     } else {
       return await ctx.db.insert("siteSettings", defaults);
     }
+  },
+});
+
+// ============================================================================
+// DISCOUNT CODE MUTATIONS — ADMIN ONLY
+// ============================================================================
+
+export const createDiscountCode = mutation({
+  args: {
+    code: v.string(),
+    discount: v.number(),
+    label: v.string(),
+    bypassStripe: v.boolean(),
+    active: v.boolean(),
+    expiresAt: v.optional(v.string()),
+    usageLimit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const normalised = args.code.trim().toLowerCase();
+    if (!normalised) throw new Error("Code cannot be empty.");
+    const existing = await ctx.db
+      .query("discountCodes")
+      .withIndex("by_code", (q: any) => q.eq("code", normalised))
+      .first();
+    if (existing) throw new Error(`Code "${normalised}" already exists.`);
+    return await ctx.db.insert("discountCodes", {
+      code: normalised,
+      discount: args.discount,
+      label: args.label,
+      bypassStripe: args.bypassStripe,
+      active: args.active,
+      expiresAt: args.expiresAt,
+      usageLimit: args.usageLimit,
+      usedCount: 0,
+      createdAt: new Date().toISOString(),
+    });
+  },
+});
+
+export const updateDiscountCode = mutation({
+  args: {
+    id: v.id("discountCodes"),
+    discount: v.optional(v.number()),
+    label: v.optional(v.string()),
+    bypassStripe: v.optional(v.boolean()),
+    active: v.optional(v.boolean()),
+    expiresAt: v.optional(v.string()),
+    usageLimit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const { id, ...updates } = args;
+    const clean = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
+    await ctx.db.patch(id, clean);
+    return id;
+  },
+});
+
+export const deleteDiscountCode = mutation({
+  args: { id: v.id("discountCodes") },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    await ctx.db.delete(args.id);
+    return args.id;
   },
 });
 

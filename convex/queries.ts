@@ -373,3 +373,50 @@ export const getSiteSettings = query({
       .first();
   },
 });
+
+// ============================================================================
+// DISCOUNT CODE QUERIES
+// ============================================================================
+
+// List all discount codes — admin only
+export const listDiscountCodes = query({
+  args: {},
+  handler: async (ctx) => {
+    // Check admin via customers table (same pattern as requireAdmin)
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return [];
+    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
+    const caller = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
+      .first();
+    if (caller?.role !== "admin") return [];
+    return await ctx.db.query("discountCodes").collect();
+  },
+});
+
+// Validate a discount code — public (returns null if invalid/expired/exhausted)
+export const validateDiscountCode = query({
+  args: { code: v.string() },
+  handler: async (ctx, args) => {
+    const normalised = args.code.trim().toLowerCase();
+    if (!normalised) return null;
+    const doc = await ctx.db
+      .query("discountCodes")
+      .withIndex("by_code", (q: any) => q.eq("code", normalised))
+      .first();
+    if (!doc || !doc.active) return null;
+    // Check expiry (YYYY-MM-DD string comparison is safe)
+    if (doc.expiresAt) {
+      const today = new Date().toISOString().slice(0, 10);
+      if (doc.expiresAt < today) return null;
+    }
+    // Check usage cap
+    if (doc.usageLimit !== undefined && doc.usedCount >= doc.usageLimit) return null;
+    return {
+      discount: doc.discount,
+      label: doc.label,
+      bypassStripe: doc.bypassStripe,
+    };
+  },
+});

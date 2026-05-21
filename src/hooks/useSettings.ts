@@ -26,12 +26,15 @@ export function useSettings() {
     const keys: (keyof SiteSettings)[] = [
       'customerPricePerHour', 'customerPrice90Min',
       'trumanPricePerHour', 'trumanPrice90Min',
-      'coachPerHour',
+      'coachPerHour', 'coachPer30Min',
       'cancellationHoursBefore', 'openingHour', 'closingHour',
       'minBookingNoticeMinutes', 'coachBookingWindowDays',
       'customerOpenDay', 'customerOpenHour',
       'l1CoachOpenDay', 'l1CoachOpenHour',
       'l2CoachOpenDay', 'l2CoachOpenHour',
+      'coachRescheduleFreezeHours', 'extensionNoticeMinutes',
+      'customerMaxDurationMinutes', 'coachMaxDurationMinutes',
+      'minAthleteDurationMinutes',
     ]
     for (const k of keys) {
       const v = (remoteSettings as any)[k]
@@ -52,6 +55,7 @@ export function useSettings() {
       trumanPricePerHour: remoteSettings.trumanPricePerHour ?? localSettings.trumanPricePerHour,
       trumanPrice90Min: remoteSettings.trumanPrice90Min ?? localSettings.trumanPrice90Min,
       coachPerHour: remoteSettings.coachPerHour ?? localSettings.coachPerHour,
+      coachPer30Min: (remoteSettings as any).coachPer30Min ?? localSettings.coachPer30Min,
       cancellationHoursBefore: remoteSettings.cancellationHoursBefore ?? localSettings.cancellationHoursBefore,
       openingHour: remoteSettings.openingHour ?? localSettings.openingHour,
       closingHour: remoteSettings.closingHour ?? localSettings.closingHour,
@@ -63,18 +67,26 @@ export function useSettings() {
       l1CoachOpenHour: (remoteSettings as any).l1CoachOpenHour ?? localSettings.l1CoachOpenHour,
       l2CoachOpenDay: (remoteSettings as any).l2CoachOpenDay ?? localSettings.l2CoachOpenDay,
       l2CoachOpenHour: (remoteSettings as any).l2CoachOpenHour ?? localSettings.l2CoachOpenHour,
+      coachRescheduleFreezeHours: (remoteSettings as any).coachRescheduleFreezeHours ?? localSettings.coachRescheduleFreezeHours,
+      extensionNoticeMinutes: (remoteSettings as any).extensionNoticeMinutes ?? localSettings.extensionNoticeMinutes,
+      customerMaxDurationMinutes: (remoteSettings as any).customerMaxDurationMinutes ?? localSettings.customerMaxDurationMinutes,
+      coachMaxDurationMinutes: (remoteSettings as any).coachMaxDurationMinutes ?? localSettings.coachMaxDurationMinutes,
+      minAthleteDurationMinutes: (remoteSettings as any).minAthleteDurationMinutes ?? localSettings.minAthleteDurationMinutes,
     }
   }, [remoteSettings, localSettings])
 
   const REMOTE_KEYS = new Set([
     'customerPricePerHour', 'customerPrice90Min',
     'trumanPricePerHour', 'trumanPrice90Min',
-    'coachPerHour',
+    'coachPerHour', 'coachPer30Min',
     'cancellationHoursBefore', 'openingHour', 'closingHour',
     'minBookingNoticeMinutes', 'coachBookingWindowDays',
     'customerOpenDay', 'customerOpenHour',
     'l1CoachOpenDay', 'l1CoachOpenHour',
     'l2CoachOpenDay', 'l2CoachOpenHour',
+    'coachRescheduleFreezeHours', 'extensionNoticeMinutes',
+    'customerMaxDurationMinutes', 'coachMaxDurationMinutes',
+    'minAthleteDurationMinutes',
   ])
 
   const updateSettings = (updates: Partial<SiteSettings>) => {

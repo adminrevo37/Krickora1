@@ -210,7 +210,29 @@ export default defineSchema({
     l2CoachOpenDay: v.optional(v.string()),
     l2CoachOpenHour: v.optional(v.number()),
     registrationLocked: v.optional(v.boolean()),
+    // Advanced booking rule overrides
+    coachRescheduleFreezeHours: v.optional(v.number()),  // default 24 — coach can't self-reschedule within N hours
+    extensionNoticeMinutes: v.optional(v.number()),       // default 20 — must extend >N min before start
+    customerMaxDurationMinutes: v.optional(v.number()),   // default 120
+    coachMaxDurationMinutes: v.optional(v.number()),      // default 600
+    minAthleteDurationMinutes: v.optional(v.number()),    // default 15
   }).index("by_key", ["key"]),
+
+  // Discount codes
+  discountCodes: defineTable({
+    code: v.string(),           // lowercase unique code e.g. "julian"
+    discount: v.number(),       // 0–100 percent off
+    label: v.string(),          // display label e.g. "100% Off — Complimentary"
+    bypassStripe: v.boolean(),  // if true, skip payment entirely
+    active: v.boolean(),
+    expiresAt: v.optional(v.string()),    // YYYY-MM-DD or undefined
+    usageLimit: v.optional(v.number()),   // max total uses, undefined = unlimited
+    usedCount: v.number(),
+    createdAt: v.string(),
+    createdBy: v.optional(v.string()),
+  })
+    .index("by_code", ["code"])
+    .index("by_active", ["active"]),
 
   // Google Calendar OAuth tokens (singleton - one per admin)
   googleCalendarTokens: defineTable({
