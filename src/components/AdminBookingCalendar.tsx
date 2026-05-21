@@ -6,7 +6,7 @@ import {
   getActiveHalfHoursForLane, type Lane, type TimeSlot, type Booking,
 } from '../lib/booking-data'
 import { useBookings } from '../hooks/useBookingStore'
-import AdminManualBookingModal, { type AdminCustomerOption } from './AdminManualBookingModal'
+import AdminManualBookingModal, { type AdminCustomerOption, type BookingConfirmResult } from './AdminManualBookingModal'
 import AdminBookingDetailsModal from './AdminBookingDetailsModal'
 import LaneBlockModal from './LaneBlockModal'
 import ClosureManager from './ClosureManager'
@@ -174,7 +174,10 @@ export default function AdminBookingCalendar() {
   }, [selectedDay])
 
   const handleSlotClick = (lane: Lane, slot: TimeSlot) => {
-    if (isDateClosed) { alert('This date is marked as closed.'); return }
+    // UX-5: Admin can override facility closures with explicit confirmation
+    if (isDateClosed) {
+      if (!confirm('⚠️ This date is marked as closed. Do you want to create an admin booking anyway?')) return
+    }
     if (!selectedCustomer) {
       alert('Please select a customer or coach first to make a booking on their behalf.')
       return
@@ -185,14 +188,26 @@ export default function AdminBookingCalendar() {
     setModalOpen(true)
   }
 
-  const handleBookingConfirm = async (newBookings: Booking[]) => {
-    try {
-      for (const b of newBookings) {
+  // UX-4: Surface booking errors + DI-3/DI-4: return per-date results
+  const handleBookingConfirm = async (newBookings: Booking[]): Promise<BookingConfirmResult> => {
+    let succeeded = 0; let failed = 0; const failedDates: string[] = []
+    for (const b of newBookings) {
+      try {
         await addBooking(b)
+        succeeded++
+      } catch (e: any) {
+        failed++
+        const msg = e?.message ?? 'Conflict or server error'
+        if (!failedDates.some(d => d.startsWith(b.date))) {
+          failedDates.push(`${b.date} (${b.laneId}): ${msg}`)
+        }
       }
-    } catch {}
-    setModalOpen(false)
-    setSelectedSlot(null)
+    }
+    if (failed === 0) {
+      setModalOpen(false)
+      setSelectedSlot(null)
+    }
+    return { succeeded, failed, failedDates }
   }
 
   const dayBookings = bookings.filter(b => b.date === dateKey && b.status !== 'cancelled')

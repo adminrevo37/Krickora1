@@ -15,6 +15,12 @@ export interface AdminCustomerOption {
 
 type Recurrence = 'none' | 'weekly' | 'fortnightly' | 'monthly'
 
+export interface BookingConfirmResult {
+  succeeded: number
+  failed: number
+  failedDates: string[]
+}
+
 interface Props {
   lane: Lane
   date: Date
@@ -22,7 +28,7 @@ interface Props {
   customer: AdminCustomerOption
   existingBookings: Booking[]
   onClose: () => void
-  onConfirm: (bookings: Booking[]) => Promise<void> | void
+  onConfirm: (bookings: Booking[]) => Promise<BookingConfirmResult | void> | void
 }
 
 function addOccurrence(base: Date, recurrence: Recurrence, index: number): Date {
@@ -60,6 +66,11 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // MF-5: Discount code + price override
+  const [discountCode, setDiscountCode] = useState('')
+  const [priceOverrideStr, setPriceOverrideStr] = useState('')
+  const [showAdminOptions, setShowAdminOptions] = useState(false)
+
   // Additional lanes (multi-lane booking)
   const [additionalLaneIds, setAdditionalLaneIds] = useState<string[]>([])
   const toggleLane = (id: string) => {
@@ -85,10 +96,12 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
 
   const selectedLaneCount = 1 + additionalLaneIds.length
   const pricePerLane = isCoach ? getCoachPrice(duration) : getCustomerPrice(lane, selectedVariant?.id ?? null, duration)
-  const price = pricePerLane * selectedLaneCount
+  // MF-5: Apply price override if provided
+  const priceOverride = priceOverrideStr !== '' && !isNaN(Number(priceOverrideStr)) ? Number(priceOverrideStr) : null
+  const effectivePricePerLane = priceOverride !== null ? priceOverride : pricePerLane
+  const price = effectivePricePerLane * selectedLaneCount
   const endHour = startHour + duration / 60
   const totalSessions = recurrence === 'none' ? 1 : occurrences
-  const totalPrice = price * totalSessions
 
   const occurrenceInfo = useMemo(() => {
     const list: { date: Date; dateKey: string; conflict: boolean }[] = []
@@ -96,7 +109,8 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
       const d = recurrence === 'none' ? date : addOccurrence(date, recurrence, i)
       const dk = formatDateKey(d)
       const allLanes = [lane.id, ...additionalLaneIds]
-      const conflict = i === 0 ? false : allLanes.some(lid => hasConflict(existingBookings, lid, dk, startHour, duration))
+      // DI-3: Check all occurrences for conflicts (including the first one)
+      const conflict = allLanes.some(lid => hasConflict(existingBookings, lid, dk, startHour, duration))
       list.push({ date: d, dateKey: dk, conflict })
     }
     return list
@@ -108,14 +122,13 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
     setSubmitting(true); setError(null)
     try {
       const validOccurrences = occurrenceInfo.filter(o => !o.conflict)
-      if (validOccurrences.length === 0) throw new Error('No valid dates available.')
+      if (validOccurrences.length === 0) throw new Error('No valid dates available — all selected dates have conflicts.')
       const allLaneIds = [lane.id, ...additionalLaneIds]
       const bookings: Booking[] = []
       for (const occ of validOccurrences) {
         // Share a single access code across all lanes for the same session
         const sharedCode = generateAccessCode()
         for (const lid of allLaneIds) {
-          const laneObj = LANES.find(l => l.id === lid)!
           bookings.push({
             id: crypto.randomUUID(),
             laneId: lid,
@@ -129,17 +142,31 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
             userId: customer._id,
             status: 'confirmed',
             isCoachBooking: isCoach,
-            coachPrice: isCoach ? getCoachPrice(duration) : undefined,
+            coachPrice: isCoach ? effectivePricePerLane : undefined,
             accessCode: sharedCode,
+            discountCode: discountCode.trim() || undefined,
           })
         }
       }
-      await onConfirm(bookings)
+
+      // DI-3 / DI-4: Report per-date results instead of silently swallowing failures
+      const result = await onConfirm(bookings)
+      if (result && result.failed > 0) {
+        const summary = result.failedDates.length > 0
+          ? `${result.succeeded} booking(s) created. ${result.failed} could not be saved:\n${result.failedDates.slice(0, 4).join('\n')}${result.failedDates.length > 4 ? '\n…and more' : ''}`
+          : `${result.succeeded} booking(s) created. ${result.failed} failed.`
+        setError(summary)
+        setSubmitting(false)
+        return
+      }
     } catch (e: any) {
       setError(e?.message ?? 'Failed to create booking.')
       setSubmitting(false)
     }
   }
+
+  // UX-6: Computed display prices with toFixed(2)
+  const displayTotal = (price * (totalSessions - conflictCount)).toFixed(2)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -185,7 +212,8 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
                   <button key={v.id} onClick={() => setSelectedVariant(v)}
                     className={`p-3 rounded-xl border-2 transition-all text-left ${selectedVariant?.id === v.id ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 shadow-md' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'}`}>
                     <div className="text-base font-bold text-gray-800 dark:text-gray-200">{v.name}</div>
-                    <div className="text-xs text-gray-500 mt-0.5">${v.pricePerHour}/hr</div>
+                    {/* UX-6: toFixed(2) on price display */}
+                    <div className="text-xs text-gray-500 mt-0.5">${v.pricePerHour.toFixed(2)}/hr</div>
                   </button>
                 ))}
               </div>
@@ -203,7 +231,7 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
                   const hrs = Math.floor(d / 60); const mins = d % 60
                   const label = hrs > 0 ? `${hrs}hr${mins > 0 ? ` ${mins}min` : ''}` : `${mins}min`
                   const dPrice = isCoach ? getCoachPrice(d) : getCustomerPrice(lane, selectedVariant?.id ?? null, d)
-                  return <option key={d} value={d}>{label} — ${dPrice}</option>
+                  return <option key={d} value={d}>{label} — ${(dPrice as number).toFixed(2)}</option>
                 })}
               </select>
             )}
@@ -292,24 +320,72 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
             )}
           </div>
 
+          {/* MF-5: Admin overrides — discount code + price override */}
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowAdminOptions(v => !v)}
+              className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 font-semibold flex items-center gap-1 transition-colors"
+            >
+              {showAdminOptions ? '▾' : '▸'} Admin Overrides (discount / price)
+            </button>
+            {showAdminOptions && (
+              <div className="mt-2 grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-[10px] uppercase font-semibold text-gray-500 dark:text-gray-400 tracking-wide">Discount Code</span>
+                  <input
+                    type="text"
+                    value={discountCode}
+                    onChange={e => setDiscountCode(e.target.value)}
+                    placeholder="e.g. COMP2025"
+                    className="mt-1 w-full px-2.5 py-1.5 text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-gray-800 dark:text-gray-200"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-[10px] uppercase font-semibold text-gray-500 dark:text-gray-400 tracking-wide">Price Override ($/lane)</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={priceOverrideStr}
+                    onChange={e => setPriceOverrideStr(e.target.value)}
+                    placeholder={`Default: $${pricePerLane.toFixed(2)}`}
+                    className="mt-1 w-full px-2.5 py-1.5 text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none text-gray-800 dark:text-gray-200"
+                  />
+                </label>
+                {priceOverride !== null && (
+                  <div className="col-span-2 text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-lg p-2 border border-amber-200 dark:border-amber-800/50">
+                    ⚠️ Price overridden: ${priceOverride.toFixed(2)}/lane (default ${pricePerLane.toFixed(2)}/lane)
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* UX-6: All price displays use toFixed(2) */}
           <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 space-y-1 text-sm">
             <div className="flex justify-between"><span className="text-gray-500">Time</span><span className="font-medium">{formatTime(startHour)} - {formatTime(endHour)}</span></div>
-            <div className="flex justify-between"><span className="text-gray-500">Lanes</span><span className="font-medium">{selectedLaneCount} × ${pricePerLane}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Lanes</span><span className="font-medium">{selectedLaneCount} × ${effectivePricePerLane.toFixed(2)}</span></div>
             <div className="flex justify-between"><span className="text-gray-500">Sessions</span><span className="font-medium">{totalSessions - conflictCount} {recurrence !== 'none' && conflictCount > 0 && <span className="text-red-500 text-xs">(skipping {conflictCount})</span>}</span></div>
-            <div className="border-t border-gray-200 dark:border-gray-700 pt-1 flex justify-between"><span className="font-semibold">Total</span><span className="font-bold text-emerald-600">${price * (totalSessions - conflictCount)}</span></div>
+            {discountCode.trim() && <div className="flex justify-between"><span className="text-gray-500">Discount Code</span><span className="font-medium text-emerald-600">{discountCode.trim()}</span></div>}
+            <div className="border-t border-gray-200 dark:border-gray-700 pt-1 flex justify-between"><span className="font-semibold">Total</span><span className="font-bold text-emerald-600">${displayTotal}</span></div>
           </div>
 
           <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-3 border border-blue-200 dark:border-blue-800/50">
             <p className="text-xs text-blue-700 dark:text-blue-400">🛡️ Admin manual booking — no payment collected. {selectedLaneCount > 1 ? `${selectedLaneCount} lanes will be booked per session.` : ''}</p>
           </div>
 
-          {error && <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-200 dark:border-red-800/50 text-xs text-red-700 dark:text-red-400">⚠️ {error}</div>}
+          {error && (
+            <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-200 dark:border-red-800/50 text-xs text-red-700 dark:text-red-400 whitespace-pre-line">
+              ⚠️ {error}
+            </div>
+          )}
 
           <div className="flex gap-3">
             <button onClick={onClose} disabled={submitting} className="flex-1 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all disabled:opacity-50">Cancel</button>
             <button onClick={handleConfirm} disabled={submitting || availableDurations.length === 0 || (totalSessions - conflictCount) === 0}
               className={`flex-[2] py-3 font-semibold rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600' : 'bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600'}`}>
-              {submitting ? 'Creating...' : `Confirm — $${price * (totalSessions - conflictCount)}`}
+              {submitting ? 'Creating...' : `Confirm — $${displayTotal}`}
             </button>
           </div>
         </div>

@@ -1,4 +1,6 @@
 import { useState, useMemo } from 'react'
+import { useMutation } from 'convex/react'
+import { api } from '../../convex/_generated/api'
 import { LANES, formatTime, type Booking } from '../lib/booking-data'
 import { useBookings } from '../hooks/useBookingStore'
 
@@ -18,10 +20,12 @@ function generateHours(): number[] {
 
 export default function AdminBookingDetailsModal({ booking, onClose }: Props) {
   const { updateBooking } = useBookings()
+  const cancelMut = useMutation(api.mutations.cancelBooking)
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // UX-1: Use local state for ALL displayed fields so view mode reflects saved changes
   const [date, setDate] = useState(booking.date)
   const [startHour, setStartHour] = useState(booking.startHour)
   const [duration, setDuration] = useState(booking.duration)
@@ -32,7 +36,7 @@ export default function AdminBookingDetailsModal({ booking, onClose }: Props) {
   const [status, setStatus] = useState<string>(booking.status)
   const [coachPrice, setCoachPrice] = useState(booking.coachPrice ?? 0)
 
-  const lane = LANES.find(l => l.id === booking.laneId)
+  const displayLane = LANES.find(l => l.id === laneId)
   const hours = useMemo(() => generateHours(), [])
 
   const history = booking.modificationHistory ?? []
@@ -59,6 +63,19 @@ export default function AdminBookingDetailsModal({ booking, onClose }: Props) {
     }
   }
 
+  // MF-3: Cancel booking handler
+  const handleCancel = async () => {
+    if (!confirm(`Cancel booking for ${customerName}?\n\nThe customer will receive a cancellation email.`)) return
+    setSaving(true); setError(null)
+    try {
+      await cancelMut({ id: booking.id as any })
+      onClose()
+    } catch (e: any) {
+      setError(e?.message ?? 'Failed to cancel booking.')
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={!saving ? onClose : undefined} />
@@ -67,7 +84,7 @@ export default function AdminBookingDetailsModal({ booking, onClose }: Props) {
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-lg font-bold">📋 Booking Details</h3>
-              <p className="text-white/80 text-xs mt-0.5">{lane?.icon} {lane?.name ?? booking.laneId}</p>
+              <p className="text-white/80 text-xs mt-0.5">{displayLane?.icon} {displayLane?.name ?? laneId}</p>
             </div>
             <button onClick={onClose} disabled={saving} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors">✕</button>
           </div>
@@ -82,22 +99,23 @@ export default function AdminBookingDetailsModal({ booking, onClose }: Props) {
 
           {!editing ? (
             <>
+              {/* UX-1: View mode reads from local state so it reflects the last saved values */}
               <div className="grid grid-cols-2 gap-3 text-sm">
-                <Field label="Customer" value={booking.customerName} />
-                <Field label="Email" value={booking.customerEmail} />
-                <Field label="Phone" value={booking.customerPhone ?? '—'} />
+                <Field label="Customer" value={customerName} />
+                <Field label="Email" value={customerEmail} />
+                <Field label="Phone" value={customerPhone || '—'} />
                 <Field label="Status" value={
                   <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
-                    booking.status === 'confirmed' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' :
-                    booking.status === 'tentative' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
+                    status === 'confirmed' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' :
+                    status === 'tentative' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
                     'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400'
-                  }`}>{booking.status}</span>
+                  }`}>{status}</span>
                 } />
-                <Field label="Date" value={new Date(booking.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })} />
-                <Field label="Time" value={`${formatTime(booking.startHour)} – ${formatTime(booking.startHour + booking.duration / 60)}`} />
-                <Field label="Duration" value={`${booking.duration} min`} />
+                <Field label="Date" value={new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })} />
+                <Field label="Time" value={`${formatTime(startHour)} – ${formatTime(startHour + duration / 60)}`} />
+                <Field label="Duration" value={`${duration} min`} />
                 <Field label="Type" value={booking.isCoachBooking ? '🏅 Coach' : '👤 Customer'} />
-                {booking.isCoachBooking && <Field label="Coach Price" value={`$${(booking.coachPrice ?? 0).toFixed(2)}`} />}
+                {booking.isCoachBooking && <Field label="Coach Price" value={`$${coachPrice.toFixed(2)}`} />}
                 {booking.accessCode && <Field label="Access Code" value={<code className="font-mono">{booking.accessCode}</code>} />}
                 {booking.discountCode && <Field label="Discount" value={booking.discountCode} />}
               </div>
@@ -132,6 +150,12 @@ export default function AdminBookingDetailsModal({ booking, onClose }: Props) {
 
               <div className="flex gap-2 pt-2">
                 <button onClick={onClose} className="flex-1 px-4 py-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 text-sm font-semibold hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">Close</button>
+                {/* MF-3: Cancel booking button */}
+                {status !== 'cancelled' && (
+                  <button onClick={handleCancel} disabled={saving} className="flex-1 px-4 py-2 rounded-lg bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition-colors disabled:opacity-50">
+                    🚫 Cancel
+                  </button>
+                )}
                 <button onClick={() => setEditing(true)} className="flex-1 px-4 py-2 rounded-lg bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 transition-colors">✏️ Modify</button>
               </div>
             </>
@@ -142,7 +166,8 @@ export default function AdminBookingDetailsModal({ booking, onClose }: Props) {
                 <Input label="Email" value={customerEmail} onChange={setCustomerEmail} />
                 <Input label="Phone" value={customerPhone} onChange={setCustomerPhone} />
                 <Select label="Status" value={status} onChange={setStatus} options={STATUS_OPTIONS} />
-                <Input label="Date (YYYY-MM-DD)" value={date} onChange={setDate} />
+                {/* UX-2: Date field uses type="date" for proper date picker */}
+                <DateInput label="Date" value={date} onChange={setDate} />
                 <Select label="Lane" value={laneId} onChange={setLaneId} options={LANES.map(l => l.id)} optionLabels={LANES.map(l => l.name)} />
                 <Select label="Start Time" value={String(startHour)} onChange={(v) => setStartHour(Number(v))} options={hours.map(String)} optionLabels={hours.map(h => formatTime(h))} />
                 <Select label="Duration" value={String(duration)} onChange={(v) => setDuration(Number(v))} options={DURATION_OPTIONS.map(String)} optionLabels={DURATION_OPTIONS.map(d => `${d} min`)} />
@@ -178,6 +203,21 @@ function Input({ label, value, onChange }: { label: string; value: string; onCha
     <label className="block">
       <span className="text-[10px] uppercase font-semibold text-gray-500 dark:text-gray-400 tracking-wide">{label}</span>
       <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-1 w-full px-2.5 py-1.5 text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none text-gray-800 dark:text-gray-200"
+      />
+    </label>
+  )
+}
+
+// UX-2: Native date picker instead of free-text YYYY-MM-DD input
+function DateInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <label className="block">
+      <span className="text-[10px] uppercase font-semibold text-gray-500 dark:text-gray-400 tracking-wide">{label}</span>
+      <input
+        type="date"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="mt-1 w-full px-2.5 py-1.5 text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none text-gray-800 dark:text-gray-200"

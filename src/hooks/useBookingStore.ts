@@ -193,6 +193,11 @@ export function useBookings() {
         convexUpdates.accessCode = updates.accessCode
       if (updates.refilledMinutes !== undefined)
         convexUpdates.refilledMinutes = updates.refilledMinutes
+      // UX-3: Forward scheduling + phone fields (previously dropped)
+      if (updates.date !== undefined) convexUpdates.date = updates.date
+      if (updates.startHour !== undefined) convexUpdates.startHour = updates.startHour
+      if (updates.laneId !== undefined) convexUpdates.laneId = updates.laneId
+      if (updates.customerPhone !== undefined) convexUpdates.customerPhone = updates.customerPhone
 
       await updateBookingMut({
         id: bookingId as Id<"bookings">,

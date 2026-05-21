@@ -124,22 +124,24 @@ export const _requestBookingEdit = internalMutation({
       }
     }
 
-    // ── Price diff ───────────────────────────────────────────────────────────
-    const priceDifference = args.newPriceInCents - args.oldPriceInCents;
+    // ── Price diff — SEC-6: use server-authoritative old price ──────────────
+    // Trust the booking record, not the frontend-supplied oldPriceInCents
+    const authOldPriceInCents = (booking as any).priceInCents ?? args.oldPriceInCents;
+    const priceDifference = args.newPriceInCents - authOldPriceInCents;
 
     if (priceDifference === 0) {
-      // Apply directly — no Stripe interaction needed
+      // Apply directly — no payment interaction needed
       await ctx.db.patch(booking._id, {
         duration: args.newDuration,
         ...(args.newAdditionalLaneIds !== undefined
           ? { additionalLaneIds: args.newAdditionalLaneIds }
           : {}),
       });
-      return { requiresPayment: false, priceDifference: 0, refunded: false };
+      return { requiresPayment: false, priceDifference: 0, credited: false };
     }
 
     if (priceDifference < 0) {
-      // Shorter booking → refund, apply immediately
+      // Shorter booking → apply immediately and add account credit (no Stripe refund)
       await ctx.db.patch(booking._id, {
         duration: args.newDuration,
         ...(args.newAdditionalLaneIds !== undefined
@@ -147,17 +149,18 @@ export const _requestBookingEdit = internalMutation({
           : {}),
         priceInCents: args.newPriceInCents,
       });
-      // Issue Stripe refund if we have a paymentIntentId
-      const paymentIntentId = (booking as any).stripePaymentIntentId;
-      if (paymentIntentId) {
-        await ctx.scheduler.runAfter(0, internal.stripe.issueBookingRefund, {
-          bookingId: args.bookingId,
-          paymentIntentId,
-          refundAmountCents: Math.abs(priceDifference),
-          customerEmail: booking.customerEmail,
+      // SEC-6: Credit the customer's account instead of issuing a Stripe refund
+      const creditAmountDollars = Math.abs(priceDifference) / 100;
+      const creditCustomer = await ctx.db
+        .query("customers")
+        .withIndex("by_email", (q: any) => q.eq("email", booking.customerEmail.toLowerCase().trim()))
+        .first();
+      if (creditCustomer) {
+        await ctx.db.patch(creditCustomer._id, {
+          creditBalance: (creditCustomer.creditBalance ?? 0) + creditAmountDollars,
         });
       }
-      return { requiresPayment: false, priceDifference, refunded: !!paymentIntentId };
+      return { requiresPayment: false, priceDifference, credited: true };
     }
 
     // priceDifference > 0 → top-up required
