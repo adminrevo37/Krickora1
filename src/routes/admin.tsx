@@ -239,6 +239,16 @@ function AdminPage() {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Normalise legacy tier values ('Bowling' → 'L1', 'BowlingL2' → 'L2') */
+function normaliseCoachTier(tier: string | undefined | null): 'L1' | 'L2' {
+  if (tier === 'L2' || tier === 'BowlingL2') return 'L2'
+  return 'L1'
+}
+
+// ---------------------------------------------------------------------------
 // Statements tab
 // ---------------------------------------------------------------------------
 
@@ -247,23 +257,20 @@ function StatementsTab() {
   const customers = useQuery(api.queries.listCustomers) ?? []
   const coaches = (customers as any[]).filter(c => c.role === 'coach')
   const [viewCoach, setViewCoach] = useState<any | null>(null)
-  const allPayments = useQuery((api.queries as any).listPayments) ?? []
   const createPayment = useMutation((api.mutations as any).createPayment)
-  const deletePayment = useMutation((api.mutations as any).deletePayment)
   const today = new Date().toISOString().slice(0, 10)
-  const [form, setForm] = useState({ coachId: '', amount: '', dateReceived: today, method: 'bank_transfer', description: '' })
+  const [form, setForm] = useState({ amount: '', dateReceived: today, method: 'bank_transfer', description: '' })
   const [busy, setBusy] = useState(false)
-  const [filterCoach, setFilterCoach] = useState<string>('')
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!form.coachId) { alert('Select a coach'); return }
+    if (!viewCoach) return
     const amt = parseFloat(form.amount)
     if (!amt || amt <= 0) { alert('Enter a valid amount'); return }
     setBusy(true)
     try {
       await createPayment({
-        coachId: form.coachId,
+        coachId: viewCoach._id,
         amount: amt,
         dateReceived: form.dateReceived,
         method: form.method,
@@ -271,26 +278,10 @@ function StatementsTab() {
         note: form.description,
         createdBy: (user as any)?._id ?? (user as any)?.id ?? 'admin',
       } as any)
-      setForm({ coachId: '', amount: '', dateReceived: today, method: 'bank_transfer', description: '' })
+      setForm({ amount: '', dateReceived: today, method: 'bank_transfer', description: '' })
     } catch (err: any) { alert(err?.message ?? 'Failed') }
     finally { setBusy(false) }
   }
-
-  const remove = async (id: string) => {
-    if (!confirm('Delete this payment record?')) return
-    try { await deletePayment({ id } as any) } catch (err: any) { alert(err?.message ?? 'Failed') }
-  }
-
-  const coachName = (id: string) => {
-    const c = (customers as any[]).find(x => x._id === id)
-    return c?.name || c?.email || 'Unknown'
-  }
-
-  const list = (allPayments as any[])
-    .filter(p => !filterCoach || p.coachId === filterCoach)
-    .slice()
-    .sort((a, b) => (b.dateReceived || '').localeCompare(a.dateReceived || ''))
-  const total = list.reduce((s, p) => s + (p.amount || 0), 0)
 
   if (viewCoach) {
     return (
@@ -298,6 +289,29 @@ function StatementsTab() {
         <button onClick={() => setViewCoach(null)} className="text-sm text-emerald-600 hover:underline">
           ← Back to all statements
         </button>
+
+        {/* Record payment — pre-filled for this coach */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-100">
+            <h3 className="text-base font-bold text-gray-800">Record Payment — {viewCoach.name || viewCoach.email}</h3>
+            <p className="text-sm text-gray-500 mt-0.5">Log a payment received from this coach</p>
+          </div>
+          <form onSubmit={submit} className="p-6 grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <input required type="number" step="0.01" min="0" placeholder="Amount ($)" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+            <input required type="date" value={form.dateReceived} onChange={e => setForm({ ...form, dateReceived: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+            <select value={form.method} onChange={e => setForm({ ...form, method: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
+              <option value="bank_transfer">Bank Transfer</option>
+              <option value="cash">Cash</option>
+              <option value="stripe">Stripe</option>
+              <option value="other">Other</option>
+            </select>
+            <input placeholder="Notes (optional)" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+            <button disabled={busy} className="sm:col-span-4 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors">
+              {busy ? 'Saving…' : 'Record Payment'}
+            </button>
+          </form>
+        </div>
+
         <CoachStatementTable coachId={viewCoach._id} coachEmail={viewCoach.email} coachName={viewCoach.name} />
       </div>
     )
@@ -310,7 +324,7 @@ function StatementsTab() {
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <div>
             <h3 className="text-base font-bold text-gray-800">Coach Statements</h3>
-            <p className="text-sm text-gray-500 mt-0.5">Click a coach to view their lifetime earnings</p>
+            <p className="text-sm text-gray-500 mt-0.5">Click a coach to view their earnings and record a payment</p>
           </div>
           <span className="text-xs text-gray-400 tabular-nums">{coaches.length} coaches</span>
         </div>
@@ -329,90 +343,11 @@ function StatementsTab() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {coaches.map((c: any) => (
-                  <tr
-                    key={c._id}
-                    className="hover:bg-gray-50 cursor-pointer transition-colors"
-                    onClick={() => setViewCoach(c)}
-                  >
+                  <tr key={c._id} className="hover:bg-gray-50 cursor-pointer transition-colors" onClick={() => setViewCoach(c)}>
                     <td className="px-5 py-3 font-medium text-gray-900">{c.name || '—'}</td>
                     <td className="px-5 py-3 text-gray-500">{c.email}</td>
-                    <td className="px-5 py-3 text-gray-500">{c.coachTier || '—'}</td>
+                    <td className="px-5 py-3 text-gray-500">{normaliseCoachTier(c.coachTier)}</td>
                     <td className="px-5 py-3 text-right text-xs font-semibold text-emerald-600">View →</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {/* Record payment */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100">
-          <h3 className="text-base font-bold text-gray-800">Record Payment</h3>
-          <p className="text-sm text-gray-500 mt-0.5">Log a payment received by a coach</p>
-        </div>
-        <form onSubmit={submit} className="p-6 grid grid-cols-1 sm:grid-cols-6 gap-3">
-          <select required value={form.coachId} onChange={e => setForm({ ...form, coachId: e.target.value })} className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
-            <option value="">Select coach…</option>
-            {coaches.map((c: any) => <option key={c._id} value={c._id}>{c.name || c.email}</option>)}
-          </select>
-          <input required type="number" step="0.01" min="0" placeholder="Amount ($)" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-          <input required type="date" value={form.dateReceived} onChange={e => setForm({ ...form, dateReceived: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-          <select value={form.method} onChange={e => setForm({ ...form, method: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
-            <option value="bank_transfer">Bank Transfer</option>
-            <option value="cash">Cash</option>
-            <option value="stripe">Stripe</option>
-            <option value="other">Other</option>
-          </select>
-          <input placeholder="Notes (optional)" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} className="sm:col-span-6 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-          <button disabled={busy} className="sm:col-span-6 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors">
-            {busy ? 'Saving…' : 'Record Payment'}
-          </button>
-        </form>
-      </div>
-
-      {/* Payment history */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <h3 className="text-base font-bold text-gray-800">Payment History</h3>
-            <p className="text-sm text-gray-500 mt-0.5">
-              {list.length} record{list.length !== 1 ? 's' : ''} · Total{' '}
-              <span className="font-semibold text-gray-800">${total.toFixed(2)}</span>
-            </p>
-          </div>
-          <select value={filterCoach} onChange={e => setFilterCoach(e.target.value)} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
-            <option value="">All coaches</option>
-            {coaches.map((c: any) => <option key={c._id} value={c._id}>{c.name || c.email}</option>)}
-          </select>
-        </div>
-        {list.length === 0 ? (
-          <div className="p-6 text-sm text-gray-400 italic">No payments recorded yet.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-100">
-                <tr>
-                  <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Date</th>
-                  <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Coach</th>
-                  <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Method</th>
-                  <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Notes</th>
-                  <th className="text-right px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Amount</th>
-                  <th className="px-5 py-2.5" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {list.map((p: any) => (
-                  <tr key={p._id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-5 py-3 text-gray-700 tabular-nums">{p.dateReceived || '—'}</td>
-                    <td className="px-5 py-3 text-gray-700">{coachName(p.coachId)}</td>
-                    <td className="px-5 py-3 text-gray-500 capitalize">{(p.method || p.paymentMethod || '—').replace('_', ' ')}</td>
-                    <td className="px-5 py-3 text-gray-500 max-w-[180px] truncate">{p.description || p.note || '—'}</td>
-                    <td className="px-5 py-3 text-right font-semibold text-gray-900 tabular-nums">${(p.amount || 0).toFixed(2)}</td>
-                    <td className="px-5 py-3 text-right">
-                      <button onClick={() => remove(p._id)} className="text-xs text-red-500 hover:text-red-700">Delete</button>
-                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -433,9 +368,10 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
   const deleteUser = useMutation((api.users as any).adminDeleteUser)
   const [name, setName] = useState(user.name || '')
   const [phone, setPhone] = useState(user.phone || '')
-  const [coachTier, setCoachTier] = useState(user.coachTier || 'L1')
+  const [coachTier, setCoachTier] = useState(normaliseCoachTier(user.coachTier))
   const [color, setColor] = useState(user.color || '')
   const [role, setRole] = useState(user.role || 'user')
+  const [defaultSessionDuration, setDefaultSessionDuration] = useState<number>(user.defaultSessionDuration || 60)
   const [busy, setBusy] = useState(false)
 
   const save = async (e: React.FormEvent) => {
@@ -443,7 +379,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
     setBusy(true)
     try {
       const args: any = { email: user.email, name, phone, role }
-      if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color }
+      if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color; args.defaultSessionDuration = defaultSessionDuration }
       await updateProfile(args)
       onClose()
     } catch (err: any) { alert(err?.message ?? 'Failed') }
@@ -488,9 +424,8 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
             <label className="block text-sm">
               <span className="font-medium text-gray-700">Coach level</span>
               <select value={coachTier} onChange={e => setCoachTier(e.target.value)} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
-                <option value="L1">L1</option>
-                <option value="L2">L2</option>
-                <option value="Bowling">Bowling</option>
+                <option value="L1">L1 — rolling 8-day window</option>
+                <option value="L2">L2 — weekly (opens Sunday 5pm WST)</option>
               </select>
             </label>
             <label className="block text-sm">
@@ -499,6 +434,15 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
                 <input type="color" value={color || '#10b981'} onChange={e => setColor(e.target.value)} className="h-10 w-14 border border-gray-200 rounded-lg cursor-pointer" />
                 <input value={color} onChange={e => setColor(e.target.value)} placeholder="#10b981" className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono" />
               </div>
+            </label>
+            <label className="block text-sm">
+              <span className="font-medium text-gray-700">Default session duration</span>
+              <p className="text-xs text-gray-400 mb-1">Pre-fills the athlete slot duration when adding allocations</p>
+              <select value={defaultSessionDuration} onChange={e => setDefaultSessionDuration(Number(e.target.value))} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
+                {[30, 45, 60, 75, 90, 120].map(d => (
+                  <option key={d} value={d}>{d} min</option>
+                ))}
+              </select>
             </label>
           </>
         )}
@@ -601,6 +545,7 @@ function CoachesTab() {
   const [busy, setBusy] = useState(false)
   const [busyAdd, setBusyAdd] = useState(false)
   const [addMode, setAddMode] = useState<'direct' | 'invite'>('direct')
+  const [showAddForm, setShowAddForm] = useState(false)
 
   const submitAdd = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -652,6 +597,12 @@ function CoachesTab() {
             <h3 className="text-base font-bold text-gray-800">Active Coaches</h3>
             <p className="text-sm text-gray-500 mt-0.5">{coaches.length} coach{coaches.length !== 1 ? 'es' : ''}</p>
           </div>
+          <button
+            onClick={() => setShowAddForm(f => !f)}
+            className={`text-sm px-3 py-1.5 rounded-lg font-semibold transition-colors ${showAddForm ? 'bg-gray-100 text-gray-600 hover:bg-gray-200' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}
+          >
+            {showAddForm ? 'Cancel' : '+ Add Coach'}
+          </button>
         </div>
         {coaches.length === 0 ? (
           <div className="p-6 text-sm text-gray-400 italic">No coaches yet.</div>
@@ -676,7 +627,7 @@ function CoachesTab() {
                     <td className="px-5 py-3">
                       <span className="inline-flex items-center gap-1.5">
                         {c.color && <span className="w-2.5 h-2.5 rounded-full border border-gray-200 shrink-0" style={{ background: c.color }} />}
-                        <span className="text-gray-500">{c.coachTier || '—'}</span>
+                        <span className="text-gray-500">{normaliseCoachTier(c.coachTier)}</span>
                       </span>
                     </td>
                     <td className="px-5 py-3 text-right">
@@ -694,57 +645,57 @@ function CoachesTab() {
 
       {editingCoach && <EditUserModal user={editingCoach} onClose={() => setEditingCoach(null)} isCoach />}
 
-      {/* Add coach — toggle between direct create and invite */}
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-4">
-          <div>
-            <h3 className="text-base font-bold text-gray-800">Add Coach</h3>
-            <p className="text-sm text-gray-500 mt-0.5">
-              {addMode === 'direct' ? 'Create an account immediately with a password' : 'Send a self-service invite link by email'}
-            </p>
+      {showAddForm && (
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-base font-bold text-gray-800">Add Coach</h3>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {addMode === 'direct' ? 'Create an account immediately with a password' : 'Send a self-service invite link by email'}
+              </p>
+            </div>
+            <div className="flex bg-gray-100 p-0.5 rounded-lg">
+              <button
+                onClick={() => setAddMode('direct')}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${addMode === 'direct' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}
+              >
+                Direct
+              </button>
+              <button
+                onClick={() => setAddMode('invite')}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${addMode === 'invite' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}
+              >
+                Invite
+              </button>
+            </div>
           </div>
-          <div className="flex bg-gray-100 p-0.5 rounded-lg">
-            <button
-              onClick={() => setAddMode('direct')}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${addMode === 'direct' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}
-            >
-              Direct
-            </button>
-            <button
-              onClick={() => setAddMode('invite')}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${addMode === 'invite' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}
-            >
-              Invite
-            </button>
-          </div>
-        </div>
 
-        {addMode === 'direct' ? (
-          <form onSubmit={submitAdd} className="p-6 grid grid-cols-1 sm:grid-cols-6 gap-3">
-            <input required placeholder="Full name" value={coachForm.name} onChange={e => setCoachForm({ ...coachForm, name: e.target.value })} className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-            <input required type="email" placeholder="Email" value={coachForm.email} onChange={e => setCoachForm({ ...coachForm, email: e.target.value })} className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-            <input placeholder="Phone" value={coachForm.phone} onChange={e => setCoachForm({ ...coachForm, phone: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-            <select value={coachForm.coachTier} onChange={e => setCoachForm({ ...coachForm, coachTier: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
-              <option value="L1">L1</option>
-              <option value="L2">L2</option>
-              <option value="Bowling">Bowling</option>
-            </select>
-            <input required type="text" placeholder="Password (min 8 characters)" value={coachForm.password} onChange={e => setCoachForm({ ...coachForm, password: e.target.value })} minLength={8} className="sm:col-span-6 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-            <button disabled={busyAdd} className="sm:col-span-6 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors">
-              {busyAdd ? 'Creating…' : 'Create Coach Account'}
-            </button>
-          </form>
-        ) : (
-          <form onSubmit={submitInvite} className="p-6 grid grid-cols-1 sm:grid-cols-4 gap-3">
-            <input required placeholder="Full name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-            <input required type="email" placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-            <input placeholder="Phone" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-            <button disabled={busy} className="sm:col-span-4 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors">
-              {busy ? 'Sending…' : 'Send Invite'}
-            </button>
-          </form>
-        )}
-      </div>
+          {addMode === 'direct' ? (
+            <form onSubmit={submitAdd} className="p-6 grid grid-cols-1 sm:grid-cols-6 gap-3">
+              <input required placeholder="Full name" value={coachForm.name} onChange={e => setCoachForm({ ...coachForm, name: e.target.value })} className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              <input required type="email" placeholder="Email" value={coachForm.email} onChange={e => setCoachForm({ ...coachForm, email: e.target.value })} className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              <input placeholder="Phone" value={coachForm.phone} onChange={e => setCoachForm({ ...coachForm, phone: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              <select value={coachForm.coachTier} onChange={e => setCoachForm({ ...coachForm, coachTier: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
+                <option value="L1">L1</option>
+                <option value="L2">L2</option>
+              </select>
+              <input required type="text" placeholder="Password (min 8 characters)" value={coachForm.password} onChange={e => setCoachForm({ ...coachForm, password: e.target.value })} minLength={8} className="sm:col-span-6 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              <button disabled={busyAdd} className="sm:col-span-6 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors">
+                {busyAdd ? 'Creating…' : 'Create Coach Account'}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={submitInvite} className="p-6 grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <input required placeholder="Full name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              <input required type="email" placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              <input placeholder="Phone" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              <button disabled={busy} className="sm:col-span-4 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors">
+                {busy ? 'Sending…' : 'Send Invite'}
+              </button>
+            </form>
+          )}
+        </div>
+      )}
 
       {/* Pending invites */}
       {(invites as any[]).length > 0 && (

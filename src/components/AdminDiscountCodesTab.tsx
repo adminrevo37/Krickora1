@@ -7,11 +7,11 @@ type DiscountDoc = {
   code: string
   discount: number
   label: string
-  bypassStripe: boolean
+  bypassStripe?: boolean  // optional — old docs may not have this field
   active: boolean
   expiresAt?: string
   usageLimit?: number
-  usedCount: number
+  usedCount?: number  // optional — old docs may not have this field
   createdAt: string
 }
 
@@ -49,7 +49,7 @@ export default function AdminDiscountCodesTab() {
       code: doc.code,
       discount: doc.discount,
       label: doc.label,
-      bypassStripe: doc.bypassStripe,
+      bypassStripe: doc.bypassStripe ?? false,
       active: doc.active,
       expiresAt: doc.expiresAt ?? '',
       usageLimit: doc.usageLimit !== undefined ? String(doc.usageLimit) : '',
@@ -263,7 +263,7 @@ export default function AdminDiscountCodesTab() {
                     <td className="px-4 py-3 font-semibold text-emerald-600">{doc.discount}%</td>
                     <td className="px-4 py-3 text-gray-700 max-w-[200px] truncate">{doc.label}</td>
                     <td className="px-4 py-3 text-gray-600">
-                      {doc.usedCount}
+                      {doc.usedCount ?? 0}
                       {doc.usageLimit !== undefined && <span className="text-gray-400"> / {doc.usageLimit}</span>}
                     </td>
                     <td className="px-4 py-3 text-gray-600">{doc.expiresAt ?? <span className="text-gray-400">Never</span>}</td>

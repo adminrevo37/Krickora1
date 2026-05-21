@@ -120,6 +120,30 @@ export default function AdminBookingDetailsModal({ booking, onClose }: Props) {
                 {booking.discountCode && <Field label="Discount" value={booking.discountCode} />}
               </div>
 
+              {/* Athlete Allocations — coach bookings only */}
+              {booking.isCoachBooking && (booking.athleteSlots ?? []).length > 0 && (
+                <div>
+                  <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide mb-2">
+                    🏏 Athlete Allocations ({booking.athleteSlots!.length})
+                  </h4>
+                  <div className="space-y-1.5">
+                    {booking.athleteSlots!.map((slot, i) => (
+                      <div key={i} className="flex items-center justify-between bg-orange-50 dark:bg-orange-900/10 rounded-lg px-3 py-2 border border-orange-100 dark:border-orange-900/30">
+                        <div className="flex items-center gap-2">
+                          <div className="w-5 h-5 bg-orange-400 rounded-full flex items-center justify-center text-white text-[9px] font-bold shrink-0">
+                            {slot.athleteName.charAt(0).toUpperCase()}
+                          </div>
+                          <span className="text-sm font-medium text-gray-800 dark:text-gray-200">{slot.athleteName}</span>
+                        </div>
+                        <span className="text-xs text-gray-500 dark:text-gray-400 tabular-nums">
+                          {formatTime(slot.startHour)} – {formatTime(slot.startHour + slot.durationMinutes / 60)} · {slot.durationMinutes}min
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Modification History */}
               <div>
                 <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide mb-2">📝 Modification History</h4>

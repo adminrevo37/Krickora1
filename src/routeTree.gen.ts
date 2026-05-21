@@ -13,9 +13,9 @@ import { Route as StatementsRouteImport } from './routes/statements'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as BookingsRouteImport } from './routes/bookings'
 import { Route as AdminRouteImport } from './routes/admin'
-import { Route as AdminAnalyticsRouteImport } from './routes/admin.analytics'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CheckoutSuccessRouteImport } from './routes/checkout/success'
+import { Route as AdminAnalyticsRouteImport } from './routes/admin.analytics'
 
 const StatementsRoute = StatementsRouteImport.update({
   id: '/statements',
@@ -37,13 +37,6 @@ const AdminRoute = AdminRouteImport.update({
   path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
-// Analytics lives at /admin/analytics but is a sibling of /admin (not a child),
-// so it renders with the root layout (header/footer) but NOT the admin sidebar.
-const AdminAnalyticsRoute = AdminAnalyticsRouteImport.update({
-  id: '/admin/analytics',
-  path: '/admin/analytics',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -54,33 +47,38 @@ const CheckoutSuccessRoute = CheckoutSuccessRouteImport.update({
   path: '/checkout/success',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminAnalyticsRoute = AdminAnalyticsRouteImport.update({
+  id: '/analytics',
+  path: '/analytics',
+  getParentRoute: () => AdminRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/admin': typeof AdminRoute
-  '/admin/analytics': typeof AdminAnalyticsRoute
+  '/admin': typeof AdminRouteWithChildren
   '/bookings': typeof BookingsRoute
   '/profile': typeof ProfileRoute
   '/statements': typeof StatementsRoute
+  '/admin/analytics': typeof AdminAnalyticsRoute
   '/checkout/success': typeof CheckoutSuccessRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/admin': typeof AdminRoute
-  '/admin/analytics': typeof AdminAnalyticsRoute
+  '/admin': typeof AdminRouteWithChildren
   '/bookings': typeof BookingsRoute
   '/profile': typeof ProfileRoute
   '/statements': typeof StatementsRoute
+  '/admin/analytics': typeof AdminAnalyticsRoute
   '/checkout/success': typeof CheckoutSuccessRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/admin': typeof AdminRoute
-  '/admin/analytics': typeof AdminAnalyticsRoute
+  '/admin': typeof AdminRouteWithChildren
   '/bookings': typeof BookingsRoute
   '/profile': typeof ProfileRoute
   '/statements': typeof StatementsRoute
+  '/admin/analytics': typeof AdminAnalyticsRoute
   '/checkout/success': typeof CheckoutSuccessRoute
 }
 export interface FileRouteTypes {
@@ -88,35 +86,34 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
-    | '/admin/analytics'
     | '/bookings'
     | '/profile'
     | '/statements'
+    | '/admin/analytics'
     | '/checkout/success'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/admin'
-    | '/admin/analytics'
     | '/bookings'
     | '/profile'
     | '/statements'
+    | '/admin/analytics'
     | '/checkout/success'
   id:
     | '__root__'
     | '/'
     | '/admin'
-    | '/admin/analytics'
     | '/bookings'
     | '/profile'
     | '/statements'
+    | '/admin/analytics'
     | '/checkout/success'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AdminRoute: typeof AdminRoute
-  AdminAnalyticsRoute: typeof AdminAnalyticsRoute
+  AdminRoute: typeof AdminRouteWithChildren
   BookingsRoute: typeof BookingsRoute
   ProfileRoute: typeof ProfileRoute
   StatementsRoute: typeof StatementsRoute
@@ -167,13 +164,29 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CheckoutSuccessRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/analytics': {
+      id: '/admin/analytics'
+      path: '/analytics'
+      fullPath: '/admin/analytics'
+      preLoaderRoute: typeof AdminAnalyticsRouteImport
+      parentRoute: typeof AdminRoute
+    }
   }
 }
 
+interface AdminRouteChildren {
+  AdminAnalyticsRoute: typeof AdminAnalyticsRoute
+}
+
+const AdminRouteChildren: AdminRouteChildren = {
+  AdminAnalyticsRoute: AdminAnalyticsRoute,
+}
+
+const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AdminRoute: AdminRoute,
-  AdminAnalyticsRoute: AdminAnalyticsRoute,
+  AdminRoute: AdminRouteWithChildren,
   BookingsRoute: BookingsRoute,
   ProfileRoute: ProfileRoute,
   StatementsRoute: StatementsRoute,

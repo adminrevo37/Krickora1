@@ -5,6 +5,7 @@ import {
   generateTimeSlots,
   getCurrentWeekDays,
   getCoachRolling7Days,
+  getL2WeekDays,
   getAWSTNow,
   formatDateKey,
   formatDayLabel,
@@ -51,15 +52,16 @@ export default function BookingCalendar() {
   // Wait for customerRecord to load before deciding tier — otherwise L2 coaches
   // see a brief L1 flash while Convex resolves the record.
   const coachTierLoaded = customerRecord !== undefined && customerRecord !== null
-  const coachTierEarly = ((customerRecord as any)?.coachTier ?? 'L1') as 'L1' | 'L2' | 'Bowling' | 'BowlingL2'
-  // Only L1 coaches (incl. Bowling L1) get the rolling window. L2 coaches see the weekly view like customers.
-  // If the record hasn't loaded yet, default to NON-L1 (weekly view) to avoid an L1 flash for L2 coaches.
-  const isL1Coach = userIsCoach && coachTierLoaded && coachTierEarly !== 'L2' && coachTierEarly !== 'BowlingL2'
+  const coachTierEarly = ((customerRecord as any)?.coachTier ?? 'L1') as 'L1' | 'L2'
+  // L1 coaches get a rolling 8-day window. L2 coaches see Mon–Sun of the upcoming week.
+  // Default to L2 (weekly view) until the record loads to avoid a brief L1 flash.
+  const isL1Coach = userIsCoach && coachTierLoaded && coachTierEarly !== 'L2'
   const coachWindowDays = settings.coachBookingWindowDays ?? 8
   const weekDays = useMemo(() => {
     if (isL1Coach) return getCoachRolling7Days(coachWindowDays)
-    return getCurrentWeekDays()
-  }, [isL1Coach, coachWindowDays])
+    if (userIsCoach) return getL2WeekDays() // L2 coach: Mon–Sun of the relevant week
+    return getCurrentWeekDays()            // Customers
+  }, [isL1Coach, userIsCoach, coachWindowDays])
 
   const allTimeSlots = useMemo(() => generateTimeSlots(), [])
   const [selectedDay, setSelectedDay] = useState<Date>(() => {
@@ -88,7 +90,7 @@ export default function BookingCalendar() {
 
   const dateKey = formatDateKey(selectedDay)
   const userRole = user?.role ?? 'customer'
-  const coachTier = ((customerRecord as any)?.coachTier ?? 'L1') as 'L1' | 'L2' | 'Bowling' | 'BowlingL2'
+  const coachTier = ((customerRecord as any)?.coachTier ?? 'L1') as 'L1' | 'L2'
   const hasAccess = canAccessCalendar(userRole as 'coach' | 'customer' | 'admin', coachTier, settings)
 
   const laneActiveHalfHours = useMemo(() => {

@@ -108,6 +108,7 @@ export function createAuthOptions(ctx?: GenericCtx<DataModel>): BetterAuthOption
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: false,
+      minPasswordLength: 1, // allow existing accounts with short passwords to sign in; sign-up form enforces 8+ chars
       sendResetPassword: async ({ user, url }: { user: any; url: string }) => {
         try {
           const emailUrl = process.env.SHIPPER_EMAIL_URL;

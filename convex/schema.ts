@@ -34,7 +34,8 @@ export default defineSchema({
     assignedCoachIds: v.optional(v.array(v.string())),
     creditBalance: v.optional(v.number()),
     color: v.optional(v.string()),
-    coachTier: v.optional(v.string()), // 'L1' | 'L2' | 'Bowling'
+    coachTier: v.optional(v.string()), // 'L1' | 'L2'
+    defaultSessionDuration: v.optional(v.number()), // coach default athlete slot duration in minutes
     bookingEmailsEnabled: v.optional(v.boolean()),
     emailPrefs: v.optional(
       v.array(
@@ -226,11 +227,11 @@ export default defineSchema({
     code: v.string(),           // lowercase unique code e.g. "julian"
     discount: v.number(),       // 0–100 percent off
     label: v.string(),          // display label e.g. "100% Off — Complimentary"
-    bypassStripe: v.boolean(),  // if true, skip payment entirely
+    bypassStripe: v.optional(v.boolean()),  // if true, skip payment entirely (optional for backward compat)
     active: v.boolean(),
-    expiresAt: v.optional(v.string()),    // YYYY-MM-DD or undefined
-    usageLimit: v.optional(v.number()),   // max total uses, undefined = unlimited
-    usedCount: v.number(),
+    expiresAt: v.optional(v.string()),      // YYYY-MM-DD or undefined
+    usageLimit: v.optional(v.number()),     // max total uses, undefined = unlimited
+    usedCount: v.optional(v.number()),      // optional for backward compat — defaults to 0 in UI
     createdAt: v.string(),
     createdBy: v.optional(v.string()),
   })

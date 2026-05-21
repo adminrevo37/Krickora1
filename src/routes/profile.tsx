@@ -5,12 +5,14 @@ import { api } from '../../convex/_generated/api'
 import { useAuth } from '../hooks/useAuth'
 import EmailNotificationsCard from '../components/EmailNotificationsCard'
 
+const SESSION_DURATION_OPTIONS = [30, 45, 60, 75, 90, 120]
+
 export const Route = createFileRoute('/profile')({
   component: ProfilePage,
 })
 
 function ProfilePage() {
-  const { user, isAuthenticated, customerRecord } = useAuth()
+  const { user, isAuthenticated, isCoach, customerRecord } = useAuth()
   const updateCustomerByEmail = useMutation(api.mutations.updateCustomerByEmail)
 
   const [isEditing, setIsEditing] = useState(false)
@@ -19,12 +21,24 @@ function ProfilePage() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
+  // Coach settings
+  const [defaultSessionDuration, setDefaultSessionDuration] = useState<number>(60)
+  const [savingCoachSettings, setSavingCoachSettings] = useState(false)
+  const [coachSettingsMessage, setCoachSettingsMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
   useEffect(() => {
     if (user) {
       setName(user.name || '')
       setPhone(user.phone || '')
     }
   }, [user])
+
+  useEffect(() => {
+    if (customerRecord) {
+      const dur = (customerRecord as any).defaultSessionDuration
+      if (dur) setDefaultSessionDuration(dur)
+    }
+  }, [customerRecord])
 
   if (!isAuthenticated || !user) {
     return (
@@ -64,6 +78,23 @@ function ProfilePage() {
     setPhone(user.phone || '')
     setIsEditing(false)
     setMessage(null)
+  }
+
+  const handleSaveCoachSettings = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setCoachSettingsMessage(null)
+    setSavingCoachSettings(true)
+    try {
+      await updateCustomerByEmail({
+        email: user.email,
+        defaultSessionDuration,
+      })
+      setCoachSettingsMessage({ type: 'success', text: 'Coach settings saved' })
+    } catch (err: any) {
+      setCoachSettingsMessage({ type: 'error', text: err?.message || 'Failed to save' })
+    } finally {
+      setSavingCoachSettings(false)
+    }
   }
 
   return (
@@ -165,6 +196,48 @@ function ProfilePage() {
           updateCustomerByEmail={updateCustomerByEmail}
         />
       </div>
+
+      {isCoach && (
+        <div className="mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="bg-gradient-to-r from-orange-500 to-amber-500 px-6 py-4">
+            <h2 className="text-base font-bold text-white">🏅 Coach Settings</h2>
+            <p className="text-orange-100 text-xs mt-0.5">Defaults used when creating athlete allocations</p>
+          </div>
+
+          {coachSettingsMessage && (
+            <div className={`px-6 py-3 text-sm ${coachSettingsMessage.type === 'success' ? 'bg-emerald-50 text-emerald-800 border-b border-emerald-100' : 'bg-red-50 text-red-800 border-b border-red-100'}`}>
+              {coachSettingsMessage.text}
+            </div>
+          )}
+
+          <form onSubmit={handleSaveCoachSettings} className="p-6 space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Default session duration
+              </label>
+              <p className="text-xs text-gray-500 mb-2">
+                Pre-fills the athlete slot length when you open the athlete allocator on a booking.
+              </p>
+              <select
+                value={defaultSessionDuration}
+                onChange={e => setDefaultSessionDuration(Number(e.target.value))}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 bg-white"
+              >
+                {SESSION_DURATION_OPTIONS.map(d => (
+                  <option key={d} value={d}>{d} min</option>
+                ))}
+              </select>
+            </div>
+            <button
+              type="submit"
+              disabled={savingCoachSettings}
+              className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg font-medium text-sm transition-colors disabled:opacity-50"
+            >
+              {savingCoachSettings ? 'Saving...' : 'Save Coach Settings'}
+            </button>
+          </form>
+        </div>
+      )}
     </div>
   )
 }

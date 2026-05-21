@@ -411,12 +411,12 @@ export const validateDiscountCode = query({
       const today = new Date().toISOString().slice(0, 10);
       if (doc.expiresAt < today) return null;
     }
-    // Check usage cap
-    if (doc.usageLimit !== undefined && doc.usedCount >= doc.usageLimit) return null;
+    // Check usage cap (usedCount defaults to 0 for old docs missing the field)
+    if (doc.usageLimit !== undefined && (doc.usedCount ?? 0) >= doc.usageLimit) return null;
     return {
       discount: doc.discount,
       label: doc.label,
-      bypassStripe: doc.bypassStripe,
+      bypassStripe: doc.bypassStripe ?? false,
     };
   },
 });

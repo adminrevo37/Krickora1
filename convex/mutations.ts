@@ -1321,6 +1321,7 @@ export const updateCustomerByEmail = mutation({
     assignedCoachIds: v.optional(v.array(v.string())),
     creditBalance: v.optional(v.number()),
     color: v.optional(v.string()),
+    defaultSessionDuration: v.optional(v.number()),
     bookingEmailsEnabled: v.optional(v.boolean()),
     emailPrefs: v.optional(v.array(v.object({ slug: v.string(), enabled: v.boolean() }))),
   },

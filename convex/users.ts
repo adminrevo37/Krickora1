@@ -49,8 +49,8 @@ export const adminChangeEmail = mutation({
 });
 
 export const adminUpdateUserProfile = mutation({
-  args: { email: v.string(), name: v.optional(v.string()), phone: v.optional(v.string()), role: v.optional(v.string()), coachTier: v.optional(v.string()), color: v.optional(v.string()) },
-  handler: async (ctx, { email, name, phone, role, coachTier, color }) => {
+  args: { email: v.string(), name: v.optional(v.string()), phone: v.optional(v.string()), role: v.optional(v.string()), coachTier: v.optional(v.string()), color: v.optional(v.string()), defaultSessionDuration: v.optional(v.number()) },
+  handler: async (ctx, { email, name, phone, role, coachTier, color, defaultSessionDuration }) => {
     await requireAdmin(ctx);
     const normalizedEmail = email.toLowerCase().trim();
     if (name !== undefined) {
@@ -71,7 +71,10 @@ export const adminUpdateUserProfile = mutation({
       if (role !== undefined) updates.role = role;
       if (coachTier !== undefined) updates.coachTier = coachTier || undefined;
       if (color !== undefined) updates.color = color || undefined;
-      if (Object.keys(updates).length > 0) await ctx.db.patch(customer._id, updates);
+      if (defaultSessionDuration !== undefined) updates.defaultSessionDuration = defaultSessionDuration || undefined;
+      // Convex db.patch() does not support undefined values — filter them out before patching
+      const cleanUpdates = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
+      if (Object.keys(cleanUpdates).length > 0) await ctx.db.patch(customer._id, cleanUpdates);
     }
     return { success: true };
   },
