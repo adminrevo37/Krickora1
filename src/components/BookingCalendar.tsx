@@ -282,6 +282,10 @@ export default function BookingCalendar() {
                   const past = isPast(selectedDay, slot.hour)
                   const isLaneInactiveAtHalfHour = isHalfHour && !laneActiveSet.has(slot.hour) && !booked && !blocked
                   const isTentative = booked?.status === 'tentative'
+                  const isOwnBooking = !isAdmin && !!user && !!booked && (
+                    (booked.userId != null && booked.userId === user.id) ||
+                    booked.customerEmail?.toLowerCase() === user.email?.toLowerCase()
+                  )
 
                   const isStartOfBooking = booked && Math.abs(booked.startHour - slot.hour) < 0.01
                   const isMiddleOfBooking = booked && !isStartOfBooking
@@ -342,14 +346,24 @@ export default function BookingCalendar() {
                         if (!booked && canBook && hasDurations && timeCheck.allowed) handleSlotClick(lane, slot)
                       }}>
                       {isStartOfBooking && booked && (
-                        <div className={`absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border ${isTentative ? 'bg-gradient-to-br from-blue-100 to-blue-50 border-blue-200' : 'bg-gradient-to-br from-red-100 to-red-50 border-red-200'}`}
+                        <div className={`absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border ${
+                          isTentative
+                            ? 'bg-gradient-to-br from-blue-100 to-blue-50 border-blue-200'
+                            : isOwnBooking
+                              ? 'bg-gradient-to-br from-emerald-100 to-emerald-50 border-emerald-300'
+                              : 'bg-gradient-to-br from-red-100 to-red-50 border-red-200'
+                        }`}
                           style={{ height: `${visualSpan * 32 - 4}px` }}>
-                          <div className={`text-[9px] font-semibold truncate ${isTentative ? 'text-blue-700' : 'text-red-700'}`}>
-                            {isAdmin ? booked.customerName : isTentative ? 'Tentative' : 'Booked'}
+                          <div className={`text-[9px] font-semibold truncate ${
+                            isTentative ? 'text-blue-700' : isOwnBooking ? 'text-emerald-700' : 'text-red-700'
+                          }`}>
+                            {isAdmin ? booked.customerName : isTentative ? 'Tentative' : isOwnBooking ? booked.customerName : 'Booked'}
                             {booked.status === 'cancelled' && <span className="ml-1 text-orange-500">(cancelled)</span>}
                             {isTentative && <span className="ml-1">⏳</span>}
                           </div>
-                          <div className={`text-[8px] ${isTentative ? 'text-blue-500' : 'text-red-500'}`}>
+                          <div className={`text-[8px] ${
+                            isTentative ? 'text-blue-500' : isOwnBooking ? 'text-emerald-600' : 'text-red-500'
+                          }`}>
                             {formatTime(booked.startHour)}-{formatTime(booked.startHour + booked.duration / 60)}
                             {isAdmin && booked.isCoachBooking && <span className="ml-1 text-orange-500">🏅</span>}
                           </div>
@@ -364,7 +378,7 @@ export default function BookingCalendar() {
                           )}
                         </div>
                       )}
-                      {isMiddleOfBooking && <div className={`absolute inset-0 ${isTentative ? 'bg-blue-50/30' : 'bg-red-50/30'}`} />}
+                      {isMiddleOfBooking && <div className={`absolute inset-0 ${isTentative ? 'bg-blue-50/30' : isOwnBooking ? 'bg-emerald-50/30' : 'bg-red-50/30'}`} />}
                       {past && !booked && <div className="absolute inset-0 flex items-center justify-center"><div className="w-3 h-[1px] bg-gray-300 rotate-45" /></div>}
                       {tooLate && !booked && <div className="absolute inset-0 flex items-center justify-center"><span className="text-[8px] text-gray-400">Too late</span></div>}
                       {!past && !booked && canBook && hasDurations && timeCheck.allowed && !waitlistMode && (
