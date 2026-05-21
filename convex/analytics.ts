@@ -114,84 +114,108 @@ export const getAdminAnalytics = query({
     const monthsBack = args.months ?? 12;
     const pad = (n: number) => String(n).padStart(2, "0");
 
-    // Helper: YYYY-MM string for a given offset from today's month
     const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const DAY_NAMES = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
     const now = new Date();
+
     const monthKey = (offsetFromNow: number): string => {
       const d = new Date(now.getFullYear(), now.getMonth() + offsetFromNow, 1);
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
     };
     const monthLabel = (key: string): string => {
       const [y, m] = key.split("-").map(Number);
-      return `${MONTH_ABBR[m - 1]} ${y}`;
+      return `${MONTH_ABBR[m - 1]} ${String(y).slice(2)}`;
     };
 
-    // Cutoff: first day of the earliest month in the window
     const cutoffKey = monthKey(-monthsBack + 1);
     const cutoffDate = `${cutoffKey}-01`;
 
-    // ── Build month-keyed result map (oldest → newest) ─────────────────────
-    const monthMap = new Map<
-      string,
-      { label: string; revenue: number; bookings: number; cancelled: number }
-    >();
+    // ── Month map (oldest → newest) ────────────────────────────────────────
+    const monthMap = new Map<string, {
+      label: string;
+      revenue: number;
+      bookings: number;
+      cancelled: number;
+      coachCharges: number;
+      hours: number;
+    }>();
     for (let i = monthsBack - 1; i >= 0; i--) {
       const key = monthKey(-i);
-      monthMap.set(key, { label: monthLabel(key), revenue: 0, bookings: 0, cancelled: 0 });
+      monthMap.set(key, { label: monthLabel(key), revenue: 0, bookings: 0, cancelled: 0, coachCharges: 0, hours: 0 });
     }
 
-    // ── Revenue from stripePayments (amounts stored in dollars) ────────────
+    // ── Customer revenue from stripePayments ───────────────────────────────
     const allPayments = await ctx.db.query("stripePayments").collect();
     for (const p of allPayments) {
       const dateStr = p.date ?? "";
       if (dateStr < cutoffDate) continue;
       const status = (p.status ?? "").toLowerCase();
       if (status === "refunded" || status === "failed" || status === "canceled" || status === "cancelled") continue;
-      const key = dateStr.slice(0, 7); // YYYY-MM
+      const key = dateStr.slice(0, 7);
       const entry = monthMap.get(key);
       if (entry) entry.revenue += p.amount ?? 0;
     }
 
     // ── Bookings data ──────────────────────────────────────────────────────
-    // Use by_date index range: collect from cutoffDate onward
     const allBookingsInRange = await ctx.db
       .query("bookings")
       .withIndex("by_date", (q: any) => q.gte("date", cutoffDate))
       .collect();
 
-    // Booking counts by month
     for (const b of allBookingsInRange) {
       const key = (b.date ?? "").slice(0, 7);
       const entry = monthMap.get(key);
       if (!entry) continue;
-      if (b.status === "cancelled") entry.cancelled++;
-      else entry.bookings++;
+      if (b.status === "cancelled") {
+        entry.cancelled++;
+      } else {
+        entry.bookings++;
+        entry.hours += b.duration / 60;
+        if ((b as any).isCoachBooking) {
+          entry.coachCharges += (b as any).coachPrice ?? 0;
+        }
+      }
     }
 
-    const byMonth = Array.from(monthMap.values());
+    const byMonth = Array.from(monthMap.values()).map(e => ({
+      ...e,
+      hours: Math.round(e.hours * 10) / 10,
+      coachCharges: Math.round(e.coachCharges * 100) / 100,
+    }));
 
     // ── Current vs previous month KPIs ─────────────────────────────────────
     const thisMonthKey = monthKey(0);
     const prevMonthKey = monthKey(-1);
-    const thisM = monthMap.get(thisMonthKey) ?? { revenue: 0, bookings: 0, cancelled: 0 };
-    const prevM = monthMap.get(prevMonthKey) ?? { revenue: 0, bookings: 0, cancelled: 0 };
+    const thisM = monthMap.get(thisMonthKey) ?? { revenue: 0, bookings: 0, cancelled: 0, coachCharges: 0, hours: 0 };
+    const prevM = monthMap.get(prevMonthKey) ?? { revenue: 0, bookings: 0, cancelled: 0, coachCharges: 0, hours: 0 };
 
-    // Overall cancellation rate for the window
+    // ── Period totals ──────────────────────────────────────────────────────
     let totalConfirmed = 0;
     let totalCancelled = 0;
+    let periodRevenue = 0;
+    let periodHours = 0;
+    let periodCoachCharges = 0;
     for (const entry of monthMap.values()) {
       totalConfirmed += entry.bookings;
       totalCancelled += entry.cancelled;
+      periodRevenue += entry.revenue;
+      periodHours += entry.hours;
+      periodCoachCharges += entry.coachCharges;
     }
     const cancellationRate =
       totalConfirmed + totalCancelled > 0
         ? Math.round((totalCancelled / (totalConfirmed + totalCancelled)) * 100)
         : 0;
+    const avgRevenuePerBooking =
+      totalConfirmed > 0 ? Math.round((periodRevenue / totalConfirmed) * 100) / 100 : 0;
+
+    // ── Confirmed bookings ─────────────────────────────────────────────────
+    const confirmedBookings = allBookingsInRange.filter((b) => b.status !== "cancelled");
+    const coachConfirmed = confirmedBookings.filter((b) => (b as any).isCoachBooking);
+    const customerConfirmed = confirmedBookings.filter((b) => !(b as any).isCoachBooking);
 
     // ── Lane popularity ────────────────────────────────────────────────────
     const laneMap = new Map<string, { name: string; bookings: number; hours: number }>();
-    const confirmedBookings = allBookingsInRange.filter((b) => b.status !== "cancelled");
-
     for (const b of confirmedBookings) {
       const laneId = b.laneId;
       const name = LANE_NAMES[laneId] ?? laneId;
@@ -199,8 +223,6 @@ export const getAdminAnalytics = query({
       const e = laneMap.get(laneId)!;
       e.bookings++;
       e.hours = Math.round((e.hours + b.duration / 60) * 10) / 10;
-
-      // Also count additional lanes (multi-lane bookings)
       const extras = (b as any).additionalLaneIds ?? [];
       for (const lid of extras) {
         const lname = LANE_NAMES[lid] ?? lid;
@@ -210,7 +232,6 @@ export const getAdminAnalytics = query({
         le.hours = Math.round((le.hours + b.duration / 60) * 10) / 10;
       }
     }
-
     const lanes = Array.from(laneMap.values()).sort((a, b) => b.bookings - a.bookings);
 
     // ── Peak hours ─────────────────────────────────────────────────────────
@@ -219,31 +240,55 @@ export const getAdminAnalytics = query({
       const h = Math.floor(b.startHour);
       hourMap.set(h, (hourMap.get(h) ?? 0) + 1);
     }
-
     const timeSlots = Array.from(hourMap.entries())
       .sort((a, b) => a[0] - b[0])
       .map(([hour, bookings]) => ({
         hour,
-        label:
-          hour === 0
-            ? "12am"
-            : hour < 12
-            ? `${hour}am`
-            : hour === 12
-            ? "12pm"
-            : `${hour - 12}pm`,
+        label: hour === 0 ? "12am" : hour < 12 ? `${hour}am` : hour === 12 ? "12pm" : `${hour - 12}pm`,
         bookings,
       }));
 
-    // ── Customer segments (unique emails in this window) ───────────────────
-    const emailCount = new Map<string, number>();
+    // ── Day of week breakdown ──────────────────────────────────────────────
+    const dayMap = new Map<number, { day: string; bookings: number; hours: number }>();
+    for (let i = 0; i < 7; i++) {
+      dayMap.set(i, { day: DAY_NAMES[i], bookings: 0, hours: 0 });
+    }
+    for (const b of confirmedBookings) {
+      const [yr, mo, da] = b.date.split("-").map(Number);
+      const dow = new Date(yr, mo - 1, da).getDay();
+      const e = dayMap.get(dow)!;
+      e.bookings++;
+      e.hours = Math.round((e.hours + b.duration / 60) * 10) / 10;
+    }
+    // Start week on Monday
+    const byDayOfWeek = [1,2,3,4,5,6,0].map(i => dayMap.get(i)!);
+
+    // ── Customer segments ──────────────────────────────────────────────────
+    const customerMap = new Map<string, { name: string; email: string; bookings: number; hours: number; isCoach: boolean }>();
     for (const b of confirmedBookings) {
       const email = (b.customerEmail ?? "").toLowerCase().trim();
-      if (email) emailCount.set(email, (emailCount.get(email) ?? 0) + 1);
+      if (!email) continue;
+      if (!customerMap.has(email)) {
+        customerMap.set(email, {
+          name: b.customerName ?? email,
+          email,
+          bookings: 0,
+          hours: 0,
+          isCoach: !!(b as any).isCoachBooking,
+        });
+      }
+      const c = customerMap.get(email)!;
+      c.bookings++;
+      c.hours = Math.round((c.hours + b.duration / 60) * 10) / 10;
     }
-    const totalUniqueCustomers = emailCount.size;
-    const newCustomers = Array.from(emailCount.values()).filter((c) => c === 1).length;
-    const returningCustomers = Array.from(emailCount.values()).filter((c) => c > 1).length;
+
+    const allCustomerValues = Array.from(customerMap.values());
+    const totalUniqueCustomers = allCustomerValues.length;
+    const newCustomers = allCustomerValues.filter((c) => c.bookings === 1).length;
+    const returningCustomers = allCustomerValues.filter((c) => c.bookings > 1).length;
+    const topCustomers = allCustomerValues
+      .sort((a, b) => b.bookings - a.bookings)
+      .slice(0, 10);
 
     return {
       kpis: {
@@ -255,10 +300,18 @@ export const getAdminAnalytics = query({
         totalUniqueCustomers,
         newCustomers,
         returningCustomers,
+        periodRevenue: Math.round(periodRevenue * 100) / 100,
+        periodHours: Math.round(periodHours * 10) / 10,
+        avgRevenuePerBooking,
+        periodCoachCharges: Math.round(periodCoachCharges * 100) / 100,
+        coachBookingsCount: coachConfirmed.length,
+        customerBookingsCount: customerConfirmed.length,
       },
       byMonth,
       lanes,
       timeSlots,
+      byDayOfWeek,
+      topCustomers,
     };
   },
 });
