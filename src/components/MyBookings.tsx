@@ -9,6 +9,7 @@ import { formatAccessCode } from '../lib/access-code'
 import AuthModal from './AuthModal'
 import RescheduleModal from './RescheduleModal'
 import AthleteAllocationEditor from './AthleteAllocationEditor'
+import EditBookingModal from './EditBookingModal'
 
 export default function MyBookings() {
   const { bookings, cancelBooking, canCancel, createTentativeNextWeek, confirmTentative, cancelTentative, getTentativeBookings, rescheduleBooking, updateAthleteSlots } = useBookings()
@@ -21,6 +22,7 @@ export default function MyBookings() {
   const [tentativeTime, setTentativeTime] = useState<Record<string, number>>({})
   const [rescheduleBookingData, setRescheduleBookingData] = useState<Booking | null>(null)
   const [athleteEditBooking, setAthleteEditBooking] = useState<Booking | null>(null)
+  const [editBookingData, setEditBookingData] = useState<Booking | null>(null)
 
   // Use the customerRecord from useAuth (already fetched from Convex)
   // For the coach athlete editor, we need the coach's Convex _id
@@ -317,6 +319,13 @@ export default function MyBookings() {
             {isCoach && isCoachBooking && (
               <button onClick={() => handleCreateTentative(booking.id)}
                 className="text-xs px-3 py-1.5 rounded-lg border border-blue-200 dark:border-blue-800/50 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all">⏳ Repeat</button>
+            )}
+            {/* Edit duration button — only for non-coach customer bookings */}
+            {cancelCheck.allowed && !isCoachBooking && (
+              <button onClick={() => setEditBookingData(booking)}
+                className="text-xs px-3 py-1.5 rounded-lg border border-violet-200 dark:border-violet-800/50 text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-all">
+                ✏️ Edit Duration
+              </button>
             )}
             {/* Reschedule button */}
             {cancelCheck.allowed && (
@@ -651,6 +660,15 @@ export default function MyBookings() {
           onClose={() => setRescheduleBookingData(null)}
           onReschedule={(opts) => handleReschedule(rescheduleBookingData, opts)}
           isCoach={isCoach}
+        />
+      )}
+
+      {/* Edit Booking Duration Modal */}
+      {editBookingData && (
+        <EditBookingModal
+          booking={editBookingData}
+          onClose={() => setEditBookingData(null)}
+          onSuccess={() => setEditBookingData(null)}
         />
       )}
 

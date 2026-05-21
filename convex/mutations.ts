@@ -42,7 +42,11 @@ export const createBooking = mutation({
     tentativeForDate: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const CLOSING_HOUR = 21;
+    const siteSettings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    const CLOSING_HOUR = siteSettings?.closingHour ?? 21;
     const endHour = args.startHour + args.duration / 60;
     if (endHour > CLOSING_HOUR) {
       throw new Error("Booking extends past closing time.");
@@ -354,6 +358,23 @@ export const cancelBooking = mutation({
     if (booking.status === "cancelled")
       throw new Error("Already cancelled.");
 
+    // Auth guard: only booking owner or admin can cancel
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Authentication required to cancel a booking.");
+    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
+    const isOwner =
+      (booking.userId != null && booking.userId === identity.subject) ||
+      booking.customerEmail.toLowerCase() === callerEmail;
+    if (!isOwner) {
+      const callerCustomer = await ctx.db
+        .query("customers")
+        .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
+        .first();
+      if (callerCustomer?.role !== "admin") {
+        throw new Error("You can only cancel your own bookings.");
+      }
+    }
+
     await ctx.db.patch(args.id, {
       status: "cancelled",
       cancelledAt: new Date().toISOString(),
@@ -452,7 +473,11 @@ export const createTentativeNextWeek = mutation({
     const source = await ctx.db.get(args.sourceBookingId);
     if (!source || !source.isCoachBooking) return null;
 
-    const CLOSING_HOUR = 21;
+    const tentativeSettings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    const CLOSING_HOUR = tentativeSettings?.closingHour ?? 21;
     const [year, month, day] = source.date.split("-").map(Number);
     const sourceDate = new Date(year, month - 1, day);
     const nextWeekDate = new Date(sourceDate);
@@ -525,7 +550,11 @@ export const editBookingDuration = mutation({
     if (booking.status === "cancelled") throw new Error("Cannot edit a cancelled booking.");
     if (booking.userId !== args.userId && booking.customerEmail !== args.userId) throw new Error("You can only edit your own bookings.");
 
-    const CLOSING_HOUR = 21;
+    const editDurSettings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    const CLOSING_HOUR = editDurSettings?.closingHour ?? 21;
     const newEndHour = booking.startHour + args.newDuration / 60;
     if (newEndHour > CLOSING_HOUR) {
       throw new Error("New duration extends past closing time.");
@@ -556,11 +585,7 @@ export const editBookingDuration = mutation({
 
     // If shortening, apply cancellation terms from site settings
     if (isShortening) {
-      const settings = await ctx.db
-        .query("siteSettings")
-        .withIndex("by_key", (q: any) => q.eq("key", "global"))
-        .first();
-      const cancellationHours = settings?.cancellationHoursBefore ?? 2;
+      const cancellationHours = editDurSettings?.cancellationHoursBefore ?? 2;
       const hoursUntil = minutesUntil / 60;
       if (hoursUntil < cancellationHours) {
         throw new Error(
@@ -1427,6 +1452,23 @@ export const addToWaitlist = mutation({
 export const removeFromWaitlist = mutation({
   args: { id: v.id("waitlist") },
   handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Authentication required.");
+    const entry = await ctx.db.get(args.id);
+    if (!entry) throw new Error("Waitlist entry not found.");
+    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
+    const isOwner =
+      entry.userId === identity.subject ||
+      entry.userEmail.toLowerCase() === callerEmail;
+    if (!isOwner) {
+      const callerCustomer = await ctx.db
+        .query("customers")
+        .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
+        .first();
+      if (callerCustomer?.role !== "admin") {
+        throw new Error("You can only remove your own waitlist entries.");
+      }
+    }
     await ctx.db.delete(args.id);
     return args.id;
   },
@@ -1647,6 +1689,19 @@ export const addCustomerCredit = mutation({
 export const useCustomerCredit = mutation({
   args: { email: v.string(), amount: v.number() },
   handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Authentication required.");
+    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
+    const targetEmail = args.email.toLowerCase().trim();
+    if (callerEmail !== targetEmail) {
+      const callerCustomer = await ctx.db
+        .query("customers")
+        .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
+        .first();
+      if (callerCustomer?.role !== "admin") {
+        throw new Error("You can only use your own credits.");
+      }
+    }
     const customer = await ctx.db
       .query("customers")
       .withIndex("by_email", (q: any) => q.eq("email", args.email.toLowerCase().trim()))

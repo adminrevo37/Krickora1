@@ -100,6 +100,21 @@ export async function createPaymentLink(req: CheckoutSessionRequest): Promise<{ 
   return result
 }
 
+// Create a top-up checkout session for a booking edit (when extra payment is needed)
+export async function createTopUpCheckoutSession(req: {
+  bookingId: string
+  laneName: string
+  date: string
+  customerName: string
+  customerEmail: string
+  topUpAmountCents: number
+  description: string
+}): Promise<{ sessionId: string; url: string }> {
+  if (!convex) throw new Error('Payment system not configured.')
+  const result = await convex.action(api.stripe.createTopUpCheckoutSession, req)
+  return { sessionId: result.sessionId ?? '', url: result.url ?? '' }
+}
+
 // List recent Stripe payments
 export async function listRecentStripePayments(limit?: number) {
   if (!convex) return []

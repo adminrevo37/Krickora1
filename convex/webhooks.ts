@@ -28,9 +28,13 @@ export const confirmBookingPayment = internalMutation({
       return { success: true, alreadyPaid: true };
     }
 
+    // Email dedup guard: check before patching so we can set the flag atomically
+    const willSendEmail = !!b.customerEmail && !b.paymentEmailSent;
+
     const patch: Record<string, any> = {
       paymentStatus: "paid",
       stripeSessionId: args.stripeSessionId,
+      ...(willSendEmail ? { paymentEmailSent: true } : {}),
     };
 
     if (b.status === "tentative" || b.status === "pending_payment" || b.status === "pending") {
@@ -39,17 +43,18 @@ export const confirmBookingPayment = internalMutation({
 
     await ctx.db.patch(booking._id, patch);
 
-    // Send payment confirmation email
-    if (b.customerEmail) {
+    // Send payment confirmation email (only if verifySession hasn't already sent it)
+    if (willSendEmail) {
+      const LANE_NAMES: Record<string, string> = {
+        bm1: "Bowling Machine 1",
+        bm2: "Bowling Machine 2",
+        bm3: "Bowling Machine 3",
+        ru1: "9m Run Up 1",
+        ru2: "9m Run Up 2",
+      };
       const currency = (args.currency ?? "AUD").toUpperCase();
       const amount = `$${(args.amountPaid / 100).toFixed(2)} ${currency}`;
-      const laneNameMap: Record<string, string> = {
-        bm1: "Bowling Machine Lane 1",
-        bm2: "Bowling Machine Lane 2",
-        ru1: "Run-Up Lane 1",
-        ru2: "Run-Up Lane 2",
-      };
-      const laneName = laneNameMap[b.laneId] ?? String(b.laneId).toUpperCase();
+      const laneName = LANE_NAMES[b.laneId] ?? String(b.laneId).toUpperCase();
       const description = `${laneName} — ${b.date}`;
       const paymentDate = new Date().toLocaleDateString("en-US", {
         year: "numeric",
@@ -68,6 +73,28 @@ export const confirmBookingPayment = internalMutation({
     }
 
     return { success: true, alreadyPaid: false };
+  },
+});
+
+/**
+ * Marks paymentEmailSent = true on a booking so the webhook won't resend
+ * when verifySession has already sent the confirmation email.
+ * Also stores stripePaymentIntentId (needed for future partial refunds).
+ */
+export const markPaymentEmailSent = internalMutation({
+  args: {
+    bookingId: v.string(),
+    stripePaymentIntentId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId as any);
+    if (!booking) return { success: false };
+    const patch: Record<string, any> = { paymentEmailSent: true };
+    if (args.stripePaymentIntentId) {
+      patch.stripePaymentIntentId = args.stripePaymentIntentId;
+    }
+    await ctx.db.patch(booking._id, patch);
+    return { success: true };
   },
 });
 

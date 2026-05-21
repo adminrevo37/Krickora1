@@ -99,6 +99,17 @@ export default defineSchema({
     lockSyncStatus: v.optional(v.string()), // 'pending' | 'synced' | 'failed' | 'removed'
     lockCodeId: v.optional(v.string()), // Reference to lockCodes table entry
     reminderSent: v.optional(v.boolean()), // Whether 6-hour reminder email was sent
+    // Payment tracking
+    paymentEmailSent: v.optional(v.boolean()), // Dedup guard — prevents duplicate payment confirmation emails
+    stripePaymentIntentId: v.optional(v.string()), // Needed to issue partial refunds
+    priceInCents: v.optional(v.number()), // Stored price at booking time (used for edit diff calculation)
+    // Pending booking edit (set when a top-up payment is required)
+    pendingEdit: v.optional(v.object({
+      newDuration: v.number(),
+      newAdditionalLaneIds: v.optional(v.array(v.string())),
+      newPriceInCents: v.number(),
+      priceDifference: v.number(), // positive = top-up required, negative = refund
+    })),
     modificationHistory: v.optional(
       v.array(
         v.object({
