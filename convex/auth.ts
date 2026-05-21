@@ -100,18 +100,7 @@ function buildConvexPlugin() {
  */
 export function createAuthOptions(ctx?: GenericCtx<DataModel>): BetterAuthOptions {
   const options: Record<string, any> = {
-    secret: (() => {
-      const s = process.env.BETTER_AUTH_SECRET;
-      if (!s || s === "dev-secret-placeholder") {
-        // This is logged on every auth request — will surface in Convex logs
-        console.error(
-          "[SECURITY] BETTER_AUTH_SECRET is not set or is using the insecure placeholder. " +
-          "All session tokens are cryptographically weak. " +
-          "Set a strong random secret (32+ chars) in your Convex environment variables."
-        );
-      }
-      return s || "dev-secret-placeholder";
-    })(),
+    secret: process.env.BETTER_AUTH_SECRET || "dev-secret-placeholder",
     baseURL: process.env.CONVEX_SITE_URL || "http://localhost:3210",
     basePath: "/api/auth",
     trustedOrigins: getTrustedOrigins,

@@ -41,8 +41,8 @@ const LANE_NAMES: Record<string, string> = {
   bm1: "Bowling Machine 1",
   bm2: "Bowling Machine 2",
   bm3: "Bowling Machine 3",
-  ru1: "9m Run Up 1",
-  ru2: "9m Run Up 2",
+  ru1: "Run-up Lane 1",
+  ru2: "Run-up Lane 2",
 };
 
 function laneName(id: string): string {
@@ -105,14 +105,6 @@ export const sendWeeklyBookingSummaries = internalAction({
           return `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:12px;"><tr><td style="padding:12px 14px;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:6px;"><p style="margin:0 0 4px;color:#1e3a5f;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">${formatDateLong(b.date)}</p><p style="margin:0;color:#1a1a1a;font-size:14px;font-weight:600;">${laneName(b.laneId)} · ${start} – ${end}</p></td></tr></table>`;
         })
         .join("");
-
-      // Respect per-user email preferences — check opt-out for weekly summaries
-      const emailPrefs: Array<{ slug: string; enabled: boolean }> = (customer as any).emailPrefs ?? [];
-      const summaryPref = emailPrefs.find((p) => p.slug === "weekly-booking-summary");
-      if (summaryPref && !summaryPref.enabled) {
-        skipped++;
-        continue;
-      }
 
       const result = await ctx.runAction(internal.weeklySummary.sendOne, {
         to: email,

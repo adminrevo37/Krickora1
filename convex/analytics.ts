@@ -72,13 +72,14 @@ export const getEventSummary = query({
     endTimestamp: v.number(),
   },
   handler: async (ctx, args) => {
-    // Use index range bounds to avoid loading the entire analytics table
-    const filtered = await ctx.db
+    const events = await ctx.db
       .query("analytics")
-      .withIndex("by_timestamp", (q: any) =>
-        q.gte("timestamp", args.startTimestamp).lte("timestamp", args.endTimestamp)
-      )
+      .withIndex("by_timestamp")
       .collect();
+
+    const filtered = events.filter(
+      (e) => e.timestamp >= args.startTimestamp && e.timestamp <= args.endTimestamp
+    );
 
     const summary: Record<string, number> = {};
     for (const e of filtered) {

@@ -168,9 +168,6 @@ export const createPaymentLink = action({
 
     const siteUrl = process.env.SITE_URL || "http://localhost:5173";
 
-    // Payment Links require a pre-saved price, so we create a one-off product/price
-    // and immediately archive them to keep the Stripe dashboard clean.
-    // Archiving does NOT break existing payment links — they remain functional.
     const product = await stripe.products.create({
       name: `Net Session - ${args.laneName}${variantLabel}`,
       description,
@@ -195,14 +192,6 @@ export const createPaymentLink = action({
       },
     });
 
-    // Archive the one-off product/price so they don't pollute the Stripe dashboard
-    try {
-      await stripe.prices.update(price.id, { active: false });
-      await stripe.products.update(product.id, { active: false });
-    } catch (archiveErr) {
-      console.warn("[createPaymentLink] Could not archive product/price:", archiveErr);
-    }
-
     return {
       url: paymentLink.url,
       description,
@@ -214,20 +203,19 @@ export const listRecentPayments = action({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const stripe = getStripe();
-    // Use payment_intents instead of the deprecated charges.list
-    const paymentIntents = await stripe.paymentIntents.list({
+    const charges = await stripe.charges.list({
       limit: args.limit || 50,
     });
-    return paymentIntents.data.map((pi) => ({
-      id: pi.id,
-      amount: pi.amount,
-      currency: pi.currency,
-      status: pi.status,
-      customerEmail: (pi as any).receipt_email || "",
-      description: pi.description || "",
-      created: pi.created,
-      metadata: pi.metadata,
-      receiptUrl: undefined as string | undefined,
+    return charges.data.map((charge) => ({
+      id: charge.id,
+      amount: charge.amount,
+      currency: charge.currency,
+      status: charge.status,
+      customerEmail: charge.billing_details?.email || charge.receipt_email || "",
+      description: charge.description || "",
+      created: charge.created,
+      metadata: charge.metadata,
+      receiptUrl: charge.receipt_url,
     }));
   },
 });

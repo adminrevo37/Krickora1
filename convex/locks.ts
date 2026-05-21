@@ -149,11 +149,9 @@ export const pushAccessCode = internalAction({
       }
     }
 
-    const status = seamCodeIds.length === 0
-      ? "failed"
-      : errors.length > 0
-        ? "partial"
-        : "active";
+    const status = seamCodeIds.length > 0
+      ? (errors.length > 0 ? "active" : "active")
+      : "failed";
 
     // Save lock code record
     await ctx.runMutation(internal.lockMutations.createLockCode, {

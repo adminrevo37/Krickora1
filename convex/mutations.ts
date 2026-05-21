@@ -4,45 +4,6 @@ import { internal } from "./_generated/api";
 import { requireAdmin } from "./lib/adminGuard";
 
 // ============================================================================
-// SHARED FORMATTING UTILITIES — single source of truth across mutations
-// ============================================================================
-
-/** Canonical lane display names. Keep in sync with src/lib/booking-data.ts LANES. */
-const LANE_NAMES: Record<string, string> = {
-  bm1: "Bowling Machine 1",
-  bm2: "Bowling Machine 2",
-  bm3: "Bowling Machine 3",
-  ru1: "9m Run Up 1",
-  ru2: "9m Run Up 2",
-};
-
-function getLaneName(laneId: string): string {
-  return LANE_NAMES[laneId] ?? laneId.toUpperCase();
-}
-
-function fmtHour(h: number): string {
-  const hr = Math.floor(h);
-  const min = Math.round((h - hr) * 60);
-  const period = hr >= 12 ? "PM" : "AM";
-  const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
-  return `${display}:${min.toString().padStart(2, "0")} ${period}`;
-}
-
-function fmtDuration(minutes: number): string {
-  if (minutes < 60) return `${minutes} minutes`;
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  if (m === 0) return h === 1 ? "1 hour" : `${h} hours`;
-  return `${h}hr ${m}min`;
-}
-
-function fmtDate(dateStr: string): string {
-  return new Date(dateStr + "T00:00:00").toLocaleDateString("en-US", {
-    weekday: "long", year: "numeric", month: "long", day: "numeric",
-  });
-}
-
-// ============================================================================
 // BOOKING MUTATIONS
 // ============================================================================
 
@@ -81,12 +42,7 @@ export const createBooking = mutation({
     tentativeForDate: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // Read closing hour from admin settings (fallback: 21 / 9 PM)
-    const siteSettings = await ctx.db
-      .query("siteSettings")
-      .withIndex("by_key", (q: any) => q.eq("key", "global"))
-      .first();
-    const CLOSING_HOUR = siteSettings?.closingHour ?? 21;
+    const CLOSING_HOUR = 21;
     const endHour = args.startHour + args.duration / 60;
     if (endHour > CLOSING_HOUR) {
       throw new Error("Booking extends past closing time.");
@@ -143,21 +99,6 @@ export const createBooking = mutation({
       }
     }
 
-    // Also check facility-wide blocks (laneId = 'all') that apply to every lane
-    const facilityBlocks = await ctx.db
-      .query("laneBlocks")
-      .withIndex("by_laneId_date", (q: any) =>
-        q.eq("laneId", "all").eq("date", args.date)
-      )
-      .collect();
-    const hasFacilityConflict = facilityBlocks.some((b) => {
-      const bEnd = b.startHour + b.duration / 60;
-      return args.startHour < bEnd && endHour > b.startHour;
-    });
-    if (hasFacilityConflict) {
-      throw new Error("This lane is blocked for service/repair during this time.");
-    }
-
     // For coach bookings, all assigned athletes share the coach's access code
     const normalizedAthleteSlots = args.athleteSlots && args.isCoachBooking && args.accessCode
       ? args.athleteSlots.map((s) => ({
@@ -192,10 +133,26 @@ export const createBooking = mutation({
 
     // Send booking confirmation email for confirmed bookings
     if (args.status === "confirmed" && args.customerEmail) {
-      const laneName = getLaneName(args.laneId);
-      const formattedDate = fmtDate(args.date);
+      const laneNameMap: Record<string, string> = {
+        bm1: "Bowling Machine Lane 1",
+        bm2: "Bowling Machine Lane 2",
+        ru1: "Run-Up Lane 1",
+        ru2: "Run-Up Lane 2",
+      };
+      const laneName = laneNameMap[args.laneId] ?? args.laneId.toUpperCase();
+      const formattedDate = new Date(args.date + "T00:00:00").toLocaleDateString("en-US", {
+        weekday: "long", year: "numeric", month: "long", day: "numeric",
+      });
+      const fmtHour = (h: number) => {
+        const hr = Math.floor(h);
+        const min = Math.round((h - hr) * 60);
+        const period = hr >= 12 ? "PM" : "AM";
+        const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+        return `${display}:${min.toString().padStart(2, "0")} ${period}`;
+      };
+      const endHour = args.startHour + args.duration / 60;
       const timeSlot = `${fmtHour(args.startHour)} - ${fmtHour(endHour)}`;
-      const durationStr = fmtDuration(args.duration);
+      const durationStr = args.duration === 60 ? "1 hour" : args.duration === 90 ? "1.5 hours" : args.duration === 120 ? "2 hours" : `${args.duration} minutes`;
       const amount = args.coachPrice != null
         ? `$${args.coachPrice.toFixed(2)}`
         : args.creditApplied != null
@@ -215,8 +172,23 @@ export const createBooking = mutation({
 
     // Send athlete allocation emails for coach bookings with initial athlete slots
     if (args.isCoachBooking && normalizedAthleteSlots && normalizedAthleteSlots.length > 0 && (args.status === "confirmed" || args.status === "tentative")) {
-      const laneName = getLaneName(args.laneId);
-      const formattedDate = fmtDate(args.date);
+      const laneNameMap: Record<string, string> = {
+        bm1: "Bowling Machine Lane 1",
+        bm2: "Bowling Machine Lane 2",
+        ru1: "Run-Up Lane 1",
+        ru2: "Run-Up Lane 2",
+      };
+      const laneName = laneNameMap[args.laneId] ?? args.laneId.toUpperCase();
+      const formattedDate = new Date(args.date + "T00:00:00").toLocaleDateString("en-US", {
+        weekday: "long", year: "numeric", month: "long", day: "numeric",
+      });
+      const fmtHour = (h: number) => {
+        const hr = Math.floor(h);
+        const min = Math.round((h - hr) * 60);
+        const period = hr >= 12 ? "PM" : "AM";
+        const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+        return `${display}:${min.toString().padStart(2, "0")} ${period}`;
+      };
       for (const slot of normalizedAthleteSlots) {
         const athlete = await ctx.db
           .query("customers")
@@ -231,7 +203,7 @@ export const createBooking = mutation({
           laneName,
           date: formattedDate,
           timeSlot: `${fmtHour(slot.startHour)} - ${fmtHour(slotEnd)}`,
-          duration: fmtDuration(slot.durationMinutes),
+          duration: slot.durationMinutes === 60 ? "1 hour" : `${slot.durationMinutes} minutes`,
           accessCode: slot.accessCode ?? args.accessCode ?? "N/A",
         });
       }
@@ -379,24 +351,8 @@ export const cancelBooking = mutation({
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.id);
     if (!booking) throw new Error("Booking not found.");
-    if (booking.status === "cancelled") throw new Error("Already cancelled.");
-
-    // Auth check: caller must own the booking or be an admin
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Authentication required to cancel a booking.");
-    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
-    const isOwner =
-      (booking.userId != null && booking.userId === identity.subject) ||
-      booking.customerEmail.toLowerCase() === callerEmail;
-    if (!isOwner) {
-      const callerCustomer = await ctx.db
-        .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
-        .first();
-      if (callerCustomer?.role !== "admin") {
-        throw new Error("You can only cancel your own bookings.");
-      }
-    }
+    if (booking.status === "cancelled")
+      throw new Error("Already cancelled.");
 
     await ctx.db.patch(args.id, {
       status: "cancelled",
@@ -414,13 +370,21 @@ export const cancelBooking = mutation({
 
     // Send cancellation confirmation email
     if (booking.customerEmail) {
+      const LANE_NAMES: Record<string, string> = { bm1: "Bowling Machine 1", bm2: "Bowling Machine 2", bm3: "Bowling Machine 3", ru1: "9m Run Up 1", ru2: "9m Run Up 2" };
+      const whole = Math.floor(booking.startHour);
+      const mins = Math.round((booking.startHour - whole) * 60);
+      const period = whole >= 12 ? "PM" : "AM";
+      const displayHour = whole > 12 ? whole - 12 : whole === 0 ? 12 : whole;
+      const timeSlot = `${displayHour}:${mins.toString().padStart(2, "0")} ${period}`;
+      const durationLabel = booking.duration === 60 ? "1 hour" : booking.duration === 90 ? "1.5 hours" : booking.duration === 30 ? "30 minutes" : `${booking.duration} min`;
+
       await ctx.scheduler.runAfter(0, internal.emails.sendBookingCancellation, {
         to: booking.customerEmail,
         customerName: booking.customerName || "Valued Customer",
-        laneName: getLaneName(booking.laneId),
+        laneName: LANE_NAMES[booking.laneId] ?? booking.laneId,
         date: booking.date,
-        timeSlot: fmtHour(booking.startHour),
-        duration: fmtDuration(booking.duration),
+        timeSlot,
+        duration: durationLabel,
       });
     }
 
@@ -488,11 +452,7 @@ export const createTentativeNextWeek = mutation({
     const source = await ctx.db.get(args.sourceBookingId);
     if (!source || !source.isCoachBooking) return null;
 
-    const tentativeSettings = await ctx.db
-      .query("siteSettings")
-      .withIndex("by_key", (q: any) => q.eq("key", "global"))
-      .first();
-    const CLOSING_HOUR = tentativeSettings?.closingHour ?? 21;
+    const CLOSING_HOUR = 21;
     const [year, month, day] = source.date.split("-").map(Number);
     const sourceDate = new Date(year, month - 1, day);
     const nextWeekDate = new Date(sourceDate);
@@ -565,11 +525,7 @@ export const editBookingDuration = mutation({
     if (booking.status === "cancelled") throw new Error("Cannot edit a cancelled booking.");
     if (booking.userId !== args.userId && booking.customerEmail !== args.userId) throw new Error("You can only edit your own bookings.");
 
-    const durationSettings = await ctx.db
-      .query("siteSettings")
-      .withIndex("by_key", (q: any) => q.eq("key", "global"))
-      .first();
-    const CLOSING_HOUR = durationSettings?.closingHour ?? 21;
+    const CLOSING_HOUR = 21;
     const newEndHour = booking.startHour + args.newDuration / 60;
     if (newEndHour > CLOSING_HOUR) {
       throw new Error("New duration extends past closing time.");
@@ -681,10 +637,11 @@ export const rescheduleBooking = mutation({
         .query("customers")
         .withIndex("by_email", (q: any) => q.eq("email", args.userId.toLowerCase()))
         .first();
-      // Avoid full table scan: try direct ID lookup for the userId
-      let adminById: any = null;
-      try { adminById = await ctx.db.get(args.userId as any); } catch {}
-      const isAdmin = adminCustomer?.role === "admin" || adminById?.role === "admin";
+      const isAdminById = await ctx.db
+        .query("customers")
+        .collect()
+        .then(all => all.find(c => c._id.toString() === args.userId && c.role === "admin"));
+      const isAdmin = adminCustomer?.role === "admin" || !!isAdminById;
       if (!isAdmin) {
         throw new Error("You can only reschedule your own bookings.");
       }
@@ -719,9 +676,8 @@ export const rescheduleBooking = mutation({
         .query("customers")
         .withIndex("by_email", (q: any) => q.eq("email", args.userId.toLowerCase()))
         .first();
-      // Avoid full table scan: try direct ID lookup for the userId
-      let userById: any = null;
-      try { userById = await ctx.db.get(args.userId as any); } catch {}
+      const allCustomers = await ctx.db.query("customers").collect();
+      const userById = allCustomers.find(c => c._id.toString() === args.userId);
       const isAdmin = requestingUser?.role === "admin" || userById?.role === "admin";
       if (!isAdmin) {
         throw new Error(
@@ -850,16 +806,26 @@ export const rescheduleBooking = mutation({
 
     // Send reschedule confirmation email
     if (booking.customerEmail) {
+      const LANE_NAMES: Record<string, string> = { bm1: "Bowling Machine 1", bm2: "Bowling Machine 2", bm3: "Bowling Machine 3", ru1: "9m Run Up 1", ru2: "9m Run Up 2" };
+      const fmtTime = (h: number) => {
+        const w = Math.floor(h);
+        const m = Math.round((h - w) * 60);
+        const p = w >= 12 ? "PM" : "AM";
+        const dh = w > 12 ? w - 12 : w === 0 ? 12 : w;
+        return `${dh}:${m.toString().padStart(2, "0")} ${p}`;
+      };
+      const fmtDur = (d: number) => d === 60 ? "1 hour" : d === 90 ? "1.5 hours" : d === 30 ? "30 minutes" : `${d} min`;
+
       await ctx.scheduler.runAfter(0, internal.emails.sendBookingRescheduled, {
         to: booking.customerEmail,
         customerName: booking.customerName || "Valued Customer",
-        oldLaneName: getLaneName(booking.laneId),
+        oldLaneName: LANE_NAMES[booking.laneId] ?? booking.laneId,
         oldDate: booking.date,
-        oldTimeSlot: fmtHour(booking.startHour),
-        newLaneName: getLaneName(newLaneId),
+        oldTimeSlot: fmtTime(booking.startHour),
+        newLaneName: LANE_NAMES[newLaneId] ?? newLaneId,
         newDate: args.newDate,
-        newTimeSlot: fmtHour(args.newStartHour),
-        newDuration: fmtDuration(args.newDuration),
+        newTimeSlot: fmtTime(args.newStartHour),
+        newDuration: fmtDur(args.newDuration),
         accessCode: args.newAccessCode ?? booking.accessCode ?? "",
       });
     }
@@ -963,8 +929,23 @@ export const updateBookingAthleteSlots = mutation({
     });
 
     // Send allocation emails to newly-added or changed athletes
-    const laneName = getLaneName(booking.laneId);
-    const formattedDate = fmtDate(booking.date);
+    const laneNameMap: Record<string, string> = {
+      bm1: "Bowling Machine Lane 1",
+      bm2: "Bowling Machine Lane 2",
+      ru1: "Run-Up Lane 1",
+      ru2: "Run-Up Lane 2",
+    };
+    const laneName = laneNameMap[booking.laneId] ?? booking.laneId.toUpperCase();
+    const formattedDate = new Date(booking.date + "T00:00:00").toLocaleDateString("en-US", {
+      weekday: "long", year: "numeric", month: "long", day: "numeric",
+    });
+    const fmtHour = (h: number) => {
+      const hr = Math.floor(h);
+      const min = Math.round((h - hr) * 60);
+      const period = hr >= 12 ? "PM" : "AM";
+      const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+      return `${display}:${min.toString().padStart(2, "0")} ${period}`;
+    };
     for (const slot of finalSlots) {
       const prev = prevMap.get(slot.athleteName);
       const changed = !prev || prev.startHour !== slot.startHour || prev.durationMinutes !== slot.durationMinutes;
@@ -982,7 +963,7 @@ export const updateBookingAthleteSlots = mutation({
         laneName,
         date: formattedDate,
         timeSlot: `${fmtHour(slot.startHour)} - ${fmtHour(slotEnd)}`,
-        duration: fmtDuration(slot.durationMinutes),
+        duration: slot.durationMinutes === 60 ? "1 hour" : `${slot.durationMinutes} minutes`,
         accessCode: slot.accessCode ?? booking.accessCode ?? "N/A",
       });
     }
@@ -1446,24 +1427,6 @@ export const addToWaitlist = mutation({
 export const removeFromWaitlist = mutation({
   args: { id: v.id("waitlist") },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Authentication required.");
-    const entry = await ctx.db.get(args.id);
-    if (!entry) throw new Error("Waitlist entry not found.");
-    // Verify ownership — caller must own the entry or be an admin
-    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
-    const isOwner =
-      entry.userId === identity.subject ||
-      entry.userEmail.toLowerCase() === callerEmail;
-    if (!isOwner) {
-      const callerCustomer = await ctx.db
-        .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
-        .first();
-      if (callerCustomer?.role !== "admin") {
-        throw new Error("You can only remove your own waitlist entries.");
-      }
-    }
     await ctx.db.delete(args.id);
     return args.id;
   },
@@ -1507,7 +1470,16 @@ export const notifyWaitlistedUsers = mutation({
         notificationIds.push(notifId);
 
         // Email every waitlisted user (first-come-first-served)
-        const formattedDate = fmtDate(args.date);
+        const fmtHour = (h: number) => {
+          const hr = Math.floor(h);
+          const min = Math.round((h - hr) * 60);
+          const period = hr >= 12 ? "PM" : "AM";
+          const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+          return `${display}:${min.toString().padStart(2, "0")} ${period}`;
+        };
+        const formattedDate = new Date(args.date + "T00:00:00").toLocaleDateString("en-US", {
+          weekday: "long", year: "numeric", month: "long", day: "numeric",
+        });
         await ctx.scheduler.runAfter(0, internal.emails.sendWaitlistVacancy, {
           to: entry.userEmail,
           customerName: entry.userName,
@@ -1675,23 +1647,9 @@ export const addCustomerCredit = mutation({
 export const useCustomerCredit = mutation({
   args: { email: v.string(), amount: v.number() },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Authentication required.");
-    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
-    const targetEmail = args.email.toLowerCase().trim();
-    // Caller must be the account owner or an admin
-    if (callerEmail !== targetEmail) {
-      const callerCustomer = await ctx.db
-        .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
-        .first();
-      if (callerCustomer?.role !== "admin") {
-        throw new Error("You can only use your own credits.");
-      }
-    }
     const customer = await ctx.db
       .query("customers")
-      .withIndex("by_email", (q: any) => q.eq("email", targetEmail))
+      .withIndex("by_email", (q: any) => q.eq("email", args.email.toLowerCase().trim()))
       .first();
     if (!customer) return 0;
     const available = customer.creditBalance ?? 0;

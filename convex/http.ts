@@ -1,6 +1,7 @@
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { authComponent, createAuth } from "./auth";
+import { stripeWebhook } from "./stripeWebhook";
 
 const http = httpRouter();
 
@@ -133,5 +134,16 @@ for (const path of AUTH_PREFLIGHT_PATHS) {
     }),
   });
 }
+
+// ── Stripe webhook (raw body required, no auth) ──────────────────────
+// Required env vars: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
+// Register in Stripe Dashboard → Developers → Webhooks:
+//   URL: https://<deployment>.convex.site/stripe/webhook
+//   Events: checkout.session.completed, payment_intent.payment_failed
+http.route({
+  path: "/stripe/webhook",
+  method: "POST",
+  handler: stripeWebhook,
+});
 
 export default http;

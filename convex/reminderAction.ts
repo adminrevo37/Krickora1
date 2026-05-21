@@ -29,7 +29,6 @@ export const sendBookingReminders = internalAction({
           timeSlot: booking.timeSlot,
           duration: booking.durationLabel,
           accessCode: booking.accessCode,
-          calendarUrl: "https://krickora.com",
         });
 
         // Mark as reminded so we don't send again

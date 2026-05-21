@@ -375,8 +375,7 @@ export function getValidCoachStartTimes(date: Date): number[] {
 
 // Max duration
 export function getMaxDuration(bookings: Booking[], laneId: string, dateKey: string, startHour: number, isCoach: boolean): number {
-  // Use bookingOccupiesLane to correctly account for multi-lane bookings
-  const laneBookings = bookings.filter(b => bookingOccupiesLane(b, laneId) && b.date === dateKey && b.status !== 'cancelled')
+  const laneBookings = bookings.filter(b => b.laneId === laneId && b.date === dateKey && b.status !== 'cancelled')
   let maxEnd = CLOSING_HOUR
   for (const b of laneBookings) {
     if (b.startHour > startHour && b.startHour < maxEnd) maxEnd = b.startHour
