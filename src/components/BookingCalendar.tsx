@@ -5,7 +5,6 @@ import {
   generateTimeSlots,
   getCurrentWeekDays,
   getCoachRolling7Days,
-  getL2WeekDays,
   getAWSTNow,
   formatDateKey,
   formatDayLabel,
@@ -33,18 +32,6 @@ import BookingModal from './BookingModal'
 import AuthModal from './AuthModal'
 import WaitlistModal from './WaitlistModal'
 
-/** Returns black or white depending on which has better contrast against the bg hex colour. */
-function getContrastText(hex?: string): string {
-  if (!hex) return '#fff'
-  const h = hex.replace('#', '')
-  const full = h.length === 3 ? h.split('').map(x => x + x).join('') : h
-  if (full.length !== 6) return '#fff'
-  const r = parseInt(full.slice(0, 2), 16)
-  const g = parseInt(full.slice(2, 4), 16)
-  const b = parseInt(full.slice(4, 6), 16)
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.6 ? '#1f2937' : '#ffffff'
-}
-
 export default function BookingCalendar() {
   const { user, isAdmin, isCoach: userIsCoach, customerRecord } = useAuth()
   const { settings } = useSettings()
@@ -52,16 +39,15 @@ export default function BookingCalendar() {
   // Wait for customerRecord to load before deciding tier — otherwise L2 coaches
   // see a brief L1 flash while Convex resolves the record.
   const coachTierLoaded = customerRecord !== undefined && customerRecord !== null
-  const coachTierEarly = ((customerRecord as any)?.coachTier ?? 'L1') as 'L1' | 'L2'
-  // L1 coaches get a rolling 8-day window. L2 coaches see Mon–Sun of the upcoming week.
-  // Default to L2 (weekly view) until the record loads to avoid a brief L1 flash.
-  const isL1Coach = userIsCoach && coachTierLoaded && coachTierEarly !== 'L2'
+  const coachTierEarly = ((customerRecord as any)?.coachTier ?? 'L1') as 'L1' | 'L2' | 'Bowling' | 'BowlingL2'
+  // Only L1 coaches (incl. Bowling L1) get the rolling window. L2 coaches see the weekly view like customers.
+  // If the record hasn't loaded yet, default to NON-L1 (weekly view) to avoid an L1 flash for L2 coaches.
+  const isL1Coach = userIsCoach && coachTierLoaded && coachTierEarly !== 'L2' && coachTierEarly !== 'BowlingL2'
   const coachWindowDays = settings.coachBookingWindowDays ?? 8
   const weekDays = useMemo(() => {
     if (isL1Coach) return getCoachRolling7Days(coachWindowDays)
-    if (userIsCoach) return getL2WeekDays() // L2 coach: Mon–Sun of the relevant week
-    return getCurrentWeekDays()            // Customers
-  }, [isL1Coach, userIsCoach, coachWindowDays])
+    return getCurrentWeekDays()
+  }, [isL1Coach, coachWindowDays])
 
   const allTimeSlots = useMemo(() => generateTimeSlots(), [])
   const [selectedDay, setSelectedDay] = useState<Date>(() => {
@@ -90,7 +76,7 @@ export default function BookingCalendar() {
 
   const dateKey = formatDateKey(selectedDay)
   const userRole = user?.role ?? 'customer'
-  const coachTier = ((customerRecord as any)?.coachTier ?? 'L1') as 'L1' | 'L2'
+  const coachTier = ((customerRecord as any)?.coachTier ?? 'L1') as 'L1' | 'L2' | 'Bowling' | 'BowlingL2'
   const hasAccess = canAccessCalendar(userRole as 'coach' | 'customer' | 'admin', coachTier, settings)
 
   const laneActiveHalfHours = useMemo(() => {
@@ -296,15 +282,6 @@ export default function BookingCalendar() {
                   const past = isPast(selectedDay, slot.hour)
                   const isLaneInactiveAtHalfHour = isHalfHour && !laneActiveSet.has(slot.hour) && !booked && !blocked
                   const isTentative = booked?.status === 'tentative'
-                  const isOwnBooking = !isAdmin && !!user && !!booked && (
-                    (booked.userId != null && booked.userId === user.id) ||
-                    booked.customerEmail?.toLowerCase() === user.email?.toLowerCase()
-                  )
-                  // For coaches: use their assigned profile colour instead of generic green
-                  const ownCoachColor = (isOwnBooking && userIsCoach)
-                    ? ((customerRecord as any)?.color as string | undefined)
-                    : undefined
-                  const ownCoachTextColor = getContrastText(ownCoachColor)
 
                   const isStartOfBooking = booked && Math.abs(booked.startHour - slot.hour) < 0.01
                   const isMiddleOfBooking = booked && !isStartOfBooking
@@ -365,31 +342,14 @@ export default function BookingCalendar() {
                         if (!booked && canBook && hasDurations && timeCheck.allowed) handleSlotClick(lane, slot)
                       }}>
                       {isStartOfBooking && booked && (
-                        <div
-                          className={`absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border ${
-                            isTentative
-                              ? 'bg-gradient-to-br from-blue-100 to-blue-50 border-blue-200'
-                              : ownCoachColor
-                                ? 'border-transparent'
-                                : isOwnBooking
-                                  ? 'bg-gradient-to-br from-emerald-100 to-emerald-50 border-emerald-300'
-                                  : 'bg-gradient-to-br from-red-100 to-red-50 border-red-200'
-                          }`}
-                          style={{
-                            height: `${visualSpan * 32 - 4}px`,
-                            ...(ownCoachColor ? { backgroundColor: ownCoachColor, borderColor: ownCoachColor, color: ownCoachTextColor } : {}),
-                          }}
-                        >
-                          <div className={`text-[9px] font-semibold truncate ${
-                            isTentative ? 'text-blue-700' : ownCoachColor ? '' : isOwnBooking ? 'text-emerald-700' : 'text-red-700'
-                          }`}>
-                            {isAdmin ? booked.customerName : isTentative ? 'Tentative' : isOwnBooking ? booked.customerName : 'Booked'}
+                        <div className={`absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border ${isTentative ? 'bg-gradient-to-br from-blue-100 to-blue-50 border-blue-200' : 'bg-gradient-to-br from-red-100 to-red-50 border-red-200'}`}
+                          style={{ height: `${visualSpan * 32 - 4}px` }}>
+                          <div className={`text-[9px] font-semibold truncate ${isTentative ? 'text-blue-700' : 'text-red-700'}`}>
+                            {isAdmin ? booked.customerName : isTentative ? 'Tentative' : 'Booked'}
                             {booked.status === 'cancelled' && <span className="ml-1 text-orange-500">(cancelled)</span>}
                             {isTentative && <span className="ml-1">⏳</span>}
                           </div>
-                          <div className={`text-[8px] ${
-                            isTentative ? 'text-blue-500' : ownCoachColor ? 'opacity-75' : isOwnBooking ? 'text-emerald-600' : 'text-red-500'
-                          }`}>
+                          <div className={`text-[8px] ${isTentative ? 'text-blue-500' : 'text-red-500'}`}>
                             {formatTime(booked.startHour)}-{formatTime(booked.startHour + booked.duration / 60)}
                             {isAdmin && booked.isCoachBooking && <span className="ml-1 text-orange-500">🏅</span>}
                           </div>
@@ -404,12 +364,7 @@ export default function BookingCalendar() {
                           )}
                         </div>
                       )}
-                      {isMiddleOfBooking && (
-                        <div
-                          className={`absolute inset-0 ${isTentative ? 'bg-blue-50/30' : ownCoachColor ? '' : isOwnBooking ? 'bg-emerald-50/30' : 'bg-red-50/30'}`}
-                          style={ownCoachColor ? { backgroundColor: `${ownCoachColor}30` } : undefined}
-                        />
-                      )}
+                      {isMiddleOfBooking && <div className={`absolute inset-0 ${isTentative ? 'bg-blue-50/30' : 'bg-red-50/30'}`} />}
                       {past && !booked && <div className="absolute inset-0 flex items-center justify-center"><div className="w-3 h-[1px] bg-gray-300 rotate-45" /></div>}
                       {tooLate && !booked && <div className="absolute inset-0 flex items-center justify-center"><span className="text-[8px] text-gray-400">Too late</span></div>}
                       {!past && !booked && canBook && hasDurations && timeCheck.allowed && !waitlistMode && (

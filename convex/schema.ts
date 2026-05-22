@@ -34,8 +34,7 @@ export default defineSchema({
     assignedCoachIds: v.optional(v.array(v.string())),
     creditBalance: v.optional(v.number()),
     color: v.optional(v.string()),
-    coachTier: v.optional(v.string()), // 'L1' | 'L2'
-    defaultSessionDuration: v.optional(v.number()), // coach default athlete slot duration in minutes
+    coachTier: v.optional(v.string()), // 'L1' | 'L2' | 'Bowling'
     bookingEmailsEnabled: v.optional(v.boolean()),
     emailPrefs: v.optional(
       v.array(
@@ -100,17 +99,6 @@ export default defineSchema({
     lockSyncStatus: v.optional(v.string()), // 'pending' | 'synced' | 'failed' | 'removed'
     lockCodeId: v.optional(v.string()), // Reference to lockCodes table entry
     reminderSent: v.optional(v.boolean()), // Whether 6-hour reminder email was sent
-    // Payment tracking
-    paymentEmailSent: v.optional(v.boolean()), // Dedup guard — prevents duplicate payment confirmation emails
-    stripePaymentIntentId: v.optional(v.string()), // Needed to issue partial refunds
-    priceInCents: v.optional(v.number()), // Stored price at booking time (used for edit diff calculation)
-    // Pending booking edit (set when a top-up payment is required)
-    pendingEdit: v.optional(v.object({
-      newDuration: v.number(),
-      newAdditionalLaneIds: v.optional(v.array(v.string())),
-      newPriceInCents: v.number(),
-      priceDifference: v.number(), // positive = top-up required, negative = refund
-    })),
     modificationHistory: v.optional(
       v.array(
         v.object({
@@ -211,32 +199,7 @@ export default defineSchema({
     l2CoachOpenDay: v.optional(v.string()),
     l2CoachOpenHour: v.optional(v.number()),
     registrationLocked: v.optional(v.boolean()),
-    // Advanced booking rule overrides
-    coachRescheduleFreezeHours: v.optional(v.number()),  // default 24 — coach can't self-reschedule within N hours
-    extensionNoticeMinutes: v.optional(v.number()),       // default 20 — must extend >N min before start
-    customerMaxDurationMinutes: v.optional(v.number()),   // default 120
-    coachMaxDurationMinutes: v.optional(v.number()),      // default 600
-    minAthleteDurationMinutes: v.optional(v.number()),    // default 15
-    // Cancellation rules (separated by user type)
-    customerCancellationHours: v.optional(v.number()),   // default 2 — customers cannot cancel within N hours
-    coachLateCancellationHours: v.optional(v.number()),  // default 24 — coach charged if they cancel within N hours
   }).index("by_key", ["key"]),
-
-  // Discount codes
-  discountCodes: defineTable({
-    code: v.string(),           // lowercase unique code e.g. "julian"
-    discount: v.number(),       // 0–100 percent off
-    label: v.string(),          // display label e.g. "100% Off — Complimentary"
-    bypassStripe: v.optional(v.boolean()),  // if true, skip payment entirely (optional for backward compat)
-    active: v.boolean(),
-    expiresAt: v.optional(v.string()),      // YYYY-MM-DD or undefined
-    usageLimit: v.optional(v.number()),     // max total uses, undefined = unlimited
-    usedCount: v.optional(v.number()),      // optional for backward compat — defaults to 0 in UI
-    createdAt: v.string(),
-    createdBy: v.optional(v.string()),
-  })
-    .index("by_code", ["code"])
-    .index("by_active", ["active"]),
 
   // Google Calendar OAuth tokens (singleton - one per admin)
   googleCalendarTokens: defineTable({

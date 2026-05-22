@@ -1,5 +1,5 @@
 export type UserRole = 'customer' | 'coach' | 'admin'
-export type CoachTier = 'L1' | 'L2'
+export type CoachTier = 'L1' | 'L2' | 'Bowling' | 'BowlingL2'
 
 export interface User {
   id: string

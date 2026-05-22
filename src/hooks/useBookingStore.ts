@@ -2,7 +2,6 @@ import { useCallback, useMemo } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { type Booking, CLOSING_HOUR, getAWSTNow } from '../lib/booking-data'
-import { getSettingsStore } from '../lib/settings-store'
 import type { Id } from '../../convex/_generated/dataModel'
 
 // Convert Convex booking doc to local Booking type
@@ -112,21 +111,18 @@ export function useBookings() {
       const now = getAWSTNow()
       const hoursUntil =
         (bookingStart.getTime() - now.getTime()) / (1000 * 60 * 60)
-      const s = getSettingsStore().get()
-      // Coach bookings can always be cancelled, but will be charged if within the late-cancellation window
+      // Coach bookings can always be cancelled, but will be charged if <24h
       if (booking.isCoachBooking) {
-        const coachLateHours = s.coachLateCancellationHours
-        if (hoursUntil < coachLateHours) {
-          return { allowed: true, willBeCharged: true, reason: `Cancellation within ${coachLateHours} hours of booking — you will still be charged to your statement.` }
+        if (hoursUntil < 24) {
+          return { allowed: true, willBeCharged: true, reason: 'Cancellation within 24 hours of booking — you will still be charged to your statement.' }
         }
         return { allowed: true }
       }
-      const customerCancelHours = s.customerCancellationHours
-      if (hoursUntil < customerCancelHours) {
+      if (hoursUntil < 2) {
         return {
           allowed: false,
           reason:
-            `Bookings can only be cancelled or changed at least ${customerCancelHours} hour${customerCancelHours !== 1 ? 's' : ''} before the session starts.`,
+            'Bookings can only be cancelled or changed at least 2 hours before the session starts.',
         }
       }
       return { allowed: true }
@@ -197,11 +193,6 @@ export function useBookings() {
         convexUpdates.accessCode = updates.accessCode
       if (updates.refilledMinutes !== undefined)
         convexUpdates.refilledMinutes = updates.refilledMinutes
-      // UX-3: Forward scheduling + phone fields (previously dropped)
-      if (updates.date !== undefined) convexUpdates.date = updates.date
-      if (updates.startHour !== undefined) convexUpdates.startHour = updates.startHour
-      if (updates.laneId !== undefined) convexUpdates.laneId = updates.laneId
-      if (updates.customerPhone !== undefined) convexUpdates.customerPhone = updates.customerPhone
 
       await updateBookingMut({
         id: bookingId as Id<"bookings">,

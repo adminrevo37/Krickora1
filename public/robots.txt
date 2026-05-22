@@ -1,0 +1,8 @@
+# shipper-auto-generated-seo
+# Edit this file to override Shipper's defaults — remove the marker line
+# above to opt out of auto-regeneration on future deploys.
+
+User-agent: *
+Allow: /
+
+Sitemap: http://krickora.shipper.now/sitemap.xml

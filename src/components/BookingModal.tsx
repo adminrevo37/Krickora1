@@ -13,7 +13,10 @@ import { formatAccessCode } from '../lib/access-code'
 import { useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 
-// Discount codes are now managed in the DB — see convex/discountCodes table
+// Valid discount codes and their discount percentage (100 = free)
+const DISCOUNT_CODES: Record<string, { discount: number; label: string; bypassStripe: boolean }> = {
+  julian: { discount: 100, label: '100% Off — Complimentary', bypassStripe: true },
+}
 
 interface BookingModalProps {
   lane: Lane; date: Date; startHour: number; existingBookings: Booking[]
@@ -46,13 +49,6 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const [discountCode, setDiscountCode] = useState('')
   const [appliedDiscount, setAppliedDiscount] = useState<{ code: string; discount: number; label: string; bypassStripe: boolean } | null>(null)
   const [discountError, setDiscountError] = useState<string | null>(null)
-
-  // Validate discount code reactively from DB (null = invalid/loading, undefined = skipped)
-  const pendingCode = discountCode.trim().toLowerCase()
-  const discountResult = useQuery(
-    api.queries.validateDiscountCode,
-    pendingCode ? { code: pendingCode } : 'skip'
-  )
 
   // Coach athlete tracking
   const [athleteSlots, setAthleteSlots] = useState<AthleteSlot[]>([])
@@ -108,10 +104,9 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     setDiscountError(null)
     const code = discountCode.trim().toLowerCase()
     if (!code) { setDiscountError('Please enter a discount code.'); return }
-    // discountResult === undefined means query is still loading; null means invalid
-    if (discountResult === undefined) { setDiscountError('Checking code...'); return }
-    if (!discountResult) { setDiscountError('Invalid or expired discount code.'); return }
-    setAppliedDiscount({ code, ...discountResult })
+    const match = DISCOUNT_CODES[code]
+    if (!match) { setDiscountError('Invalid discount code.'); return }
+    setAppliedDiscount({ code, ...match })
     setDiscountError(null)
   }
 

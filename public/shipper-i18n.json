@@ -1182,6 +1182,7 @@
     "Search customers by name, email, or phone...": "Search customers by name, email, or phone...",
     "User does not have a password-based account.": "User does not have a password-based account.",
     "You don't have permission to view this page.": "You don't have permission to view this page.",
+    "useTheme must be used within a ThemeProvider": "useTheme must be used within a ThemeProvider",
     "⏳ Not yet rebooked — full charge applies": "⏳ Not yet rebooked — full charge applies",
     "Choose a coach above to view their statement.": "Choose a coach above to view their statement.",
     "Only the administrator can access this panel.": "Only the administrator can access this panel.",

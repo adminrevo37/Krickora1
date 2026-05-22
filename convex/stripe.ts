@@ -67,7 +67,6 @@ export const createCheckoutSession = action({
         },
       ],
       metadata: {
-        sessionType: "booking",
         bookingId: args.bookingId || "",
         laneName: args.laneName,
         date: args.date,
@@ -117,24 +116,10 @@ export const verifySession = action({
           reference: session.id,
           paymentDate,
         });
-        // Mark sent in Stripe metadata (guards against duplicate verifySession calls)
+        // Mark sent to avoid duplicates if verifySession is called again
         await stripe.checkout.sessions.update(args.sessionId, {
           metadata: { ...(session.metadata || {}), paymentEmailSent: "true" },
         });
-        // Also mark on the Convex booking so the webhook handler won't re-send
-        if (session.metadata?.bookingId) {
-          try {
-            await ctx.runMutation(internal.webhooks.markPaymentEmailSent, {
-              bookingId: session.metadata.bookingId,
-              stripePaymentIntentId:
-                typeof session.payment_intent === "string"
-                  ? session.payment_intent
-                  : undefined,
-            });
-          } catch (markErr) {
-            console.warn("[verifySession] Could not mark paymentEmailSent on booking:", markErr);
-          }
-        }
       } catch (err) {
         console.error("[payment-confirmation] Failed to send:", err);
       }
@@ -218,100 +203,19 @@ export const listRecentPayments = action({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const stripe = getStripe();
-    const paymentIntents = await stripe.paymentIntents.list({
+    const charges = await stripe.charges.list({
       limit: args.limit || 50,
     });
-    return paymentIntents.data.map((pi) => ({
-      id: pi.id,
-      amount: pi.amount,
-      currency: pi.currency,
-      status: pi.status,
-      customerEmail: (pi as any).receipt_email || "",
-      description: pi.description || "",
-      created: pi.created,
-      metadata: pi.metadata,
-      receiptUrl: undefined as string | undefined,
+    return charges.data.map((charge) => ({
+      id: charge.id,
+      amount: charge.amount,
+      currency: charge.currency,
+      status: charge.status,
+      customerEmail: charge.billing_details?.email || charge.receipt_email || "",
+      description: charge.description || "",
+      created: charge.created,
+      metadata: charge.metadata,
+      receiptUrl: charge.receipt_url,
     }));
-  },
-});
-
-/**
- * Issues a partial Stripe refund on an existing payment intent.
- * Called when a customer reduces their booking duration.
- */
-export const issueBookingRefund = action({
-  args: {
-    bookingId: v.string(),
-    paymentIntentId: v.string(),
-    refundAmountCents: v.number(),
-    customerEmail: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const stripe = getStripe();
-    try {
-      const refund = await stripe.refunds.create({
-        payment_intent: args.paymentIntentId,
-        amount: args.refundAmountCents,
-      });
-      console.log(
-        `[issueBookingRefund] Refund ${refund.id} issued for booking ${args.bookingId}: ` +
-        `$${(args.refundAmountCents / 100).toFixed(2)} AUD to ${args.customerEmail}`
-      );
-      return { success: true, refundId: refund.id };
-    } catch (err: any) {
-      console.error("[issueBookingRefund] Stripe refund failed:", err?.message);
-      throw new Error(`Refund failed: ${err?.message ?? "unknown error"}`);
-    }
-  },
-});
-
-/**
- * Creates a top-up Stripe checkout session for a booking edit where the
- * new duration/lanes cost more than the original.
- */
-export const createTopUpCheckoutSession = action({
-  args: {
-    bookingId: v.string(),
-    laneName: v.string(),
-    date: v.string(),
-    customerName: v.string(),
-    customerEmail: v.string(),
-    topUpAmountCents: v.number(),
-    description: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const stripe = getStripe();
-    const siteUrl = process.env.SITE_URL || "http://localhost:5173";
-
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      mode: "payment",
-      customer_email: args.customerEmail,
-      line_items: [
-        {
-          price_data: {
-            currency: "aud",
-            product_data: {
-              name: `Booking Amendment — ${args.laneName}`,
-              description: args.description,
-            },
-            unit_amount: args.topUpAmountCents,
-          },
-          quantity: 1,
-        },
-      ],
-      metadata: {
-        sessionType: "booking_edit_topup",
-        bookingId: args.bookingId,
-        laneName: args.laneName,
-        date: args.date,
-        customerName: args.customerName,
-        customerEmail: args.customerEmail,
-      },
-      success_url: `${siteUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: siteUrl,
-    });
-
-    return { sessionId: session.id, url: session.url };
   },
 });

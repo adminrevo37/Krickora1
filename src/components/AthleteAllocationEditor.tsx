@@ -4,44 +4,32 @@ import { api } from '../../convex/_generated/api'
 import { formatTime, type AthleteSlot } from '../lib/booking-data'
 
 interface AthleteAllocationEditorProps {
+  bookingId: string
   bookingStartHour: number
   bookingDuration: number // in minutes
   currentSlots: AthleteSlot[]
   coachId: string // The coach's customer _id or email to fetch their athletes
   onSave: (slots: AthleteSlot[]) => Promise<{ success: boolean; error?: string }>
   onClose: () => void
-  bottomSheet?: boolean // render as a mobile bottom sheet instead of a centred modal
-  defaultSessionDuration?: number // coach's preferred default slot length in minutes
 }
 
 export default function AthleteAllocationEditor({
+  bookingId,
   bookingStartHour,
   bookingDuration,
   currentSlots,
   coachId,
   onSave,
   onClose,
-  bottomSheet = false,
-  defaultSessionDuration,
 }: AthleteAllocationEditorProps) {
-  // Default to a single empty slot (1:1 private coaching) when no existing slots.
-  // Use the coach's configured default session duration, capped at the booking length.
-  // The dropdown is auto-opened so the coach can immediately pick their athlete.
-  const defaultSlotDuration = Math.min(defaultSessionDuration ?? 60, bookingDuration)
-  const defaultSlot: AthleteSlot = {
-    athleteName: '',
-    startHour: bookingStartHour,
-    durationMinutes: defaultSlotDuration,
-  }
   const [slots, setSlots] = useState<AthleteSlot[]>(
-    currentSlots.length > 0 ? currentSlots.map(s => ({ ...s })) : [defaultSlot]
+    currentSlots.length > 0 ? currentSlots.map(s => ({ ...s })) : []
   )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  // Auto-open the dropdown for slot 0 when opening a new (unallocated) booking
-  const [activeDropdown, setActiveDropdown] = useState<number | null>(currentSlots.length === 0 ? 0 : null)
+  const [activeDropdown, setActiveDropdown] = useState<number | null>(null)
   const [loadingTimedOut, setLoadingTimedOut] = useState(false)
 
   // Fetch athletes assigned to this coach from Convex
@@ -84,10 +72,11 @@ export default function AthleteAllocationEditor({
   }, [slots])
 
   const addSlot = () => {
+    const defaultDuration = Math.min(30, bookingDuration)
     setSlots([...slots, {
       athleteName: '',
       startHour: bookingStartHour,
-      durationMinutes: defaultSlotDuration,
+      durationMinutes: defaultDuration,
     }])
     setError(null)
     setSuccessMsg(null)
@@ -99,10 +88,7 @@ export default function AthleteAllocationEditor({
     setSlots(slots.filter((_, i) => i !== index))
     setError(null)
     setSuccessMsg(null)
-    if (activeDropdown !== null && activeDropdown >= index) {
-      setActiveDropdown(null)
-      setSearchQuery('')
-    }
+    if (activeDropdown === index) setActiveDropdown(null)
   }
 
   const selectAthlete = (index: number, name: string) => {
@@ -219,16 +205,10 @@ export default function AthleteAllocationEditor({
   const isLoading = athletes === undefined && !loadingTimedOut
 
   return (
-    <div className={`fixed inset-0 z-50 bg-black/50 backdrop-blur-sm ${bottomSheet ? 'flex items-end' : 'flex items-center justify-center p-4'}`} onClick={onClose}>
-      <div className={`bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 shadow-2xl overflow-y-auto ${bottomSheet ? 'rounded-t-2xl w-full max-h-[88vh]' : 'rounded-2xl w-full max-w-lg max-h-[90vh]'}`} onClick={e => e.stopPropagation()}>
-        {/* Drag handle — sheet mode only */}
-        {bottomSheet && (
-          <div className="flex justify-center pt-3 pb-1 shrink-0">
-            <div className="w-10 h-1 bg-gray-300 dark:bg-gray-600 rounded-full" />
-          </div>
-        )}
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         {/* Header */}
-        <div className={`sticky top-0 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 p-4 z-10 ${bottomSheet ? '' : 'rounded-t-2xl'}`}>
+        <div className="sticky top-0 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 p-4 rounded-t-2xl z-10">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-lg font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2">
@@ -356,8 +336,6 @@ export default function AthleteAllocationEditor({
 
                     {/* Dropdown */}
                     {isDropdownOpen && (
-                      <>
-                      <div className="fixed inset-0 z-10" onClick={() => { setActiveDropdown(null); setSearchQuery('') }} />
                       <div className="relative mt-1 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl z-20 max-h-64 flex flex-col overflow-hidden">
                         <div className="p-2 border-b border-gray-100 dark:border-gray-800">
                           <div className="relative">
@@ -405,7 +383,6 @@ export default function AthleteAllocationEditor({
                           </button>
                         </div>
                       </div>
-                      </>
                     )}
                   </div>
 
@@ -451,7 +428,7 @@ export default function AthleteAllocationEditor({
               onClick={addSlot}
               className="w-full py-2.5 border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-xl text-sm font-semibold text-gray-500 dark:text-gray-400 hover:border-orange-400 hover:text-orange-500 dark:hover:border-orange-500 dark:hover:text-orange-400 transition-all flex items-center justify-center gap-2"
             >
-              <span className="text-lg">+</span> Add another athlete — group booking ({availableAthleteCount} available)
+              <span className="text-lg">+</span> Add Athlete ({availableAthleteCount} available)
             </button>
           )}
 
@@ -488,7 +465,7 @@ export default function AthleteAllocationEditor({
         </div>
 
         {/* Footer */}
-        <div className={`sticky bottom-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 p-4 flex items-center justify-between gap-3 ${bottomSheet ? 'pb-safe' : 'rounded-b-2xl'}`}>
+        <div className="sticky bottom-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 p-4 rounded-b-2xl flex items-center justify-between gap-3">
           <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors">Cancel</button>
           <button
             onClick={handleSave}

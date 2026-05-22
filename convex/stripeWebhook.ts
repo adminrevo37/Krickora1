@@ -50,27 +50,15 @@ export const stripeWebhook = httpAction(async (ctx, request) => {
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
         const bookingId = session.metadata?.bookingId;
-        const sessionType = session.metadata?.sessionType ?? "booking";
-
-        if (!bookingId) {
-          console.warn("[stripe-webhook] checkout.session.completed without bookingId metadata");
-          break;
-        }
-
-        if (sessionType === "booking_edit_topup") {
-          // Top-up payment for a booking edit — apply the pending edit
-          await ctx.runMutation(internal.bookingEdit.applyPendingBookingEdit, {
-            bookingId,
-            topUpStripeSessionId: session.id,
-          });
-        } else {
-          // Regular booking payment
+        if (bookingId) {
           await ctx.runMutation(internal.webhooks.confirmBookingPayment, {
             bookingId,
             stripeSessionId: session.id,
             amountPaid: session.amount_total ?? 0,
             currency: session.currency ?? "aud",
           });
+        } else {
+          console.warn("[stripe-webhook] checkout.session.completed without bookingId metadata");
         }
         break;
       }

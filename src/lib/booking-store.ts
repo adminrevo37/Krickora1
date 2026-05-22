@@ -1,7 +1,6 @@
 import { type Booking, LANES, CLOSING_HOUR, getAWSTNow, getCustomerPrice, getCoachPrice, formatDateKey, getNextWeekDate } from './booking-data'
 import { getWaitlistStore } from './waitlist-store'
 import { getUserStore } from './user-store'
-import { getSettingsStore } from './settings-store'
 
 type BookingListener = (bookings: Booking[]) => void
 
@@ -188,9 +187,8 @@ class BookingStore {
     const bookingStart = new Date(year, month - 1, day, whole, mins, 0)
     const now = getAWSTNow()
     const hoursUntil = (bookingStart.getTime() - now.getTime()) / (1000 * 60 * 60)
-    const customerCancelHours = getSettingsStore().get().customerCancellationHours
-    if (hoursUntil < customerCancelHours) {
-      return { allowed: false, reason: `Bookings can only be cancelled or changed at least ${customerCancelHours} hour${customerCancelHours !== 1 ? 's' : ''} before the session starts.` }
+    if (hoursUntil < 2) {
+      return { allowed: false, reason: 'Bookings can only be cancelled or changed at least 2 hours before the session starts.' }
     }
     return { allowed: true }
   }
