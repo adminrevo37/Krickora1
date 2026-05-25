@@ -22,14 +22,24 @@ export default defineConfig({
     dedupe: ["react", "react-dom"],
   },
   optimizeDeps: {
+    // Force a fresh pre-bundle on every dev server start so stale chunk
+    // hashes never co-exist with new ones in the browser (root cause of the
+    // "Cannot read properties of null (reading 'useRef')" error in better-auth).
+    force: true,
     entries: ["index.html", "src/**/*.{ts,tsx,js,jsx}"],
 
     include: [
       "react",
       "react-dom",
       "react-dom/client",
+      // better-auth: include the full dep tree so none of its internals
+      // are bundled inline (which can create a circular React reference)
       "better-auth/react",
+      "better-auth/client",
       "@convex-dev/better-auth/react",
+      // nanostores — used by better-auth/react internally; must be
+      // pre-bundled separately so it shares the same React instance
+      "nanostores",
       "@tanstack/react-store",
       "@radix-ui/react-select",
       "@radix-ui/react-slot",
