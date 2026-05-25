@@ -258,20 +258,12 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
               console.warn("Registration lock check: ctx.runQuery unavailable");
               return;
             }
-            const locked = await runQuery(components.betterAuth.adapter.findOne, {
-              model: "siteSettings",
-              where: [{ field: "key", value: "global" }],
-            }).catch(() => null);
-            // Fallback: query siteSettings directly via internal API
             let isLocked = false;
             try {
               const { internal } = await import("./_generated/api");
               const settings = await runQuery((internal as any).registrationLock?.isRegistrationLockedInternal).catch(() => null);
               if (typeof settings === "boolean") isLocked = settings;
             } catch {}
-            if (!isLocked && locked && (locked as any).registrationLocked) {
-              isLocked = true;
-            }
             if (isLocked) {
               const normalizedEmail = (user.email || "").toLowerCase().trim();
               let existingCustomer = null;
