@@ -3,6 +3,18 @@
  */
 import { authComponent } from "../auth";
 
+/**
+ * Returns the authenticated Better Auth user, or null if not authenticated.
+ * Safe to call from any Convex function context (query, mutation, action).
+ */
+export async function getAuthUserSafe(ctx: any): Promise<any | null> {
+  try {
+    return await authComponent.getAuthUser(ctx) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function requireAdmin(ctx: any): Promise<{
   _id: string;
   email: string;

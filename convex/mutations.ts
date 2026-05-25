@@ -1,8 +1,7 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { requireAdmin } from "./lib/adminGuard";
-import { authComponent } from "./auth";
+import { requireAdmin, getAuthUserSafe } from "./lib/adminGuard";
 
 // ============================================================================
 // BOOKING MUTATIONS
@@ -1263,7 +1262,7 @@ export const upsertCustomer = mutation({
   },
   handler: async (ctx, args) => {
     // Require authentication for all callers
-    const authUser = await authComponent.getAuthUser(ctx);
+    const authUser = await getAuthUserSafe(ctx);
     if (!authUser) throw new Error("Not authorized");
 
     const callerEmail = ((authUser as any).email ?? "").toLowerCase().trim();
