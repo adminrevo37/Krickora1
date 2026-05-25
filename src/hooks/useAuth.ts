@@ -121,8 +121,14 @@ export function useAuth() {
         name: betterAuthUser.name ?? betterAuthUser.email.split('@')[0],
       }).catch((err) => {
         console.error('Failed to auto-create customer record:', err)
-        // Allow retry on failure (e.g. transient network error)
-        _customerCreateAttempted.delete(email)
+        // Only allow retry for TRANSIENT errors (network, timeout).
+        // Do NOT retry on auth errors — that creates an infinite retry loop
+        // (each failure removes the guard, triggering the next instance).
+        const msg: string = err?.message ?? ''
+        const isAuthError = msg.includes('Not authorized') || msg.includes('Unauthorized') || msg.includes('not authorized')
+        if (!isAuthError) {
+          _customerCreateAttempted.delete(email)
+        }
       })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
