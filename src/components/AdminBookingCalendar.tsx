@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import {
@@ -218,6 +218,14 @@ export default function AdminBookingCalendar() {
   const [blockModalOpen, setBlockModalOpen] = useState(false)
   const [blockPrefill, setBlockPrefill] = useState<{ laneId: string; startHour: number } | null>(null)
   const [customerDropdownOpen, setCustomerDropdownOpen] = useState(false)
+
+  const fmtHour = (h: number) => {
+    const hr = Math.floor(h)
+    const min = Math.round((h - hr) * 60)
+    const period = hr >= 12 ? 'pm' : 'am'
+    const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr
+    return min > 0 ? `${display}:${min.toString().padStart(2, '0')}${period}` : `${display}${period}`
+  }
 
   const getBlockForSlot = (laneId: string, hour: number) => {
     return laneBlocks.find((b) => {
@@ -440,50 +448,83 @@ export default function AdminBookingCalendar() {
           </div>
         )}
         <div className="min-w-[640px]">
-          <div className="grid grid-cols-[80px_repeat(5,1fr)] gap-1 mb-1">
-            <div className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 px-2 py-1">Time</div>
-            {LANES.map(lane => (
-              <div key={lane.id} className="text-[10px] font-semibold text-gray-700 dark:text-gray-300 px-2 py-1 text-center bg-gray-50 dark:bg-gray-800 rounded">
+          {/* Single CSS grid — bookings use gridRow span so multi-hour blocks render as one cell */}
+          <div
+            className="grid gap-1"
+            style={{
+              gridTemplateColumns: '80px repeat(5, 1fr)',
+              gridTemplateRows: `auto repeat(${visibleTimeSlots.length}, auto)`,
+            }}
+          >
+            {/* ── Header row ── */}
+            <div className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 px-2 py-1" style={{ gridRow: 1, gridColumn: 1 }}>Time</div>
+            {LANES.map((lane, li) => (
+              <div key={lane.id} style={{ gridRow: 1, gridColumn: li + 2 }} className="text-[10px] font-semibold text-gray-700 dark:text-gray-300 px-2 py-1 text-center bg-gray-50 dark:bg-gray-800 rounded">
                 {lane.icon} {lane.shortName}
               </div>
             ))}
-          </div>
-          {visibleTimeSlots.map(slot => (
-            <div key={slot.hour} className="grid grid-cols-[80px_repeat(5,1fr)] gap-1 mb-1">
-              <div className="text-[11px] text-gray-500 dark:text-gray-400 px-2 py-2 font-medium">{slot.label}</div>
-              {LANES.map(lane => {
+
+            {/* ── Time labels ── */}
+            {visibleTimeSlots.map((slot, rowIdx) => (
+              <div key={`t-${slot.hour}`} style={{ gridRow: rowIdx + 2, gridColumn: 1 }} className="text-[11px] text-gray-500 dark:text-gray-400 px-2 py-2 font-medium">
+                {slot.label}
+              </div>
+            ))}
+
+            {/* ── Lane columns with row-spanning bookings ── */}
+            {LANES.map((lane, laneIdx) => {
+              const cells: React.ReactNode[] = []
+              const skippedRows = new Set<number>()
+
+              visibleTimeSlots.forEach((slot, rowIdx) => {
+                if (skippedRows.has(rowIdx)) return
+
                 const booked = isSlotBooked(bookings, lane.id, dateKey, slot.hour)
-                const block = !booked ? getBlockForSlot(lane.id, slot.hour) : undefined
-                const disabled = !!booked || !!block || !selectedCustomer
-                const coachColor = booked ? getCoachColor(booked) : undefined
-                const coachTextColor = getContrastText(coachColor)
-                if (block) {
-                  return (
-                    <div key={lane.id} className="relative group text-[10px] py-2 px-1 rounded font-semibold bg-orange-200 dark:bg-orange-900/40 text-orange-800 dark:text-orange-300">
-                      <div className="truncate" title={block.reason ?? 'Service / repair'}>🔧 {block.reason ? block.reason.slice(0, 10) : 'Service'}</div>
-                      <button onClick={(e) => { e.stopPropagation(); handleRemoveBlock(block._id, lane.shortName) }} className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-600 text-white text-[9px] leading-none opacity-0 group-hover:opacity-100 hover:bg-red-700 transition-opacity flex items-center justify-center shadow">×</button>
-                    </div>
-                  )
-                }
+                const block  = !booked ? getBlockForSlot(lane.id, slot.hour) : undefined
+
                 if (booked) {
-                  return (
+                  // Only render on the booking's first visible slot
+                  if (slot.hour !== booked.startHour) { skippedRows.add(rowIdx); return }
+                  const endHour = booked.startHour + booked.duration / 60
+                  // Count how many visible rows this booking covers and mark them skipped
+                  let spanCount = 0
+                  visibleTimeSlots.forEach((s, si) => {
+                    if (s.hour >= booked.startHour && s.hour < endHour) {
+                      spanCount++
+                      if (si !== rowIdx) skippedRows.add(si)
+                    }
+                  })
+                  spanCount = Math.max(1, spanCount)
+                  const coachColor    = getCoachColor(booked)
+                  const coachTextColor = getContrastText(coachColor)
+                  const timeRange = `${fmtHour(booked.startHour)}–${fmtHour(booked.startHour + booked.duration / 60)}`
+
+                  cells.push(
                     <div
-                      key={lane.id}
-                      style={coachColor ? { backgroundColor: coachColor, color: coachTextColor } : undefined}
-                      className={`relative group text-[10px] py-2 px-1 rounded font-semibold ${
+                      key={`b-${lane.id}-${slot.hour}`}
+                      style={{
+                        gridRow: `${rowIdx + 2} / span ${spanCount}`,
+                        gridColumn: laneIdx + 2,
+                        ...(coachColor ? { backgroundColor: coachColor, color: coachTextColor } : {}),
+                      }}
+                      className={`relative group text-[10px] py-2 px-1 rounded font-semibold flex flex-col ${
                         coachColor ? '' : 'bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400'
                       }`}
                     >
                       <button
                         onClick={(e) => { e.stopPropagation(); setDetailsBooking(booked) }}
                         title={`View / modify booking — ${booked.customerName}`}
-                        className="text-left w-full hover:opacity-80 transition-opacity leading-tight"
+                        className="text-left w-full hover:opacity-80 transition-opacity leading-tight flex-1"
                       >
                         <div className="truncate">{booked.isCoachBooking ? '🏅' : '🔒'} {booked.customerName.split(' ')[0]}</div>
                         {booked.isCoachBooking && (
                           <div className="text-[9px] font-medium opacity-90 truncate">Coach: {booked.customerName}</div>
                         )}
-                        {booked.isCoachBooking && booked.athleteSlots && booked.athleteSlots.length > 0 && slot.hour === booked.startHour && (
+                        <div className="text-[9px] opacity-80 mt-0.5 font-medium">{timeRange}</div>
+                        {booked.notes && (
+                          <div className="text-[8px] mt-0.5 opacity-90 truncate font-semibold italic" title={booked.notes}>📝 {booked.notes}</div>
+                        )}
+                        {booked.isCoachBooking && booked.athleteSlots && booked.athleteSlots.length > 0 && (
                           <div className="mt-1 pt-1 border-t border-white/30 space-y-0.5">
                             <div className="text-[8px] uppercase tracking-wide opacity-80 font-bold">🏏 Athletes ({booked.athleteSlots.length})</div>
                             {booked.athleteSlots.map((a, i) => (
@@ -498,39 +539,62 @@ export default function AdminBookingCalendar() {
                         onClick={(e) => { e.stopPropagation(); handleDeleteBooking(booked.id, booked.customerName) }}
                         title="Delete booking permanently"
                         className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-600 text-white text-[9px] leading-none opacity-0 group-hover:opacity-100 hover:bg-red-700 transition-opacity flex items-center justify-center shadow"
-                      >
-                        ×
-                      </button>
+                      >×</button>
                     </div>
                   )
+                  return
                 }
-                return (
-                  <div key={lane.id} className="relative group">
+
+                if (block) {
+                  // Span block across its duration too
+                  const blockEndHour = block.startHour + block.duration / 60
+                  let blockSpan = 0
+                  visibleTimeSlots.forEach((s, si) => {
+                    if (s.hour >= block.startHour && s.hour < blockEndHour) {
+                      blockSpan++
+                      if (si !== rowIdx) skippedRows.add(si)
+                    }
+                  })
+                  blockSpan = Math.max(1, blockSpan)
+                  cells.push(
+                    <div key={`blk-${lane.id}-${slot.hour}`}
+                         style={{ gridRow: `${rowIdx + 2} / span ${blockSpan}`, gridColumn: laneIdx + 2 }}
+                         className="relative group text-[10px] py-2 px-1 rounded font-semibold bg-orange-200 dark:bg-orange-900/40 text-orange-800 dark:text-orange-300">
+                      <div className="truncate" title={block.reason ?? 'Service / repair'}>🔧 {block.reason ? block.reason.slice(0, 12) : 'Service'}</div>
+                      <button onClick={(e) => { e.stopPropagation(); handleRemoveBlock(block._id, lane.shortName) }} className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-600 text-white text-[9px] leading-none opacity-0 group-hover:opacity-100 hover:bg-red-700 transition-opacity flex items-center justify-center shadow">×</button>
+                    </div>
+                  )
+                  return
+                }
+
+                // Empty slot — book button
+                cells.push(
+                  <div key={`e-${lane.id}-${slot.hour}`}
+                       style={{ gridRow: rowIdx + 2, gridColumn: laneIdx + 2 }}
+                       className="relative group">
                     <button
                       onClick={() => handleSlotClick(lane, slot)}
                       disabled={!selectedCustomer}
                       className={`w-full text-[10px] py-2 px-1 rounded transition-all ${
                         !selectedCustomer
-                            ? 'bg-gray-50 dark:bg-gray-800/50 text-gray-400 dark:text-gray-600 cursor-not-allowed'
-                            : 'bg-emerald-50 dark:bg-emerald-900/10 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 hover:scale-105 cursor-pointer'
+                          ? 'bg-gray-50 dark:bg-gray-800/50 text-gray-400 dark:text-gray-600 cursor-not-allowed'
+                          : 'bg-emerald-50 dark:bg-emerald-900/10 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 hover:scale-105 cursor-pointer'
                       }`}
                     >
-                      {disabled ? '—' : '+ Book'}
+                      {selectedCustomer ? '+ Book' : '—'}
                     </button>
-                    {(
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setBlockPrefill({ laneId: lane.id, startHour: slot.hour }); setBlockModalOpen(true) }}
-                        title="Block this lane for service/repair"
-                        className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-orange-500 text-white text-[9px] leading-none opacity-0 group-hover:opacity-100 hover:bg-orange-600 transition-opacity flex items-center justify-center shadow"
-                      >
-                        🔧
-                      </button>
-                    )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setBlockPrefill({ laneId: lane.id, startHour: slot.hour }); setBlockModalOpen(true) }}
+                      title="Block this lane for service/repair"
+                      className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-orange-500 text-white text-[9px] leading-none opacity-0 group-hover:opacity-100 hover:bg-orange-600 transition-opacity flex items-center justify-center shadow"
+                    >🔧</button>
                   </div>
                 )
-              })}
-            </div>
-          ))}
+              })
+
+              return cells
+            })}
+          </div>
         </div>
       </div>
 

@@ -104,6 +104,8 @@ export default defineSchema({
     paymentEmailSent: v.optional(v.boolean()), // Dedup guard — prevents duplicate payment confirmation emails
     stripePaymentIntentId: v.optional(v.string()), // Needed to issue partial refunds
     priceInCents: v.optional(v.number()), // Stored price at booking time (used for edit diff calculation)
+    // Admin notes (e.g. "Winter Program", "Trial Session")
+    notes: v.optional(v.string()),
     // Pending booking edit (set when a top-up payment is required)
     pendingEdit: v.optional(v.object({
       newDuration: v.number(),

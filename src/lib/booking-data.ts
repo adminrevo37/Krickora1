@@ -144,6 +144,8 @@ export interface Booking {
   accessCode?: string
   // Discount code applied to this booking
   discountCode?: string
+  // Admin notes (e.g. "Winter Program", "Trial Session")
+  notes?: string
   // Audit trail of admin modifications
   modificationHistory?: Array<{
     modifiedAt: string

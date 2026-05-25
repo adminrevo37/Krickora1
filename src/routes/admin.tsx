@@ -6,7 +6,7 @@ import ClosureManager from '../components/ClosureManager'
 import SettingsPanel from '../components/SettingsPanel'
 import CoachStatementTable from '../components/CoachStatementTable'
 import AdminDiscountCodesTab from '../components/AdminDiscountCodesTab'
-import { useQuery, useMutation, useAction } from 'convex/react'
+import { useQuery, useMutation, useAction, skipToken } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 
 // ---------------------------------------------------------------------------
@@ -546,6 +546,15 @@ function CoachesTab() {
   const [busyAdd, setBusyAdd] = useState(false)
   const [addMode, setAddMode] = useState<'direct' | 'invite'>('direct')
   const [showAddForm, setShowAddForm] = useState(false)
+  // Merge consecutive bookings
+  const mergeBookings = useMutation((api.mutations as any).mergeConsecutiveCoachBookings)
+  const [mergeBusy, setMergeBusy] = useState(false)
+  const [showMergePreview, setShowMergePreview] = useState(false)
+  const [mergeResult, setMergeResult] = useState<{ mergeCount: number; mergedSummary: string[] } | null>(null)
+  const mergePreviewData = useQuery(
+    (api.queries as any).previewMergeConsecutiveCoachBookings,
+    showMergePreview ? {} : skipToken
+  )
 
   const submitAdd = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -719,6 +728,150 @@ function CoachesTab() {
           </div>
         </div>
       )}
+
+      {/* ── Merge Consecutive Bookings ── */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h3 className="text-base font-bold text-gray-800">🔗 Merge Consecutive Bookings</h3>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Collapses back-to-back coach blocks on the same lane &amp; day into a single booking.
+            Door code is taken from the first block; price and athlete allocations are combined.
+          </p>
+        </div>
+        <div className="p-6 space-y-4">
+
+          {/* ── Post-merge success banner ── */}
+          {mergeResult && (
+            <div className={`rounded-xl px-4 py-3 text-sm ${mergeResult.mergeCount > 0 ? 'bg-emerald-50 border border-emerald-200' : 'bg-gray-50 border border-gray-200'}`}>
+              {mergeResult.mergeCount === 0 ? (
+                <p className="text-gray-500">✅ No consecutive blocks found — nothing to merge.</p>
+              ) : (
+                <>
+                  <p className="font-semibold text-emerald-700 mb-2">
+                    ✅ Merged {mergeResult.mergeCount} group{mergeResult.mergeCount !== 1 ? 's' : ''}
+                  </p>
+                  <ul className="space-y-0.5">
+                    {mergeResult.mergedSummary.map((line, i) => (
+                      <li key={i} className="text-gray-600 text-xs font-mono">• {line}</li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              <button
+                onClick={() => { setMergeResult(null); setShowMergePreview(false) }}
+                className="mt-3 text-xs text-gray-400 hover:text-gray-600 underline"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {/* ── Initial button ── */}
+          {!showMergePreview && !mergeResult && (
+            <button
+              onClick={() => setShowMergePreview(true)}
+              className="px-4 py-2 bg-gray-800 hover:bg-gray-900 text-white rounded-lg text-sm font-semibold transition-colors"
+            >
+              🔍 Preview Merges
+            </button>
+          )}
+
+          {/* ── Preview loading ── */}
+          {showMergePreview && !mergeResult && mergePreviewData === undefined && (
+            <div className="flex items-center gap-2 text-sm text-gray-400 py-2">
+              <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+              </svg>
+              Scanning bookings…
+            </div>
+          )}
+
+          {/* ── Preview results ── */}
+          {showMergePreview && !mergeResult && mergePreviewData !== undefined && (
+            <div className="space-y-4">
+              {(mergePreviewData as any[]).length === 0 ? (
+                <div className="bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-500">
+                  ✅ No consecutive blocks found — nothing to merge.
+                </div>
+              ) : (
+                <>
+                  <p className="text-sm text-gray-600">
+                    Found <span className="font-semibold text-gray-900">{(mergePreviewData as any[]).length} group{(mergePreviewData as any[]).length !== 1 ? 's' : ''}</span> to merge:
+                  </p>
+
+                  {/* Chain list */}
+                  <div className="space-y-3">
+                    {(mergePreviewData as any[]).map((chain: any, idx: number) => {
+                      const dateObj = new Date(chain.date + 'T00:00:00')
+                      const dateLabel = dateObj.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })
+                      return (
+                        <div key={idx} className="border border-gray-200 rounded-xl overflow-hidden">
+                          {/* Chain header */}
+                          <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-100">
+                            <div className="flex items-center gap-2 text-sm">
+                              <span className="font-semibold text-gray-800">{chain.coachName}</span>
+                              <span className="text-gray-400">·</span>
+                              <span className="text-gray-600">{dateLabel}</span>
+                              <span className="text-gray-400">·</span>
+                              <span className="text-gray-600">{chain.laneName}</span>
+                            </div>
+                            <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                              → {chain.mergedStartLabel}–{chain.mergedEndLabel} ({chain.mergedDuration}min)
+                            </span>
+                          </div>
+                          {/* Individual blocks being merged */}
+                          <div className="px-4 py-2 flex flex-wrap gap-2">
+                            {chain.blocks.map((block: any, bi: number) => (
+                              <div key={bi} className="flex items-center gap-1">
+                                {bi > 0 && <span className="text-gray-300 text-xs">+</span>}
+                                <span className="text-xs bg-blue-50 border border-blue-200 text-blue-700 px-2 py-0.5 rounded-lg font-mono">
+                                  {block.startLabel}–{block.endLabel}
+                                  {block.accessCode && bi === 0 && (
+                                    <span className="ml-1 text-blue-400">🔑{block.accessCode}</span>
+                                  )}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {/* Confirm / Cancel */}
+                  <div className="flex items-center gap-3 pt-1">
+                    <button
+                      onClick={async () => {
+                        setMergeBusy(true)
+                        try {
+                          const result = await mergeBookings({})
+                          setMergeResult(result as any)
+                        } catch (err: any) {
+                          alert(err?.message ?? 'Merge failed')
+                        } finally {
+                          setMergeBusy(false)
+                        }
+                      }}
+                      disabled={mergeBusy}
+                      className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors"
+                    >
+                      {mergeBusy ? 'Merging…' : `✅ Confirm — merge ${(mergePreviewData as any[]).length} group${(mergePreviewData as any[]).length !== 1 ? 's' : ''}`}
+                    </button>
+                    <button
+                      onClick={() => setShowMergePreview(false)}
+                      className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+        </div>
+      </div>
     </div>
   )
 }

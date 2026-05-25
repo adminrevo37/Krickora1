@@ -35,6 +35,7 @@ export default function AdminBookingDetailsModal({ booking, onClose }: Props) {
   const [customerPhone, setCustomerPhone] = useState(booking.customerPhone ?? '')
   const [status, setStatus] = useState<string>(booking.status)
   const [coachPrice, setCoachPrice] = useState(booking.coachPrice ?? 0)
+  const [notes, setNotes] = useState(booking.notes ?? '')
 
   const displayLane = LANES.find(l => l.id === laneId)
   const hours = useMemo(() => generateHours(), [])
@@ -53,6 +54,7 @@ export default function AdminBookingDetailsModal({ booking, onClose }: Props) {
         customerEmail,
         customerPhone: customerPhone || undefined,
         status: status as Booking['status'],
+        notes: notes.trim() || undefined,
         ...(booking.isCoachBooking ? { coachPrice } : {}),
       } as any)
       setEditing(false)
@@ -119,6 +121,14 @@ export default function AdminBookingDetailsModal({ booking, onClose }: Props) {
                 {booking.accessCode && <Field label="Access Code" value={<code className="font-mono">{booking.accessCode}</code>} />}
                 {booking.discountCode && <Field label="Discount" value={booking.discountCode} />}
               </div>
+
+              {/* Notes — full width below the grid */}
+              {notes && (
+                <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40 rounded-lg px-3 py-2">
+                  <div className="text-[10px] uppercase font-semibold text-amber-700 dark:text-amber-400 tracking-wide mb-0.5">📝 Notes</div>
+                  <p className="text-sm text-gray-800 dark:text-gray-200">{notes}</p>
+                </div>
+              )}
 
               {/* Athlete Allocations — coach bookings only */}
               {booking.isCoachBooking && (booking.athleteSlots ?? []).length > 0 && (
@@ -199,6 +209,17 @@ export default function AdminBookingDetailsModal({ booking, onClose }: Props) {
                   <Input label="Coach Price ($)" value={String(coachPrice)} onChange={(v) => setCoachPrice(Number(v) || 0)} />
                 )}
               </div>
+              {/* Notes — full-width textarea */}
+              <label className="block">
+                <span className="text-[10px] uppercase font-semibold text-gray-500 dark:text-gray-400 tracking-wide">📝 Notes (optional)</span>
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="e.g. Winter Program, Trial Session, Tournament prep…"
+                  rows={2}
+                  className="mt-1 w-full px-2.5 py-1.5 text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none text-gray-800 dark:text-gray-200 resize-none"
+                />
+              </label>
               <div className="flex gap-2 pt-2">
                 <button onClick={() => setEditing(false)} disabled={saving} className="flex-1 px-4 py-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 text-sm font-semibold hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors disabled:opacity-50">Cancel</button>
                 <button onClick={handleSave} disabled={saving} className="flex-1 px-4 py-2 rounded-lg bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 transition-colors disabled:opacity-50">

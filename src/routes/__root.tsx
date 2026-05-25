@@ -27,6 +27,15 @@ function RootComponent() {
             </Link>
 
             <div className="flex items-center gap-3">
+              {/* Book a Net — primary CTA, always visible */}
+              <Link
+                to="/"
+                className="flex items-center gap-1.5 px-3 py-1.5 sm:px-4 sm:py-2 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 active:scale-95 text-white font-semibold rounded-xl shadow-md shadow-emerald-500/25 transition-all text-sm whitespace-nowrap"
+              >
+                <span className="text-base leading-none">🏏</span>
+                <span>Book a Net</span>
+              </Link>
+
               {isLoading ? (
                 <div className="w-20 h-8 bg-gray-100 rounded-xl animate-pulse" />
               ) : isAuthenticated && user ? (

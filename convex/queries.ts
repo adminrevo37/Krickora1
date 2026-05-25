@@ -420,3 +420,113 @@ export const validateDiscountCode = query({
     };
   },
 });
+
+// ============================================================================
+// DRY-RUN PREVIEW: which coach bookings would be merged
+// Returns chains of consecutive same-lane same-day blocks without modifying data
+// ============================================================================
+export const previewMergeConsecutiveCoachBookings = query({
+  args: {},
+  handler: async (ctx) => {
+    // Fetch all non-cancelled coach bookings
+    const allBookings = await ctx.db
+      .query("bookings")
+      .filter((q: any) => q.eq(q.field("isCoachBooking"), true))
+      .collect();
+
+    const active = allBookings.filter((b: any) => b.status !== "cancelled");
+
+    const LANE_NAMES: Record<string, string> = {
+      bm1: "Bowling Machine 1",
+      bm2: "Bowling Machine 2",
+      bm3: "Bowling Machine 3",
+      ru1: "9m Run Up 1",
+      ru2: "9m Run Up 2",
+    };
+
+    const fmtH = (h: number) => {
+      const w = Math.floor(h);
+      const m = Math.round((h - w) * 60);
+      const period = w >= 12 ? "pm" : "am";
+      const dh = w > 12 ? w - 12 : w === 0 ? 12 : w;
+      return `${dh}:${m.toString().padStart(2, "0")}${period}`;
+    };
+
+    // Group by coach email + laneId + date
+    const groups = new Map<string, typeof active>();
+    for (const b of active) {
+      const key = `${(b.customerEmail as string).toLowerCase()}|${b.laneId}|${b.date}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(b);
+    }
+
+    const chains: Array<{
+      coachName: string;
+      date: string;
+      laneName: string;
+      mergedStartLabel: string;
+      mergedEndLabel: string;
+      mergedDuration: number;
+      accessCode: string | undefined;
+      blocks: Array<{
+        id: string;
+        startLabel: string;
+        endLabel: string;
+        duration: number;
+        accessCode: string | undefined;
+      }>;
+    }> = [];
+
+    for (const bookings of groups.values()) {
+      if (bookings.length < 2) continue;
+      bookings.sort((a: any, b: any) => a.startHour - b.startHour);
+
+      let i = 0;
+      while (i < bookings.length) {
+        const chain: typeof bookings = [bookings[i]];
+        let j = i + 1;
+        while (j < bookings.length) {
+          const prev = chain[chain.length - 1] as any;
+          const curr = bookings[j] as any;
+          const prevEnd = prev.startHour + prev.duration / 60;
+          if (Math.abs(prevEnd - curr.startHour) < 0.017) {
+            chain.push(curr);
+            j++;
+          } else {
+            break;
+          }
+        }
+
+        if (chain.length >= 2) {
+          const first = chain[0] as any;
+          const totalDuration = chain.reduce((s: number, b: any) => s + b.duration, 0);
+          const mergedEnd = first.startHour + totalDuration / 60;
+
+          chains.push({
+            coachName: first.customerName as string,
+            date: first.date as string,
+            laneName: LANE_NAMES[first.laneId as string] ?? (first.laneId as string),
+            mergedStartLabel: fmtH(first.startHour),
+            mergedEndLabel: fmtH(mergedEnd),
+            mergedDuration: totalDuration,
+            accessCode: first.accessCode as string | undefined,
+            blocks: chain.map((b: any) => ({
+              id: b._id as string,
+              startLabel: fmtH(b.startHour),
+              endLabel: fmtH(b.startHour + b.duration / 60),
+              duration: b.duration as number,
+              accessCode: b.accessCode as string | undefined,
+            })),
+          });
+        }
+
+        i = j;
+      }
+    }
+
+    // Sort results by date then coachName for a predictable display order
+    chains.sort((a, b) => a.date.localeCompare(b.date) || a.coachName.localeCompare(b.coachName));
+
+    return chains;
+  },
+});

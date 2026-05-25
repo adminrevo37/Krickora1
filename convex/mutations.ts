@@ -40,6 +40,7 @@ export const createBooking = mutation({
     discountCode: v.optional(v.string()),
     tentativeSourceId: v.optional(v.string()),
     tentativeForDate: v.optional(v.string()),
+    notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // SEC-1: Auth guard — logged-in users may only book for themselves unless admin
@@ -293,6 +294,7 @@ export const updateBooking = mutation({
     tentativeForDate: v.optional(v.string()),
     accessCode: v.optional(v.string()),
     discountCode: v.optional(v.string()),
+    notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const adminUser = await requireAdmin(ctx);
@@ -2123,5 +2125,135 @@ export const upgradeToAdmin = mutation({
       role: "admin",
       createdAt: new Date().toISOString(),
     });
+  },
+});
+
+// ============================================================================
+// MERGE CONSECUTIVE COACH BOOKINGS — ADMIN ONLY
+// ============================================================================
+// Finds coach bookings on the same lane/date that are back-to-back 1-hr blocks
+// and collapses them into a single booking. The door/access code from the
+// *first* block in each chain is preserved; coachPrice and athleteSlots are
+// summed/concatenated; subsequent blocks are hard-deleted (no email/credit
+// side-effects since we are just consolidating, not cancelling).
+
+export const mergeConsecutiveCoachBookings = mutation({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+
+    // Fetch all non-cancelled coach bookings
+    const allBookings = await ctx.db
+      .query("bookings")
+      .filter((q: any) => q.eq(q.field("isCoachBooking"), true))
+      .collect();
+
+    const active = allBookings.filter((b: any) => b.status !== "cancelled");
+
+    // Group by coach email + laneId + date
+    const groups = new Map<string, typeof active>();
+    for (const b of active) {
+      const key = `${b.customerEmail.toLowerCase()}|${b.laneId}|${b.date}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(b);
+    }
+
+    const mergedSummary: string[] = [];
+    let mergeCount = 0;
+
+    for (const bookings of groups.values()) {
+      if (bookings.length < 2) continue;
+
+      // Sort by startHour ascending
+      bookings.sort((a: any, b: any) => a.startHour - b.startHour);
+
+      // Walk through and collect consecutive chains
+      let i = 0;
+      while (i < bookings.length) {
+        const chain: typeof bookings = [bookings[i]];
+        let j = i + 1;
+        while (j < bookings.length) {
+          const prev = chain[chain.length - 1] as any;
+          const curr = bookings[j] as any;
+          const prevEnd = prev.startHour + prev.duration / 60;
+          // Treat as consecutive if the gap is < 1 minute (floating-point safe)
+          if (Math.abs(prevEnd - curr.startHour) < 0.017) {
+            chain.push(curr);
+            j++;
+          } else {
+            break;
+          }
+        }
+
+        if (chain.length >= 2) {
+          const first = chain[0] as any;
+
+          // Summed duration
+          const totalDuration = chain.reduce((sum: number, b: any) => sum + b.duration, 0);
+
+          // Summed coachPrice (only if every booking in the chain has one)
+          const allHavePrice = chain.every((b: any) => typeof b.coachPrice === "number");
+          const totalCoachPrice = allHavePrice
+            ? chain.reduce((sum: number, b: any) => sum + b.coachPrice, 0)
+            : first.coachPrice;
+
+          // Concatenate athleteSlots; stamp the first booking's access code onto all
+          const mergedSlots = chain.flatMap((b: any) => b.athleteSlots ?? []);
+          const firstCode = first.accessCode;
+          const adjustedSlots =
+            firstCode && mergedSlots.length > 0
+              ? mergedSlots.map((s: any) => ({ ...s, accessCode: firstCode }))
+              : mergedSlots;
+
+          // Merge notes (skip blanks, join non-empty with " | ")
+          const noteFragments = chain
+            .map((b: any) => b.notes)
+            .filter((n: any): n is string => typeof n === "string" && n.trim().length > 0);
+          const mergedNotes =
+            noteFragments.length > 0 ? noteFragments.join(" | ") : undefined;
+
+          // Union of additionalLaneIds across the chain
+          const allExtraLanes = [
+            ...new Set(chain.flatMap((b: any) => b.additionalLaneIds ?? [])),
+          ];
+
+          // Patch the first booking
+          const patch: Record<string, any> = { duration: totalDuration };
+          if (totalCoachPrice !== undefined) patch.coachPrice = totalCoachPrice;
+          if (adjustedSlots.length > 0) patch.athleteSlots = adjustedSlots;
+          if (mergedNotes !== undefined) patch.notes = mergedNotes;
+          if (allExtraLanes.length > 0) patch.additionalLaneIds = allExtraLanes;
+
+          await ctx.db.patch(first._id, patch);
+
+          // Hard-delete the subsequent bookings; clean up their GCal events
+          for (let k = 1; k < chain.length; k++) {
+            const toDelete = chain[k] as any;
+            if (toDelete.googleCalendarEventId) {
+              await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
+                googleCalendarEventId: toDelete.googleCalendarEventId,
+                laneCalendarEventIds: toDelete.googleCalendarEventIds,
+              });
+            }
+            await ctx.db.delete(toDelete._id);
+          }
+
+          mergeCount++;
+          const fmtH = (h: number) => {
+            const w = Math.floor(h);
+            const m = Math.round((h - w) * 60);
+            return `${w}:${m.toString().padStart(2, "0")}`;
+          };
+          mergedSummary.push(
+            `${first.customerName} · ${first.date} · ${first.laneId} · ` +
+              `${fmtH(first.startHour)} → ${totalDuration}min (${chain.length} blocks)`
+          );
+        }
+
+        i = j;
+      }
+    }
+
+    return { mergeCount, mergedSummary };
   },
 });

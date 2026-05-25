@@ -71,6 +71,9 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   const [priceOverrideStr, setPriceOverrideStr] = useState('')
   const [showAdminOptions, setShowAdminOptions] = useState(false)
 
+  // Admin notes
+  const [notes, setNotes] = useState('')
+
   // Additional lanes (multi-lane booking)
   const [additionalLaneIds, setAdditionalLaneIds] = useState<string[]>([])
   const toggleLane = (id: string) => {
@@ -145,6 +148,7 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
             coachPrice: isCoach ? effectivePricePerLane : undefined,
             accessCode: sharedCode,
             discountCode: discountCode.trim() || undefined,
+            notes: notes.trim() || undefined,
           })
         }
       }
@@ -360,6 +364,20 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
                 )}
               </div>
             )}
+          </div>
+
+          {/* Admin Notes */}
+          <div>
+            <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">
+              📝 Notes <span className="text-[11px] font-normal text-gray-400">(optional — displays on calendar)</span>
+            </label>
+            <textarea
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder="e.g. Winter Program, Trial Session, Tournament prep…"
+              rows={2}
+              className="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-gray-800 dark:text-gray-200 resize-none"
+            />
           </div>
 
           {/* UX-6: All price displays use toFixed(2) */}

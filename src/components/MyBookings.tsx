@@ -496,6 +496,122 @@ export default function MyBookings() {
     return renderCustomerBookingCard(booking)
   }
 
+  // ── coach schedule: flat date-grouped list of ALL upcoming bookings ──────────
+
+  const renderCoachSchedule = () => {
+    // Group all upcoming bookings by date
+    const byDate: Record<string, Booking[]> = {}
+    for (const b of scheduleBookings) {
+      if (!byDate[b.date]) byDate[b.date] = []
+      byDate[b.date].push(b)
+    }
+    const sortedDates = Object.keys(byDate).sort()
+
+    // Bookings that still need athlete allocation
+    const unallocated = scheduleBookings.filter(
+      b => b.isCoachBooking && (!b.athleteSlots || b.athleteSlots.length === 0)
+    )
+
+    if (sortedDates.length === 0) {
+      return (
+        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-8 text-center">
+          <div className="text-3xl mb-2">📭</div>
+          <h3 className="font-semibold text-gray-700 dark:text-gray-300 text-sm">No upcoming bookings</h3>
+          <p className="text-xs text-gray-400 mt-1">Book sessions from the calendar — they'll all appear here</p>
+        </div>
+      )
+    }
+
+    return (
+      <div className="space-y-4">
+        {/* ── Needs-allocation banner ── */}
+        {unallocated.length > 0 && (
+          <div className="bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-800/40 rounded-2xl p-3.5">
+            <div className="flex items-center gap-2 mb-2.5">
+              <span className="text-sm">⚠️</span>
+              <span className="text-sm font-semibold text-orange-700 dark:text-orange-400">
+                {unallocated.length} booking{unallocated.length > 1 ? 's' : ''} need{unallocated.length === 1 ? 's' : ''} athlete allocation
+              </span>
+            </div>
+            <div className="flex gap-2 overflow-x-auto pb-0.5">
+              {unallocated.map(b => {
+                const lane = getLane(b.laneId)
+                const dateObj = new Date(b.date + 'T00:00:00')
+                return (
+                  <button
+                    key={b.id}
+                    onClick={() => setAthleteEditBooking(b)}
+                    className="shrink-0 flex flex-col items-start px-3 py-2 bg-white dark:bg-gray-900 border border-orange-200 dark:border-orange-800 rounded-xl text-left hover:bg-orange-50 dark:hover:bg-orange-900/20 active:scale-95 transition-all"
+                  >
+                    <span className="text-[11px] font-bold text-orange-700 dark:text-orange-400">
+                      {dateObj.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                    </span>
+                    <span className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+                      {formatTime(b.startHour)} · {lane?.shortName ?? b.laneId}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ── All upcoming bookings, grouped by date ── */}
+        {sortedDates.map(date => {
+          const isToday = date === todayKey
+          const isTomorrow = date === toDateKey(addDays(now, 1))
+          const dayBookings = byDate[date]
+          const dateObj = new Date(date + 'T00:00:00')
+          const hasUnallocated = dayBookings.some(
+            b => b.isCoachBooking && (!b.athleteSlots || b.athleteSlots.length === 0)
+          )
+
+          let dateLabel: string
+          let dateSub: string
+          if (isToday) {
+            dateLabel = 'Today'
+            dateSub = dateObj.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+          } else if (isTomorrow) {
+            dateLabel = 'Tomorrow'
+            dateSub = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          } else {
+            dateLabel = dateObj.toLocaleDateString('en-US', { weekday: 'long' })
+            dateSub = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+          }
+
+          return (
+            <div key={date} className="space-y-2">
+              {/* Date header */}
+              <div className="flex items-center gap-2">
+                <div className={`px-2.5 py-1 rounded-lg text-xs font-bold ${
+                  isToday
+                    ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
+                    : isTomorrow
+                      ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
+                }`}>
+                  {dateLabel}
+                </div>
+                <span className="text-xs text-gray-400 dark:text-gray-500">{dateSub}</span>
+                {hasUnallocated && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 font-semibold uppercase tracking-wide">
+                    needs athletes
+                  </span>
+                )}
+                <span className="ml-auto text-[10px] bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 px-1.5 py-0.5 rounded-full">
+                  {dayBookings.length}
+                </span>
+              </div>
+              {dayBookings.map(b => (
+                <div key={b.id}>{renderBookingCard(b)}</div>
+              ))}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
   // ── render ───────────────────────────────────────────────────────────────────
 
   return (
@@ -570,8 +686,11 @@ export default function MyBookings() {
         ))}
       </div>
 
-      {/* ── SCHEDULE TAB ── */}
-      {activeTab === 'schedule' && (
+      {/* ── SCHEDULE TAB — coaches see all upcoming in a flat list ── */}
+      {activeTab === 'schedule' && isCoach && renderCoachSchedule()}
+
+      {/* ── SCHEDULE TAB — customers keep the week-strip view ── */}
+      {activeTab === 'schedule' && !isCoach && (
         <div className="space-y-3">
           {/* Week strip */}
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden">

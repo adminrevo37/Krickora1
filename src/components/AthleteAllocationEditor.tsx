@@ -43,6 +43,9 @@ export default function AthleteAllocationEditor({
   // Auto-open the dropdown for slot 0 when opening a new (unallocated) booking
   const [activeDropdown, setActiveDropdown] = useState<number | null>(currentSlots.length === 0 ? 0 : null)
   const [loadingTimedOut, setLoadingTimedOut] = useState(false)
+  // Review mode: when athletes are already allocated, show a clean read-only summary
+  // so coaches can quickly confirm without accidentally editing anything
+  const [reviewMode, setReviewMode] = useState(currentSlots.length > 0)
 
   // Fetch athletes assigned to this coach from Convex
   const athletes = useQuery(api.queries.listAthletesByCoach, coachId ? { coachId } : "skip")
@@ -233,15 +236,92 @@ export default function AthleteAllocationEditor({
             <div>
               <h3 className="text-lg font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2">
                 🏏 Athlete Allocations
+                {reviewMode && slots.length > 0 && (
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 font-semibold">✓ Allocated</span>
+                )}
               </h3>
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                {formatTime(bookingStartHour)} – {formatTime(bookingEndHour)} ({bookingDuration}min window)
+                {formatTime(bookingStartHour)} – {formatTime(bookingEndHour)} · {bookingDuration}min booking
               </p>
             </div>
             <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 hover:text-gray-600 transition-colors">✕</button>
           </div>
         </div>
 
+        {/* ── REVIEW MODE: clean read-only summary ── */}
+        {reviewMode && (
+          <div className="p-4 space-y-4">
+            {/* Timeline */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Session Timeline</span>
+                <span className="text-[11px] text-gray-400">{slots.length} athlete{slots.length !== 1 ? 's' : ''}</span>
+              </div>
+              <div className="relative bg-gray-100 dark:bg-gray-800 rounded-xl h-12 overflow-hidden">
+                {/* Time markers */}
+                {Array.from({ length: Math.ceil(bookingDuration / 30) + 1 }, (_, i) => {
+                  const markerHour = bookingStartHour + (i * 30) / 60
+                  if (markerHour > bookingEndHour + 0.01) return null
+                  const pos = ((i * 30) / bookingDuration) * 100
+                  return (
+                    <div key={i} className="absolute top-0 h-full flex flex-col items-start" style={{ left: `${Math.min(pos, 98)}%` }}>
+                      <div className="w-px h-3 bg-gray-300 dark:bg-gray-600" />
+                      <span className="text-[8px] text-gray-400 mt-0.5 pl-0.5">{formatTime(markerHour)}</span>
+                    </div>
+                  )
+                })}
+                {/* Athlete blocks */}
+                {slots.map((slot, i) => {
+                  if (!slot.athleteName.trim()) return null
+                  const totalMinutes = bookingDuration
+                  const offsetMinutes = (slot.startHour - bookingStartHour) * 60
+                  const left = (offsetMinutes / totalMinutes) * 100
+                  const width = (slot.durationMinutes / totalMinutes) * 100
+                  return (
+                    <div
+                      key={i}
+                      className={`absolute top-3.5 h-6 ${slotColors[i % slotColors.length]} rounded-lg text-[10px] text-white font-semibold flex items-center justify-center overflow-hidden px-2 shadow-sm`}
+                      style={{ left: `${left}%`, width: `${Math.max(width, 6)}%`, minWidth: '2.5rem' }}
+                      title={`${slot.athleteName}: ${formatTime(slot.startHour)}–${formatTime(slot.startHour + slot.durationMinutes / 60)}`}
+                    >
+                      <span className="truncate">{slot.athleteName.split(' ')[0]}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Athlete cards */}
+            <div className="space-y-2">
+              {slots.map((slot, i) => (
+                <div key={i} className="flex items-center gap-3 bg-gray-50 dark:bg-gray-800/60 rounded-xl px-3 py-2.5 border border-gray-100 dark:border-gray-700">
+                  <div className={`w-8 h-8 ${slotColors[i % slotColors.length]} rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0`}>
+                    {slot.athleteName.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-gray-800 dark:text-gray-200 truncate">{slot.athleteName}</div>
+                    <div className="text-[11px] text-gray-500 dark:text-gray-400">
+                      {formatTime(slot.startHour)} – {formatTime(slot.startHour + slot.durationMinutes / 60)}
+                      <span className="ml-1.5 text-gray-400">· {slot.durationMinutes}min</span>
+                    </div>
+                  </div>
+                  <span className="text-emerald-500 text-base shrink-0">✓</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Success message */}
+            {successMsg && (
+              <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-3 border border-emerald-200 dark:border-emerald-800/50">
+                <span>✅</span>
+                <p className="text-sm text-emerald-700 dark:text-emerald-400">{successMsg}</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── EDIT MODE: full allocation editor ── */}
+        {!reviewMode && (
         <div className="p-4 space-y-4">
           {/* Loading state */}
           {isLoading && (
@@ -472,31 +552,53 @@ export default function AthleteAllocationEditor({
             </div>
           )}
 
-          {/* Error / Success */}
-          {error && (
-            <div className="flex items-center gap-2 bg-red-50 dark:bg-red-900/20 rounded-lg p-3 border border-red-200 dark:border-red-800/50">
-              <span>⚠️</span>
-              <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
-            </div>
-          )}
-          {successMsg && (
-            <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-3 border border-emerald-200 dark:border-emerald-800/50">
-              <span>✅</span>
-              <p className="text-sm text-emerald-700 dark:text-emerald-400">{successMsg}</p>
-            </div>
-          )}
         </div>
+        )} {/* end !reviewMode */}
 
         {/* Footer */}
-        <div className={`sticky bottom-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 p-4 flex items-center justify-between gap-3 ${bottomSheet ? 'pb-safe' : 'rounded-b-2xl'}`}>
-          <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors">Cancel</button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="px-6 py-2 bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 text-white font-semibold text-sm rounded-lg shadow-md transition-all disabled:cursor-not-allowed"
-          >
-            {saving ? 'Saving...' : 'Save Allocations'}
-          </button>
+        <div className={`sticky bottom-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 p-4 z-10 ${bottomSheet ? 'pb-safe' : 'rounded-b-2xl'}`}>
+          {reviewMode ? (
+            /* Review mode footer */
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setReviewMode(false)}
+                className="flex-1 px-4 py-2.5 text-sm font-semibold text-orange-600 dark:text-orange-400 border border-orange-200 dark:border-orange-700 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded-xl transition-colors"
+              >
+                ✏️ Edit Allocations
+              </button>
+              <button
+                onClick={onClose}
+                className="flex-[2] px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-sm rounded-xl shadow-md transition-all active:scale-95"
+              >
+                ✓ Looks Correct
+              </button>
+            </div>
+          ) : (
+            /* Edit mode footer */
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => {
+                  if (currentSlots.length > 0) {
+                    setSlots(currentSlots.map(s => ({ ...s })))
+                    setReviewMode(true)
+                    setError(null)
+                  } else {
+                    onClose()
+                  }
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-xl transition-colors"
+              >
+                {currentSlots.length > 0 ? '← Back' : 'Cancel'}
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="flex-1 px-6 py-2.5 bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 text-white font-bold text-sm rounded-xl shadow-md transition-all disabled:cursor-not-allowed active:scale-95"
+              >
+                {saving ? 'Saving…' : '💾 Save Allocations'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
