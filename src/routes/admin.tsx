@@ -161,7 +161,7 @@ function AdminPage() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
 
   const setSection = (s: Section) => {
-    navigate({ search: { section: s }, replace: true })
+    navigate({ to: '/admin', search: { section: s }, replace: true })
     setMobileSidebarOpen(false)
   }
 
@@ -255,6 +255,8 @@ function normaliseCoachTier(tier: string | undefined | null): 'L1' | 'L2' {
 
 function StatementsTab() {
   const { user } = useAuth()
+  const { impersonate } = useImpersonation()
+  const navigate = useNavigate()
   const customers = useQuery(api.queries.listCustomers) ?? []
   const coaches = (customers as any[]).filter(c => c.role === 'coach')
   const [viewCoach, setViewCoach] = useState<any | null>(null)
@@ -439,7 +441,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
           <>
             <label className="block text-sm">
               <span className="font-medium text-gray-700">Coach level</span>
-              <select value={coachTier} onChange={e => setCoachTier(e.target.value)} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
+              <select value={coachTier} onChange={e => setCoachTier(e.target.value as 'L1' | 'L2')} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
                 <option value="L1">L1 — rolling 8-day window</option>
                 <option value="L2">L2 — weekly (opens Sunday 5pm WST)</option>
               </select>

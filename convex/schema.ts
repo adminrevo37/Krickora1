@@ -101,6 +101,7 @@ export default defineSchema({
     lockCodeId: v.optional(v.string()), // Reference to lockCodes table entry
     reminderSent: v.optional(v.boolean()), // Whether 6-hour reminder email was sent
     // Payment tracking
+    paymentStatus: v.optional(v.string()), // 'paid' | 'pending' | 'failed'
     paymentEmailSent: v.optional(v.boolean()), // Dedup guard — prevents duplicate payment confirmation emails
     stripePaymentIntentId: v.optional(v.string()), // Needed to issue partial refunds
     priceInCents: v.optional(v.number()), // Stored price at booking time (used for edit diff calculation)

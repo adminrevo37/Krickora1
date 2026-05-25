@@ -80,7 +80,9 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
   const dateKey = formatDateKey(selectedDay)
   const userRole = user?.role ?? 'customer'
   const coachTier = ((customerRecord as any)?.coachTier ?? 'L1') as 'L1' | 'L2' | 'Bowling' | 'BowlingL2'
-  const hasAccess = canAccessCalendar(userRole as 'coach' | 'customer' | 'admin', coachTier, settings)
+  // Normalise 4-value tier to 2-value for access-control functions
+  const coachTierNorm: 'L1' | 'L2' | null = (coachTier === 'L2' || coachTier === 'BowlingL2') ? 'L2' : 'L1'
+  const hasAccess = canAccessCalendar(userRole as 'coach' | 'customer' | 'admin', coachTierNorm, settings)
 
   const laneActiveHalfHours = useMemo(() => {
     const map = new Map<string, Set<number>>()
@@ -174,7 +176,7 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
         <div className="bg-white rounded-2xl border border-gray-200 p-8 shadow-sm text-center">
           <div className="text-5xl mb-4">🔒</div>
           <h2 className="text-xl font-bold text-gray-800 mb-2">Calendar Not Yet Available</h2>
-          <p className="text-sm text-gray-500 mb-4">{getCalendarAccessMessage(userRole as 'coach' | 'customer', coachTier, settings)}</p>
+          <p className="text-sm text-gray-500 mb-4">{getCalendarAccessMessage(userRole as 'coach' | 'customer', coachTierNorm, settings)}</p>
           <div className="inline-flex items-center gap-2 bg-amber-50 text-amber-700 px-4 py-2 rounded-xl text-sm font-medium">⏰ Check back later</div>
         </div>
       </div>

@@ -38,6 +38,8 @@ export interface SiteSettings {
   l1CoachOpenHour: number
   l2CoachOpenDay: string
   l2CoachOpenHour: number
+  customerMaxDurationMinutes?: number
+  coachMaxDurationMinutes?: number
 }
 
 const DEFAULT_DAILY_HOURS: Record<DayKey, DailyHours> = {
