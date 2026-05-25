@@ -92,40 +92,44 @@ export function useAuth() {
   const upsertCustomerMutation = useMutation(api.mutations.upsertCustomer)
   const createCoachInviteMutation = useMutation(api.mutations.createCoachInvite)
   const adminSetPasswordAction = useAction(api.adminPassword.adminSetPassword)
-  // ensureCustomerRecord: safe for all authenticated users (no requireAdmin).
-  // Used for auto-creating the customer record on first login / signup.
-  // Distinct from upsertCustomer which is admin-only for admin panel operations.
-  const ensureCustomerRecord = useMutation((api.auth as any).ensureCustomerExists)
+  // updateCustomerByEmailMutation: used for auto-creating the customer record
+  // on first login / signup. This mutation is confirmed present in the deployed
+  // Convex backend (used by profile.tsx). It creates the record if it doesn't
+  // exist and allows authenticated users to update their own record without
+  // admin privileges.
+  const updateCustomerByEmailMutation = useMutation(api.mutations.updateCustomerByEmail)
 
   // ── Auto-create customer record if missing ───────────────────────────
-  // Uses ensureCustomerExists (convex/auth.ts) — NOT upsertCustomer.
-  // upsertCustomer calls requireAdmin and throws "Not authorized" for regular
-  // users. ensureCustomerExists has no auth restriction and is safe for all
-  // authenticated users to call for their own record.
+  // Uses updateCustomerByEmail — confirmed deployed in production Convex.
+  // This mutation: (1) creates the customer record if it doesn't exist,
+  // (2) requires only that the caller is authenticated and uses their own email.
+  // It does NOT call requireAdmin for self-updates.
+  //
+  // NOT using upsertCustomer — it calls requireAdmin in the deployed backend
+  // and throws "Not authorized" for every non-admin user.
   //
   // The module-level _customerCreateAttempted Set ensures only ONE call fires
   // across ALL simultaneous useAuth instances (root layout, home page,
   // BookingCalendar, MyBookings, etc.).
   //
-  // ensureCustomerRecord is intentionally NOT in the dependency array —
-  // Convex useMutation can return a new reference each render, which would
-  // cause the effect to re-fire on every render while customerRecord is null.
+  // updateCustomerByEmailMutation is intentionally NOT in the dependency array —
+  // Convex useMutation returns a new reference each render, which would cause
+  // the effect to re-fire on every render while customerRecord is null.
   useEffect(() => {
     if (betterAuthUser?.email && customerRecord === null) {
       const email = betterAuthUser.email.toLowerCase().trim()
       // Skip if another useAuth instance already initiated this
       if (_customerCreateAttempted.has(email)) return
       _customerCreateAttempted.add(email)
-      ensureCustomerRecord({
+      updateCustomerByEmailMutation({
         email,
         name: betterAuthUser.name ?? betterAuthUser.email.split('@')[0],
       }).catch((err) => {
         console.error('Failed to auto-create customer record:', err)
         // Only allow retry for TRANSIENT errors (network, timeout).
-        // Do NOT retry on auth errors — that creates an infinite retry loop
-        // (each failure removes the guard, triggering the next instance).
+        // Do NOT retry on auth/authorization errors — prevents infinite retry loops.
         const msg: string = err?.message ?? ''
-        const isAuthError = msg.includes('Not authorized') || msg.includes('Unauthorized') || msg.includes('not authorized')
+        const isAuthError = msg.includes('Not authorized') || msg.includes('Unauthorized') || msg.includes('not authorized') || msg.includes('Authentication required')
         if (!isAuthError) {
           _customerCreateAttempted.delete(email)
         }
