@@ -2,6 +2,7 @@ import { mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { requireAdmin } from "./lib/adminGuard";
+import { authComponent } from "./auth";
 
 // ============================================================================
 // BOOKING MUTATIONS
@@ -1249,7 +1250,9 @@ export const updateBookingAthleteSlots = mutation({
 // CUSTOMER MUTATIONS — ADMIN ONLY
 // ============================================================================
 
-// Create or update a customer (upsert by email) — ADMIN ONLY
+// Create or update a customer (upsert by email).
+// Admins may upsert any record. Authenticated users may only upsert their own
+// record with role "customer" (safety-net for auto-create after signup).
 export const upsertCustomer = mutation({
   args: {
     name: v.string(),
@@ -1259,8 +1262,28 @@ export const upsertCustomer = mutation({
     creditBalance: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    // Require authentication for all callers
+    const authUser = await authComponent.getAuthUser(ctx);
+    if (!authUser) throw new Error("Not authorized");
+
+    const callerEmail = ((authUser as any).email ?? "").toLowerCase().trim();
     const normalizedEmail = args.email.toLowerCase().trim();
+
+    // Determine if caller is admin (Better Auth role or customers table role)
+    let isAdmin = (authUser as any).role === "admin";
+    if (!isAdmin && callerEmail) {
+      const callerCustomer = await ctx.db
+        .query("customers")
+        .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
+        .first();
+      if (callerCustomer && callerCustomer.role === "admin") isAdmin = true;
+    }
+
+    // Non-admins may only upsert their own record and cannot elevate role
+    if (!isAdmin) {
+      if (callerEmail !== normalizedEmail) throw new Error("Not authorized");
+      if (args.role && args.role !== "customer") throw new Error("Not authorized");
+    }
     const existing = await ctx.db
       .query("customers")
       .withIndex("by_email", (q: any) => q.eq("email", normalizedEmail))
