@@ -6,10 +6,9 @@ import {
   getActiveHalfHoursForLane, type Lane, type TimeSlot, type Booking,
 } from '../lib/booking-data'
 import { useBookings } from '../hooks/useBookingStore'
-import AdminManualBookingModal, { type AdminCustomerOption } from './AdminManualBookingModal'
+import AdminManualBookingModal, { type AdminCustomerOption, type BookingConfirmResult } from './AdminManualBookingModal'
 import AdminBookingDetailsModal from './AdminBookingDetailsModal'
 import LaneBlockModal from './LaneBlockModal'
-import ClosureManager from './ClosureManager'
 
 // Generate days from N months back to N months ahead (AWST aware)
 function generateAdminDays(monthsBack: number = 12, monthsAhead: number = 12): Date[] {
@@ -174,7 +173,10 @@ export default function AdminBookingCalendar() {
   }, [selectedDay])
 
   const handleSlotClick = (lane: Lane, slot: TimeSlot) => {
-    if (isDateClosed) { alert('This date is marked as closed.'); return }
+    // UX-5: Admin can override facility closures with explicit confirmation
+    if (isDateClosed) {
+      if (!confirm('⚠️ This date is marked as closed. Do you want to create an admin booking anyway?')) return
+    }
     if (!selectedCustomer) {
       alert('Please select a customer or coach first to make a booking on their behalf.')
       return
@@ -185,14 +187,26 @@ export default function AdminBookingCalendar() {
     setModalOpen(true)
   }
 
-  const handleBookingConfirm = async (newBookings: Booking[]) => {
-    try {
-      for (const b of newBookings) {
+  // UX-4: Surface booking errors + DI-3/DI-4: return per-date results
+  const handleBookingConfirm = async (newBookings: Booking[]): Promise<BookingConfirmResult> => {
+    let succeeded = 0; let failed = 0; const failedDates: string[] = []
+    for (const b of newBookings) {
+      try {
         await addBooking(b)
+        succeeded++
+      } catch (e: any) {
+        failed++
+        const msg = e?.message ?? 'Conflict or server error'
+        if (!failedDates.some(d => d.startsWith(b.date))) {
+          failedDates.push(`${b.date} (${b.laneId}): ${msg}`)
+        }
       }
-    } catch {}
-    setModalOpen(false)
-    setSelectedSlot(null)
+    }
+    if (failed === 0) {
+      setModalOpen(false)
+      setSelectedSlot(null)
+    }
+    return { succeeded, failed, failedDates }
   }
 
   const dayBookings = bookings.filter(b => b.date === dateKey && b.status !== 'cancelled')
@@ -203,6 +217,7 @@ export default function AdminBookingCalendar() {
   const removeBlockMut = useMutation(api.laneBlocks.removeLaneBlock)
   const [blockModalOpen, setBlockModalOpen] = useState(false)
   const [blockPrefill, setBlockPrefill] = useState<{ laneId: string; startHour: number } | null>(null)
+  const [customerDropdownOpen, setCustomerDropdownOpen] = useState(false)
 
   const fmtHour = (h: number) => {
     const hr = Math.floor(h)
@@ -227,202 +242,175 @@ export default function AdminBookingCalendar() {
 
   return (
     <div className="space-y-4">
-      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/30 rounded-xl p-4">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-lg">🛡️</span>
-          <h3 className="text-sm font-bold text-blue-700 dark:text-blue-400">Admin Calendar — 12 Month View</h3>
-        </div>
-        <p className="text-xs text-blue-600/80 dark:text-blue-400/80">
-          Browse 12 months of history or up to 12 months ahead. Select a customer/coach to book on their behalf. Past months are read-only — booking is disabled for dates before today.
-        </p>
+      <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/30 text-xs text-blue-600 dark:text-blue-400">
+        <span>🛡️</span>
+        <span><strong className="font-semibold">Admin Calendar</strong> — 12-month view · Use the toolbar below to select a customer or coach before booking · Past dates are read-only</span>
       </div>
 
-      {/* Customer / Coach Selection */}
-      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">👤 Book on behalf of</h3>
-          {selectedCustomer && (
-            <button onClick={() => setSelectedCustomerId('')} className="text-[11px] text-red-500 hover:text-red-700 font-semibold">
-              Clear selection
+      {/* Date Picker — month strip + day grid in one card */}
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm">
+        <div className="p-3 border-b border-gray-100 dark:border-gray-800">
+          <div className="flex items-center gap-2 mb-2">
+            <button
+              onClick={() => {
+                const todayKey = `${new Date().getFullYear()}-${new Date().getMonth()}`
+                setActiveMonthKey(todayKey)
+                const today = new Date(); today.setHours(0,0,0,0)
+                const t = allDays.find(d => formatDateKey(d) === formatDateKey(today))
+                if (t) setSelectedDay(t)
+              }}
+              className="text-[11px] px-3 py-1.5 rounded-lg bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 font-semibold hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors"
+            >
+              📅 Today
             </button>
-          )}
-        </div>
-
-        {selectedCustomer ? (
-          <div className={`flex items-center gap-3 rounded-xl p-3 border ${selectedCustomer.role === 'coach' ? 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800/50' : 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800/50'}`}>
-            <div className={`w-10 h-10 ${selectedCustomer.role === 'coach' ? 'bg-orange-500' : 'bg-emerald-500'} rounded-full flex items-center justify-center text-white text-sm font-bold`}>
-              {selectedCustomer.name.charAt(0).toUpperCase()}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-semibold text-gray-800 dark:text-gray-200 truncate">{selectedCustomer.name}</div>
-              <div className="text-xs text-gray-500 truncate">{selectedCustomer.email}</div>
-            </div>
-            <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${selectedCustomer.role === 'coach' ? 'bg-orange-200 dark:bg-orange-900/40 text-orange-800 dark:text-orange-300' : 'bg-emerald-200 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300'}`}>
-              {selectedCustomer.role === 'coach' ? '🏅 Coach' : '👤 Customer'}
-            </span>
+            <span className="text-[10px] text-gray-400">Scroll to view past or future months</span>
           </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="flex gap-2">
-              <div className="flex-1 relative">
-                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs">🔍</span>
-                <input
-                  type="text"
-                  value={customerSearch}
-                  onChange={(e) => setCustomerSearch(e.target.value)}
-                  placeholder="Search by name, email, or phone..."
-                  className="w-full pl-8 pr-3 py-2 text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none text-gray-800 dark:text-gray-200 placeholder-gray-400"
-                />
-              </div>
-              <select
-                value={roleFilter}
-                onChange={(e) => setRoleFilter(e.target.value as any)}
-                className="text-xs px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200"
-              >
-                <option value="all">All</option>
-                <option value="customer">Customers</option>
-                <option value="coach">Coaches</option>
-              </select>
-            </div>
-            <div className="max-h-60 overflow-y-auto border border-gray-100 dark:border-gray-800 rounded-lg divide-y divide-gray-100 dark:divide-gray-800">
-              {filteredCustomers.length === 0 ? (
-                <div className="p-4 text-center text-xs text-gray-400">
-                  {customerSearch ? 'No matches found' : 'No customers in database'}
-                </div>
-              ) : (
-                filteredCustomers.map((c) => (
-                  <button
-                    key={c._id}
-                    onClick={() => setSelectedCustomerId(c._id)}
-                    className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-emerald-50 dark:hover:bg-emerald-900/10 transition-colors text-left group"
-                  >
-                    <div className={`w-8 h-8 ${c.role === 'coach' ? 'bg-orange-500' : 'bg-emerald-500'} rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0`}>
-                      {(c.name ?? '?').charAt(0).toUpperCase()}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{c.name}</div>
-                      <div className="text-[10px] text-gray-400 truncate">{c.email}</div>
-                    </div>
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold shrink-0 ${c.role === 'coach' ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400' : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400'}`}>
-                      {c.role === 'coach' ? 'Coach' : 'Customer'}
-                    </span>
-                    <span className="text-emerald-500 opacity-0 group-hover:opacity-100 transition-opacity text-xs">Select →</span>
-                  </button>
-                ))
-              )}
-            </div>
-            <p className="text-[10px] text-gray-400 dark:text-gray-500 text-center">
-              {filteredCustomers.length} {filteredCustomers.length === 1 ? 'result' : 'results'}
-            </p>
+          <div ref={monthScrollRef} className="flex gap-2 overflow-x-auto pb-1">
+            {monthGroups.map(m => {
+              const today = new Date()
+              const [yr, mo] = m.key.split('-').map(Number)
+              const isPast = yr < today.getFullYear() || (yr === today.getFullYear() && mo < today.getMonth())
+              const isCurrent = yr === today.getFullYear() && mo === today.getMonth()
+              return (
+                <button
+                  key={m.key}
+                  ref={m.key === activeMonthKey ? activeMonthBtnRef : undefined}
+                  onClick={() => {
+                    setActiveMonthKey(m.key)
+                    setSelectedDay(m.days[0])
+                  }}
+                  className={`px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+                    m.key === activeMonthKey
+                      ? 'bg-emerald-500 text-white shadow-md shadow-emerald-500/30'
+                      : isPast
+                        ? 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700'
+                        : isCurrent
+                          ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/30'
+                          : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  {isPast && '🕓 '}{m.label}
+                </button>
+              )
+            })}
           </div>
-        )}
-      </div>
-
-      {/* Facility closures */}
-      <ClosureManager selectedDate={selectedDay} />
-
-      {/* Month Selector */}
-      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-3 shadow-sm">
-        <div className="flex items-center gap-2 mb-2">
-          <button
-            onClick={() => {
-              const todayKey = `${new Date().getFullYear()}-${new Date().getMonth()}`
-              setActiveMonthKey(todayKey)
-              const today = new Date(); today.setHours(0,0,0,0)
-              const t = allDays.find(d => formatDateKey(d) === formatDateKey(today))
-              if (t) setSelectedDay(t)
-            }}
-            className="text-[11px] px-3 py-1.5 rounded-lg bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 font-semibold hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors"
-          >
-            📅 Today
-          </button>
-          <span className="text-[10px] text-gray-400">Scroll horizontally to view past or future months</span>
         </div>
-        <div ref={monthScrollRef} className="flex gap-2 overflow-x-auto pb-1">
-          {monthGroups.map(m => {
-            const today = new Date()
-            const [yr, mo] = m.key.split('-').map(Number)
-            const isPast = yr < today.getFullYear() || (yr === today.getFullYear() && mo < today.getMonth())
-            const isCurrent = yr === today.getFullYear() && mo === today.getMonth()
-            return (
-              <button
-                key={m.key}
-                ref={m.key === activeMonthKey ? activeMonthBtnRef : undefined}
-                onClick={() => {
-                  setActiveMonthKey(m.key)
-                  setSelectedDay(m.days[0])
-                }}
-                className={`px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
-                  m.key === activeMonthKey
-                    ? 'bg-emerald-500 text-white shadow-md shadow-emerald-500/30'
-                    : isPast
-                      ? 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700'
-                      : isCurrent
-                        ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/30'
-                        : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
-                }`}
-              >
-                {isPast && '🕓 '}{m.label}
-              </button>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* Day Grid for Active Month */}
-      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">{activeMonth?.label}</h3>
-          <span className="text-xs text-gray-500 dark:text-gray-400">{activeMonth?.days.length} days</span>
-        </div>
-        <div className="grid grid-cols-7 gap-2">
-          {activeMonth?.days.map(day => {
-            const active = formatDateKey(day) === formatDateKey(selectedDay)
-            const today = isToday(day)
-            const dayBookCount = bookings.filter(b => b.date === formatDateKey(day) && b.status !== 'cancelled').length
-            return (
-              <button
-                key={formatDateKey(day)}
-                onClick={() => setSelectedDay(day)}
-                className={`relative flex flex-col items-center py-2 px-1 rounded-xl transition-all duration-200 text-center ${
-                  active
-                    ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 scale-105'
-                    : today
-                      ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700'
-                      : 'bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20'
-                }`}
-              >
-                <span className="text-[10px] uppercase font-medium opacity-75">
-                  {day.toLocaleDateString('en-US', { weekday: 'short' })}
-                </span>
-                <span className="text-base font-bold">{day.getDate()}</span>
-                {dayBookCount > 0 && (
-                  <span className={`text-[9px] mt-0.5 px-1 rounded-full ${active ? 'bg-white/30' : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400'}`}>
-                    {dayBookCount}
+        <div className="p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">{activeMonth?.label}</h3>
+            <span className="text-xs text-gray-500 dark:text-gray-400">{activeMonth?.days.length} days</span>
+          </div>
+          <div className="grid grid-cols-7 gap-2">
+            {activeMonth?.days.map(day => {
+              const active = formatDateKey(day) === formatDateKey(selectedDay)
+              const today = isToday(day)
+              const dayBookCount = bookings.filter(b => b.date === formatDateKey(day) && b.status !== 'cancelled').length
+              return (
+                <button
+                  key={formatDateKey(day)}
+                  onClick={() => setSelectedDay(day)}
+                  className={`relative flex flex-col items-center py-2 px-1 rounded-xl transition-all duration-200 text-center ${
+                    active
+                      ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 scale-105'
+                      : today
+                        ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700'
+                        : 'bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20'
+                  }`}
+                >
+                  <span className="text-[10px] uppercase font-medium opacity-75">
+                    {day.toLocaleDateString('en-US', { weekday: 'short' })}
                   </span>
-                )}
-              </button>
-            )
-          })}
+                  <span className="text-base font-bold">{day.getDate()}</span>
+                  {dayBookCount > 0 && (
+                    <span className={`text-[9px] mt-0.5 px-1 rounded-full ${active ? 'bg-white/30' : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400'}`}>
+                      {dayBookCount}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
         </div>
       </div>
 
       {/* Lane × Time Grid */}
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm overflow-x-auto">
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
             {selectedDay.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
           </h3>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Customer selector — inline dropdown */}
+            <div className="relative">
+              {selectedCustomer ? (
+                <div className="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-900/20">
+                  <span className={`w-5 h-5 rounded-full ${selectedCustomer.role === 'coach' ? 'bg-orange-500' : 'bg-emerald-500'} flex items-center justify-center text-white text-[9px] font-bold shrink-0`}>
+                    {selectedCustomer.name.charAt(0).toUpperCase()}
+                  </span>
+                  <span className="font-semibold text-gray-800 dark:text-gray-200 max-w-[120px] truncate">{selectedCustomer.name}</span>
+                  <button onClick={() => setSelectedCustomerId('')} className="text-gray-400 hover:text-red-500 ml-0.5 leading-none text-base">×</button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setCustomerDropdownOpen(o => !o)}
+                  className="text-[11px] px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:border-emerald-400 dark:hover:border-emerald-600 font-medium transition-colors"
+                >
+                  👤 Select customer…
+                </button>
+              )}
+              {customerDropdownOpen && !selectedCustomer && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setCustomerDropdownOpen(false)} />
+                  <div className="absolute right-0 top-full mt-1 w-72 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-xl z-40 overflow-hidden">
+                    <div className="p-2 space-y-1.5 border-b border-gray-100 dark:border-gray-800">
+                      <div className="relative">
+                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">🔍</span>
+                        <input
+                          type="text"
+                          autoFocus
+                          value={customerSearch}
+                          onChange={(e) => setCustomerSearch(e.target.value)}
+                          placeholder="Search name, email…"
+                          className="w-full pl-7 pr-3 py-1.5 text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:ring-1 focus:ring-emerald-500 text-gray-800 dark:text-gray-200 placeholder-gray-400"
+                        />
+                      </div>
+                      <div className="flex gap-1">
+                        {(['all', 'customer', 'coach'] as const).map(r => (
+                          <button key={r} onClick={() => setRoleFilter(r)} className={`flex-1 text-[10px] py-1 rounded-md font-semibold transition-colors ${roleFilter === r ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
+                            {r.charAt(0).toUpperCase() + r.slice(1)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="max-h-56 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
+                      {filteredCustomers.length === 0 ? (
+                        <div className="p-3 text-center text-xs text-gray-400">{customerSearch ? 'No matches' : 'No customers'}</div>
+                      ) : filteredCustomers.map((c) => (
+                        <button key={c._id} onClick={() => { setSelectedCustomerId(c._id); setCustomerDropdownOpen(false) }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-emerald-50 dark:hover:bg-emerald-900/10 transition-colors text-left">
+                          <div className={`w-6 h-6 ${c.role === 'coach' ? 'bg-orange-500' : 'bg-emerald-500'} rounded-full flex items-center justify-center text-white text-[9px] font-bold shrink-0`}>
+                            {(c.name ?? '?').charAt(0).toUpperCase()}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="text-xs font-medium text-gray-800 dark:text-gray-200 truncate">{c.name}</div>
+                            <div className="text-[9px] text-gray-400 truncate">{c.email}</div>
+                          </div>
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold shrink-0 ${c.role === 'coach' ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400' : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400'}`}>
+                            {c.role === 'coach' ? 'Coach' : 'Cust.'}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
             <span className="text-xs text-gray-500 dark:text-gray-400">{dayBookings.length} bookings</span>
-            {(
-              <button
-                onClick={() => { setBlockPrefill(null); setBlockModalOpen(true) }}
-                className="text-[11px] px-2.5 py-1 rounded-lg bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 font-semibold hover:bg-orange-200 dark:hover:bg-orange-900/50 transition-colors"
-              >
-                🔧 Block Lane for Service
-              </button>
-            )}
+            <button
+              onClick={() => { setBlockPrefill(null); setBlockModalOpen(true) }}
+              className="text-[11px] px-2.5 py-1 rounded-lg bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 font-semibold hover:bg-orange-200 dark:hover:bg-orange-900/50 transition-colors"
+            >
+              🔧 Block Lane
+            </button>
           </div>
         </div>
         {laneBlocks.length > 0 && (

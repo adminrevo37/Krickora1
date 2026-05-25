@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { useAuth } from '../hooks/useAuth'
 import AdminBookingCalendar from '../components/AdminBookingCalendar'
 import ClosureManager from '../components/ClosureManager'
@@ -9,19 +9,167 @@ import AdminDiscountCodesTab from '../components/AdminDiscountCodesTab'
 import { useQuery, useMutation, useAction, skipToken } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 
+// ---------------------------------------------------------------------------
+// Route — section tracked in URL search params for bookmarkable navigation
+// ---------------------------------------------------------------------------
+
+type Section =
+  | 'bookings' | 'closures'
+  | 'customers' | 'coaches'
+  | 'statements' | 'discounts'
+  | 'settings'
+
+const VALID_SECTIONS: Section[] = [
+  'bookings', 'closures', 'customers', 'coaches',
+  'statements', 'discounts', 'settings',
+]
+
 export const Route = createFileRoute('/admin')({
   component: AdminPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    section: (VALID_SECTIONS.includes(search.section as Section)
+      ? search.section
+      : 'bookings') as Section,
+  }),
 })
 
-type Tab = 'bookings' | 'customers' | 'coaches' | 'statements' | 'closures' | 'hours' | 'pricing' | 'settings'
+// ---------------------------------------------------------------------------
+// Sidebar navigation definition
+// ---------------------------------------------------------------------------
+
+const NAV_GROUPS: Array<{
+  label: string
+  items: Array<{ id: Section; label: string; icon: string; href?: string }>
+}> = [
+  {
+    label: 'Operations',
+    items: [
+      { id: 'bookings',   label: 'Bookings',   icon: '📅' },
+      { id: 'closures',   label: 'Closures',   icon: '🚫' },
+    ],
+  },
+  {
+    label: 'People',
+    items: [
+      { id: 'customers',  label: 'Customers',  icon: '👥' },
+      { id: 'coaches',    label: 'Coaches',    icon: '🏏' },
+    ],
+  },
+  {
+    label: 'Finance',
+    items: [
+      { id: 'statements', label: 'Statements', icon: '💰' },
+      { id: 'discounts',  label: 'Discounts',  icon: '🏷️' },
+    ],
+  },
+  {
+    label: 'Configure',
+    items: [
+      { id: 'settings',   label: 'Settings',   icon: '⚙️' },
+    ],
+  },
+]
+
+const SECTION_TITLES: Record<Section, string> = {
+  bookings:   'Bookings',
+  closures:   'Closures',
+  customers:  'Customers',
+  coaches:    'Coaches',
+  statements: 'Statements',
+  discounts:  'Discounts',
+  settings:   'Settings',
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar component
+// ---------------------------------------------------------------------------
+
+function Sidebar({
+  active,
+  onSelect,
+  onClose,
+}: {
+  active: Section
+  onSelect: (s: Section) => void
+  onClose?: () => void
+}) {
+  return (
+    <nav className="flex flex-col h-full">
+      {/* Brand / title */}
+      <div className="px-4 py-5 border-b border-gray-100">
+        <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400">Admin Panel</p>
+      </div>
+
+      {/* Nav groups */}
+      <div className="flex-1 overflow-y-auto py-3 px-2 space-y-4">
+        {NAV_GROUPS.map(group => (
+          <div key={group.label}>
+            <p className="px-2 mb-1 text-[10px] font-bold uppercase tracking-widest text-gray-400">
+              {group.label}
+            </p>
+            {group.items.map(item => {
+              const isActive = active === item.id
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => { onSelect(item.id); onClose?.() }}
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    isActive
+                      ? 'bg-emerald-50 text-emerald-700'
+                      : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                  }`}
+                >
+                  <span className="text-base leading-none">{item.icon}</span>
+                  <span>{item.label}</span>
+                  {isActive && (
+                    <span className="ml-auto w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        ))}
+      </div>
+
+      {/* Analytics — own page */}
+      <div className="px-2 pb-4 border-t border-gray-100 pt-3">
+        <Link
+          to="/admin/analytics"
+          onClick={onClose}
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors"
+        >
+          <span className="text-base leading-none">📊</span>
+          <span>Analytics</span>
+          <svg className="ml-auto w-3 h-3 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+          </svg>
+        </Link>
+      </div>
+    </nav>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
 
 function AdminPage() {
   const { isAdmin, isLoading } = useAuth()
-  const [tab, setTab] = useState<Tab>('bookings')
-  const [selectedDate] = useState(new Date())
+  const { section } = Route.useSearch()
+  const navigate = useNavigate()
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+
+  const setSection = (s: Section) => {
+    navigate({ search: { section: s }, replace: true })
+    setMobileSidebarOpen(false)
+  }
 
   if (isLoading) {
-    return <div className="max-w-7xl mx-auto px-4 py-16 text-center text-gray-500">Loading...</div>
+    return (
+      <div className="flex items-center justify-center min-h-[60vh] text-gray-400 text-sm">
+        Loading…
+      </div>
+    )
   }
 
   if (!isAdmin) {
@@ -34,76 +182,95 @@ function AdminPage() {
     )
   }
 
-  const tabs: { id: Tab; label: string; icon: string }[] = [
-    { id: 'bookings', label: 'Bookings', icon: '📅' },
-    { id: 'customers', label: 'Customers', icon: '👥' },
-    { id: 'coaches', label: 'Coaches', icon: '🏏' },
-    { id: 'statements', label: 'Statements', icon: '💰' },
-    { id: 'closures', label: 'Closures', icon: '🚫' },
-    { id: 'hours', label: 'Opening Hours', icon: '🕒' },
-    { id: 'pricing', label: 'Pricing', icon: '💲' },
-    { id: 'settings', label: 'Settings', icon: '⚙️' },
-  ]
-
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-gray-900">Admin Panel</h1>
-        <p className="text-gray-500 mt-1">Manage bookings, customers, coaches, closures, and settings</p>
-      </div>
+    <div className="flex min-h-[calc(100vh-4rem)] bg-gray-50">
 
-      <div className="flex gap-1 mb-6 border-b border-gray-200 overflow-x-auto">
-        {tabs.map(t => (
+      {/* ── Mobile overlay backdrop ── */}
+      {mobileSidebarOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/40 md:hidden"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      )}
+
+      {/* ── Mobile slide-in sidebar ── */}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 w-64 bg-white border-r border-gray-200 pt-16 shadow-xl transition-transform duration-200 md:hidden ${
+          mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        <Sidebar active={section} onSelect={setSection} onClose={() => setMobileSidebarOpen(false)} />
+      </aside>
+
+      {/* ── Desktop sidebar (sticky) ── */}
+      <aside className="hidden md:flex md:flex-col w-52 shrink-0 sticky top-16 h-[calc(100vh-4rem)] bg-white border-r border-gray-200 overflow-y-auto">
+        <Sidebar active={section} onSelect={setSection} />
+      </aside>
+
+      {/* ── Content area ── */}
+      <main className="flex-1 min-w-0 overflow-y-auto">
+        {/* Mobile top bar */}
+        <div className="sticky top-0 z-20 flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 md:hidden">
           <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`px-4 py-2.5 text-sm font-medium whitespace-nowrap border-b-2 -mb-px transition-colors ${
-              tab === t.id
-                ? 'border-emerald-500 text-emerald-600'
-                : 'border-transparent text-gray-500 hover:text-gray-800'
-            }`}
+            onClick={() => setMobileSidebarOpen(true)}
+            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600"
+            aria-label="Open menu"
           >
-            <span className="mr-1.5">{t.icon}</span>{t.label}
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
           </button>
-        ))}
-      </div>
+          <h1 className="text-base font-semibold text-gray-800">{SECTION_TITLES[section]}</h1>
+        </div>
 
-      <div className="space-y-6">
-        {tab === 'bookings' && <AdminBookingCalendar />}
-        {tab === 'customers' && <CustomersTab />}
-        {tab === 'coaches' && <CoachesTab />}
-        {tab === 'statements' && <StatementsTab />}
-        {tab === 'closures' && <ClosureManager selectedDate={selectedDate} />}
-        {tab === 'hours' && <SettingsPanel />}
-        {tab === 'pricing' && <SettingsPanel />}
-        {tab === 'settings' && <SettingsPanel />}
-      </div>
+        {/* Section content */}
+        <div className="p-6 space-y-6">
+          {section === 'bookings'   && <AdminBookingCalendar />}
+          {section === 'closures'   && <ClosureManager selectedDate={new Date()} />}
+          {section === 'customers'  && <CustomersTab />}
+          {section === 'coaches'    && <CoachesTab />}
+          {section === 'statements' && <StatementsTab />}
+          {section === 'discounts'  && <AdminDiscountCodesTab />}
+          {section === 'settings'   && <SettingsPanel />}
+        </div>
+      </main>
     </div>
   )
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Normalise legacy tier values ('Bowling' → 'L1', 'BowlingL2' → 'L2') */
+function normaliseCoachTier(tier: string | undefined | null): 'L1' | 'L2' {
+  if (tier === 'L2' || tier === 'BowlingL2') return 'L2'
+  return 'L1'
+}
+
+// ---------------------------------------------------------------------------
+// Statements tab
+// ---------------------------------------------------------------------------
 
 function StatementsTab() {
   const { user } = useAuth()
   const customers = useQuery(api.queries.listCustomers) ?? []
   const coaches = (customers as any[]).filter(c => c.role === 'coach')
   const [viewCoach, setViewCoach] = useState<any | null>(null)
-  const allPayments = useQuery((api.queries as any).listPayments) ?? []
   const createPayment = useMutation((api.mutations as any).createPayment)
-  const deletePayment = useMutation((api.mutations as any).deletePayment)
   const today = new Date().toISOString().slice(0, 10)
-  const [form, setForm] = useState({ coachId: '', amount: '', dateReceived: today, method: 'bank_transfer', description: '' })
+  const [form, setForm] = useState({ amount: '', dateReceived: today, method: 'bank_transfer', description: '' })
   const [busy, setBusy] = useState(false)
-  const [filterCoach, setFilterCoach] = useState<string>('')
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!form.coachId) { alert('Select a coach'); return }
+    if (!viewCoach) return
     const amt = parseFloat(form.amount)
     if (!amt || amt <= 0) { alert('Enter a valid amount'); return }
     setBusy(true)
     try {
       await createPayment({
-        coachId: form.coachId,
+        coachId: viewCoach._id,
         amount: amt,
         dateReceived: form.dateReceived,
         method: form.method,
@@ -111,31 +278,40 @@ function StatementsTab() {
         note: form.description,
         createdBy: (user as any)?._id ?? (user as any)?.id ?? 'admin',
       } as any)
-      setForm({ coachId: '', amount: '', dateReceived: today, method: 'bank_transfer', description: '' })
+      setForm({ amount: '', dateReceived: today, method: 'bank_transfer', description: '' })
     } catch (err: any) { alert(err?.message ?? 'Failed') }
     finally { setBusy(false) }
   }
 
-  const remove = async (id: string) => {
-    if (!confirm('Delete this payment?')) return
-    try { await deletePayment({ id } as any) } catch (err: any) { alert(err?.message ?? 'Failed') }
-  }
-
-  const coachName = (id: string) => {
-    const c = (customers as any[]).find(x => x._id === id)
-    return c?.name || c?.email || 'Unknown'
-  }
-
-  const list = (allPayments as any[])
-    .filter(p => !filterCoach || p.coachId === filterCoach)
-    .slice()
-    .sort((a, b) => (b.dateReceived || '').localeCompare(a.dateReceived || ''))
-  const total = list.reduce((s, p) => s + (p.amount || 0), 0)
-
   if (viewCoach) {
     return (
       <div className="space-y-4">
-        <button onClick={() => setViewCoach(null)} className="text-sm text-emerald-600 hover:underline">← Back to all coaches</button>
+        <button onClick={() => setViewCoach(null)} className="text-sm text-emerald-600 hover:underline">
+          ← Back to all statements
+        </button>
+
+        {/* Record payment — pre-filled for this coach */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-100">
+            <h3 className="text-base font-bold text-gray-800">Record Payment — {viewCoach.name || viewCoach.email}</h3>
+            <p className="text-sm text-gray-500 mt-0.5">Log a payment received from this coach</p>
+          </div>
+          <form onSubmit={submit} className="p-6 grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <input required type="number" step="0.01" min="0" placeholder="Amount ($)" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+            <input required type="date" value={form.dateReceived} onChange={e => setForm({ ...form, dateReceived: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+            <select value={form.method} onChange={e => setForm({ ...form, method: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
+              <option value="bank_transfer">Bank Transfer</option>
+              <option value="cash">Cash</option>
+              <option value="stripe">Stripe</option>
+              <option value="other">Other</option>
+            </select>
+            <input placeholder="Notes (optional)" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+            <button disabled={busy} className="sm:col-span-4 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors">
+              {busy ? 'Saving…' : 'Record Payment'}
+            </button>
+          </form>
+        </div>
+
         <CoachStatementTable coachId={viewCoach._id} coachEmail={viewCoach.email} coachName={viewCoach.name} />
       </div>
     )
@@ -143,106 +319,35 @@ function StatementsTab() {
 
   return (
     <div className="space-y-6">
+      {/* Coach list */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <div>
-            <h3 className="text-lg font-bold text-gray-800">Coach Statements</h3>
-            <p className="text-sm text-gray-500 mt-1">Click a coach to view their lifetime statement.</p>
+            <h3 className="text-base font-bold text-gray-800">Coach Statements</h3>
+            <p className="text-sm text-gray-500 mt-0.5">Click a coach to view their earnings and record a payment</p>
           </div>
-          <span className="text-xs text-gray-500">{coaches.length} coaches</span>
+          <span className="text-xs text-gray-400 tabular-nums">{coaches.length} coaches</span>
         </div>
         {coaches.length === 0 ? (
-          <div className="p-6 text-sm text-gray-500">No coaches yet.</div>
+          <div className="p-6 text-sm text-gray-400 italic">No coaches yet.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-gray-600">
+              <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
-                  <th className="text-left px-5 py-2 font-semibold">Coach</th>
-                  <th className="text-left px-5 py-2 font-semibold">Email</th>
-                  <th className="text-left px-5 py-2 font-semibold">Tier</th>
-                  <th className="px-5 py-2"></th>
+                  <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Coach</th>
+                  <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Email</th>
+                  <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tier</th>
+                  <th className="px-5 py-2.5" />
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-gray-100">
                 {coaches.map((c: any) => (
-                  <tr key={c._id} className="border-t border-gray-100 hover:bg-gray-50 cursor-pointer" onClick={() => setViewCoach(c)}>
+                  <tr key={c._id} className="hover:bg-gray-50 cursor-pointer transition-colors" onClick={() => setViewCoach(c)}>
                     <td className="px-5 py-3 font-medium text-gray-900">{c.name || '—'}</td>
-                    <td className="px-5 py-3 text-gray-600">{c.email}</td>
-                    <td className="px-5 py-3 text-gray-600">{c.coachTier || '—'}</td>
-                    <td className="px-5 py-3 text-right"><span className="text-emerald-600 text-xs font-semibold">View Statement →</span></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100">
-          <h3 className="text-lg font-bold text-gray-800">Record Coach Payment</h3>
-          <p className="text-sm text-gray-500 mt-1">Enter a payment received by a coach. Coaches can view their own statements.</p>
-        </div>
-        <form onSubmit={submit} className="p-6 grid grid-cols-1 sm:grid-cols-6 gap-3">
-          <select required value={form.coachId} onChange={e => setForm({ ...form, coachId: e.target.value })} className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm">
-            <option value="">Select coach…</option>
-            {coaches.map((c: any) => (
-              <option key={c._id} value={c._id}>{c.name || c.email}</option>
-            ))}
-          </select>
-          <input required type="number" step="0.01" min="0" placeholder="Amount" value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-          <input required type="date" value={form.dateReceived} onChange={e => setForm({ ...form, dateReceived: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-          <select value={form.method} onChange={e => setForm({ ...form, method: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm">
-            <option value="bank_transfer">Bank Transfer</option>
-            <option value="cash">Cash</option>
-            <option value="stripe">Stripe</option>
-            <option value="other">Other</option>
-          </select>
-          <input placeholder="Description / notes" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} className="sm:col-span-6 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-          <button disabled={busy} className="sm:col-span-6 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
-            {busy ? 'Saving…' : 'Record Payment'}
-          </button>
-        </form>
-      </div>
-
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <h3 className="text-lg font-bold text-gray-800">Payment History ({list.length})</h3>
-            <p className="text-sm text-gray-500">Total: <span className="font-semibold text-gray-800">${total.toFixed(2)}</span></p>
-          </div>
-          <select value={filterCoach} onChange={e => setFilterCoach(e.target.value)} className="px-3 py-2 border border-gray-200 rounded-lg text-sm">
-            <option value="">All coaches</option>
-            {coaches.map((c: any) => (
-              <option key={c._id} value={c._id}>{c.name || c.email}</option>
-            ))}
-          </select>
-        </div>
-        {list.length === 0 ? (
-          <div className="p-6 text-sm text-gray-500">No payments recorded yet.</div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-gray-600">
-                <tr>
-                  <th className="text-left px-5 py-2 font-semibold">Date</th>
-                  <th className="text-left px-5 py-2 font-semibold">Coach</th>
-                  <th className="text-left px-5 py-2 font-semibold">Method</th>
-                  <th className="text-left px-5 py-2 font-semibold">Description</th>
-                  <th className="text-right px-5 py-2 font-semibold">Amount</th>
-                  <th className="px-5 py-2"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.map((p: any) => (
-                  <tr key={p._id} className="border-t border-gray-100">
-                    <td className="px-5 py-3 text-gray-700">{p.dateReceived || '—'}</td>
-                    <td className="px-5 py-3 text-gray-700">{coachName(p.coachId)}</td>
-                    <td className="px-5 py-3 text-gray-600">{p.method || p.paymentMethod || '—'}</td>
-                    <td className="px-5 py-3 text-gray-600">{p.description || p.note || '—'}</td>
-                    <td className="px-5 py-3 text-right font-semibold text-gray-900">${(p.amount || 0).toFixed(2)}</td>
-                    <td className="px-5 py-3 text-right"><button onClick={() => remove(p._id)} className="text-xs text-red-600 hover:underline">Delete</button></td>
+                    <td className="px-5 py-3 text-gray-500">{c.email}</td>
+                    <td className="px-5 py-3 text-gray-500">{normaliseCoachTier(c.coachTier)}</td>
+                    <td className="px-5 py-3 text-right text-xs font-semibold text-emerald-600">View →</td>
                   </tr>
                 ))}
               </tbody>
@@ -254,14 +359,19 @@ function StatementsTab() {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Edit user / coach modal
+// ---------------------------------------------------------------------------
+
 function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => void; isCoach?: boolean }) {
   const updateProfile = useMutation((api.users as any).adminUpdateUserProfile)
   const deleteUser = useMutation((api.users as any).adminDeleteUser)
   const [name, setName] = useState(user.name || '')
   const [phone, setPhone] = useState(user.phone || '')
-  const [coachTier, setCoachTier] = useState(user.coachTier || 'L1')
+  const [coachTier, setCoachTier] = useState(normaliseCoachTier(user.coachTier))
   const [color, setColor] = useState(user.color || '')
   const [role, setRole] = useState(user.role || 'user')
+  const [defaultSessionDuration, setDefaultSessionDuration] = useState<number>(user.defaultSessionDuration || 60)
   const [busy, setBusy] = useState(false)
 
   const save = async (e: React.FormEvent) => {
@@ -269,7 +379,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
     setBusy(true)
     try {
       const args: any = { email: user.email, name, phone, role }
-      if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color }
+      if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color; args.defaultSessionDuration = defaultSessionDuration }
       await updateProfile(args)
       onClose()
     } catch (err: any) { alert(err?.message ?? 'Failed') }
@@ -277,7 +387,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
   }
 
   const remove = async () => {
-    if (!confirm(`Delete ${user.email}? This cannot be undone.`)) return
+    if (!confirm(`Permanently delete ${user.email}? This cannot be undone.`)) return
     setBusy(true)
     try { await deleteUser({ email: user.email }); onClose() }
     catch (err: any) { alert(err?.message ?? 'Failed') }
@@ -289,9 +399,9 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
       <form onClick={e => e.stopPropagation()} onSubmit={save} className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-bold text-gray-900">Edit {isCoach ? 'Coach' : 'User'}</h3>
-          <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl">×</button>
+          <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
         </div>
-        <div className="text-xs text-gray-500">{user.email}</div>
+        <p className="text-xs text-gray-400">{user.email}</p>
         <label className="block text-sm">
           <span className="font-medium text-gray-700">Full name</span>
           <input value={name} onChange={e => setName(e.target.value)} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" />
@@ -314,25 +424,37 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
             <label className="block text-sm">
               <span className="font-medium text-gray-700">Coach level</span>
               <select value={coachTier} onChange={e => setCoachTier(e.target.value)} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
-                <option value="L1">L1</option>
-                <option value="L2">L2</option>
-                <option value="Bowling">Bowling</option>
+                <option value="L1">L1 — rolling 8-day window</option>
+                <option value="L2">L2 — weekly (opens Sunday 5pm WST)</option>
               </select>
             </label>
             <label className="block text-sm">
-              <span className="font-medium text-gray-700">Calendar color</span>
+              <span className="font-medium text-gray-700">Calendar colour</span>
               <div className="flex gap-2 items-center mt-1">
-                <input type="color" value={color || '#10b981'} onChange={e => setColor(e.target.value)} className="h-10 w-14 border border-gray-200 rounded-lg" />
-                <input value={color} onChange={e => setColor(e.target.value)} placeholder="#10b981" className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+                <input type="color" value={color || '#10b981'} onChange={e => setColor(e.target.value)} className="h-10 w-14 border border-gray-200 rounded-lg cursor-pointer" />
+                <input value={color} onChange={e => setColor(e.target.value)} placeholder="#10b981" className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono" />
               </div>
+            </label>
+            <label className="block text-sm">
+              <span className="font-medium text-gray-700">Default session duration</span>
+              <p className="text-xs text-gray-400 mb-1">Pre-fills the athlete slot duration when adding allocations</p>
+              <select value={defaultSessionDuration} onChange={e => setDefaultSessionDuration(Number(e.target.value))} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
+                {[30, 45, 60, 75, 90, 120].map(d => (
+                  <option key={d} value={d}>{d} min</option>
+                ))}
+              </select>
             </label>
           </>
         )}
         <div className="flex items-center justify-between gap-2 pt-2">
-          <button type="button" onClick={remove} disabled={busy} className="text-sm text-red-600 hover:underline disabled:opacity-50">Delete user</button>
+          <button type="button" onClick={remove} disabled={busy} className="text-sm text-red-500 hover:text-red-700 hover:underline disabled:opacity-50">
+            Delete account
+          </button>
           <div className="flex gap-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg">Cancel</button>
-            <button disabled={busy} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50">{busy ? 'Saving…' : 'Save'}</button>
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">Cancel</button>
+            <button disabled={busy} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
+              {busy ? 'Saving…' : 'Save'}
+            </button>
           </div>
         </div>
       </form>
@@ -340,28 +462,62 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
   )
 }
 
+// ---------------------------------------------------------------------------
+// Customers tab
+// ---------------------------------------------------------------------------
+
 function CustomersTab() {
   const customers = useQuery(api.queries.listCustomers) ?? []
   const list = (customers as any[]).filter(c => c.role !== 'admin' && c.role !== 'coach')
   const [editing, setEditing] = useState<any | null>(null)
+  const [search, setSearch] = useState('')
+
+  const filtered = search
+    ? list.filter((c: any) =>
+        (c.name || '').toLowerCase().includes(search.toLowerCase()) ||
+        (c.email || '').toLowerCase().includes(search.toLowerCase())
+      )
+    : list
+
   return (
     <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-      <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-        <h3 className="text-lg font-bold text-gray-800">Customers ({list.length})</h3>
+      <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h3 className="text-base font-bold text-gray-800">Customers</h3>
+          <p className="text-sm text-gray-500 mt-0.5">{list.length} registered</p>
+        </div>
+        <input
+          type="search"
+          placeholder="Search name or email…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-56"
+        />
       </div>
       <div className="divide-y divide-gray-100">
-        {list.length === 0 && <div className="p-6 text-sm text-gray-500">No customers yet.</div>}
-        {list.map((c: any) => (
-          <div key={c._id} className="px-6 py-3 flex items-center justify-between gap-3">
+        {filtered.length === 0 && (
+          <div className="p-6 text-sm text-gray-400 italic">{search ? 'No results.' : 'No customers yet.'}</div>
+        )}
+        {filtered.map((c: any) => (
+          <div key={c._id} className="px-6 py-3 flex items-center justify-between gap-3 hover:bg-gray-50 transition-colors">
             <div className="min-w-0">
               <div className="font-medium text-gray-900 truncate">{c.name || c.email}</div>
-              <div className="text-sm text-gray-500 truncate">{c.email}{c.phone ? ` · ${c.phone}` : ''}</div>
+              <div className="text-sm text-gray-500 truncate">
+                {c.name ? c.email : ''}
+                {c.phone ? ` · ${c.phone}` : ''}
+              </div>
             </div>
             <div className="flex items-center gap-3 shrink-0">
               {c.creditBalance ? (
-                <div className="text-sm text-emerald-600 font-semibold">${c.creditBalance.toFixed(2)} credit</div>
+                <span className="text-sm text-emerald-600 font-semibold">${c.creditBalance.toFixed(2)} credit</span>
               ) : null}
-              <button onClick={() => setEditing(c)} className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 font-medium">Edit</button>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium capitalize">{c.role}</span>
+              <button
+                onClick={() => setEditing(c)}
+                className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 font-medium text-gray-700"
+              >
+                Edit
+              </button>
             </div>
           </div>
         ))}
@@ -370,6 +526,10 @@ function CustomersTab() {
     </div>
   )
 }
+
+// ---------------------------------------------------------------------------
+// Coaches tab
+// ---------------------------------------------------------------------------
 
 function CoachesTab() {
   const { user } = useAuth()
@@ -408,44 +568,82 @@ function CoachesTab() {
         return
       }
       await createCoach({ name: coachForm.name.trim(), email, phone: coachForm.phone, coachTier: coachForm.coachTier })
-      try {
-        await setPassword({ email, password: coachForm.password })
-      } catch (err: any) {
-        alert('Coach created, but failed to set password: ' + (err?.message ?? 'unknown'))
-      }
+      try { await setPassword({ email, password: coachForm.password }) }
+      catch (err: any) { alert('Coach created, but failed to set password: ' + (err?.message ?? 'unknown')) }
       setCoachForm({ name: '', email: '', phone: '', coachTier: 'L1', password: '' })
     } catch (err: any) { alert(err?.message ?? 'Failed') }
     finally { setBusyAdd(false) }
   }
 
+  const submitInvite = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!createInvite) { alert('Coach invites not available'); return }
+    setBusy(true)
+    try {
+      const token = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2) + Date.now().toString(36)
+      await createInvite({
+        token,
+        name: form.name.trim(),
+        email: form.email.toLowerCase().trim(),
+        phone: form.phone,
+        createdBy: (user as any)?._id ?? (user as any)?.id ?? 'admin',
+      })
+      setForm({ name: '', email: '', phone: '' })
+    } catch (err: any) { alert(err?.message ?? 'Failed') }
+    finally { setBusy(false) }
+  }
+
+  const pendingInvites = (invites as any[]).filter(i => !i.used)
+
   return (
     <div className="space-y-6">
+      {/* Active coaches */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100">
-          <h3 className="text-lg font-bold text-gray-800">Active Coaches ({coaches.length})</h3>
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+          <div>
+            <h3 className="text-base font-bold text-gray-800">Active Coaches</h3>
+            <p className="text-sm text-gray-500 mt-0.5">{coaches.length} coach{coaches.length !== 1 ? 'es' : ''}</p>
+          </div>
+          <button
+            onClick={() => setShowAddForm(f => !f)}
+            className={`text-sm px-3 py-1.5 rounded-lg font-semibold transition-colors ${showAddForm ? 'bg-gray-100 text-gray-600 hover:bg-gray-200' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}
+          >
+            {showAddForm ? 'Cancel' : '+ Add Coach'}
+          </button>
         </div>
         {coaches.length === 0 ? (
-          <div className="p-6 text-sm text-gray-500">No coaches yet.</div>
+          <div className="p-6 text-sm text-gray-400 italic">No coaches yet.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-gray-600">
+              <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
-                  <th className="text-left px-5 py-2 font-semibold">Name</th>
-                  <th className="text-left px-5 py-2 font-semibold">Email</th>
-                  <th className="text-left px-5 py-2 font-semibold">Phone</th>
-                  <th className="text-left px-5 py-2 font-semibold">Tier</th>
-                  <th className="px-5 py-2"></th>
+                  <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Name</th>
+                  <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Email</th>
+                  <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Phone</th>
+                  <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tier</th>
+                  <th className="px-5 py-2.5" />
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-gray-100">
                 {coaches.map((c: any) => (
-                  <tr key={c._id} className="border-t border-gray-100">
+                  <tr key={c._id} className="hover:bg-gray-50 transition-colors">
                     <td className="px-5 py-3 font-medium text-gray-900">{c.name || '—'}</td>
-                    <td className="px-5 py-3 text-gray-600">{c.email}</td>
-                    <td className="px-5 py-3 text-gray-600">{c.phone || '—'}</td>
-                    <td className="px-5 py-3 text-gray-600"><span className="inline-flex items-center gap-2">{c.color && <span className="w-3 h-3 rounded-full border border-gray-200" style={{ background: c.color }} />}{c.coachTier || '—'}</span></td>
-                    <td className="px-5 py-3 text-right"><button onClick={() => setEditingCoach(c)} className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 font-medium">Edit</button></td>
+                    <td className="px-5 py-3 text-gray-500">{c.email}</td>
+                    <td className="px-5 py-3 text-gray-500">{c.phone || '—'}</td>
+                    <td className="px-5 py-3">
+                      <span className="inline-flex items-center gap-1.5">
+                        {c.color && <span className="w-2.5 h-2.5 rounded-full border border-gray-200 shrink-0" style={{ background: c.color }} />}
+                        <span className="text-gray-500">{normaliseCoachTier(c.coachTier)}</span>
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      <button onClick={() => setEditingCoach(c)} className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 font-medium text-gray-700">
+                        Edit
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -456,60 +654,78 @@ function CoachesTab() {
 
       {editingCoach && <EditUserModal user={editingCoach} onClose={() => setEditingCoach(null)} isCoach />}
 
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100">
-          <h3 className="text-lg font-bold text-gray-800">Add New Coach</h3>
-          <p className="text-sm text-gray-500 mt-1">Manually create a coach account immediately (no invite email).</p>
-        </div>
-        <form onSubmit={submitAdd} className="p-6 grid grid-cols-1 sm:grid-cols-6 gap-3">
-          <input required placeholder="Full name" value={coachForm.name} onChange={e => setCoachForm({ ...coachForm, name: e.target.value })} className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-          <input required type="email" placeholder="Email" value={coachForm.email} onChange={e => setCoachForm({ ...coachForm, email: e.target.value })} className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-          <input placeholder="Phone" value={coachForm.phone} onChange={e => setCoachForm({ ...coachForm, phone: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-          <select value={coachForm.coachTier} onChange={e => setCoachForm({ ...coachForm, coachTier: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm">
-            <option value="L1">L1</option>
-            <option value="L2">L2</option>
-            <option value="Bowling">Bowling</option>
-          </select>
-          <input required type="text" placeholder="Password (min 8)" value={coachForm.password} onChange={e => setCoachForm({ ...coachForm, password: e.target.value })} minLength={8} className="sm:col-span-6 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-          <button disabled={busyAdd} className="sm:col-span-6 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
-            {busyAdd ? 'Adding…' : 'Add Coach'}
-          </button>
-        </form>
-      </div>
-
-      {(
+      {showAddForm && (
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-100">
-            <h3 className="text-lg font-bold text-gray-800">Invite New Coach</h3>
+          <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-4">
+            <div>
+              <h3 className="text-base font-bold text-gray-800">Add Coach</h3>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {addMode === 'direct' ? 'Create an account immediately with a password' : 'Send a self-service invite link by email'}
+              </p>
+            </div>
+            <div className="flex bg-gray-100 p-0.5 rounded-lg">
+              <button
+                onClick={() => setAddMode('direct')}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${addMode === 'direct' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}
+              >
+                Direct
+              </button>
+              <button
+                onClick={() => setAddMode('invite')}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${addMode === 'invite' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}
+              >
+                Invite
+              </button>
+            </div>
           </div>
-          <form onSubmit={submit} className="p-6 grid grid-cols-1 sm:grid-cols-4 gap-3">
-            <input required placeholder="Full name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-            <input required type="email" placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-            <input placeholder="Phone" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-            <button disabled={busy} className="sm:col-span-4 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-sm font-semibold disabled:opacity-50">
-              {busy ? 'Creating…' : 'Create Invite'}
-            </button>
-          </form>
+
+          {addMode === 'direct' ? (
+            <form onSubmit={submitAdd} className="p-6 grid grid-cols-1 sm:grid-cols-6 gap-3">
+              <input required placeholder="Full name" value={coachForm.name} onChange={e => setCoachForm({ ...coachForm, name: e.target.value })} className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              <input required type="email" placeholder="Email" value={coachForm.email} onChange={e => setCoachForm({ ...coachForm, email: e.target.value })} className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              <input placeholder="Phone" value={coachForm.phone} onChange={e => setCoachForm({ ...coachForm, phone: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              <select value={coachForm.coachTier} onChange={e => setCoachForm({ ...coachForm, coachTier: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
+                <option value="L1">L1</option>
+                <option value="L2">L2</option>
+              </select>
+              <input required type="text" placeholder="Password (min 8 characters)" value={coachForm.password} onChange={e => setCoachForm({ ...coachForm, password: e.target.value })} minLength={8} className="sm:col-span-6 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              <button disabled={busyAdd} className="sm:col-span-6 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors">
+                {busyAdd ? 'Creating…' : 'Create Coach Account'}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={submitInvite} className="p-6 grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <input required placeholder="Full name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              <input required type="email" placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              <input placeholder="Phone" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              <button disabled={busy} className="sm:col-span-4 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors">
+                {busy ? 'Sending…' : 'Send Invite'}
+              </button>
+            </form>
+          )}
         </div>
       )}
 
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-100">
-          <h3 className="text-lg font-bold text-gray-800">Pending Invites ({(invites as any[]).filter(i => !i.used).length})</h3>
-        </div>
-        <div className="divide-y divide-gray-100">
-          {(invites as any[]).length === 0 && <div className="p-6 text-sm text-gray-500">No invites yet.</div>}
-          {(invites as any[]).map((inv: any) => (
-            <div key={inv._id} className="px-6 py-3 flex items-center justify-between">
-              <div>
-                <div className="font-medium text-gray-900">{inv.name}</div>
-                <div className="text-sm text-gray-500">{inv.email}</div>
+      {/* Pending invites */}
+      {(invites as any[]).length > 0 && (
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+            <h3 className="text-base font-bold text-gray-800">Pending Invites</h3>
+            <span className="text-xs text-gray-400 tabular-nums">{pendingInvites.length} pending</span>
+          </div>
+          <div className="divide-y divide-gray-100">
+            {(invites as any[]).map((inv: any) => (
+              <div key={inv._id} className="px-6 py-3 flex items-center justify-between">
+                <div>
+                  <div className="font-medium text-gray-900 text-sm">{inv.name}</div>
+                  <div className="text-xs text-gray-500">{inv.email}</div>
+                </div>
+                <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${inv.used ? 'bg-gray-100 text-gray-400' : 'bg-amber-100 text-amber-700'}`}>
+                  {inv.used ? 'Used' : 'Pending'}
+                </span>
               </div>
-              <span className={`text-xs px-2 py-1 rounded-full font-semibold ${inv.used ? 'bg-gray-100 text-gray-500' : 'bg-amber-100 text-amber-700'}`}>
-                {inv.used ? 'Used' : 'Pending'}
-              </span>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       )}
 
