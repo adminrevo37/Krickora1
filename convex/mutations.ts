@@ -1425,6 +1425,46 @@ export const createCoachInvite = mutation({
   },
 });
 
+// Manually create a customer account — ADMIN ONLY
+export const createCustomer = mutation({
+  args: {
+    name: v.string(),
+    email: v.string(),
+    phone: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const normalizedEmail = args.email.toLowerCase().trim();
+    if (!normalizedEmail || !args.name.trim()) {
+      throw new Error("Name and email are required.");
+    }
+
+    const existing = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", normalizedEmail))
+      .first();
+
+    if (existing) {
+      // Update existing record (e.g. if auto-created at signup with partial data)
+      await ctx.db.patch(existing._id, {
+        name: args.name.trim() || existing.name,
+        ...(args.phone?.trim() ? { phone: args.phone.trim() } : {}),
+      });
+      return existing._id;
+    }
+
+    const id = await ctx.db.insert("customers", {
+      name: args.name.trim(),
+      email: normalizedEmail,
+      phone: args.phone?.trim(),
+      role: "customer",
+      creditBalance: 0,
+      createdAt: new Date().toISOString(),
+    });
+    return id;
+  },
+});
+
 // Manually create a coach (no invite flow) — ADMIN ONLY
 export const createCoach = mutation({
   args: {

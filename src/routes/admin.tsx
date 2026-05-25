@@ -489,8 +489,13 @@ function CustomersTab() {
   const list = (customers as any[]).filter(c => c.role !== 'admin' && c.role !== 'coach')
   const [editing, setEditing] = useState<any | null>(null)
   const [search, setSearch] = useState('')
+  const [showAddForm, setShowAddForm] = useState(false)
+  const [custForm, setCustForm] = useState({ name: '', email: '', phone: '', password: '' })
+  const [busyAdd, setBusyAdd] = useState(false)
   const { impersonate } = useImpersonation()
   const navigate = useNavigate()
+  const createCustomerMut = useMutation((api.mutations as any).createCustomer)
+  const setPassword = useAction((api as any).adminPassword.adminSetPassword)
 
   const filtered = search
     ? list.filter((c: any) =>
@@ -499,60 +504,124 @@ function CustomersTab() {
       )
     : list
 
+  const submitAdd = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const email = custForm.email.toLowerCase().trim()
+    if (!custForm.name.trim() || !email) { alert('Name and email are required'); return }
+    if (!custForm.password || custForm.password.length < 8) { alert('Password must be at least 8 characters'); return }
+    setBusyAdd(true)
+    try {
+      await createCustomerMut({ name: custForm.name.trim(), email, phone: custForm.phone || undefined })
+      try { await setPassword({ email, password: custForm.password }) }
+      catch (err: any) { alert('Customer record created, but failed to set password: ' + (err?.message ?? 'unknown')) }
+      setCustForm({ name: '', email: '', phone: '', password: '' })
+      setShowAddForm(false)
+    } catch (err: any) { alert(err?.message ?? 'Failed to create customer') }
+    finally { setBusyAdd(false) }
+  }
+
   return (
-    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-      <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h3 className="text-base font-bold text-gray-800">Customers</h3>
-          <p className="text-sm text-gray-500 mt-0.5">{list.length} registered</p>
+    <div className="space-y-6">
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <h3 className="text-base font-bold text-gray-800">Customers</h3>
+            <p className="text-sm text-gray-500 mt-0.5">{list.length} registered</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <input
+              type="search"
+              placeholder="Search name or email…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-56"
+            />
+            <button
+              onClick={() => setShowAddForm(f => !f)}
+              className={`text-sm px-3 py-1.5 rounded-lg font-semibold transition-colors ${showAddForm ? 'bg-gray-100 text-gray-600 hover:bg-gray-200' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}
+            >
+              {showAddForm ? 'Cancel' : '+ Add Customer'}
+            </button>
+          </div>
         </div>
-        <input
-          type="search"
-          placeholder="Search name or email…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-56"
-        />
-      </div>
-      <div className="divide-y divide-gray-100">
-        {filtered.length === 0 && (
-          <div className="p-6 text-sm text-gray-400 italic">{search ? 'No results.' : 'No customers yet.'}</div>
-        )}
-        {filtered.map((c: any) => (
-          <div key={c._id} className="px-6 py-3 flex items-center justify-between gap-3 hover:bg-gray-50 transition-colors">
-            <div className="min-w-0">
-              <div className="font-medium text-gray-900 truncate">{c.name || c.email}</div>
-              <div className="text-sm text-gray-500 truncate">
-                {c.name ? c.email : ''}
-                {c.phone ? ` · ${c.phone}` : ''}
+        <div className="divide-y divide-gray-100">
+          {filtered.length === 0 && (
+            <div className="p-6 text-sm text-gray-400 italic">{search ? 'No results.' : 'No customers yet.'}</div>
+          )}
+          {filtered.map((c: any) => (
+            <div key={c._id} className="px-6 py-3 flex items-center justify-between gap-3 hover:bg-gray-50 transition-colors">
+              <div className="min-w-0">
+                <div className="font-medium text-gray-900 truncate">{c.name || c.email}</div>
+                <div className="text-sm text-gray-500 truncate">
+                  {c.name ? c.email : ''}
+                  {c.phone ? ` · ${c.phone}` : ''}
+                </div>
+              </div>
+              <div className="flex items-center gap-3 shrink-0">
+                {c.creditBalance ? (
+                  <span className="text-sm text-emerald-600 font-semibold">${c.creditBalance.toFixed(2)} credit</span>
+                ) : null}
+                <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium capitalize">{c.role}</span>
+                <button
+                  onClick={() => {
+                    impersonate({ id: c._id, name: c.name || c.email, email: c.email, role: c.role })
+                    navigate({ to: '/' })
+                  }}
+                  className="text-xs px-3 py-1.5 border border-amber-300 bg-amber-50 rounded-lg hover:bg-amber-100 font-medium text-amber-700 transition-colors"
+                  title="View site as this user"
+                >
+                  👁️ Login as
+                </button>
+                <button
+                  onClick={() => setEditing(c)}
+                  className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 font-medium text-gray-700"
+                >
+                  Edit
+                </button>
               </div>
             </div>
-            <div className="flex items-center gap-3 shrink-0">
-              {c.creditBalance ? (
-                <span className="text-sm text-emerald-600 font-semibold">${c.creditBalance.toFixed(2)} credit</span>
-              ) : null}
-              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium capitalize">{c.role}</span>
-              <button
-                onClick={() => {
-                  impersonate({ id: c._id, name: c.name || c.email, email: c.email, role: c.role })
-                  navigate({ to: '/' })
-                }}
-                className="text-xs px-3 py-1.5 border border-amber-300 bg-amber-50 rounded-lg hover:bg-amber-100 font-medium text-amber-700 transition-colors"
-                title="View site as this user"
-              >
-                👁️ Login as
-              </button>
-              <button
-                onClick={() => setEditing(c)}
-                className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 font-medium text-gray-700"
-              >
-                Edit
-              </button>
-            </div>
-          </div>
-        ))}
+          ))}
+        </div>
+        {editing && <EditUserModal user={editing} onClose={() => setEditing(null)} />}
       </div>
-      {editing && <EditUserModal user={editing} onClose={() => setEditing(null)} />}
+
+      {showAddForm && (
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-100">
+            <h3 className="text-base font-bold text-gray-800">Add Customer</h3>
+            <p className="text-sm text-gray-500 mt-0.5">Create an account immediately with a password</p>
+          </div>
+          <form onSubmit={submitAdd} className="p-6 grid grid-cols-1 sm:grid-cols-6 gap-3">
+            <input
+              required placeholder="Full name" value={custForm.name}
+              onChange={e => setCustForm({ ...custForm, name: e.target.value })}
+              className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm"
+            />
+            <input
+              required type="email" placeholder="Email" value={custForm.email}
+              onChange={e => setCustForm({ ...custForm, email: e.target.value })}
+              className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm"
+            />
+            <input
+              placeholder="Phone (optional)" value={custForm.phone}
+              onChange={e => setCustForm({ ...custForm, phone: e.target.value })}
+              className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm"
+            />
+            <input
+              required type="text" placeholder="Password (min 8 characters)"
+              value={custForm.password} minLength={8}
+              onChange={e => setCustForm({ ...custForm, password: e.target.value })}
+              className="sm:col-span-6 px-3 py-2 border border-gray-200 rounded-lg text-sm"
+            />
+            <button
+              disabled={busyAdd}
+              className="sm:col-span-6 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors"
+            >
+              {busyAdd ? 'Creating…' : 'Create Customer Account'}
+            </button>
+          </form>
+        </div>
+      )}
     </div>
   )
 }
