@@ -284,23 +284,19 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
         },
         after: async (user: any) => {
           try {
-            const db = (ctx as any).db;
-            if (!db) return;
+            // HTTP actions don't have ctx.db — must use ctx.runMutation instead
+            const runMutation = (ctx as any).runMutation;
+            if (!runMutation) {
+              console.warn("Cannot create customer record: runMutation unavailable");
+              return;
+            }
             const normalizedEmail = (user.email || "").toLowerCase().trim();
             if (!normalizedEmail) return;
-            const existing = await db
-              .query("customers")
-              .withIndex("by_email", (q: any) => q.eq("email", normalizedEmail))
-              .first();
-            if (!existing) {
-              await db.insert("customers", {
-                name: user.name || normalizedEmail.split("@")[0] || "New User",
-                email: normalizedEmail,
-                role: "customer",
-                creditBalance: 0,
-                createdAt: new Date().toISOString(),
-              });
-            }
+            const { internal } = await import("./_generated/api");
+            await runMutation(internal.auth.ensureCustomerExists, {
+              email: normalizedEmail,
+              name: user.name || undefined,
+            });
           } catch (e) {
             console.error("Failed to auto-create customer record:", e);
           }

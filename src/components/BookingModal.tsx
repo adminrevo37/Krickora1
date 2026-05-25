@@ -80,6 +80,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const customerName = user?.name ?? ''
   const customerEmail = user?.email ?? ''
   const sendBookingEmail = useMutation(api.mutations.sendBookingEmail)
+  const createBookingForStripe = useMutation(api.mutations.createBooking)
 
   const otherLanes = LANES.filter(l => l.id !== lane.id)
   const availableAdditionalLanes = otherLanes.filter(l => canBookSlot(existingBookings, l.id, dateKey, startHour, duration))
@@ -313,11 +314,32 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     setIsSubmitting(true); setError(null); setStep('processing')
     try {
       if (applyCredit && creditToApply > 0) useCredit(user.id, creditToApply)
+
+      // Create the booking in Convex FIRST with "pending_payment" status.
+      // The Stripe webhook needs bookingId in the session metadata to confirm it.
+      const bookingId = await createBookingForStripe({
+        laneId: lane.id,
+        variantId: selectedVariant?.id ?? undefined,
+        date: dateKey,
+        startHour,
+        duration,
+        customerName,
+        customerEmail,
+        customerPhone: user.phone,
+        userId: user.id,
+        status: 'pending_payment',
+        isCoachBooking: false,
+        additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
+        creditApplied: creditToApply > 0 ? creditToApply : undefined,
+        discountCode: appliedDiscount?.code,
+      })
+
       const checkoutReq: CheckoutSessionRequest = {
         laneId: lane.id, laneName: lane.name, variantId: selectedVariant?.id ?? null,
         variantName: selectedVariant?.name ?? null, date: dateKey, startHour, duration,
         customerName, customerEmail, price: totalPrice,
         additionalLanes: additionalLanes.map(lid => LANES.find(l => l.id === lid)?.shortName ?? lid),
+        bookingId: bookingId as string,
       }
       const session = await createCheckoutSession(checkoutReq)
 
@@ -329,8 +351,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       setError('Could not create checkout session. Please try again.')
       setStep('confirm')
       setIsSubmitting(false)
-    } catch {
-      setError('Payment failed. Please try again.')
+    } catch (err: any) {
+      setError(err?.message ?? 'Payment failed. Please try again.')
       setStep('confirm')
       setIsSubmitting(false)
     }
