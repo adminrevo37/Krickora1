@@ -92,27 +92,33 @@ export function useAuth() {
   const upsertCustomerMutation = useMutation(api.mutations.upsertCustomer)
   const createCoachInviteMutation = useMutation(api.mutations.createCoachInvite)
   const adminSetPasswordAction = useAction(api.adminPassword.adminSetPassword)
+  // ensureCustomerRecord: safe for all authenticated users (no requireAdmin).
+  // Used for auto-creating the customer record on first login / signup.
+  // Distinct from upsertCustomer which is admin-only for admin panel operations.
+  const ensureCustomerRecord = useMutation((api.auth as any).ensureCustomerExists)
 
   // ── Auto-create customer record if missing ───────────────────────────
-  // IMPORTANT: upsertCustomerMutation is intentionally NOT in the dependency
-  // array. Convex's useMutation can return a new function reference on every
-  // render; including it causes the effect to re-fire on every render while
-  // customerRecord is null, producing multiple concurrent calls.
+  // Uses ensureCustomerExists (convex/auth.ts) — NOT upsertCustomer.
+  // upsertCustomer calls requireAdmin and throws "Not authorized" for regular
+  // users. ensureCustomerExists has no auth restriction and is safe for all
+  // authenticated users to call for their own record.
   //
   // The module-level _customerCreateAttempted Set ensures only ONE call fires
   // across ALL simultaneous useAuth instances (root layout, home page,
   // BookingCalendar, MyBookings, etc.).
+  //
+  // ensureCustomerRecord is intentionally NOT in the dependency array —
+  // Convex useMutation can return a new reference each render, which would
+  // cause the effect to re-fire on every render while customerRecord is null.
   useEffect(() => {
     if (betterAuthUser?.email && customerRecord === null) {
       const email = betterAuthUser.email.toLowerCase().trim()
       // Skip if another useAuth instance already initiated this
       if (_customerCreateAttempted.has(email)) return
       _customerCreateAttempted.add(email)
-      upsertCustomerMutation({
-        name: betterAuthUser.name ?? betterAuthUser.email.split('@')[0],
+      ensureCustomerRecord({
         email,
-        phone: '',
-        role: 'customer',
+        name: betterAuthUser.name ?? betterAuthUser.email.split('@')[0],
       }).catch((err) => {
         console.error('Failed to auto-create customer record:', err)
         // Allow retry on failure (e.g. transient network error)
