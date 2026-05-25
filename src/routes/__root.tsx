@@ -1,11 +1,14 @@
 import { useState } from 'react'
-import { createRootRoute, Outlet, Link } from '@tanstack/react-router'
+import { createRootRoute, Outlet, Link, useNavigate } from '@tanstack/react-router'
 import { useAuth } from '../hooks/useAuth'
 import { signOutUser } from '../lib/auth-client'
 import AuthModal from '../components/AuthModal'
+import { useImpersonation } from '../hooks/useImpersonation'
 
 function RootComponent() {
   const { user, isAuthenticated, isAdmin, isCoach, isLoading } = useAuth()
+  const { impersonatedUser, isImpersonating, exitImpersonation } = useImpersonation()
+  const navigate = useNavigate()
   const [showAuth, setShowAuth] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)
 
@@ -94,6 +97,33 @@ function RootComponent() {
           </div>
         </div>
       </header>
+
+      {/* Impersonation banner */}
+      {isImpersonating && impersonatedUser && (
+        <div className="sticky top-16 z-40 bg-amber-500 text-white text-sm font-medium px-4 py-2 flex items-center justify-between gap-4 shadow-md">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-base leading-none shrink-0">👁️</span>
+            <span className="truncate">
+              Viewing as <strong>{impersonatedUser.name}</strong>
+              <span className="hidden sm:inline"> ({impersonatedUser.email})</span>
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => navigate({ to: '/admin', search: { section: 'customers' } })}
+              className="text-amber-100 hover:text-white text-xs underline underline-offset-2"
+            >
+              Back to admin
+            </button>
+            <button
+              onClick={() => { exitImpersonation(); navigate({ to: '/admin', search: { section: 'customers' } }) }}
+              className="px-3 py-1 bg-white text-amber-700 rounded-lg text-xs font-bold hover:bg-amber-50 transition-colors"
+            >
+              Exit impersonation
+            </button>
+          </div>
+        </div>
+      )}
 
       <main>
         <Outlet />

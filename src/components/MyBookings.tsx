@@ -66,7 +66,7 @@ function formatDate(dateStr: string): string {
 
 // ── component ─────────────────────────────────────────────────────────────────
 
-export default function MyBookings() {
+export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: string } = {}) {
   const {
     bookings, cancelBooking, canCancel,
     createTentativeNextWeek, confirmTentative, cancelTentative, getTentativeBookings,
@@ -74,6 +74,8 @@ export default function MyBookings() {
   } = useBookings()
   const { user, isCoach, isCustomer, getAllCoaches, assignCoach, removeCoach, customerRecord } = useAuth()
   const { getUserEntries, removeFromWaitlist, notifications, dismissNotification } = useWaitlist(user?.id)
+  // When impersonating, filter bookings by the impersonated user's email
+  const effectiveEmail = impersonatedEmail ?? user?.email
 
   const now = new Date()
   const todayKey = formatDateKey(now)
@@ -107,16 +109,16 @@ export default function MyBookings() {
     return b.athleteSlots.some(s => athleteNameCandidates.includes(s.athleteName.toLowerCase().trim()))
   }
 
-  const userBookings = useMemo(() => user
+  const userBookings = useMemo(() => (user || impersonatedEmail)
     ? bookings.filter(b =>
-        (b.customerEmail.toLowerCase() === user.email.toLowerCase() ||
-         b.userId === user.id ||
-         isAthleteInBooking(b)) &&
+        (effectiveEmail ? b.customerEmail.toLowerCase() === effectiveEmail.toLowerCase() : false ||
+         (!impersonatedEmail && b.userId === user?.id) ||
+         (!impersonatedEmail && isAthleteInBooking(b))) &&
         b.status !== 'tentative',
       ).sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour)
     : [],
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  [bookings, user, athleteNameCandidates])
+  [bookings, user, athleteNameCandidates, effectiveEmail, impersonatedEmail])
 
   const tentativeBookings = user ? getTentativeBookings(user.id) : []
 

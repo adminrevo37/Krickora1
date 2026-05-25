@@ -6,6 +6,7 @@ import BookingCalendar from '../components/BookingCalendar'
 import AdminBookingCalendar from '../components/AdminBookingCalendar'
 import AuthModal from '../components/AuthModal'
 import { useAuth } from '../hooks/useAuth'
+import { useImpersonation } from '../hooks/useImpersonation'
 
 export const Route = createFileRoute('/')({
   component: HomePage,
@@ -13,6 +14,7 @@ export const Route = createFileRoute('/')({
 
 function HomePage() {
   const { isAuthenticated, isAdmin, isLoading } = useAuth()
+  const { isImpersonating, impersonatedUser } = useImpersonation()
   const [showAuth, setShowAuth] = useState(false)
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signup')
 
@@ -29,6 +31,20 @@ function HomePage() {
 
   // ── Logged-in users go straight to the booking calendar ──
   if (isAuthenticated) {
+    // Admin impersonating a user — show the customer view for that user
+    if (isAdmin && isImpersonating && impersonatedUser) {
+      return (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="mb-8">
+            <h1 className="text-3xl font-bold text-gray-900">Book a Training Net</h1>
+            <p className="text-gray-500 mt-1">
+              Customer view for <strong>{impersonatedUser.name}</strong> ({impersonatedUser.email})
+            </p>
+          </div>
+          <BookingCalendar impersonatedEmail={impersonatedUser.email} />
+        </div>
+      )
+    }
     if (isAdmin) {
       return (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">

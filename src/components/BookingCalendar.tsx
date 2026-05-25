@@ -32,8 +32,11 @@ import BookingModal from './BookingModal'
 import AuthModal from './AuthModal'
 import WaitlistModal from './WaitlistModal'
 
-export default function BookingCalendar() {
-  const { user, isAdmin, isCoach: userIsCoach, customerRecord } = useAuth()
+export default function BookingCalendar({ impersonatedEmail }: { impersonatedEmail?: string } = {}) {
+  const { user, isAdmin: realIsAdmin, isCoach: realIsCoach, customerRecord } = useAuth()
+  // When impersonating, behave as a regular customer (not admin/coach)
+  const isAdmin = impersonatedEmail ? false : realIsAdmin
+  const userIsCoach = impersonatedEmail ? false : realIsCoach
   const { settings } = useSettings()
 
   // Wait for customerRecord to load before deciding tier — otherwise L2 coaches

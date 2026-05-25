@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { useAuth } from '../hooks/useAuth'
+import { useImpersonation } from '../hooks/useImpersonation'
 import AdminBookingCalendar from '../components/AdminBookingCalendar'
 import ClosureManager from '../components/ClosureManager'
 import SettingsPanel from '../components/SettingsPanel'
@@ -347,7 +348,22 @@ function StatementsTab() {
                     <td className="px-5 py-3 font-medium text-gray-900">{c.name || '—'}</td>
                     <td className="px-5 py-3 text-gray-500">{c.email}</td>
                     <td className="px-5 py-3 text-gray-500">{normaliseCoachTier(c.coachTier)}</td>
-                    <td className="px-5 py-3 text-right text-xs font-semibold text-emerald-600">View →</td>
+                    <td className="px-5 py-3 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          onClick={e => {
+                            e.stopPropagation()
+                            impersonate({ id: c._id, name: c.name || c.email, email: c.email, role: c.role })
+                            navigate({ to: '/' })
+                          }}
+                          className="text-xs px-2.5 py-1 border border-amber-300 bg-amber-50 rounded-lg hover:bg-amber-100 font-medium text-amber-700 transition-colors"
+                          title="View site as this coach"
+                        >
+                          👁️ Login as
+                        </button>
+                        <span className="text-xs font-semibold text-emerald-600">View →</span>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -471,6 +487,8 @@ function CustomersTab() {
   const list = (customers as any[]).filter(c => c.role !== 'admin' && c.role !== 'coach')
   const [editing, setEditing] = useState<any | null>(null)
   const [search, setSearch] = useState('')
+  const { impersonate } = useImpersonation()
+  const navigate = useNavigate()
 
   const filtered = search
     ? list.filter((c: any) =>
@@ -513,6 +531,16 @@ function CustomersTab() {
               ) : null}
               <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium capitalize">{c.role}</span>
               <button
+                onClick={() => {
+                  impersonate({ id: c._id, name: c.name || c.email, email: c.email, role: c.role })
+                  navigate({ to: '/' })
+                }}
+                className="text-xs px-3 py-1.5 border border-amber-300 bg-amber-50 rounded-lg hover:bg-amber-100 font-medium text-amber-700 transition-colors"
+                title="View site as this user"
+              >
+                👁️ Login as
+              </button>
+              <button
                 onClick={() => setEditing(c)}
                 className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 font-medium text-gray-700"
               >
@@ -533,6 +561,8 @@ function CustomersTab() {
 
 function CoachesTab() {
   const { user } = useAuth()
+  const { impersonate } = useImpersonation()
+  const navigate = useNavigate()
   const customers = useQuery(api.queries.listCustomers) ?? []
   const coaches = (customers as any[]).filter(c => c.role === 'coach')
   const [editingCoach, setEditingCoach] = useState<any | null>(null)
