@@ -7,7 +7,7 @@ import ClosureManager from '../components/ClosureManager'
 import SettingsPanel from '../components/SettingsPanel'
 import CoachStatementTable from '../components/CoachStatementTable'
 import AdminDiscountCodesTab from '../components/AdminDiscountCodesTab'
-import { useQuery, useMutation, useAction, skipToken } from 'convex/react'
+import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 
 // ---------------------------------------------------------------------------
@@ -583,7 +583,7 @@ function CoachesTab() {
   const [mergeResult, setMergeResult] = useState<{ mergeCount: number; mergedSummary: string[] } | null>(null)
   const mergePreviewData = useQuery(
     (api.queries as any).previewMergeConsecutiveCoachBookings,
-    showMergePreview ? {} : skipToken
+    showMergePreview ? {} : "skip"
   )
 
   const submitAdd = async (e: React.FormEvent) => {
