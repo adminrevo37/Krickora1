@@ -28,6 +28,21 @@ export const confirmBookingPayment = internalMutation({
       return { success: true, alreadyPaid: true };
     }
 
+    // Booking edit top-up — apply the pending duration/price change inline
+    if (b.status === "pending_edit_payment" && b.pendingEdit) {
+      const pe = b.pendingEdit;
+      await ctx.db.patch(booking._id, {
+        status: "confirmed",
+        paymentStatus: "paid",
+        stripeSessionId: args.stripeSessionId,
+        duration: pe.newDuration,
+        ...(pe.newAdditionalLaneIds !== undefined ? { additionalLaneIds: pe.newAdditionalLaneIds } : {}),
+        priceInCents: pe.newPriceInCents,
+        pendingEdit: undefined,
+      } as any);
+      return { success: true, isBookingEdit: true };
+    }
+
     const patch: Record<string, any> = {
       paymentStatus: "paid",
       stripeSessionId: args.stripeSessionId,

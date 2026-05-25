@@ -51,28 +51,17 @@ export default function EditBookingModal({ booking, onClose, onSuccess }: EditBo
 
       if (result.requiresPayment && result.priceDifference > 0) {
         // Need to pay the difference — redirect to Stripe top-up checkout
-        // Import createTopUpCheckoutSession action
-        // We do this inline to avoid an extra import
-        const laneObj = LANES.find(l => l.id === booking.laneId)
-        const fmtH = (h: number) => {
-          const w = Math.floor(h); const m = Math.round((h - w) * 60)
-          const p = w >= 12 ? 'pm' : 'am'; const d = w > 12 ? w - 12 : w === 0 ? 12 : w
-          return m > 0 ? `${d}:${m.toString().padStart(2, '0')}${p}` : `${d}${p}`
-        }
-        const endHour = booking.startHour + newDuration / 60
-        const desc = `${laneObj?.name ?? booking.laneId} — ${booking.date} ${fmtH(booking.startHour)}-${fmtH(endHour)} (amendment, +${newDuration - booking.duration}min)`
-
-        // Use fetch to call the Convex action for top-up session
-        // We delegate to a function available on api.stripe.createTopUpCheckoutSession
         const { createTopUpCheckoutSession } = await import('../lib/stripe')
+        const laneObj = LANES.find(l => l.id === booking.laneId)
         const session = await createTopUpCheckoutSession({
           bookingId: booking.id,
           laneName: laneObj?.name ?? booking.laneId,
           date: booking.date,
+          startHour: booking.startHour,
+          newDuration,
           customerName: booking.customerEmail,
           customerEmail: booking.customerEmail,
           topUpAmountCents: result.priceDifference,
-          description: desc,
         })
         if (session?.url) {
           window.location.href = session.url

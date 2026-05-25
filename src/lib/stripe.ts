@@ -100,6 +100,31 @@ export async function createPaymentLink(req: CheckoutSessionRequest): Promise<{ 
   return result
 }
 
+// Create a top-up checkout session for booking duration amendments
+// (when the new duration costs more than the original booking)
+export async function createTopUpCheckoutSession(params: {
+  bookingId: string
+  laneName: string
+  date: string
+  startHour: number
+  newDuration: number
+  customerName: string
+  customerEmail: string
+  topUpAmountCents: number
+}): Promise<CheckoutSessionResponse> {
+  return createCheckoutSession({
+    laneId: '',
+    laneName: params.laneName,
+    date: params.date,
+    startHour: params.startHour,
+    duration: params.newDuration,
+    customerName: params.customerName,
+    customerEmail: params.customerEmail,
+    price: params.topUpAmountCents / 100,
+    bookingId: params.bookingId,
+  })
+}
+
 // List recent Stripe payments
 export async function listRecentStripePayments(limit?: number) {
   if (!convex) return []
