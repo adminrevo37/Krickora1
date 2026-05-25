@@ -4,6 +4,20 @@ import { api } from '../../convex/_generated/api'
 import { useSession } from '../lib/auth-client'
 
 /**
+ * Module-level deduplication guard for customer record auto-creation.
+ *
+ * useAuth is mounted in many components simultaneously (root layout, home page,
+ * BookingCalendar, MyBookings, etc.). Without this guard, every instance fires
+ * its own useEffect when customerRecord === null, causing a burst of concurrent
+ * upsertCustomer calls — one "Not authorized" error per component instance.
+ *
+ * The Set tracks which emails have already had a creation attempt initiated in
+ * this browser session. Only the FIRST instance to check calls the mutation;
+ * all others skip immediately. The email is removed on error to allow retry.
+ */
+const _customerCreateAttempted = new Set<string>()
+
+/**
  * useAuth — Fully Convex-native hook using Better Auth session.
  * 
  * KEY FIX (redirect loop prevention):
@@ -80,19 +94,33 @@ export function useAuth() {
   const adminSetPasswordAction = useAction(api.adminPassword.adminSetPassword)
 
   // ── Auto-create customer record if missing ───────────────────────────
+  // IMPORTANT: upsertCustomerMutation is intentionally NOT in the dependency
+  // array. Convex's useMutation can return a new function reference on every
+  // render; including it causes the effect to re-fire on every render while
+  // customerRecord is null, producing multiple concurrent calls.
+  //
+  // The module-level _customerCreateAttempted Set ensures only ONE call fires
+  // across ALL simultaneous useAuth instances (root layout, home page,
+  // BookingCalendar, MyBookings, etc.).
   useEffect(() => {
     if (betterAuthUser?.email && customerRecord === null) {
-      // User is authenticated but has no customer record — create one
+      const email = betterAuthUser.email.toLowerCase().trim()
+      // Skip if another useAuth instance already initiated this
+      if (_customerCreateAttempted.has(email)) return
+      _customerCreateAttempted.add(email)
       upsertCustomerMutation({
         name: betterAuthUser.name ?? betterAuthUser.email.split('@')[0],
-        email: betterAuthUser.email.toLowerCase().trim(),
+        email,
         phone: '',
         role: 'customer',
       }).catch((err) => {
         console.error('Failed to auto-create customer record:', err)
+        // Allow retry on failure (e.g. transient network error)
+        _customerCreateAttempted.delete(email)
       })
     }
-  }, [betterAuthUser?.email, betterAuthUser?.name, customerRecord, upsertCustomerMutation])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [betterAuthUser?.email, betterAuthUser?.name, customerRecord])
 
   // ── Cleanup stabilization timer on unmount ───────────────────────────
   useEffect(() => {
