@@ -43,29 +43,7 @@ export const createBooking = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // SEC-1: Auth guard — logged-in users may only book for themselves unless admin
-    const createIdentity = await ctx.auth.getUserIdentity();
-    if (createIdentity) {
-      const callerEmail = createIdentity.email?.toLowerCase().trim() ?? "";
-      const isForSelf =
-        (args.userId != null && args.userId === createIdentity.subject) ||
-        args.customerEmail.toLowerCase() === callerEmail;
-      if (!isForSelf) {
-        const callerCustomer = await ctx.db
-          .query("customers")
-          .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
-          .first();
-        if (callerCustomer?.role !== "admin") {
-          throw new Error("You can only create bookings for yourself.");
-        }
-      }
-    }
-
-    const siteSettings = await ctx.db
-      .query("siteSettings")
-      .withIndex("by_key", (q: any) => q.eq("key", "global"))
-      .first();
-    const CLOSING_HOUR = siteSettings?.closingHour ?? 21;
+    const CLOSING_HOUR = 21;
     const endHour = args.startHour + args.duration / 60;
     if (endHour > CLOSING_HOUR) {
       throw new Error("Booking extends past closing time.");
@@ -361,114 +339,7 @@ export const updateBooking = mutation({
       }));
     }
 
-    // Compute scheduling change info once (used for conflict check, GCal, email)
-    const effNewDate = (cleanUpdates as any).date ?? (existing as any)?.date;
-    const effNewStartHour = (cleanUpdates as any).startHour ?? (existing as any)?.startHour;
-    const effNewDuration = (cleanUpdates as any).duration ?? (existing as any)?.duration;
-    const effNewLaneId = (cleanUpdates as any).laneId ?? (existing as any)?.laneId;
-    const effNewAdditionalLanes: string[] = (cleanUpdates as any).additionalLaneIds ?? (existing as any)?.additionalLaneIds ?? [];
-    const schedulingChanged = existing != null && (
-      ((cleanUpdates as any).date !== undefined && (cleanUpdates as any).date !== (existing as any).date) ||
-      ((cleanUpdates as any).startHour !== undefined && (cleanUpdates as any).startHour !== (existing as any).startHour) ||
-      ((cleanUpdates as any).duration !== undefined && (cleanUpdates as any).duration !== (existing as any).duration) ||
-      ((cleanUpdates as any).laneId !== undefined && (cleanUpdates as any).laneId !== (existing as any).laneId)
-    );
-
-    // DI-1: Conflict check when scheduling fields change
-    if (schedulingChanged && effNewDate && effNewStartHour != null && effNewDuration != null && effNewLaneId) {
-      const endHourUpd = effNewStartHour + effNewDuration / 60;
-      const allLanesUpd = [effNewLaneId, ...effNewAdditionalLanes];
-      for (const lid of allLanesUpd) {
-        const laneBookingsUpd = await ctx.db
-          .query("bookings")
-          .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", effNewDate))
-          .collect();
-        const hasConflictUpd = laneBookingsUpd.some((b) => {
-          if (b._id === id || b.status === "cancelled") return false;
-          const bEnd = b.startHour + b.duration / 60;
-          return effNewStartHour < bEnd && endHourUpd > b.startHour;
-        });
-        if (hasConflictUpd) {
-          throw new Error("Cannot update — the new time slot conflicts with an existing booking.");
-        }
-      }
-    }
-
-    // MF-1: Add account credit when admin reduces coach price
-    if (existing) {
-      const oldCoachPrice = (existing as any).coachPrice;
-      const newCoachPriceUpd = (cleanUpdates as any).coachPrice;
-      if (typeof oldCoachPrice === "number" && typeof newCoachPriceUpd === "number" && newCoachPriceUpd < oldCoachPrice) {
-        const creditAmt = Math.round((oldCoachPrice - newCoachPriceUpd) * 100) / 100;
-        if (creditAmt > 0) {
-          const credEmail = ((cleanUpdates as any).customerEmail ?? (existing as any).customerEmail ?? "").toLowerCase().trim();
-          if (credEmail) {
-            const credCustomer = await ctx.db
-              .query("customers")
-              .withIndex("by_email", (q: any) => q.eq("email", credEmail))
-              .first();
-            if (credCustomer) {
-              await ctx.db.patch(credCustomer._id, {
-                creditBalance: (credCustomer.creditBalance ?? 0) + creditAmt,
-              });
-            }
-          }
-        }
-      }
-    }
-
     await ctx.db.patch(id, cleanUpdates);
-
-    // DI-2 / MF-2: GCal sync + customer notification when scheduling changes
-    if (schedulingChanged && existing && effNewDate && effNewStartHour != null && effNewDuration != null && effNewLaneId) {
-      const LANE_NAMES_UPD: Record<string, string> = { bm1: "Bowling Machine 1", bm2: "Bowling Machine 2", bm3: "Bowling Machine 3", ru1: "9m Run Up 1", ru2: "9m Run Up 2" };
-      const fmtTUpd = (h: number) => {
-        const w = Math.floor(h); const m = Math.round((h - w) * 60);
-        const p = w >= 12 ? "PM" : "AM"; const dh = w > 12 ? w - 12 : w === 0 ? 12 : w;
-        return `${dh}:${m.toString().padStart(2, "0")} ${p}`;
-      };
-      const fmtDUpd = (d: number) => d === 60 ? "1 hour" : d === 90 ? "1.5 hours" : d === 30 ? "30 minutes" : `${d} min`;
-      const notifyEmail = ((cleanUpdates as any).customerEmail ?? (existing as any).customerEmail ?? "") as string;
-
-      if ((existing as any).googleCalendarEventId) {
-        await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-          googleCalendarEventId: (existing as any).googleCalendarEventId,
-          laneCalendarEventIds: (existing as any).googleCalendarEventIds,
-        });
-        await ctx.scheduler.runAfter(500, internal.googleCalendar.createCalendarEvent, {
-          bookingId: id.toString(),
-          laneId: effNewLaneId,
-          variantId: (cleanUpdates as any).variantId ?? (existing as any).variantId,
-          date: effNewDate,
-          startHour: effNewStartHour,
-          duration: effNewDuration,
-          customerName: (cleanUpdates as any).customerName ?? (existing as any).customerName,
-          customerEmail: notifyEmail,
-          customerPhone: (cleanUpdates as any).customerPhone ?? (existing as any).customerPhone,
-          status: (cleanUpdates as any).status ?? (existing as any).status,
-          isCoachBooking: (existing as any).isCoachBooking,
-          accessCode: (cleanUpdates as any).accessCode ?? (existing as any).accessCode,
-          additionalLaneIds: effNewAdditionalLanes,
-          athleteSlots: (cleanUpdates as any).athleteSlots ?? (existing as any).athleteSlots,
-        });
-      }
-
-      if (notifyEmail) {
-        await ctx.scheduler.runAfter(0, internal.emails.sendBookingRescheduled, {
-          to: notifyEmail,
-          customerName: (cleanUpdates as any).customerName ?? (existing as any).customerName ?? "Valued Customer",
-          oldLaneName: LANE_NAMES_UPD[(existing as any).laneId] ?? (existing as any).laneId,
-          oldDate: (existing as any).date,
-          oldTimeSlot: fmtTUpd((existing as any).startHour),
-          newLaneName: LANE_NAMES_UPD[effNewLaneId] ?? effNewLaneId,
-          newDate: effNewDate,
-          newTimeSlot: fmtTUpd(effNewStartHour),
-          newDuration: fmtDUpd(effNewDuration),
-          accessCode: (cleanUpdates as any).accessCode ?? (existing as any).accessCode ?? "",
-        });
-      }
-    }
-
     return id;
   },
 });
@@ -484,50 +355,6 @@ export const cancelBooking = mutation({
     if (!booking) throw new Error("Booking not found.");
     if (booking.status === "cancelled")
       throw new Error("Already cancelled.");
-
-    // Auth guard: only booking owner or admin can cancel
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Authentication required to cancel a booking.");
-    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
-    const isOwner =
-      (booking.userId != null && booking.userId === identity.subject) ||
-      booking.customerEmail.toLowerCase() === callerEmail;
-    if (!isOwner) {
-      const callerCustomer = await ctx.db
-        .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
-        .first();
-      if (callerCustomer?.role !== "admin") {
-        throw new Error("You can only cancel your own bookings.");
-      }
-    }
-
-    // Time-based policy enforcement for customer bookings
-    if (booking.status !== "tentative" && !booking.isCoachBooking) {
-      const siteSettings = await ctx.db
-        .query("siteSettings")
-        .withIndex("by_key", (q: any) => q.eq("key", "global"))
-        .first();
-      const customerCancellationHours = (siteSettings as any)?.customerCancellationHours ?? siteSettings?.cancellationHoursBefore ?? 2;
-      const [cYear, cMonth, cDay] = booking.date.split("-").map(Number);
-      const cWhole = Math.floor(booking.startHour);
-      const cMins = Math.round((booking.startHour - cWhole) * 60);
-      const bookingStart = new Date(cYear, cMonth - 1, cDay, cWhole, cMins, 0);
-      const awstNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Australia/Perth" }));
-      const hoursUntil = (bookingStart.getTime() - awstNow.getTime()) / (1000 * 60 * 60);
-      if (hoursUntil < customerCancellationHours) {
-        // Admin bypass — admins can always cancel
-        const callerCheck = await ctx.db
-          .query("customers")
-          .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
-          .first();
-        if (callerCheck?.role !== "admin") {
-          throw new Error(
-            `Bookings can only be cancelled at least ${customerCancellationHours} hour${customerCancellationHours !== 1 ? "s" : ""} before the session starts.`
-          );
-        }
-      }
-    }
 
     await ctx.db.patch(args.id, {
       status: "cancelled",
@@ -572,54 +399,6 @@ export const deleteBooking = mutation({
   args: { id: v.id("bookings") },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
-    const delBooking = await ctx.db.get(args.id);
-    if (delBooking) {
-      // DI-7: Add account credit for the booking's value (credit, not Stripe refund)
-      if (delBooking.status !== "cancelled") {
-        const creditAmt = delBooking.coachPrice != null
-          ? delBooking.coachPrice
-          : ((delBooking as any).priceInCents != null ? (delBooking as any).priceInCents / 100 : 0);
-        if (creditAmt > 0 && delBooking.customerEmail) {
-          const credCustomer = await ctx.db
-            .query("customers")
-            .withIndex("by_email", (q: any) => q.eq("email", delBooking.customerEmail.toLowerCase().trim()))
-            .first();
-          if (credCustomer) {
-            await ctx.db.patch(credCustomer._id, {
-              creditBalance: (credCustomer.creditBalance ?? 0) + creditAmt,
-            });
-          }
-        }
-      }
-
-      // DI-7: Clean up Google Calendar event
-      if ((delBooking as any).googleCalendarEventId) {
-        await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-          googleCalendarEventId: (delBooking as any).googleCalendarEventId,
-          laneCalendarEventIds: (delBooking as any).googleCalendarEventIds,
-        });
-      }
-
-      // DI-7: Send cancellation email to customer
-      if (delBooking.customerEmail && delBooking.status !== "cancelled") {
-        const LANE_NAMES_DEL: Record<string, string> = { bm1: "Bowling Machine 1", bm2: "Bowling Machine 2", bm3: "Bowling Machine 3", ru1: "9m Run Up 1", ru2: "9m Run Up 2" };
-        const whole = Math.floor(delBooking.startHour);
-        const mins = Math.round((delBooking.startHour - whole) * 60);
-        const period = whole >= 12 ? "PM" : "AM";
-        const displayHour = whole > 12 ? whole - 12 : whole === 0 ? 12 : whole;
-        const timeSlot = `${displayHour}:${mins.toString().padStart(2, "0")} ${period}`;
-        const durationLabel = delBooking.duration === 60 ? "1 hour" : delBooking.duration === 90 ? "1.5 hours" : delBooking.duration === 30 ? "30 minutes" : `${delBooking.duration} min`;
-        await ctx.scheduler.runAfter(0, internal.emails.sendBookingCancellation, {
-          to: delBooking.customerEmail,
-          customerName: delBooking.customerName || "Valued Customer",
-          laneName: LANE_NAMES_DEL[delBooking.laneId] ?? delBooking.laneId,
-          date: delBooking.date,
-          timeSlot,
-          duration: durationLabel,
-        });
-      }
-    }
-
     await ctx.db.delete(args.id);
     return args.id;
   },
@@ -633,14 +412,9 @@ export const confirmTentativeBooking = mutation({
     const booking = await ctx.db.get(args.id);
     if (!booking || booking.status !== "tentative") return null;
 
-    // DI-6: Calculate coach price from site settings (not hardcoded 15)
-    const confSettings = await ctx.db
-      .query("siteSettings")
-      .withIndex("by_key", (q: any) => q.eq("key", "global"))
-      .first();
-    const coachPer30Min = confSettings?.coachPer30Min ?? 15;
+    // Calculate coach price based on duration
     const halfHours = booking.duration / 30;
-    const coachPrice = halfHours * coachPer30Min;
+    const coachPrice = halfHours * 15;
 
     await ctx.db.patch(args.id, {
       status: "confirmed",
@@ -680,11 +454,7 @@ export const createTentativeNextWeek = mutation({
     const source = await ctx.db.get(args.sourceBookingId);
     if (!source || !source.isCoachBooking) return null;
 
-    const tentativeSettings = await ctx.db
-      .query("siteSettings")
-      .withIndex("by_key", (q: any) => q.eq("key", "global"))
-      .first();
-    const CLOSING_HOUR = tentativeSettings?.closingHour ?? 21;
+    const CLOSING_HOUR = 21;
     const [year, month, day] = source.date.split("-").map(Number);
     const sourceDate = new Date(year, month - 1, day);
     const nextWeekDate = new Date(sourceDate);
@@ -716,22 +486,6 @@ export const createTentativeNextWeek = mutation({
       if (hasConflict) return null;
     }
 
-    // DI-5: Adjust athlete slots by time offset and validate they still fit
-    const newBookingEnd = startHour + source.duration / 60;
-    let adjustedAthleteSlots = source.athleteSlots
-      ? source.athleteSlots.map((s) => ({
-          ...s,
-          startHour: s.startHour - source.startHour + startHour,
-        }))
-      : undefined;
-    if (adjustedAthleteSlots) {
-      const allFit = adjustedAthleteSlots.every((s) => {
-        const slotEnd = s.startHour + s.durationMinutes / 60;
-        return s.startHour >= startHour && slotEnd <= newBookingEnd + 0.001;
-      });
-      if (!allFit) adjustedAthleteSlots = undefined;
-    }
-
     const id = await ctx.db.insert("bookings", {
       laneId: source.laneId,
       variantId: source.variantId,
@@ -746,7 +500,12 @@ export const createTentativeNextWeek = mutation({
       isCoachBooking: true,
       coachPrice: source.coachPrice,
       additionalLaneIds: source.additionalLaneIds,
-      athleteSlots: adjustedAthleteSlots,
+      athleteSlots: source.athleteSlots
+        ? source.athleteSlots.map((s) => ({
+            ...s,
+            startHour: s.startHour - source.startHour + startHour,
+          }))
+        : undefined,
       tentativeSourceId: args.sourceBookingId,
       tentativeForDate: nextWeekKey,
     });
@@ -768,11 +527,7 @@ export const editBookingDuration = mutation({
     if (booking.status === "cancelled") throw new Error("Cannot edit a cancelled booking.");
     if (booking.userId !== args.userId && booking.customerEmail !== args.userId) throw new Error("You can only edit your own bookings.");
 
-    const editDurSettings = await ctx.db
-      .query("siteSettings")
-      .withIndex("by_key", (q: any) => q.eq("key", "global"))
-      .first();
-    const CLOSING_HOUR = editDurSettings?.closingHour ?? 21;
+    const CLOSING_HOUR = 21;
     const newEndHour = booking.startHour + args.newDuration / 60;
     if (newEndHour > CLOSING_HOUR) {
       throw new Error("New duration extends past closing time.");
@@ -794,17 +549,20 @@ export const editBookingDuration = mutation({
     const awstNow = new Date(awstStr);
     const minutesUntil = (bookingStart.getTime() - awstNow.getTime()) / (1000 * 60);
 
-    // Extending: allowed within 2-hour window before start, but must be >N min before start
+    // Extending: allowed within 2-hour window before start, but must be >20 min before start
     if (isExtending) {
-      const extensionNoticeMin = editDurSettings?.extensionNoticeMinutes ?? 20;
-      if (minutesUntil <= extensionNoticeMin) {
-        throw new Error(`Extensions must be made more than ${extensionNoticeMin} minutes before the booking starts.`);
+      if (minutesUntil <= 20) {
+        throw new Error("Extensions must be made more than 20 minutes before the booking starts.");
       }
     }
 
-    // If shortening, apply cancellation terms from site settings (coach-specific threshold)
+    // If shortening, apply cancellation terms from site settings
     if (isShortening) {
-      const cancellationHours = (editDurSettings as any)?.coachLateCancellationHours ?? editDurSettings?.cancellationHoursBefore ?? 24;
+      const settings = await ctx.db
+        .query("siteSettings")
+        .withIndex("by_key", (q: any) => q.eq("key", "global"))
+        .first();
+      const cancellationHours = settings?.cancellationHoursBefore ?? 2;
       const hoursUntil = minutesUntil / 60;
       if (hoursUntil < cancellationHours) {
         throw new Error(
@@ -838,10 +596,9 @@ export const editBookingDuration = mutation({
       }
     }
 
-    // Recalculate coach price based on new duration (DI-6: use settings rate)
+    // Recalculate coach price based on new duration
     const halfHours = args.newDuration / 30;
-    const coachPer30MinEdit = editDurSettings?.coachPer30Min ?? 15;
-    const newCoachPrice = halfHours * coachPer30MinEdit;
+    const newCoachPrice = halfHours * 15;
 
     await ctx.db.patch(args.id, {
       duration: args.newDuration,
@@ -874,23 +631,20 @@ export const rescheduleBooking = mutation({
     if (booking.status === "cancelled") throw new Error("Cannot reschedule a cancelled booking.");
     if (booking.status === "tentative") throw new Error("Confirm the tentative booking first, then reschedule.");
 
-    // SEC-2: Use server-side identity for auth check; SEC-7: avoid full table scan
-    const reschedIdentity = await ctx.auth.getUserIdentity();
-    const reschedCallerEmail = reschedIdentity?.email?.toLowerCase().trim() ?? "";
-
     // Verify ownership — user must own the booking or be admin
-    const isOwner =
-      booking.userId === args.userId ||
-      booking.customerEmail.toLowerCase() === args.userId.toLowerCase() ||
-      (reschedIdentity?.subject != null && booking.userId === reschedIdentity.subject) ||
-      (reschedCallerEmail !== "" && booking.customerEmail.toLowerCase() === reschedCallerEmail);
+    const isOwner = booking.userId === args.userId || booking.customerEmail.toLowerCase() === args.userId.toLowerCase();
     if (!isOwner) {
-      // Use identity email for admin lookup (no full table scan)
-      const callerCustomer = reschedCallerEmail ? await ctx.db
+      // Check if the user is an admin
+      const adminCustomer = await ctx.db
         .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", reschedCallerEmail))
-        .first() : null;
-      if (callerCustomer?.role !== "admin") {
+        .withIndex("by_email", (q: any) => q.eq("email", args.userId.toLowerCase()))
+        .first();
+      const isAdminById = await ctx.db
+        .query("customers")
+        .collect()
+        .then(all => all.find(c => c._id.toString() === args.userId && c.role === "admin"));
+      const isAdmin = adminCustomer?.role === "admin" || !!isAdminById;
+      if (!isAdmin) {
         throw new Error("You can only reschedule your own bookings.");
       }
     }
@@ -900,7 +654,7 @@ export const rescheduleBooking = mutation({
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
       .first();
-    const cancellationHours = (settings as any)?.customerCancellationHours ?? settings?.cancellationHoursBefore ?? 2;
+    const cancellationHours = settings?.cancellationHoursBefore ?? 2;
 
     const [oYear, oMonth, oDay] = booking.date.split("-").map(Number);
     const oWhole = Math.floor(booking.startHour);
@@ -917,17 +671,19 @@ export const rescheduleBooking = mutation({
       );
     }
 
-    // Coaches cannot self-reschedule within N hours of booking start
-    const coachFreezeHours = settings?.coachRescheduleFreezeHours ?? 24;
-    if (booking.isCoachBooking && hoursUntilOriginal < coachFreezeHours) {
-      // SEC-7: Use identity email (already fetched above) — no full table scan
-      const coachAdminCheck = reschedCallerEmail ? await ctx.db
+    // Coaches cannot reschedule within 24 hours of booking start
+    if (booking.isCoachBooking && hoursUntilOriginal < 24) {
+      // Allow admins to override
+      const requestingUser = await ctx.db
         .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", reschedCallerEmail))
-        .first() : null;
-      if (coachAdminCheck?.role !== "admin") {
+        .withIndex("by_email", (q: any) => q.eq("email", args.userId.toLowerCase()))
+        .first();
+      const allCustomers = await ctx.db.query("customers").collect();
+      const userById = allCustomers.find(c => c._id.toString() === args.userId);
+      const isAdmin = requestingUser?.role === "admin" || userById?.role === "admin";
+      if (!isAdmin) {
         throw new Error(
-          `Coach bookings cannot be rescheduled within ${coachFreezeHours} hours of the session start time.`
+          "Coach bookings cannot be rescheduled within 24 hours of the session start time."
         );
       }
     }
@@ -984,13 +740,12 @@ export const rescheduleBooking = mutation({
       }
     }
 
-    // Calculate new price (use settings-driven rate — fixes hardcoded * 15 bug)
+    // Calculate new price
     const isCoach = booking.isCoachBooking;
     let newCoachPrice = booking.coachPrice;
     if (isCoach) {
       const halfHours = args.newDuration / 30;
-      const coachRatePer30 = settings?.coachPer30Min ?? 15;
-      newCoachPrice = halfHours * coachRatePer30;
+      newCoachPrice = halfHours * 15;
     }
 
     // Adjust athlete slots if start time changed
@@ -1139,19 +894,14 @@ export const updateBookingAthleteSlots = mutation({
     }
 
     // Validate athlete slots fit within booking window
-    const athleteSettings = await ctx.db
-      .query("siteSettings")
-      .withIndex("by_key", (q: any) => q.eq("key", "global"))
-      .first();
-    const minAthleteMins = athleteSettings?.minAthleteDurationMinutes ?? 15;
     const bookingEnd = booking.startHour + booking.duration / 60;
     for (const slot of args.athleteSlots) {
       const slotEnd = slot.startHour + slot.durationMinutes / 60;
       if (slot.startHour < booking.startHour || slotEnd > bookingEnd + 0.001) {
         throw new Error(`Athlete "${slot.athleteName}" session falls outside the booking window.`);
       }
-      if (slot.durationMinutes < minAthleteMins) {
-        throw new Error(`Minimum athlete session is ${minAthleteMins} minutes.`);
+      if (slot.durationMinutes < 15) {
+        throw new Error(`Minimum athlete session is 15 minutes.`);
       }
     }
 
@@ -1312,7 +1062,7 @@ export const updateCustomer = mutation({
   },
 });
 
-// Update customer by email — self-update or admin only
+// Update customer by email — ADMIN ONLY
 export const updateCustomerByEmail = mutation({
   args: {
     email: v.string(),
@@ -1323,25 +1073,11 @@ export const updateCustomerByEmail = mutation({
     assignedCoachIds: v.optional(v.array(v.string())),
     creditBalance: v.optional(v.number()),
     color: v.optional(v.string()),
-    defaultSessionDuration: v.optional(v.number()),
     bookingEmailsEnabled: v.optional(v.boolean()),
     emailPrefs: v.optional(v.array(v.object({ slug: v.string(), enabled: v.boolean() }))),
   },
   handler: async (ctx, args) => {
-    // SEC-3: Must be authenticated; can update own profile or be admin
-    const updByEmailIdentity = await ctx.auth.getUserIdentity();
-    if (!updByEmailIdentity) throw new Error("Authentication required.");
-    const updCallerEmail = updByEmailIdentity.email?.toLowerCase().trim() ?? "";
     const normalizedEmail = args.email.toLowerCase().trim();
-    if (updCallerEmail !== normalizedEmail) {
-      const updCallerCustomer = await ctx.db
-        .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", updCallerEmail))
-        .first();
-      if (updCallerCustomer?.role !== "admin") {
-        throw new Error("You can only update your own profile.");
-      }
-    }
     const existing = await ctx.db
       .query("customers")
       .withIndex("by_email", (q: any) => q.eq("email", normalizedEmail))
@@ -1574,19 +1310,6 @@ export const sendBookingEmail = mutation({
     accessCode: v.string(),
   },
   handler: async (ctx, args) => {
-    // SEC-4: Must be authenticated; can send to self or be admin
-    const sendEmailIdentity = await ctx.auth.getUserIdentity();
-    if (!sendEmailIdentity) throw new Error("Authentication required.");
-    const sendCallerEmail = sendEmailIdentity.email?.toLowerCase().trim() ?? "";
-    if (sendCallerEmail !== args.customerEmail.toLowerCase().trim()) {
-      const sendCallerCustomer = await ctx.db
-        .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", sendCallerEmail))
-        .first();
-      if (sendCallerCustomer?.role !== "admin") {
-        throw new Error("You can only send booking emails for your own bookings.");
-      }
-    }
     await ctx.scheduler.runAfter(
       0,
       internal.emails.sendBookingConfirmation,
@@ -1706,23 +1429,6 @@ export const addToWaitlist = mutation({
 export const removeFromWaitlist = mutation({
   args: { id: v.id("waitlist") },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Authentication required.");
-    const entry = await ctx.db.get(args.id);
-    if (!entry) throw new Error("Waitlist entry not found.");
-    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
-    const isOwner =
-      entry.userId === identity.subject ||
-      entry.userEmail.toLowerCase() === callerEmail;
-    if (!isOwner) {
-      const callerCustomer = await ctx.db
-        .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
-        .first();
-      if (callerCustomer?.role !== "admin") {
-        throw new Error("You can only remove your own waitlist entries.");
-      }
-    }
     await ctx.db.delete(args.id);
     return args.id;
   },
@@ -1798,23 +1504,6 @@ export const notifyWaitlistedUsers = mutation({
 export const dismissWaitlistNotification = mutation({
   args: { id: v.id("waitlistNotifications") },
   handler: async (ctx, args) => {
-    // SEC-5: Only the notification owner (or admin) can dismiss it
-    const dismissIdentity = await ctx.auth.getUserIdentity();
-    if (!dismissIdentity) throw new Error("Authentication required.");
-    const notification = await ctx.db.get(args.id);
-    if (!notification) throw new Error("Notification not found.");
-    const isOwner =
-      notification.userId === dismissIdentity.subject ||
-      (notification as any).userEmail?.toLowerCase() === dismissIdentity.email?.toLowerCase();
-    if (!isOwner) {
-      const dismissCallerCustomer = await ctx.db
-        .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", dismissIdentity.email?.toLowerCase() ?? ""))
-        .first();
-      if (dismissCallerCustomer?.role !== "admin") {
-        throw new Error("You can only dismiss your own notifications.");
-      }
-    }
     await ctx.db.patch(args.id, { dismissed: true });
     return args.id;
   },
@@ -1845,13 +1534,6 @@ export const updateSiteSettings = mutation({
     l2CoachOpenDay: v.optional(v.string()),
     l2CoachOpenHour: v.optional(v.number()),
     registrationLocked: v.optional(v.boolean()),
-    coachRescheduleFreezeHours: v.optional(v.number()),
-    extensionNoticeMinutes: v.optional(v.number()),
-    customerMaxDurationMinutes: v.optional(v.number()),
-    coachMaxDurationMinutes: v.optional(v.number()),
-    minAthleteDurationMinutes: v.optional(v.number()),
-    customerCancellationHours: v.optional(v.number()),
-    coachLateCancellationHours: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
@@ -1967,19 +1649,6 @@ export const addCustomerCredit = mutation({
 export const useCustomerCredit = mutation({
   args: { email: v.string(), amount: v.number() },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Authentication required.");
-    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
-    const targetEmail = args.email.toLowerCase().trim();
-    if (callerEmail !== targetEmail) {
-      const callerCustomer = await ctx.db
-        .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
-        .first();
-      if (callerCustomer?.role !== "admin") {
-        throw new Error("You can only use your own credits.");
-      }
-    }
     const customer = await ctx.db
       .query("customers")
       .withIndex("by_email", (q: any) => q.eq("email", args.email.toLowerCase().trim()))
@@ -2019,13 +1688,6 @@ export const resetSiteSettings = mutation({
       coachBookingWindowDays: 7,
       customerOpenDay: "sunday",
       customerOpenHour: 19,
-      coachRescheduleFreezeHours: 24,
-      extensionNoticeMinutes: 20,
-      customerMaxDurationMinutes: 120,
-      coachMaxDurationMinutes: 600,
-      minAthleteDurationMinutes: 15,
-      customerCancellationHours: 2,
-      coachLateCancellationHours: 24,
     };
 
     if (existing) {
@@ -2034,71 +1696,6 @@ export const resetSiteSettings = mutation({
     } else {
       return await ctx.db.insert("siteSettings", defaults);
     }
-  },
-});
-
-// ============================================================================
-// DISCOUNT CODE MUTATIONS — ADMIN ONLY
-// ============================================================================
-
-export const createDiscountCode = mutation({
-  args: {
-    code: v.string(),
-    discount: v.number(),
-    label: v.string(),
-    bypassStripe: v.boolean(),
-    active: v.boolean(),
-    expiresAt: v.optional(v.string()),
-    usageLimit: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    await requireAdmin(ctx);
-    const normalised = args.code.trim().toLowerCase();
-    if (!normalised) throw new Error("Code cannot be empty.");
-    const existing = await ctx.db
-      .query("discountCodes")
-      .withIndex("by_code", (q: any) => q.eq("code", normalised))
-      .first();
-    if (existing) throw new Error(`Code "${normalised}" already exists.`);
-    return await ctx.db.insert("discountCodes", {
-      code: normalised,
-      discount: args.discount,
-      label: args.label,
-      bypassStripe: args.bypassStripe,
-      active: args.active,
-      expiresAt: args.expiresAt,
-      usageLimit: args.usageLimit,
-      usedCount: 0,
-      createdAt: new Date().toISOString(),
-    });
-  },
-});
-
-export const updateDiscountCode = mutation({
-  args: {
-    id: v.id("discountCodes"),
-    discount: v.optional(v.number()),
-    label: v.optional(v.string()),
-    bypassStripe: v.optional(v.boolean()),
-    active: v.optional(v.boolean()),
-    expiresAt: v.optional(v.string()),
-    usageLimit: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    await requireAdmin(ctx);
-    const { id, ...updates } = args;
-    const clean = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
-    await ctx.db.patch(id, clean);
-    return id;
-  },
-});
-
-export const deleteDiscountCode = mutation({
-  args: { id: v.id("discountCodes") },
-  handler: async (ctx, args) => {
-    await requireAdmin(ctx);
-    await ctx.db.delete(args.id);
-    return args.id;
   },
 });
 

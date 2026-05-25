@@ -296,12 +296,7 @@ export function getCustomerDurations(bookings: Booking[], laneId: string, dateKe
   const lastMinute = isLastMinuteBooking(dateKey, startHour)
   const durations: number[] = []
 
-  // Build candidate durations dynamically from settings (60, 90, 120 ... up to customerMaxDurationMinutes)
-  const customerMax = getSettingsStore().get().customerMaxDurationMinutes ?? 120
-  const candidates: number[] = []
-  for (let d = 60; d <= customerMax; d += 30) candidates.push(d)
-
-  for (const d of candidates) {
+  for (const d of [60, 90, 120]) {
     if (d > maxMins) continue
     const createsGap = wouldCreateDeadGap(startHour, d, nextStart)
     if (!createsGap) {
@@ -327,9 +322,8 @@ export function getCustomerDurations(bookings: Booking[], laneId: string, dateKe
 // Coach durations
 export function getCoachDurations(bookings: Booking[], laneId: string, dateKey: string, startHour: number): number[] {
   const maxMins = getMaxDuration(bookings, laneId, dateKey, startHour, true)
-  const coachMax = getSettingsStore().get().coachMaxDurationMinutes ?? 600
   const durations: number[] = []
-  for (let m = 60; m <= Math.min(maxMins, coachMax); m += 30) durations.push(m)
+  for (let m = 60; m <= Math.min(maxMins, 600); m += 30) durations.push(m)
   return durations
 }
 
@@ -389,8 +383,7 @@ export function getMaxDuration(bookings: Booking[], laneId: string, dateKey: str
     if (b.startHour > startHour && b.startHour < maxEnd) maxEnd = b.startHour
   }
   const maxMinutes = Math.round((maxEnd - startHour) * 60)
-  const s = getSettingsStore().get()
-  const absoluteMax = isCoach ? (s.coachMaxDurationMinutes ?? 600) : (s.customerMaxDurationMinutes ?? 120)
+  const absoluteMax = isCoach ? 600 : 120
   return Math.min(maxMinutes, absoluteMax)
 }
 
@@ -437,7 +430,7 @@ const DAY_INDEX: Record<string, number> = {
  */
 export function canAccessCalendar(
   role: 'coach' | 'customer' | 'admin',
-  coachTier?: 'L1' | 'L2' | null,
+  coachTier?: 'L1' | 'L2' | 'Bowling' | 'BowlingL2' | null,
   settings?: { l1CoachOpenDay?: string; l1CoachOpenHour?: number; l2CoachOpenDay?: string; l2CoachOpenHour?: number; customerOpenDay?: string; customerOpenHour?: number }
 ): boolean {
   if (role === 'admin') return true
@@ -448,19 +441,20 @@ export function canAccessCalendar(
   const minute = now.getMinutes()
   const currentTimeDecimal = hour + minute / 60
 
-  // L1 Coaches — rolling 8-day window, always open by default
-  if (role === 'coach' && coachTier !== 'L2') {
+  // L1 Coaches (includes Bowling L1 — same access as L1)
+  if (role === 'coach' && coachTier !== 'L2' && coachTier !== 'BowlingL2') {
     const openDay = settings?.l1CoachOpenDay ?? 'always'
     if (openDay === 'always') return true
     const openHour = settings?.l1CoachOpenHour ?? 0
     const targetDayIdx = DAY_INDEX[openDay] ?? 0
     if (dayOfWeek === targetDayIdx) return currentTimeDecimal >= openHour
+    // Check if we're past the open day this week
     const daysSinceOpen = (dayOfWeek - targetDayIdx + 7) % 7
     return daysSinceOpen > 0
   }
 
-  // L2 Coaches — weekly view, opens Sunday 5pm WST for the week ahead (Mon–Sun)
-  if (role === 'coach' && coachTier === 'L2') {
+  // L2 Coaches (includes Bowling L2 — same access as L2)
+  if (role === 'coach' && (coachTier === 'L2' || coachTier === 'BowlingL2')) {
     const openDay = settings?.l2CoachOpenDay ?? 'sunday'
     const openHour = settings?.l2CoachOpenHour ?? 17
     const targetDayIdx = DAY_INDEX[openDay] ?? 0
@@ -480,7 +474,7 @@ export function canAccessCalendar(
 
 export function getCalendarAccessMessage(
   role: 'coach' | 'customer',
-  coachTier?: 'L1' | 'L2' | null,
+  coachTier?: 'L1' | 'L2' | 'Bowling' | 'BowlingL2' | null,
   settings?: { l1CoachOpenDay?: string; l1CoachOpenHour?: number; l2CoachOpenDay?: string; l2CoachOpenHour?: number; customerOpenDay?: string; customerOpenHour?: number }
 ): string {
   const formatHour = (h: number) => {
@@ -491,20 +485,20 @@ export function getCalendarAccessMessage(
   }
   const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
-  if (role === 'coach' && coachTier === 'L2') {
+  if (role === 'coach' && (coachTier === 'L2' || coachTier === 'BowlingL2')) {
     const day = settings?.l2CoachOpenDay ?? 'sunday'
     const hour = settings?.l2CoachOpenHour ?? 17
-    return `L2 Coach booking opens at ${formatHour(hour)} ${capitalize(day)} WST for the week ahead (Monday–Sunday).`
+    return `L2 Coach booking opens at ${formatHour(hour)} ${capitalize(day)} AWST for the week ahead.`
   }
   if (role === 'coach') {
     const day = settings?.l1CoachOpenDay ?? 'always'
-    if (day === 'always') return 'L1 Coach booking is available on a rolling 8-day window.'
+    if (day === 'always') return 'L1 Coach booking is available on a rolling 7-day window.'
     const hour = settings?.l1CoachOpenHour ?? 0
-    return `L1 Coach booking opens at ${formatHour(hour)} ${capitalize(day)} WST.`
+    return `L1 Coach booking opens at ${formatHour(hour)} ${capitalize(day)} AWST.`
   }
   const day = settings?.customerOpenDay ?? 'sunday'
   const hour = settings?.customerOpenHour ?? 19
-  return `Booking opens at ${formatHour(hour)} ${capitalize(day)} WST for the upcoming week.`
+  return `Booking opens at ${formatHour(hour)} ${capitalize(day)} AWST for the upcoming week.`
 }
 
 // ============================================================
@@ -529,34 +523,6 @@ export function getCurrentWeekDays(): Date[] {
     start = new Date(today)
   } else {
     // Mon-Sat: show current week starting Monday
-    start = new Date(today)
-    start.setDate(today.getDate() - (dayOfWeek - 1))
-  }
-  start.setHours(0, 0, 0, 0)
-  const days: Date[] = []
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(start)
-    d.setDate(start.getDate() + i)
-    days.push(d)
-  }
-  return days
-}
-
-/**
- * Returns the Mon–Sun week that L2 coaches should see.
- * On Sunday (when access opens at 5pm WST): returns NEXT Mon–Sun.
- * Mon–Sat: returns the current Mon–Sun (the week that opened last Sunday).
- */
-export function getL2WeekDays(): Date[] {
-  const today = getAWSTNow()
-  const dayOfWeek = today.getDay() // 0=Sunday
-  let start: Date
-  if (dayOfWeek === 0) {
-    // Sunday — show next week (tomorrow = Monday through the following Sunday)
-    start = new Date(today)
-    start.setDate(today.getDate() + 1)
-  } else {
-    // Mon–Sat — show this week's Monday
     start = new Date(today)
     start.setDate(today.getDate() - (dayOfWeek - 1))
   }
