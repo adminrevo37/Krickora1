@@ -26,7 +26,6 @@ export default defineConfig({
     // hashes never co-exist with new ones in the browser (root cause of the
     // "Cannot read properties of null (reading 'useRef')" error in better-auth).
     force: true,
-    entries: ["index.html", "src/**/*.{ts,tsx,js,jsx}"],
 
     include: [
       "react",
