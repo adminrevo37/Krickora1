@@ -647,6 +647,61 @@ function CoachesTab() {
   const [busyAdd, setBusyAdd] = useState(false)
   const [addMode, setAddMode] = useState<'direct' | 'invite'>('direct')
   const [showAddForm, setShowAddForm] = useState(false)
+
+  // ── Quick-add payment ────────────────────────────────────────────────────
+  const createPayment = useMutation(api.mutations.createPayment)
+  const balanceSummaries = useQuery((api.queries as any).getCoachBalanceSummaries) ?? []
+  const balanceMap = new Map((balanceSummaries as any[]).map((s: any) => [s.coachId, s]))
+
+  const todayISO = (() => {
+    const n = new Date()
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`
+  })()
+  const [qpCoachId, setQpCoachId] = useState('')
+  const [qpAmount, setQpAmount] = useState('')
+  const [qpDate, setQpDate] = useState(todayISO)
+  const [qpMethod, setQpMethod] = useState('Bank Transfer')
+  const [qpNote, setQpNote] = useState('')
+  const [qpBusy, setQpBusy] = useState(false)
+  const [qpSuccess, setQpSuccess] = useState(false)
+
+  const submitQuickPay = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const amt = parseFloat(qpAmount)
+    if (!qpCoachId || isNaN(amt) || amt <= 0) return
+    setQpBusy(true)
+    try {
+      await createPayment({
+        coachId: qpCoachId,
+        amount: amt,
+        dateReceived: qpDate,
+        method: qpMethod,
+        note: qpNote.trim() || undefined,
+        createdBy: user?.email ?? 'admin',
+      })
+      setQpAmount('')
+      setQpNote('')
+      setQpSuccess(true)
+      setTimeout(() => setQpSuccess(false), 3000)
+    } catch (err: any) {
+      alert(err?.message ?? 'Failed to record payment')
+    } finally {
+      setQpBusy(false)
+    }
+  }
+
+  const fmtBalance = (balance: number) => {
+    if (Math.abs(balance) < 0.005) return { label: 'Settled', cls: 'bg-gray-100 text-gray-500 border-gray-200' }
+    if (balance > 0) return { label: `$${balance.toFixed(2)} outstanding`, cls: 'bg-red-100 text-red-700 border-red-200' }
+    return { label: `$${Math.abs(balance).toFixed(2)} in credit`, cls: 'bg-emerald-100 text-emerald-700 border-emerald-200' }
+  }
+
+  const fmtLastPaid = (dateStr: string | null) => {
+    if (!dateStr) return 'Never'
+    const d = new Date(dateStr + 'T00:00:00')
+    return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
+  }
+
   // Merge consecutive bookings
   const mergeBookings = useMutation((api.mutations as any).mergeConsecutiveCoachBookings)
   const [mergeBusy, setMergeBusy] = useState(false)
@@ -700,6 +755,97 @@ function CoachesTab() {
 
   return (
     <div className="space-y-6">
+
+      {/* ── Quick Add Coach Payment ── */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h3 className="text-base font-bold text-gray-800">Quick Add Payment</h3>
+          <p className="text-sm text-gray-500 mt-0.5">Record a payment received from a coach without opening their statement.</p>
+        </div>
+        <form onSubmit={submitQuickPay} className="p-6 grid grid-cols-1 sm:grid-cols-6 gap-3 items-end">
+          {/* Coach */}
+          <div className="sm:col-span-2 flex flex-col gap-1">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Coach</label>
+            <select
+              required
+              value={qpCoachId}
+              onChange={e => setQpCoachId(e.target.value)}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white"
+            >
+              <option value="">Select coach…</option>
+              {coaches.map((c: any) => (
+                <option key={c._id} value={c._id}>{c.name || c.email}</option>
+              ))}
+            </select>
+          </div>
+          {/* Amount */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Amount ($)</label>
+            <input
+              required
+              type="number"
+              min="0.01"
+              step="0.01"
+              placeholder="0.00"
+              value={qpAmount}
+              onChange={e => setQpAmount(e.target.value)}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+            />
+          </div>
+          {/* Date */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Date</label>
+            <input
+              required
+              type="date"
+              value={qpDate}
+              onChange={e => setQpDate(e.target.value)}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+            />
+          </div>
+          {/* Method */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Method</label>
+            <select
+              value={qpMethod}
+              onChange={e => setQpMethod(e.target.value)}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white"
+            >
+              <option>Bank Transfer</option>
+              <option>Cash</option>
+              <option>Card</option>
+            </select>
+          </div>
+          {/* Note */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Note (optional)</label>
+            <input
+              type="text"
+              placeholder="e.g. May payment"
+              value={qpNote}
+              onChange={e => setQpNote(e.target.value)}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+            />
+          </div>
+          {/* Submit */}
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-transparent uppercase tracking-wide">Save</label>
+            <button
+              type="submit"
+              disabled={qpBusy}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors whitespace-nowrap"
+            >
+              {qpBusy ? 'Saving…' : 'Save Payment'}
+            </button>
+          </div>
+        </form>
+        {qpSuccess && (
+          <div className="mx-6 mb-4 px-4 py-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-sm text-emerald-700 font-medium">
+            ✅ Payment recorded successfully.
+          </div>
+        )}
+      </div>
+
       {/* Active coaches */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
@@ -725,28 +871,41 @@ function CoachesTab() {
                   <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Email</th>
                   <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Phone</th>
                   <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Tier</th>
+                  <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Balance</th>
+                  <th className="text-left px-5 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">Last Paid</th>
                   <th className="px-5 py-2.5" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {coaches.map((c: any) => (
-                  <tr key={c._id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-5 py-3 font-medium text-gray-900">{c.name || '—'}</td>
-                    <td className="px-5 py-3 text-gray-500">{c.email}</td>
-                    <td className="px-5 py-3 text-gray-500">{c.phone || '—'}</td>
-                    <td className="px-5 py-3">
-                      <span className="inline-flex items-center gap-1.5">
-                        {c.color && <span className="w-2.5 h-2.5 rounded-full border border-gray-200 shrink-0" style={{ background: c.color }} />}
-                        <span className="text-gray-500">{normaliseCoachTier(c.coachTier)}</span>
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 text-right">
-                      <button onClick={() => setEditingCoach(c)} className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 font-medium text-gray-700">
-                        Edit
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {coaches.map((c: any) => {
+                  const summary = balanceMap.get(c._id) as any
+                  const bal = fmtBalance(summary?.balance ?? 0)
+                  const lastPaid = fmtLastPaid(summary?.lastPaymentDate ?? null)
+                  return (
+                    <tr key={c._id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-5 py-3 font-medium text-gray-900">{c.name || '—'}</td>
+                      <td className="px-5 py-3 text-gray-500">{c.email}</td>
+                      <td className="px-5 py-3 text-gray-500">{c.phone || '—'}</td>
+                      <td className="px-5 py-3">
+                        <span className="inline-flex items-center gap-1.5">
+                          {c.color && <span className="w-2.5 h-2.5 rounded-full border border-gray-200 shrink-0" style={{ background: c.color }} />}
+                          <span className="text-gray-500">{normaliseCoachTier(c.coachTier)}</span>
+                        </span>
+                      </td>
+                      <td className="px-5 py-3">
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${bal.cls}`}>
+                          {bal.label}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3 text-sm text-gray-500 whitespace-nowrap">{lastPaid}</td>
+                      <td className="px-5 py-3 text-right">
+                        <button onClick={() => setEditingCoach(c)} className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 font-medium text-gray-700">
+                          Edit
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

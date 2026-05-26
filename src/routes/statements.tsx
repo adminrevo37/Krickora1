@@ -54,45 +54,45 @@ function StatementsPage() {
   )
   const totalPaid = sortedPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0)
 
-  // Include ALL non-cancelled bookings for this coach email.
-  // Catches both explicit coach bookings AND legacy bookings that may not
-  // have the isCoachBooking flag set but still belong to this coach.
-  const coachBookings = (bookings ?? []).filter(
-    (b: any) =>
-      b.status !== 'cancelled' &&
-      (b.isCoachBooking === true || (typeof b.coachPrice === 'number' && b.coachPrice > 0))
-  )
-  const sortedBookings = [...coachBookings].sort((a: any, b: any) => {
-    const cmp = (b.date || '').localeCompare(a.date || '')
-    if (cmp !== 0) return cmp
-    return (b.startHour || 0) - (a.startHour || 0)
-  })
-
-  // Compute cost per booking. Prefer stored coachPrice; fall back to 0.
-  const bookingCost = (b: any) => Number(b.coachPrice || 0)
-  const totalBooked = sortedBookings.reduce((s: number, b: any) => s + bookingCost(b), 0)
-  const balance = totalBooked - totalPaid
-
   const now = new Date()
   const y = now.getFullYear()
   const m = now.getMonth()
   const pad = (n: number) => String(n).padStart(2, '0')
-  const monthStart = `${y}-${pad(m + 1)}-01`
   const todayStr = `${y}-${pad(m + 1)}-${pad(now.getDate())}`
+  const monthStart = `${y}-${pad(m + 1)}-01`
+
+  // Include ALL non-cancelled bookings for this coach email.
+  // Catches both explicit coach bookings AND legacy bookings that may not
+  // have the isCoachBooking flag set but still belong to this coach.
+  const allCoachBookings = (bookings ?? []).filter(
+    (b: any) =>
+      b.status !== 'cancelled' &&
+      (b.isCoachBooking === true || (typeof b.coachPrice === 'number' && b.coachPrice > 0))
+  )
+  // Past/today: included in totals and running balance
+  const coachBookings = allCoachBookings.filter((b: any) => (b.date || '') <= todayStr)
+  // Future: shown greyed out/upcoming, excluded from all totals
+  const futureBookings = allCoachBookings.filter((b: any) => (b.date || '') > todayStr)
+
+  // Compute cost per booking. Prefer stored coachPrice; fall back to 0.
+  const bookingCost = (b: any) => Number(b.coachPrice || 0)
+  const totalBooked = coachBookings.reduce((s: number, b: any) => s + bookingCost(b), 0)
+  const balance = totalBooked - totalPaid
+
   const monthPaid = sortedPayments
     .filter((p: any) => (p.dateReceived || '') >= monthStart && (p.dateReceived || '') <= todayStr)
     .reduce((s: number, p: any) => s + (p.amount || 0), 0)
-  const monthBooked = sortedBookings
-    .filter((b: any) => (b.date || '') >= monthStart && (b.date || '') <= todayStr)
+  const monthBooked = coachBookings
+    .filter((b: any) => (b.date || '') >= monthStart)
     .reduce((s: number, b: any) => s + bookingCost(b), 0)
 
-  // Merge into a unified activity ledger sorted by date desc with running balance (asc internal)
+  // Merge past rows into unified activity ledger with running balance
   type Row =
-    | { kind: 'booking'; date: string; sortKey: string; label: string; lane: string; amount: number; raw: any }
+    | { kind: 'booking'; date: string; sortKey: string; label: string; lane: string; amount: number; raw: any; future?: boolean }
     | { kind: 'payment'; date: string; sortKey: string; label: string; method: string; amount: number; raw: any }
 
   const rows: Row[] = []
-  for (const b of sortedBookings) {
+  for (const b of coachBookings) {
     rows.push({
       kind: 'booking',
       date: b.date,
@@ -121,7 +121,24 @@ function StatementsPage() {
     running += r.kind === 'booking' ? r.amount : -r.amount
     return { ...r, balance: running }
   })
-  const displayRows = [...rowsWithBalance].reverse()
+
+  // Future rows: sorted ascending, flagged, excluded from balance
+  const futureRows = [...futureBookings]
+    .sort((a: any, b: any) => (a.date || '').localeCompare(b.date || '') || (a.startHour ?? 0) - (b.startHour ?? 0))
+    .map((b: any) => ({
+      kind: 'booking' as const,
+      date: b.date,
+      sortKey: `${b.date}T${String(b.startHour ?? 0).padStart(5, '0')}`,
+      label: `${formatHour(b.startHour)} • ${b.duration} min`,
+      lane: b.laneId || '—',
+      amount: bookingCost(b),
+      raw: b,
+      future: true,
+      balance: 0,
+    }))
+
+  // Future at top, then past newest-first
+  const displayRows = [...futureRows, ...[...rowsWithBalance].reverse()]
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -155,7 +172,9 @@ function StatementsPage() {
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
           <h2 className="font-semibold text-gray-800">Activity Ledger</h2>
-          <span className="text-xs text-gray-500">{displayRows.length} entries</span>
+          <span className="text-xs text-gray-500">
+            {rowsWithBalance.length} entries{futureRows.length > 0 ? ` + ${futureRows.length} upcoming` : ''}
+          </span>
         </div>
         {bookings === undefined || payments === undefined ? (
           <div className="p-8 text-center text-gray-500">Loading...</div>
@@ -175,36 +194,39 @@ function StatementsPage() {
                 </tr>
               </thead>
               <tbody>
-                {displayRows.map((r, i) => (
-                  <tr key={i} className="border-t border-gray-100">
-                    <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{r.date || '—'}</td>
-                    <td className="px-5 py-3">
-                      {r.kind === 'booking' ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">
-                          Booking
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium">
-                          Payment
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-5 py-3 text-gray-700">
-                      {r.kind === 'booking'
-                        ? `${(r as any).lane} • ${r.label}`
-                        : `${r.label} (${(r as any).method})`}
-                    </td>
-                    <td className="px-5 py-3 text-right text-gray-900">
-                      {r.kind === 'booking' ? `$${r.amount.toFixed(2)}` : ''}
-                    </td>
-                    <td className="px-5 py-3 text-right text-emerald-700">
-                      {r.kind === 'payment' ? `−$${r.amount.toFixed(2)}` : ''}
-                    </td>
-                    <td className={`px-5 py-3 text-right font-semibold ${r.balance > 0 ? 'text-amber-700' : 'text-gray-900'}`}>
-                      ${r.balance.toFixed(2)}
-                    </td>
-                  </tr>
-                ))}
+                {displayRows.map((r, i) => {
+                  const isFuture = (r as any).future === true
+                  return (
+                    <tr key={i} className={`border-t border-gray-100 ${isFuture ? 'opacity-50' : ''}`}>
+                      <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{r.date || '—'}</td>
+                      <td className="px-5 py-3">
+                        {r.kind === 'booking' ? (
+                          isFuture ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-xs font-medium">Upcoming</span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">Booking</span>
+                          )
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium">Payment</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3 text-gray-700">
+                        {r.kind === 'booking'
+                          ? `${(r as any).lane} • ${r.label}`
+                          : `${r.label} (${(r as any).method})`}
+                      </td>
+                      <td className="px-5 py-3 text-right text-gray-900">
+                        {r.kind === 'booking' ? `$${r.amount.toFixed(2)}` : ''}
+                      </td>
+                      <td className="px-5 py-3 text-right text-emerald-700">
+                        {r.kind === 'payment' ? `−$${r.amount.toFixed(2)}` : ''}
+                      </td>
+                      <td className={`px-5 py-3 text-right font-semibold ${isFuture ? 'text-gray-400' : (r as any).balance > 0 ? 'text-amber-700' : 'text-gray-900'}`}>
+                        {isFuture ? '—' : `$${(r as any).balance.toFixed(2)}`}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

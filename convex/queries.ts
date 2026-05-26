@@ -274,6 +274,79 @@ export const listPaymentsByCoach = query({
   },
 });
 
+// Get balance summaries for all coaches (admin coach dashboard)
+// Returns per-coach: totalCharged (bookings up to today), totalPaid, balance,
+// lastPaymentDate. Positive balance = coach owes admin. Negative = coach has credit.
+export const getCoachBalanceSummaries = query({
+  args: {},
+  handler: async (ctx) => {
+    const coaches = await ctx.db
+      .query("customers")
+      .withIndex("by_role", (q: any) => q.eq("role", "coach"))
+      .collect();
+
+    const allPayments = await ctx.db.query("payments").collect();
+
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+    // Per-coach charge totals from bookings up to today
+    const chargeByEmail = new Map<string, number>();
+    for (const coach of coaches) {
+      const email = (coach.email || "").toLowerCase().trim();
+      if (!email) continue;
+      const coachBookings = await ctx.db
+        .query("bookings")
+        .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", email))
+        .collect();
+      let total = 0;
+      for (const b of coachBookings) {
+        if (b.status === "cancelled") continue;
+        if (!(b.isCoachBooking === true || (typeof b.coachPrice === "number" && b.coachPrice > 0))) continue;
+        if ((b.date || "") > todayStr) continue;
+        total += Number(b.coachPrice) || 0;
+      }
+      chargeByEmail.set(email, total);
+    }
+
+    // Per-coach payment totals
+    type PaySummary = { total: number; lastDate: string; lastAmount: number };
+    const payByCoachId = new Map<string, PaySummary>();
+    for (const p of allPayments) {
+      const id = p.coachId as string;
+      const amt = Number(p.amount) || 0;
+      const date = p.dateReceived || "";
+      const ex = payByCoachId.get(id);
+      if (!ex) {
+        payByCoachId.set(id, { total: amt, lastDate: date, lastAmount: amt });
+      } else {
+        const isNewer = date > ex.lastDate;
+        payByCoachId.set(id, {
+          total: ex.total + amt,
+          lastDate: isNewer ? date : ex.lastDate,
+          lastAmount: isNewer ? amt : ex.lastAmount,
+        });
+      }
+    }
+
+    return coaches.map((coach) => {
+      const email = (coach.email || "").toLowerCase().trim();
+      const totalCharged = chargeByEmail.get(email) || 0;
+      const pm = payByCoachId.get(coach._id as string);
+      const totalPaid = pm?.total || 0;
+      return {
+        coachId: coach._id as string,
+        email: coach.email,
+        totalCharged,
+        totalPaid,
+        balance: totalCharged - totalPaid,
+        lastPaymentDate: pm?.lastDate || null,
+        lastPaymentAmount: pm?.lastAmount || 0,
+      };
+    });
+  },
+});
+
 // ============================================================================
 // REVENUE BREAKDOWN QUERIES
 // ============================================================================

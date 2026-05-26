@@ -27,30 +27,37 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName }: 
   )
   const totalPaid = sortedPayments.reduce((s, p) => s + (p.amount || 0), 0)
 
-  const coachBookings = (bookings as any[]).filter(
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+  const monthStart = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`
+
+  const allCoachBookings = (bookings as any[]).filter(
     (b) =>
       b.status !== 'cancelled' &&
       (b.isCoachBooking === true || (typeof b.coachPrice === 'number' && b.coachPrice > 0))
   )
+  // Past/today: count in totals and running balance
+  const coachBookings = allCoachBookings.filter((b) => (b.date || '') <= todayStr)
+  // Future: shown greyed out, excluded from all totals
+  const futureBookings = allCoachBookings.filter((b) => (b.date || '') > todayStr)
+
   const bookingCost = (b: any) => Number(b.coachPrice || 0)
-  const totalBooked = coachBookings.reduce((s, b) => s + bookingCost(b), 0)
+  const totalBooked = coachBookings.reduce((s: number, b: any) => s + bookingCost(b), 0)
   const balance = totalBooked - totalPaid
 
-  const now = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const monthStart = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`
-  const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
   const monthPaid = sortedPayments
     .filter((p) => (p.dateReceived || '') >= monthStart && (p.dateReceived || '') <= todayStr)
     .reduce((s, p) => s + (p.amount || 0), 0)
   const monthBooked = coachBookings
-    .filter((b) => (b.date || '') >= monthStart && (b.date || '') <= todayStr)
-    .reduce((s, b) => s + bookingCost(b), 0)
+    .filter((b) => (b.date || '') >= monthStart)
+    .reduce((s: number, b: any) => s + bookingCost(b), 0)
 
   type Row =
-    | { kind: 'booking'; date: string; sortKey: string; label: string; lane: string; amount: number; balance: number }
+    | { kind: 'booking'; date: string; sortKey: string; label: string; lane: string; amount: number; balance: number; future?: boolean }
     | { kind: 'payment'; date: string; sortKey: string; label: string; method: string; amount: number; balance: number }
 
+  // Build past rows with running balance
   const rows: any[] = []
   for (const b of coachBookings) {
     rows.push({
@@ -78,7 +85,23 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName }: 
     running += r.kind === 'booking' ? r.amount : -r.amount
     return { ...r, balance: running } as Row
   })
-  const displayRows = [...rowsWithBalance].reverse()
+
+  // Future rows: sorted ascending, no balance change, flagged future
+  const futureRows: Row[] = [...futureBookings]
+    .sort((a: any, b: any) => (a.date || '').localeCompare(b.date || '') || (a.startHour ?? 0) - (b.startHour ?? 0))
+    .map((b: any) => ({
+      kind: 'booking' as const,
+      date: b.date,
+      sortKey: `${b.date}T${String(b.startHour ?? 0).padStart(5, '0')}`,
+      label: `${formatHour(b.startHour)} • ${b.duration} min`,
+      lane: b.laneId || '—',
+      amount: bookingCost(b),
+      balance: 0,
+      future: true,
+    }))
+
+  // Future rows at top (upcoming), then past newest-first
+  const displayRows = [...futureRows, ...[...rowsWithBalance].reverse()]
 
   const loading = payments === undefined || bookings === undefined
 
@@ -118,7 +141,9 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName }: 
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
           <h4 className="font-semibold text-gray-800">Activity Ledger</h4>
-          <span className="text-xs text-gray-500">{displayRows.length} entries</span>
+          <span className="text-xs text-gray-500">
+            {rowsWithBalance.length} entries{futureRows.length > 0 ? ` + ${futureRows.length} upcoming` : ''}
+          </span>
         </div>
         {loading ? (
           <div className="p-8 text-center text-gray-500">Loading...</div>
@@ -138,32 +163,39 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName }: 
                 </tr>
               </thead>
               <tbody>
-                {displayRows.map((r, i) => (
-                  <tr key={i} className="border-t border-gray-100">
-                    <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{r.date || '—'}</td>
-                    <td className="px-5 py-3">
-                      {r.kind === 'booking' ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">Booking</span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium">Payment</span>
-                      )}
-                    </td>
-                    <td className="px-5 py-3 text-gray-700">
-                      {r.kind === 'booking'
-                        ? `${(r as any).lane} • ${r.label}`
-                        : `${r.label} (${(r as any).method})`}
-                    </td>
-                    <td className="px-5 py-3 text-right text-gray-900">
-                      {r.kind === 'booking' ? `$${r.amount.toFixed(2)}` : ''}
-                    </td>
-                    <td className="px-5 py-3 text-right text-emerald-700">
-                      {r.kind === 'payment' ? `−$${r.amount.toFixed(2)}` : ''}
-                    </td>
-                    <td className={`px-5 py-3 text-right font-semibold ${r.balance > 0 ? 'text-amber-700' : 'text-gray-900'}`}>
-                      ${r.balance.toFixed(2)}
-                    </td>
-                  </tr>
-                ))}
+                {displayRows.map((r, i) => {
+                  const isFuture = (r as any).future === true
+                  return (
+                    <tr key={i} className={`border-t border-gray-100 ${isFuture ? 'opacity-50' : ''}`}>
+                      <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{r.date || '—'}</td>
+                      <td className="px-5 py-3">
+                        {r.kind === 'booking' ? (
+                          isFuture ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-xs font-medium">Upcoming</span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">Booking</span>
+                          )
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium">Payment</span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3 text-gray-700">
+                        {r.kind === 'booking'
+                          ? `${(r as any).lane} • ${r.label}`
+                          : `${r.label} (${(r as any).method})`}
+                      </td>
+                      <td className="px-5 py-3 text-right text-gray-900">
+                        {r.kind === 'booking' ? `$${r.amount.toFixed(2)}` : ''}
+                      </td>
+                      <td className="px-5 py-3 text-right text-emerald-700">
+                        {r.kind === 'payment' ? `−$${r.amount.toFixed(2)}` : ''}
+                      </td>
+                      <td className={`px-5 py-3 text-right font-semibold ${isFuture ? 'text-gray-400' : r.balance > 0 ? 'text-amber-700' : 'text-gray-900'}`}>
+                        {isFuture ? '—' : `$${r.balance.toFixed(2)}`}
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
