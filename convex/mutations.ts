@@ -1246,7 +1246,7 @@ export const updateBookingAthleteSlots = mutation({
 });
 
 // ============================================================================
-// CUSTOMER MUTATIONS — ADMIN ONLY
+// CUSTOMER MUTATIONS
 // ============================================================================
 
 // Create or update a customer (upsert by email).
