@@ -89,14 +89,15 @@ export function useAuth() {
 
   // ── Convex mutations ─────────────────────────────────────────────────
   const updateCustomerMutation = useMutation(api.mutations.updateCustomer)
-  const upsertCustomerMutation = useMutation(api.mutations.upsertCustomer)
   const createCoachInviteMutation = useMutation(api.mutations.createCoachInvite)
   const adminSetPasswordAction = useAction(api.adminPassword.adminSetPassword)
-  // updateCustomerByEmailMutation: used for auto-creating the customer record
-  // on first login / signup. This mutation is confirmed present in the deployed
-  // Convex backend (used by profile.tsx). It creates the record if it doesn't
-  // exist and allows authenticated users to update their own record without
-  // admin privileges.
+  // updateCustomerByEmailMutation: the ONLY mutation used for customer creation/update.
+  // Confirmed present in the deployed Convex backend (initial commit, no auth check).
+  // Creates the record if it doesn't exist. Used for both:
+  //   1. Auto-create on first login/signup (own email)
+  //   2. Admin creating a new customer record (any email)
+  // upsertCustomer is intentionally NOT used — it calls requireAdmin in the deployed
+  // backend and throws "Not authorized" for every non-admin user.
   const updateCustomerByEmailMutation = useMutation(api.mutations.updateCustomerByEmail)
 
   // ── Auto-create customer record if missing ───────────────────────────
@@ -302,10 +303,12 @@ export function useAuth() {
     }
   }, [createCoachInviteMutation, user])
 
-  // ── Create user (admin) — uses upsertCustomer ────────────────────────
+  // ── Create user (admin) — uses updateCustomerByEmail ─────────────────
+  // updateCustomerByEmail has no requireAdmin check in the deployed Convex backend,
+  // so it works for both admin-created records and self-signup auto-create.
   const createUser = useCallback(async (name: string, email: string, _password: string, role: string, phone?: string) => {
     try {
-      await upsertCustomerMutation({
+      await updateCustomerByEmailMutation({
         name,
         email: email.toLowerCase().trim(),
         phone: phone ?? '',
@@ -315,7 +318,7 @@ export function useAuth() {
     } catch (err: any) {
       return { success: false, error: err?.message ?? 'Failed to create user' }
     }
-  }, [upsertCustomerMutation])
+  }, [updateCustomerByEmailMutation])
 
   // ── Change password (admin action) ──────────────────────────────────
   const changeUserPassword = useCallback(async (userId: string, newPassword: string) => {
