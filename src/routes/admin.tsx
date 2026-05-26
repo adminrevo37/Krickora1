@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { useAuth } from '../hooks/useAuth'
 import { useImpersonation } from '../hooks/useImpersonation'
@@ -627,6 +627,139 @@ function CustomersTab() {
 }
 
 // ---------------------------------------------------------------------------
+// Balance error boundary — isolates per-coach balance query failures so a
+// single coach's data error doesn't crash the rest of the Coaches tab
+// ---------------------------------------------------------------------------
+
+class BalanceBoundary extends React.Component<
+  { children: React.ReactNode; fallback: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: any) {
+    super(props)
+    this.state = { hasError: false }
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true }
+  }
+  render() {
+    return this.state.hasError ? this.props.fallback : this.props.children
+  }
+}
+
+type BalVal = { label: string; cls: string }
+
+// Computes and renders the Balance + Last Paid cells for a single coach using
+// only the two queries that already exist in production Convex.
+// Lives in its own component so useQuery hooks don't violate the rules-of-hooks
+// when called in a loop, and so BalanceBoundary can isolate any query errors.
+function CoachBalanceCells({
+  coachId, coachEmail, fmtBalance, fmtLastPaid,
+}: {
+  coachId: string
+  coachEmail: string
+  fmtBalance: (n: number) => BalVal
+  fmtLastPaid: (d: string | null) => string
+}) {
+  const payments = useQuery(api.queries.listPaymentsByCoach, coachId ? { coachId } : 'skip')
+  const bookings = useQuery(
+    api.queries.listBookingsByEmail,
+    coachEmail ? { email: coachEmail } : 'skip'
+  )
+
+  if (payments === undefined || bookings === undefined) {
+    return (
+      <>
+        <td className="px-5 py-3 text-gray-300 text-xs">…</td>
+        <td className="px-5 py-3 text-gray-300 text-xs">…</td>
+      </>
+    )
+  }
+
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+
+  const totalCharged = (bookings as any[]).reduce((sum: number, b: any) => {
+    if (b.status === 'cancelled') return sum
+    if (!(b.isCoachBooking === true || (typeof b.coachPrice === 'number' && b.coachPrice > 0))) return sum
+    if ((b.date || '') > todayStr) return sum
+    return sum + (Number(b.coachPrice) || 0)
+  }, 0)
+
+  const totalPaid = (payments as any[]).reduce((sum: number, p: any) => sum + (Number(p.amount) || 0), 0)
+  const balance = totalCharged - totalPaid
+
+  const lastPayment = (payments as any[]).reduce((latest: any, p: any) =>
+    !latest || (p.dateReceived || '') > (latest.dateReceived || '') ? p : latest
+  , null)
+
+  const bal = fmtBalance(balance)
+  const lastPaid = fmtLastPaid(lastPayment?.dateReceived ?? null)
+
+  return (
+    <>
+      <td className="px-5 py-3">
+        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${bal.cls}`}>
+          {bal.label}
+        </span>
+      </td>
+      <td className="px-5 py-3 text-sm text-gray-500 whitespace-nowrap">{lastPaid}</td>
+    </>
+  )
+}
+
+function CoachRow({
+  c, setEditingCoach, fmtBalance, fmtLastPaid,
+}: {
+  c: any
+  setEditingCoach: (c: any) => void
+  fmtBalance: (n: number) => BalVal
+  fmtLastPaid: (d: string | null) => string
+}) {
+  const unknownBal: BalVal = { label: '—', cls: 'bg-gray-100 text-gray-400 border-gray-200' }
+  const fallbackCells = (
+    <>
+      <td className="px-5 py-3">
+        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${unknownBal.cls}`}>
+          {unknownBal.label}
+        </span>
+      </td>
+      <td className="px-5 py-3 text-sm text-gray-400 whitespace-nowrap">—</td>
+    </>
+  )
+  return (
+    <tr className="hover:bg-gray-50 transition-colors">
+      <td className="px-5 py-3 font-medium text-gray-900">{c.name || '—'}</td>
+      <td className="px-5 py-3 text-gray-500">{c.email}</td>
+      <td className="px-5 py-3 text-gray-500">{c.phone || '—'}</td>
+      <td className="px-5 py-3">
+        <span className="inline-flex items-center gap-1.5">
+          {c.color && <span className="w-2.5 h-2.5 rounded-full border border-gray-200 shrink-0" style={{ background: c.color }} />}
+          <span className="text-gray-500">{normaliseCoachTier(c.coachTier)}</span>
+        </span>
+      </td>
+      <BalanceBoundary fallback={fallbackCells}>
+        <CoachBalanceCells
+          coachId={c._id}
+          coachEmail={c.email || ''}
+          fmtBalance={fmtBalance}
+          fmtLastPaid={fmtLastPaid}
+        />
+      </BalanceBoundary>
+      <td className="px-5 py-3 text-right">
+        <button
+          onClick={() => setEditingCoach(c)}
+          className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 font-medium text-gray-700"
+        >
+          Edit
+        </button>
+      </td>
+    </tr>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Coaches tab
 // ---------------------------------------------------------------------------
 
@@ -650,8 +783,6 @@ function CoachesTab() {
 
   // ── Quick-add payment ────────────────────────────────────────────────────
   const createPayment = useMutation(api.mutations.createPayment)
-  const balanceSummaries = useQuery((api.queries as any).getCoachBalanceSummaries) ?? []
-  const balanceMap = new Map((balanceSummaries as any[]).map((s: any) => [s.coachId, s]))
 
   const todayISO = (() => {
     const n = new Date()
@@ -877,35 +1008,15 @@ function CoachesTab() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {coaches.map((c: any) => {
-                  const summary = balanceMap.get(c._id) as any
-                  const bal = fmtBalance(summary?.balance ?? 0)
-                  const lastPaid = fmtLastPaid(summary?.lastPaymentDate ?? null)
-                  return (
-                    <tr key={c._id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-5 py-3 font-medium text-gray-900">{c.name || '—'}</td>
-                      <td className="px-5 py-3 text-gray-500">{c.email}</td>
-                      <td className="px-5 py-3 text-gray-500">{c.phone || '—'}</td>
-                      <td className="px-5 py-3">
-                        <span className="inline-flex items-center gap-1.5">
-                          {c.color && <span className="w-2.5 h-2.5 rounded-full border border-gray-200 shrink-0" style={{ background: c.color }} />}
-                          <span className="text-gray-500">{normaliseCoachTier(c.coachTier)}</span>
-                        </span>
-                      </td>
-                      <td className="px-5 py-3">
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${bal.cls}`}>
-                          {bal.label}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3 text-sm text-gray-500 whitespace-nowrap">{lastPaid}</td>
-                      <td className="px-5 py-3 text-right">
-                        <button onClick={() => setEditingCoach(c)} className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 font-medium text-gray-700">
-                          Edit
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
+                {coaches.map((c: any) => (
+                  <CoachRow
+                    key={c._id}
+                    c={c}
+                    setEditingCoach={setEditingCoach}
+                    fmtBalance={fmtBalance}
+                    fmtLastPaid={fmtLastPaid}
+                  />
+                ))}
               </tbody>
             </table>
           </div>
