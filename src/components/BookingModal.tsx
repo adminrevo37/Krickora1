@@ -487,7 +487,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                     <button key={variant.id} onClick={() => setSelectedVariant(variant)}
                       className={`p-3 rounded-xl border-2 transition-all text-left ${selectedVariant?.id === variant.id ? variant.id.includes('truman') ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20 shadow-md' : 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 shadow-md' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'}`}>
                       <div className="text-base font-bold text-gray-800 dark:text-gray-200">{variant.name}</div>
-                      <div className="text-xs text-gray-500 mt-0.5">${variant.pricePerHour}/hr</div>
+                      <div className="text-xs text-gray-500 mt-0.5">${getCustomerPrice(lane, variant.id, 60)}/hr</div>
                     </button>
                   ))}
                 </div>
