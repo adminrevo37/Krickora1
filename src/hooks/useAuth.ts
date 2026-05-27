@@ -2,6 +2,7 @@ import { useCallback, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { useSession } from '../lib/auth-client'
+import { useImpersonation } from './useImpersonation'
 
 /**
  * Module-level deduplication guard for customer record auto-creation.
@@ -30,6 +31,13 @@ const _customerCreateAttempted = new Set<string>()
  * Better Auth session explicitly reports no user (isPending=false, data=null).
  */
 export function useAuth() {
+  // ── Impersonation state ───────────────────────────────────────────────
+  // When admin impersonates a user, override email/name/role on the returned
+  // `user` object so every page (Statements, Profile, etc.) automatically loads
+  // that user's data. isAdmin stays true based on real auth so the admin panel
+  // and exit-impersonation remain accessible.
+  const { impersonatedUser, isImpersonating } = useImpersonation()
+
   // ── Better Auth session (client-side, has proper isPending) ──────────
   const { data: session, isPending: sessionPending } = useSession()
 
@@ -157,7 +165,7 @@ export function useAuth() {
   // Build user object compatible with existing UI
   const user = useMemo(() => {
     if (!betterAuthUser) return null
-    return {
+    const base = {
       id: betterAuthUser.id,
       name: betterAuthUser.name ?? betterAuthUser.email.split('@')[0],
       email: betterAuthUser.email,
@@ -165,7 +173,19 @@ export function useAuth() {
       role: customerRole as 'customer' | 'coach' | 'admin',
       color: (customerRecord as any)?.color as string | undefined,
     }
-  }, [betterAuthUser, customerRecord, customerRole])
+    // When impersonating, override email/name/role so every page that reads
+    // user.email (Statements, Profile, Bookings) loads the impersonated user's
+    // data. isAdmin is preserved from real auth so admin pages stay accessible.
+    if (isImpersonating && impersonatedUser) {
+      return {
+        ...base,
+        name: impersonatedUser.name,
+        email: impersonatedUser.email,
+        role: impersonatedUser.role as 'customer' | 'coach' | 'admin',
+      }
+    }
+    return base
+  }, [betterAuthUser, customerRecord, customerRole, isImpersonating, impersonatedUser])
 
   // ── Coach list (from Convex, real-time) ──────────────────────────────
   const getAllCoaches = useCallback(() => {

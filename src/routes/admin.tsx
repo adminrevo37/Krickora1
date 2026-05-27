@@ -719,6 +719,8 @@ function CoachRow({
   fmtBalance: (n: number) => BalVal
   fmtLastPaid: (d: string | null) => string
 }) {
+  const { impersonate } = useImpersonation()
+  const navigate = useNavigate()
   const unknownBal: BalVal = { label: '—', cls: 'bg-gray-100 text-gray-400 border-gray-200' }
   const fallbackCells = (
     <>
@@ -750,12 +752,24 @@ function CoachRow({
         />
       </BalanceBoundary>
       <td className="px-5 py-3 text-right">
-        <button
-          onClick={() => setEditingCoach(c)}
-          className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 font-medium text-gray-700"
-        >
-          Edit
-        </button>
+        <div className="flex items-center justify-end gap-2">
+          <button
+            onClick={() => {
+              impersonate({ id: c._id, name: c.name || c.email, email: c.email, role: 'coach' })
+              navigate({ to: '/statements' })
+            }}
+            className="text-xs px-2.5 py-1 border border-amber-300 bg-amber-50 rounded-lg hover:bg-amber-100 font-medium text-amber-700 transition-colors"
+            title="View portal as this coach"
+          >
+            👁️ Login as
+          </button>
+          <button
+            onClick={() => setEditingCoach(c)}
+            className="text-xs px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 font-medium text-gray-700"
+          >
+            Edit
+          </button>
+        </div>
       </td>
     </tr>
   )

@@ -106,20 +106,23 @@ function RootComponent() {
             <span className="truncate">
               Viewing as <strong>{impersonatedUser.name}</strong>
               <span className="hidden sm:inline"> ({impersonatedUser.email})</span>
+              {impersonatedUser.role === 'coach' && (
+                <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-white/20 font-bold uppercase tracking-wide">Coach</span>
+              )}
             </span>
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={() => navigate({ to: '/admin', search: { section: 'customers' } })}
+              onClick={() => navigate({ to: '/admin', search: { section: impersonatedUser.role === 'coach' ? 'coaches' : 'customers' } })}
               className="text-amber-100 hover:text-white text-xs underline underline-offset-2"
             >
               Back to admin
             </button>
             <button
-              onClick={() => { exitImpersonation(); navigate({ to: '/admin', search: { section: 'customers' } }) }}
+              onClick={() => { exitImpersonation(); navigate({ to: '/admin', search: { section: impersonatedUser.role === 'coach' ? 'coaches' : 'customers' } }) }}
               className="px-3 py-1 bg-white text-amber-700 rounded-lg text-xs font-bold hover:bg-amber-50 transition-colors"
             >
-              Exit impersonation
+              Exit
             </button>
           </div>
         </div>
