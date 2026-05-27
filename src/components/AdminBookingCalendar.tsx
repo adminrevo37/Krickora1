@@ -521,9 +521,17 @@ export default function AdminBookingCalendar() {
                           <div className="text-[9px] font-medium opacity-90 truncate">Coach: {booked.customerName}</div>
                         )}
                         <div className="text-[9px] opacity-80 mt-0.5 font-medium">{timeRange}</div>
-                        {booked.notes && (
+                        {booked.isCoachBooking && booked.notes ? (
+                          <div className="mt-1 pt-1 border-t border-white/25">
+                            <div
+                              className="text-[9px] font-semibold leading-snug"
+                              style={{ display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' } as React.CSSProperties}
+                              title={booked.notes}
+                            >📝 {booked.notes}</div>
+                          </div>
+                        ) : booked.notes ? (
                           <div className="text-[8px] mt-0.5 opacity-90 truncate font-semibold italic" title={booked.notes}>📝 {booked.notes}</div>
-                        )}
+                        ) : null}
                         {booked.isCoachBooking && booked.athleteSlots && booked.athleteSlots.length > 0 && (
                           <div className="mt-1 pt-1 border-t border-white/30 space-y-0.5">
                             <div className="text-[8px] uppercase tracking-wide opacity-80 font-bold">🏏 Athletes ({booked.athleteSlots.length})</div>
