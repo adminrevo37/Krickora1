@@ -397,7 +397,9 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
     setBusy(true)
     try {
       const args: any = { email: user.email, name, phone, role }
-      if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color; args.defaultSessionDuration = defaultSessionDuration }
+      if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color }
+      // defaultSessionDuration is not in the deployed Convex schema for adminUpdateUserProfile
+      // and causes an argument validation Server Error — omitted until Convex is updated
       await updateProfile(args)
       onClose()
     } catch (err: any) { alert(err?.message ?? 'Failed') }

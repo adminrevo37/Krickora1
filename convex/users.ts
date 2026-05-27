@@ -53,14 +53,20 @@ export const adminUpdateUserProfile = mutation({
   handler: async (ctx, { email, name, phone, role, coachTier, color }) => {
     await requireAdmin(ctx);
     const normalizedEmail = email.toLowerCase().trim();
+    // Sync name to Better Auth user record — wrapped in try/catch so an adapter
+    // failure doesn't prevent the customer record from being updated.
     if (name !== undefined) {
-      const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, {
-        model: "user", where: [{ field: "email", value: normalizedEmail }],
-      });
-      if (authUser) {
-        await ctx.runMutation(components.betterAuth.adapter.updateOne, {
-          input: { model: "user", where: [{ field: "_id", value: authUser._id }], update: { name: name.trim() } as any },
+      try {
+        const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+          model: "user", where: [{ field: "email", value: normalizedEmail }],
         });
+        if (authUser) {
+          await ctx.runMutation(components.betterAuth.adapter.updateOne, {
+            input: { model: "user", where: [{ field: "_id", value: authUser._id }], update: { name: name.trim() } as any },
+          });
+        }
+      } catch (e) {
+        console.error("adminUpdateUserProfile: failed to sync name to auth user:", e);
       }
     }
     const customer = await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", normalizedEmail)).first();
