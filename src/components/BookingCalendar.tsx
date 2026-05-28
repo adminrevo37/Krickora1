@@ -18,6 +18,8 @@ import {
   getActiveHalfHoursForLane,
   getAvailableStartTimes,
   getCustomerDurations,
+  getValidCoachStartTimes,
+  isWeekday,
   CLOSING_HOUR,
   type Booking,
   type Lane,
@@ -93,18 +95,26 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
   const visibleTimeSlots = useMemo(() => {
     return allTimeSlots.filter(slot => {
       if (slot.hour === Math.floor(slot.hour)) return true
+      // Always show 3:30pm row for coaches on weekdays so they can make bookings
+      if (userIsCoach && slot.hour === 15.5 && isWeekday(selectedDay)) return true
       for (const activeSet of laneActiveHalfHours.values()) {
         if (activeSet.has(slot.hour)) return true
       }
       return false
     })
-  }, [allTimeSlots, laneActiveHalfHours])
+  }, [allTimeSlots, laneActiveHalfHours, userIsCoach, selectedDay])
 
   const laneStartTimes = useMemo(() => {
     const map = new Map<string, number[]>()
     for (const lane of LANES) map.set(lane.id, getAvailableStartTimes(bookings, lane.id, dateKey))
     return map
   }, [bookings, dateKey])
+
+  // Valid start times for coaches on the selected day (3:30pm Mon–Fri only, empty on weekends)
+  const validCoachStartsForDay = useMemo(
+    () => (userIsCoach ? getValidCoachStartTimes(selectedDay) : []),
+    [userIsCoach, selectedDay]
+  )
 
   const handleSlotClick = (lane: Lane, slot: TimeSlot) => {
     if (isPast(selectedDay, slot.hour)) return
@@ -113,9 +123,13 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
     if (booked) return
     const timeCheck = canBookTime(dateKey, slot.hour)
     if (!timeCheck.allowed) return
-    if (!userIsCoach && !isAdmin) {
-      const validStarts = laneStartTimes.get(lane.id) ?? []
-      if (!validStarts.includes(slot.hour)) return
+    if (!isAdmin) {
+      if (userIsCoach) {
+        if (!validCoachStartsForDay.includes(slot.hour)) return
+      } else {
+        const validStarts = laneStartTimes.get(lane.id) ?? []
+        if (!validStarts.includes(slot.hour)) return
+      }
     }
     if (!user) { setPendingAction({ type: 'book', lane, slot }); setAuthModalOpen(true); return }
     setSelectedSlot({ lane, date: selectedDay, startHour: slot.hour })
@@ -291,9 +305,9 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
                   const isStartOfBooking = booked && Math.abs(booked.startHour - slot.hour) < 0.01
                   const isMiddleOfBooking = booked && !isStartOfBooking
                   const validStarts = laneStartTimes.get(lane.id) ?? []
-                  const isValidStart = validStarts.includes(slot.hour) || userIsCoach || isAdmin
+                  const isValidStart = validStarts.includes(slot.hour) || (userIsCoach && validCoachStartsForDay.includes(slot.hour)) || isAdmin
                   const canBook = !past && !booked && !blocked && isValidStart && canBookSlot(bookings, lane.id, dateKey, slot.hour, 60)
-                  const hasDurations = !past && !booked && isValidStart ? getCustomerDurations(bookings, lane.id, dateKey, slot.hour).length > 0 || userIsCoach || isAdmin : false
+                  const hasDurations = !past && !booked && isValidStart ? getCustomerDurations(bookings, lane.id, dateKey, slot.hour).length > 0 || (userIsCoach && validCoachStartsForDay.includes(slot.hour)) || isAdmin : false
                   const waitlistCount = getWaitlistCount(lane.id, dateKey, slot.hour)
                   const userOnWaitlist = user ? isOnWaitlist(user.id, lane.id, dateKey, slot.hour) : false
                   const isSelected = isWaitlistSelected(lane.id, dateKey, slot.hour)

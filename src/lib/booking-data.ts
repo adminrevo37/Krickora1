@@ -367,18 +367,10 @@ export function getAvailableStartTimes(bookings: Booking[], laneId: string, date
   return times
 }
 
-// Coach start times — weekdays: on the hour + 3:30pm; weekends: on the hour only
+// Coach start times — 3:30pm Monday–Friday only
 export function getValidCoachStartTimes(date: Date): number[] {
-  const times: number[] = []
-  const weekday = isWeekday(date)
-  for (let h = OPENING_HOUR; h < CLOSING_HOUR; h += 0.5) {
-    if (weekday) {
-      if (h === Math.floor(h) || h === 15.5) times.push(h)
-    } else {
-      if (h === Math.floor(h)) times.push(h)
-    }
-  }
-  return times
+  if (!isWeekday(date)) return []
+  return [15.5]
 }
 
 // Max duration
