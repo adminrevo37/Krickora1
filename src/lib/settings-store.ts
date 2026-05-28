@@ -40,6 +40,9 @@ export interface SiteSettings {
   l2CoachOpenHour: number
   customerMaxDurationMinutes?: number
   coachMaxDurationMinutes?: number
+  coachRescheduleFreezeHours?: number
+  coachLateCancellationHours?: number
+  customerCancellationHours?: number
 }
 
 const DEFAULT_DAILY_HOURS: Record<DayKey, DailyHours> = {
@@ -71,6 +74,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   l2CoachOpenDay: 'sunday',
   l2CoachOpenHour: 17,
   customerMaxDurationMinutes: 180,
+  coachMaxDurationMinutes: 600,
 }
 
 const JS_DAY_TO_KEY: DayKey[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']

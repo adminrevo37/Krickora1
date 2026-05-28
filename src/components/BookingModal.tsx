@@ -3,20 +3,17 @@ import { useQuery } from 'convex/react'
 import {
   LANES, canBookSlot, formatDateKey, formatTime, getCustomerPrice, getCoachPrice, getCoachPerHourRate,
   getCoachDurations, getCustomerDurations, getValidCoachStartTimes, isWeekday,
-  generateGoogleCalendarUrl, CLOSING_HOUR, roundCoachBookingDuration, getMinCoachDurationFromAthletes,
+  generateGoogleCalendarUrl, roundCoachBookingDuration, getMinCoachDurationFromAthletes,
   type Booking, type Lane, type LaneVariant, type AthleteSlot,
 } from '../lib/booking-data'
 import { createCheckoutSession, type CheckoutSessionRequest } from '../lib/stripe'
+import { getSettingsStore } from '../lib/settings-store'
 import { useAuth } from '../hooks/useAuth'
 import AuthModal from './AuthModal'
-import { formatAccessCode } from '../lib/access-code'
+import { formatAccessCode, generateAccessCode } from '../lib/access-code'
 import { useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 
-// Valid discount codes and their discount percentage (100 = free)
-const DISCOUNT_CODES: Record<string, { discount: number; label: string; bypassStripe: boolean }> = {
-  julian: { discount: 100, label: '100% Off — Complimentary', bypassStripe: true },
-}
 
 interface BookingModalProps {
   lane: Lane; date: Date; startHour: number; existingBookings: Booking[]
@@ -24,7 +21,7 @@ interface BookingModalProps {
 }
 
 export default function BookingModal({ lane, date, startHour, existingBookings, onClose, onConfirm }: BookingModalProps) {
-  const { user, isCoach, getCreditBalance, useCredit, getAllCoaches, customerRecord } = useAuth()
+  const { user, isCoach, getCreditBalance, useCredit, customerRecord } = useAuth()
   const hasVariants = !!(lane.variants && lane.variants.length > 0)
   const [selectedVariant, setSelectedVariant] = useState<LaneVariant | null>(hasVariants ? lane.variants![0] : null)
   const [additionalLanes, setAdditionalLanes] = useState<string[]>([])
@@ -49,6 +46,27 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const [discountCode, setDiscountCode] = useState('')
   const [appliedDiscount, setAppliedDiscount] = useState<{ code: string; discount: number; label: string; bypassStripe: boolean } | null>(null)
   const [discountError, setDiscountError] = useState<string | null>(null)
+  const [pendingDiscountCode, setPendingDiscountCode] = useState<string | null>(null)
+  const [discountValidating, setDiscountValidating] = useState(false)
+
+  // Live validation of discount code against Convex (fires only when pendingDiscountCode is set)
+  const discountQueryResult = useQuery(
+    api.queries.validateDiscountCode,
+    pendingDiscountCode !== null ? { code: pendingDiscountCode } : 'skip'
+  )
+  useEffect(() => {
+    if (pendingDiscountCode === null) return
+    if (discountQueryResult === undefined) { setDiscountValidating(true); return }
+    setDiscountValidating(false)
+    if (!discountQueryResult) {
+      setDiscountError('Invalid or expired discount code.')
+      setPendingDiscountCode(null)
+    } else {
+      setAppliedDiscount({ code: pendingDiscountCode, ...discountQueryResult })
+      setDiscountError(null)
+      setPendingDiscountCode(null)
+    }
+  }, [discountQueryResult, pendingDiscountCode])
 
   // Coach athlete tracking
   const [athleteSlots, setAthleteSlots] = useState<AthleteSlot[]>([])
@@ -57,9 +75,6 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const [newAthleteDuration, setNewAthleteDuration] = useState(15)
   const [athleteDropdownOpen, setAthleteDropdownOpen] = useState(false)
   const [athleteSearchQuery, setAthleteSearchQuery] = useState('')
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const _coachesUnused = getAllCoaches
 
   // Rounding notice for coach
   const [roundingNotice, setRoundingNotice] = useState<string | null>(null)
@@ -79,7 +94,6 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const finalPrice = price - creditToApply
   const customerName = user?.name ?? ''
   const customerEmail = user?.email ?? ''
-  const sendBookingEmail = useMutation(api.mutations.sendBookingEmail)
   const createBookingForStripe = useMutation(api.mutations.createBooking)
 
   const otherLanes = LANES.filter(l => l.id !== lane.id)
@@ -105,17 +119,23 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     setDiscountError(null)
     const code = discountCode.trim().toLowerCase()
     if (!code) { setDiscountError('Please enter a discount code.'); return }
-    const match = DISCOUNT_CODES[code]
-    if (!match) { setDiscountError('Invalid discount code.'); return }
-    setAppliedDiscount({ code, ...match })
-    setDiscountError(null)
+    setPendingDiscountCode(code)
   }
 
   const handleRemoveDiscount = () => {
     setAppliedDiscount(null)
     setDiscountCode('')
     setDiscountError(null)
+    setPendingDiscountCode(null)
+    setDiscountValidating(false)
   }
+
+  // Resync duration when available durations change (e.g. after bookings load)
+  useEffect(() => {
+    if (availableDurations.length > 0 && !availableDurations.includes(duration)) {
+      setDuration(availableDurations[0])
+    }
+  }, [availableDurations])
 
   // Auto-round duration when athlete slots change
   useEffect(() => {
@@ -207,7 +227,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     }))
   }
 
-  const getSlotStartOptions = (slotIdx: number) => {
+  const getSlotStartOptions = (_slotIdx?: number) => {
     const opts: number[] = []
     const end = startHour + duration / 60
     for (let h = startHour; h < end; h += 0.25) opts.push(Math.round(h * 100) / 100)
@@ -257,7 +277,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     setIsSubmitting(true); setStep('processing')
     await new Promise(r => setTimeout(r, 600))
 
-    const accessCode = Math.floor(100000 + Math.random() * 900000).toString()
+    const accessCode = generateAccessCode()
     const booking: Booking = {
       id: crypto.randomUUID(), laneId: lane.id, variantId: selectedVariant?.id ?? null,
       date: dateKey, startHour, duration, customerName, customerEmail, customerPhone: user.phone,
@@ -267,7 +287,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       discountCode: appliedDiscount?.code,
       creditApplied: creditToApply > 0 ? creditToApply : undefined,
     }
-    if (applyCredit && creditToApply > 0) useCredit(user.id, creditToApply)
+    if (applyCredit && creditToApply > 0) await useCredit(user.id, creditToApply)
     setConfirmedBooking(booking); setStep('success')
     setTimeout(() => onConfirm(booking), 4000)
 
@@ -287,7 +307,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       }
     }
 
-    const accessCode = Math.floor(100000 + Math.random() * 900000).toString()
+    const accessCode = generateAccessCode()
     // All athletes share the coach's door code
     const slotsWithCodes = athleteSlots.map(s => ({
       ...s,
@@ -313,8 +333,6 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     if (!user) return
     setIsSubmitting(true); setError(null); setStep('processing')
     try {
-      if (applyCredit && creditToApply > 0) useCredit(user.id, creditToApply)
-
       // Create the booking in Convex FIRST with "pending_payment" status.
       // The Stripe webhook needs bookingId in the session metadata to confirm it.
       const bookingId = await createBookingForStripe({
@@ -344,6 +362,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       const session = await createCheckoutSession(checkoutReq)
 
       if (session.url) {
+        // Consume credit only now — we're committed to the Stripe redirect
+        if (applyCredit && creditToApply > 0) await useCredit(user.id, creditToApply)
         window.location.assign(session.url)
         return
       }
@@ -433,8 +453,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
             <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-4 w-full space-y-2 text-sm">
               <div className="flex justify-between"><span className="text-gray-500">Lane</span><span className="font-medium text-gray-800 dark:text-gray-200">{lane.name}{selectedVariant ? ` (${selectedVariant.name})` : ''}</span></div>
               {additionalLanes.length > 0 && <div className="flex justify-between"><span className="text-gray-500">+ Lanes</span><span className="font-medium text-gray-800 dark:text-gray-200">{additionalLanes.map(lid => LANES.find(l => l.id === lid)?.shortName).join(', ')}</span></div>}
-              <div className="flex justify-between"><span className="text-gray-500">Time</span><span className="font-medium text-gray-800 dark:text-gray-200">{formatTime(startHour)} - {formatTime(endHour)}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Total</span><span className="font-bold text-emerald-600 dark:text-emerald-400">{totalPrice === 0 ? 'FREE' : `$${totalPrice}`}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Time</span><span className="font-medium text-gray-800 dark:text-gray-200">{formatTime(startHour)} - {formatTime(startHour + (confirmedBooking?.duration ?? duration) / 60)}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Total</span><span className="font-bold text-emerald-600 dark:text-emerald-400">{confirmedBooking?.isCoachBooking ? `$${getCoachPrice(confirmedBooking.duration)}` : totalPrice === 0 ? 'FREE' : `$${totalPrice}`}</span></div>
             </div>
             {googleCalUrl && (
               <a href={googleCalUrl} target="_blank" rel="noopener noreferrer" className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-white dark:bg-gray-800 border-2 border-gray-200 dark:border-gray-700 rounded-xl hover:border-blue-400 hover:shadow-md transition-all">
@@ -450,7 +470,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
             {isCoach && (
               <div className="flex items-center gap-3 bg-orange-50 dark:bg-orange-900/20 rounded-xl p-3 border border-orange-200 dark:border-orange-800/50">
                 <div className="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center text-white text-sm font-bold">🏅</div>
-                <div><div className="text-sm font-semibold text-orange-800 dark:text-orange-300">Coach Booking</div><div className="text-xs text-orange-600 dark:text-orange-400">$25/hr &middot; 1 hour minimum &middot; No payment required</div></div>
+                <div><div className="text-sm font-semibold text-orange-800 dark:text-orange-300">Coach Booking</div><div className="text-xs text-orange-600 dark:text-orange-400">${getCoachPerHourRate()}/hr &middot; 1 hour minimum &middot; No payment required</div></div>
               </div>
             )}
             {!isValidCoachStart && isCoach && (
@@ -693,7 +713,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                       placeholder="Enter code"
                       className="flex-1 text-sm px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 placeholder:text-gray-400"
                     />
-                    <button onClick={handleApplyDiscount} className="px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold rounded-xl transition-colors">Apply</button>
+                    <button onClick={handleApplyDiscount} disabled={discountValidating} className="px-4 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition-colors">{discountValidating ? 'Checking...' : 'Apply'}</button>
                   </div>
                 )}
                 {discountError && <p className="text-xs text-red-500 mt-1.5">{discountError}</p>}
@@ -749,7 +769,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               <div className="border-t border-gray-200 dark:border-gray-700 pt-2"><div className="flex justify-between items-center"><span className="font-semibold">Total</span><span className="text-xl font-bold text-emerald-600">{totalPrice === 0 ? 'FREE' : `$${totalPrice}`}</span></div></div>
             </div>
             <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-3 border border-blue-200 dark:border-blue-800/50">
-              <p className="text-xs text-blue-700 dark:text-blue-400"><strong>Cancellation Policy:</strong> Cancel 2+ hours before for account credit.</p>
+              <p className="text-xs text-blue-700 dark:text-blue-400"><strong>Cancellation Policy:</strong> Cancel {getSettingsStore().get().cancellationHoursBefore ?? 2}+ hours before for account credit.</p>
             </div>
             <div className="flex gap-3">
               <button onClick={() => { setStep('details'); setError(null) }} className="flex-1 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all">← Back</button>

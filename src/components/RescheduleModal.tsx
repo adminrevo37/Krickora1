@@ -1,10 +1,12 @@
 import { useState, useMemo } from 'react'
 import {
   LANES, formatDateKey, formatTime, canBookSlot, getCustomerPrice, getCoachPrice,
-  getCoachDurations, getCustomerDurations, CLOSING_HOUR, OPENING_HOUR,
+  getCoachDurations, getCustomerDurations, getValidCoachStartTimes, getCoachRolling7Days,
+  getAWSTNow, bookingOccupiesLane,
   type Booking, type Lane,
 } from '../lib/booking-data'
 import { generateAccessCode, formatAccessCode } from '../lib/access-code'
+import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 
 interface RescheduleModalProps {
   booking: Booking
@@ -21,20 +23,49 @@ interface RescheduleModalProps {
 export default function RescheduleModal({ booking, allBookings, onClose, onReschedule, isCoach }: RescheduleModalProps) {
   const originalLane = LANES.find(l => l.id === booking.laneId)
 
-  // Generate next 14 days for date picker
+  // Generate available dates — coaches use their booking window, customers get 14 days
   const availableDates = useMemo(() => {
+    if (isCoach) {
+      const windowDays = getSettingsStore().get().coachBookingWindowDays ?? 8
+      return getCoachRolling7Days(windowDays)
+    }
     const dates: Date[] = []
-    const now = new Date()
-    const awstStr = now.toLocaleString('en-US', { timeZone: 'Australia/Perth' })
-    const awstNow = new Date(awstStr)
+    const awstNow = getAWSTNow()
+    awstNow.setHours(0, 0, 0, 0)
     for (let i = 0; i < 14; i++) {
       const d = new Date(awstNow)
       d.setDate(awstNow.getDate() + i)
-      d.setHours(0, 0, 0, 0)
       dates.push(d)
     }
     return dates
-  }, [])
+  }, [isCoach])
+
+  // Get a valid default start hour for a given date (used when date changes)
+  const getDefaultStartHourForDate = (dateKey: string): number => {
+    const { open, close } = getHoursForDate(getSettingsStore().get(), dateKey)
+    if (isCoach) {
+      const d = new Date(dateKey + 'T00:00:00')
+      const validTimes = getValidCoachStartTimes(d).filter(h => h >= open && h < close)
+      return validTimes[0] ?? open
+    }
+    return open
+  }
+
+  // Pre-flight: check if the coach freeze rule blocks this reschedule
+  const checkFreezeRule = (): string | null => {
+    if (!booking.isCoachBooking) return null
+    const [oYear, oMonth, oDay] = booking.date.split('-').map(Number)
+    const oWhole = Math.floor(booking.startHour)
+    const oMins = Math.round((booking.startHour - oWhole) * 60)
+    const originalStart = new Date(oYear, oMonth - 1, oDay, oWhole, oMins, 0)
+    const awstNow = getAWSTNow()
+    const hoursUntilOriginal = (originalStart.getTime() - awstNow.getTime()) / (1000 * 60 * 60)
+    const freezeHours = getSettingsStore().get().coachRescheduleFreezeHours ?? 24
+    if (hoursUntilOriginal < freezeHours) {
+      return `Coach bookings cannot be rescheduled within ${freezeHours} hours of the session start time. Please contact an admin.`
+    }
+    return null
+  }
 
   const [selectedDate, setSelectedDate] = useState<string>(booking.date)
   const [selectedLaneId, setSelectedLaneId] = useState<string>(booking.laneId)
@@ -55,9 +86,20 @@ export default function RescheduleModal({ booking, allBookings, onClose, onResch
   // Available time slots for the selected date + lane
   const availableSlots = useMemo(() => {
     const slots: number[] = []
-    const laneBookings = otherBookings.filter(b => b.laneId === selectedLaneId && b.date === selectedDate)
+    const laneBookings = otherBookings.filter(b => bookingOccupiesLane(b, selectedLaneId) && b.date === selectedDate)
+    const { open, close } = getHoursForDate(getSettingsStore().get(), selectedDate)
 
-    for (let h = OPENING_HOUR; h < CLOSING_HOUR; h += 0.5) {
+    // Coaches: only show valid coach start times (weekdays 3:30pm; weekends on the hour)
+    // Customers: show every half-hour within open/close
+    const candidateHours: number[] = isCoach
+      ? getValidCoachStartTimes(new Date(selectedDate + 'T00:00:00')).filter(h => h >= open && h < close)
+      : (() => {
+          const times: number[] = []
+          for (let h = open; h < close; h += 0.5) times.push(h)
+          return times
+        })()
+
+    for (const h of candidateHours) {
       const isOccupied = laneBookings.some(b => {
         const bEnd = b.startHour + b.duration / 60
         return h >= b.startHour && h < bEnd
@@ -65,7 +107,7 @@ export default function RescheduleModal({ booking, allBookings, onClose, onResch
       if (!isOccupied) slots.push(h)
     }
     return slots
-  }, [otherBookings, selectedLaneId, selectedDate])
+  }, [otherBookings, selectedLaneId, selectedDate, isCoach])
 
   // Available durations for the selected slot
   const availableDurations = useMemo(() => {
@@ -99,6 +141,12 @@ export default function RescheduleModal({ booking, allBookings, onClose, onResch
 
   const handleConfirm = async () => {
     setError(null)
+    const freezeError = checkFreezeRule()
+    if (freezeError) {
+      setError(freezeError)
+      setStep('confirm')
+      return
+    }
     setStep('processing')
 
     const newAccessCode = generateAccessCode()
@@ -108,6 +156,7 @@ export default function RescheduleModal({ booking, allBookings, onClose, onResch
       newDuration: effectiveDuration,
       newLaneId: selectedLaneId !== booking.laneId ? selectedLaneId : undefined,
       newVariantId: selectedVariantId !== booking.variantId ? selectedVariantId : undefined,
+      newAdditionalLaneIds: booking.additionalLaneIds,
       newAccessCode: newAccessCode,
     })
 
@@ -235,7 +284,7 @@ export default function RescheduleModal({ booking, allBookings, onClose, onResch
                           : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
                       }`}>
                       <div className="text-sm font-bold text-gray-800 dark:text-gray-200">{variant.name}</div>
-                      <div className="text-xs text-gray-500 mt-0.5">${variant.pricePerHour}/hr</div>
+                      <div className="text-xs text-gray-500 mt-0.5">${selectedLane ? getCustomerPrice(selectedLane, variant.id, 60) : variant.pricePerHour}/hr</div>
                     </button>
                   ))}
                 </div>
@@ -253,7 +302,7 @@ export default function RescheduleModal({ booking, allBookings, onClose, onResch
                   const isSelected = key === selectedDate
                   const isOriginal = key === booking.date
                   return (
-                    <button key={key} onClick={() => { setSelectedDate(key); setSelectedStartHour(OPENING_HOUR) }}
+                    <button key={key} onClick={() => { setSelectedDate(key); setSelectedStartHour(getDefaultStartHourForDate(key)) }}
                       className={`p-1.5 rounded-lg border transition-all text-center ${
                         isSelected
                           ? 'border-amber-500 bg-amber-50 dark:bg-amber-900/20 shadow-sm'
@@ -329,13 +378,13 @@ export default function RescheduleModal({ booking, allBookings, onClose, onResch
             {/* Price comparison */}
             {hasChanges && (
               <div className="bg-amber-50 dark:bg-amber-900/10 rounded-xl p-3 border border-amber-200 dark:border-amber-800/50 space-y-1 text-sm">
-                <div className="flex justify-between"><span className="text-gray-500">Original</span><span className="font-medium">${originalPrice}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">New</span><span className="font-medium">${newPrice}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Original</span><span className="font-medium">${originalPrice.toFixed(2)}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">New</span><span className="font-medium">${newPrice.toFixed(2)}</span></div>
                 {priceDiff !== 0 && (
                   <div className="flex justify-between border-t border-amber-200 dark:border-amber-700 pt-1">
                     <span className="font-semibold">{priceDiff > 0 ? 'Difference' : 'Savings'}</span>
                     <span className={`font-bold ${priceDiff > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                      {priceDiff > 0 ? '+' : '-'}${Math.abs(priceDiff)}
+                      {priceDiff > 0 ? '+' : '-'}${Math.abs(priceDiff).toFixed(2)}
                     </span>
                   </div>
                 )}
@@ -360,7 +409,12 @@ export default function RescheduleModal({ booking, allBookings, onClose, onResch
                 Cancel
               </button>
               <button
-                onClick={() => { setError(null); setStep('confirm') }}
+                onClick={() => {
+                  const freezeErr = checkFreezeRule()
+                  if (freezeErr) { setError(freezeErr); return }
+                  setError(null)
+                  setStep('confirm')
+                }}
                 disabled={!hasChanges || !canSlotFit || availableSlots.length === 0 || availableDurations.length === 0}
                 className="flex-[2] py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-semibold rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed">
                 {!hasChanges ? 'No Changes' : !canSlotFit ? 'Slot Unavailable' : 'Review Changes →'}
@@ -405,7 +459,7 @@ export default function RescheduleModal({ booking, allBookings, onClose, onResch
                 <div className="flex justify-between items-center border-t border-gray-200 dark:border-gray-700 pt-2">
                   <span className="font-semibold">Price {priceDiff > 0 ? 'Increase' : 'Decrease'}</span>
                   <span className={`font-bold ${priceDiff > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                    {priceDiff > 0 ? '+' : '-'}${Math.abs(priceDiff)}
+                    {priceDiff > 0 ? '+' : '-'}${Math.abs(priceDiff).toFixed(2)}
                   </span>
                 </div>
               )}

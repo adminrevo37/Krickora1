@@ -1,31 +1,50 @@
+import { useState, useEffect } from 'react'
 import { useSettings } from '../hooks/useSettings'
 import { DAY_KEYS, DAY_LABELS, type DayKey } from '../lib/settings-store'
 import RegistrationLockCard from './RegistrationLockCard'
+
+// ── NumberInput: buffers keystrokes locally, saves to Convex only on blur (IMPR-1) ──
+function NumberInput({
+  label,
+  value,
+  onChange,
+  step = 1,
+  min = 0,
+}: {
+  label: string
+  value: number
+  onChange: (v: number) => void
+  step?: number
+  min?: number
+}) {
+  const [local, setLocal] = useState(String(value))
+
+  // Sync when the prop changes (e.g. another tab updated settings)
+  useEffect(() => { setLocal(String(value)) }, [value])
+
+  return (
+    <label className="block">
+      <span className="text-sm font-medium text-gray-700">{label}</span>
+      <input
+        type="number"
+        value={local}
+        step={step}
+        min={min}
+        onChange={(e) => setLocal(e.target.value)}
+        onBlur={() => {
+          const num = Number(local)
+          if (!isNaN(num) && num !== value) onChange(num)
+        }}
+        className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+      />
+    </label>
+  )
+}
 
 export default function SettingsPanel() {
   const { settings, updateSettings, updateDayHours, resetSettings, isAdmin } = useSettings()
 
   if (!isAdmin) return null
-
-  const numberInput = (
-    label: string,
-    value: number,
-    onChange: (v: number) => void,
-    step = 1,
-    min = 0,
-  ) => (
-    <label className="block">
-      <span className="text-sm font-medium text-gray-700">{label}</span>
-      <input
-        type="number"
-        value={value}
-        step={step}
-        min={min}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
-      />
-    </label>
-  )
 
   return (
     <div className="space-y-6">
@@ -92,9 +111,9 @@ export default function SettingsPanel() {
           <p className="text-sm text-gray-500 mt-0.5">Customer and coach session rates</p>
         </div>
         <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {numberInput('Customer / hour ($)', settings.customerPricePerHour, (v) => updateSettings({ customerPricePerHour: v }))}
-          {numberInput('Truman / hour ($)', settings.trumanPricePerHour, (v) => updateSettings({ trumanPricePerHour: v }))}
-          {numberInput('Coach / hour ($)', settings.coachPerHour, (v) => updateSettings({ coachPerHour: v }))}
+          <NumberInput label="Customer / hour ($)" value={settings.customerPricePerHour} onChange={(v) => updateSettings({ customerPricePerHour: v })} />
+          <NumberInput label="Truman / hour ($)" value={settings.trumanPricePerHour} onChange={(v) => updateSettings({ trumanPricePerHour: v })} />
+          <NumberInput label="Coach / hour ($)" value={settings.coachPerHour} onChange={(v) => updateSettings({ coachPerHour: v })} />
         </div>
       </div>
 
@@ -104,10 +123,10 @@ export default function SettingsPanel() {
           <h3 className="text-lg font-bold text-gray-800">📋 Booking Rules</h3>
         </div>
         <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {numberInput('Cancellation notice (hours)', settings.cancellationHoursBefore, (v) => updateSettings({ cancellationHoursBefore: v }))}
-          {numberInput('Min booking notice (minutes)', settings.minBookingNoticeMinutes, (v) => updateSettings({ minBookingNoticeMinutes: v }))}
-          {numberInput('Coach booking window (days)', settings.coachBookingWindowDays, (v) => updateSettings({ coachBookingWindowDays: v }))}
-          {numberInput('Customer open hour', settings.customerOpenHour, (v) => updateSettings({ customerOpenHour: v }))}
+          <NumberInput label="Cancellation notice (hours)" value={settings.cancellationHoursBefore} onChange={(v) => updateSettings({ cancellationHoursBefore: v })} />
+          <NumberInput label="Min booking notice (minutes)" value={settings.minBookingNoticeMinutes} onChange={(v) => updateSettings({ minBookingNoticeMinutes: v })} />
+          <NumberInput label="Coach booking window (days)" value={settings.coachBookingWindowDays} onChange={(v) => updateSettings({ coachBookingWindowDays: v })} />
+          <NumberInput label="Customer open hour" value={settings.customerOpenHour} onChange={(v) => updateSettings({ customerOpenHour: v })} />
           <label className="block">
             <span className="text-sm font-medium text-gray-700">Customer open day</span>
             <select
@@ -142,7 +161,7 @@ export default function SettingsPanel() {
                   {DAY_KEYS.map(d => <option key={d} value={d}>{DAY_LABELS[d]}</option>)}
                 </select>
               </label>
-              {numberInput('Open hour', settings.l1CoachOpenHour, (v) => updateSettings({ l1CoachOpenHour: v }))}
+              <NumberInput label="Open hour" value={settings.l1CoachOpenHour} onChange={(v) => updateSettings({ l1CoachOpenHour: v })} />
             </div>
           </div>
           <div>
@@ -159,7 +178,7 @@ export default function SettingsPanel() {
                   {DAY_KEYS.map(d => <option key={d} value={d}>{DAY_LABELS[d]}</option>)}
                 </select>
               </label>
-              {numberInput('Open hour', settings.l2CoachOpenHour, (v) => updateSettings({ l2CoachOpenHour: v }))}
+              <NumberInput label="Open hour" value={settings.l2CoachOpenHour} onChange={(v) => updateSettings({ l2CoachOpenHour: v })} />
             </div>
           </div>
         </div>

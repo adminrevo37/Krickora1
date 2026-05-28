@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import {
   formatDateKey, formatTime, getCustomerPrice, getCoachPrice,
-  getCustomerDurations, getCoachDurations, LANES, type Lane, type LaneVariant, type Booking,
+  getCustomerDurations, getCoachDurations, bookingOccupiesLane, LANES, type Lane, type LaneVariant, type Booking,
 } from '../lib/booking-data'
+import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 import { generateAccessCode } from '../lib/access-code'
 
 export interface AdminCustomerOption {
@@ -42,7 +43,7 @@ function addOccurrence(base: Date, recurrence: Recurrence, index: number): Date 
 function hasConflict(bookings: Booking[], laneId: string, dateKey: string, startHour: number, durationMinutes: number): boolean {
   const endHour = startHour + durationMinutes / 60
   return bookings.some(b => {
-    if (b.laneId !== laneId || b.date !== dateKey || b.status === 'cancelled') return false
+    if (!bookingOccupiesLane(b, laneId) || b.date !== dateKey || b.status === 'cancelled') return false
     const bEnd = b.startHour + b.duration / 60
     return startHour < bEnd && endHour > b.startHour
   })
@@ -82,15 +83,16 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
 
   // Determine which other lanes are available for the same start + duration (no conflicts on first occurrence)
   const otherLanes = useMemo(() => {
+    const dayClose = getHoursForDate(getSettingsStore().get(), dateKey).close
     return LANES.filter(l => l.id !== lane.id).map(l => ({
       lane: l,
       conflict: hasConflict(existingBookings, l.id, dateKey, startHour, duration) ||
-                (startHour + duration / 60) > 21,
+                (startHour + duration / 60) > dayClose,
     }))
   }, [lane.id, existingBookings, dateKey, startHour, duration])
 
   // Auto-prune additional lanes that became conflicting after duration change
-  useMemo(() => {
+  useEffect(() => {
     setAdditionalLaneIds(prev => prev.filter(id => {
       const entry = otherLanes.find(o => o.lane.id === id)
       return entry && !entry.conflict
@@ -126,31 +128,27 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
     try {
       const validOccurrences = occurrenceInfo.filter(o => !o.conflict)
       if (validOccurrences.length === 0) throw new Error('No valid dates available — all selected dates have conflicts.')
-      const allLaneIds = [lane.id, ...additionalLaneIds]
       const bookings: Booking[] = []
       for (const occ of validOccurrences) {
-        // Share a single access code across all lanes for the same session
-        const sharedCode = generateAccessCode()
-        for (const lid of allLaneIds) {
-          bookings.push({
-            id: crypto.randomUUID(),
-            laneId: lid,
-            variantId: lid === lane.id ? (selectedVariant?.id ?? null) : null,
-            date: occ.dateKey,
-            startHour,
-            duration,
-            customerName: customer.name,
-            customerEmail: customer.email,
-            customerPhone: customer.phone,
-            userId: customer._id,
-            status: 'confirmed',
-            isCoachBooking: isCoach,
-            coachPrice: isCoach ? effectivePricePerLane : undefined,
-            accessCode: sharedCode,
-            discountCode: discountCode.trim() || undefined,
-            notes: notes.trim() || undefined,
-          })
-        }
+        bookings.push({
+          id: crypto.randomUUID(),
+          laneId: lane.id,
+          variantId: selectedVariant?.id ?? null,
+          date: occ.dateKey,
+          startHour,
+          duration,
+          customerName: customer.name,
+          customerEmail: customer.email,
+          customerPhone: customer.phone,
+          userId: customer._id,
+          status: 'confirmed',
+          isCoachBooking: isCoach,
+          coachPrice: isCoach ? effectivePricePerLane : undefined,
+          additionalLaneIds: additionalLaneIds.length > 0 ? additionalLaneIds : undefined,
+          accessCode: generateAccessCode(),
+          discountCode: discountCode.trim() || undefined,
+          notes: notes.trim() || undefined,
+        })
       }
 
       // DI-3 / DI-4: Report per-date results instead of silently swallowing failures
@@ -216,8 +214,7 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
                   <button key={v.id} onClick={() => setSelectedVariant(v)}
                     className={`p-3 rounded-xl border-2 transition-all text-left ${selectedVariant?.id === v.id ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 shadow-md' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'}`}>
                     <div className="text-base font-bold text-gray-800 dark:text-gray-200">{v.name}</div>
-                    {/* UX-6: toFixed(2) on price display */}
-                    <div className="text-xs text-gray-500 mt-0.5">${v.pricePerHour.toFixed(2)}/hr</div>
+                    <div className="text-xs text-gray-500 mt-0.5">${getCustomerPrice(lane, v.id, 60)}/hr</div>
                   </button>
                 ))}
               </div>

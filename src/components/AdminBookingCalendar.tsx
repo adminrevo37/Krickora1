@@ -2,9 +2,11 @@ import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import {
-  LANES, generateTimeSlots, formatDateKey, isToday, isSlotBooked,
+  LANES, formatDateKey, formatTime, getAWSTNow, isToday, isSlotBooked,
   getActiveHalfHoursForLane, type Lane, type TimeSlot, type Booking,
 } from '../lib/booking-data'
+import { getHoursForDate } from '../lib/settings-store'
+import { useSettings } from '../hooks/useSettings'
 import { useBookings } from '../hooks/useBookingStore'
 import AdminManualBookingModal, { type AdminCustomerOption, type BookingConfirmResult } from './AdminManualBookingModal'
 import AdminBookingDetailsModal from './AdminBookingDetailsModal'
@@ -13,11 +15,11 @@ import LaneBlockModal from './LaneBlockModal'
 // Generate days from N months back to N months ahead (AWST aware)
 function generateAdminDays(monthsBack: number = 12, monthsAhead: number = 12): Date[] {
   const days: Date[] = []
-  const start = new Date()
+  const start = getAWSTNow()
   start.setHours(0, 0, 0, 0)
   start.setMonth(start.getMonth() - monthsBack)
   start.setDate(1)
-  const end = new Date()
+  const end = getAWSTNow()
   end.setHours(0, 0, 0, 0)
   end.setMonth(end.getMonth() + monthsAhead)
   for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
@@ -27,6 +29,7 @@ function generateAdminDays(monthsBack: number = 12, monthsAhead: number = 12): D
 }
 
 export default function AdminBookingCalendar() {
+  const { settings } = useSettings()
   const { bookings, addBooking } = useBookings()
   const deleteBookingMut = useMutation(api.mutations.deleteBooking)
   const handleDeleteBooking = async (bookingId: string, customerName: string) => {
@@ -77,7 +80,7 @@ export default function AdminBookingCalendar() {
   }
   const allDays = useMemo(() => generateAdminDays(12, 12), [])
   const [selectedDay, setSelectedDay] = useState<Date>(() => {
-    const today = new Date()
+    const today = getAWSTNow()
     today.setHours(0, 0, 0, 0)
     return allDays.find(d => formatDateKey(d) === formatDateKey(today)) ?? allDays[0]
   })
@@ -112,7 +115,12 @@ export default function AdminBookingCalendar() {
     return { _id: c._id, name: c.name ?? '', email: c.email ?? '', phone: c.phone, role: c.role ?? 'customer' }
   }, [allCustomers, selectedCustomerId])
 
-  const allTimeSlots = useMemo(() => generateTimeSlots(), [])
+  const allTimeSlots = useMemo(() => {
+    const { open, close } = getHoursForDate(settings, selectedDay)
+    const slots: TimeSlot[] = []
+    for (let h = open; h < close; h += 0.5) slots.push({ hour: h, label: formatTime(h) })
+    return slots
+  }, [selectedDay, settings])
   const dateKey = formatDateKey(selectedDay)
 
   // Build month groups for navigation
@@ -135,7 +143,7 @@ export default function AdminBookingCalendar() {
   }, [allDays])
 
   const [activeMonthKey, setActiveMonthKey] = useState<string>(() => {
-    const today = new Date()
+    const today = getAWSTNow()
     return `${today.getFullYear()}-${today.getMonth()}`
   })
   const activeMonth = monthGroups.find(m => m.key === activeMonthKey) ?? monthGroups[0]
@@ -168,7 +176,7 @@ export default function AdminBookingCalendar() {
   }, [allTimeSlots, laneActiveHalfHours])
 
   const isPastDay = useMemo(() => {
-    const today = new Date(); today.setHours(0,0,0,0)
+    const today = getAWSTNow(); today.setHours(0,0,0,0)
     return selectedDay < today
   }, [selectedDay])
 
@@ -253,9 +261,10 @@ export default function AdminBookingCalendar() {
           <div className="flex items-center gap-2 mb-2">
             <button
               onClick={() => {
-                const todayKey = `${new Date().getFullYear()}-${new Date().getMonth()}`
+                const awstToday = getAWSTNow()
+                const todayKey = `${awstToday.getFullYear()}-${awstToday.getMonth()}`
                 setActiveMonthKey(todayKey)
-                const today = new Date(); today.setHours(0,0,0,0)
+                const today = getAWSTNow(); today.setHours(0,0,0,0)
                 const t = allDays.find(d => formatDateKey(d) === formatDateKey(today))
                 if (t) setSelectedDay(t)
               }}
@@ -267,7 +276,7 @@ export default function AdminBookingCalendar() {
           </div>
           <div ref={monthScrollRef} className="flex gap-2 overflow-x-auto pb-1">
             {monthGroups.map(m => {
-              const today = new Date()
+              const today = getAWSTNow()
               const [yr, mo] = m.key.split('-').map(Number)
               const isPast = yr < today.getFullYear() || (yr === today.getFullYear() && mo < today.getMonth())
               const isCurrent = yr === today.getFullYear() && mo === today.getMonth()
@@ -520,7 +529,14 @@ export default function AdminBookingCalendar() {
                         {booked.isCoachBooking && (
                           <div className="text-[9px] font-medium opacity-90 truncate">Coach: {booked.customerName}</div>
                         )}
-                        <div className="text-[9px] opacity-80 mt-0.5 font-medium">{timeRange}</div>
+                        <div className="text-[9px] opacity-80 mt-0.5 font-medium flex items-center gap-1">
+                          {timeRange}
+                          {(booked.modificationHistory?.length ?? 0) > 0 && (
+                            <span className="opacity-60" title={`${booked.modificationHistory!.length} modification${booked.modificationHistory!.length !== 1 ? 's' : ''}`}>
+                              ✏️{booked.modificationHistory!.length}
+                            </span>
+                          )}
+                        </div>
                         {booked.isCoachBooking && booked.notes ? (
                           <div className="mt-1 pt-1 border-t border-white/25">
                             <div
@@ -610,6 +626,15 @@ export default function AdminBookingCalendar() {
         <AdminBookingDetailsModal
           booking={detailsBooking}
           onClose={() => setDetailsBooking(null)}
+          onSave={(newDate) => {
+            setDetailsBooking(null)
+            // Navigate calendar to the saved date (which may be different from the original)
+            const newDay = allDays.find(d => formatDateKey(d) === newDate)
+            if (newDay) {
+              setSelectedDay(newDay)
+              setActiveMonthKey(`${newDay.getFullYear()}-${newDay.getMonth()}`)
+            }
+          }}
         />
       )}
 

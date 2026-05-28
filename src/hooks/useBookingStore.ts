@@ -1,8 +1,10 @@
 import { useCallback, useMemo } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
-import { type Booking, CLOSING_HOUR, getAWSTNow } from '../lib/booking-data'
+import { type Booking, getAWSTNow } from '../lib/booking-data'
 import type { Id } from '../../convex/_generated/dataModel'
+import { getSettingsStore } from '../lib/settings-store'
+import { useAuth } from './useAuth'
 
 // Convert Convex booking doc to local Booking type
 function toBooking(doc: any): Booking {
@@ -33,11 +35,16 @@ function toBooking(doc: any): Booking {
     accessCode: doc.accessCode,
     discountCode: doc.discountCode,
     modificationHistory: doc.modificationHistory,
+    notes: doc.notes,
   }
 }
 
 export function useBookings() {
   const rawBookings = useQuery(api.queries.listBookings) ?? []
+  const { user, isAdmin } = useAuth()
+  // isAdmin is derived from customerRecord.role (real auth, not impersonated role) — correct under impersonation
+  // betterAuthUser.id is always the real session user ID (correct under impersonation too)
+  const currentUserId = user?.id
   const createBookingMut = useMutation(api.mutations.createBooking)
   const updateBookingMut = useMutation(api.mutations.updateBooking)
   const cancelBookingMut = useMutation(api.mutations.cancelBooking)
@@ -48,10 +55,23 @@ export function useBookings() {
   const rescheduleMut = useMutation(api.mutations.rescheduleBooking)
   const updateAthleteSlotsMut = useMutation(api.mutations.updateBookingAthleteSlots)
 
-  const bookings: Booking[] = useMemo(
-    () => rawBookings.map(toBooking),
-    [rawBookings]
-  )
+  const bookings: Booking[] = useMemo(() => {
+    return rawBookings.map(doc => {
+      const b = toBooking(doc)
+      // Admins see full data for all bookings.
+      // Everyone else only gets PII for their own bookings — other users'
+      // bookings are stripped to scheduling fields only (lane/time/status)
+      // so the calendar can still show occupancy without exposing customer data.
+      if (isAdmin) return b
+      if (currentUserId && b.userId === currentUserId) return b
+      return {
+        ...b,
+        customerName: 'Booked',
+        customerEmail: '',
+        customerPhone: undefined,
+      }
+    })
+  }, [rawBookings, isAdmin, currentUserId])
 
   const addBooking = useCallback(
     async (booking: Booking) => {
@@ -118,11 +138,11 @@ export function useBookings() {
         }
         return { allowed: true }
       }
-      if (hoursUntil < 2) {
+      const cancellationHours = getSettingsStore().get().cancellationHoursBefore ?? 2
+      if (hoursUntil < cancellationHours) {
         return {
           allowed: false,
-          reason:
-            'Bookings can only be cancelled or changed at least 2 hours before the session starts.',
+          reason: `Bookings can only be cancelled or changed at least ${cancellationHours} hour${cancellationHours !== 1 ? 's' : ''} before the session starts.`,
         }
       }
       return { allowed: true }
@@ -139,11 +159,11 @@ export function useBookings() {
       const now = getAWSTNow()
       const minutesUntil =
         (bookingStart.getTime() - now.getTime()) / (1000 * 60)
-      if (minutesUntil < 10) {
+      const noticeMinutes = getSettingsStore().get().minBookingNoticeMinutes ?? 10
+      if (minutesUntil < noticeMinutes) {
         return {
           allowed: false,
-          reason:
-            'Bookings must be made at least 10 minutes before the session starts.',
+          reason: `Bookings must be made at least ${noticeMinutes} minute${noticeMinutes !== 1 ? 's' : ''} before the session starts.`,
         }
       }
       return { allowed: true }
@@ -176,23 +196,20 @@ export function useBookings() {
   const updateBooking = useCallback(
     async (bookingId: string, updates: Partial<Booking>) => {
       const convexUpdates: Record<string, any> = {}
+      if (updates.date !== undefined) convexUpdates.date = updates.date
+      if (updates.startHour !== undefined) convexUpdates.startHour = updates.startHour
+      if (updates.laneId !== undefined) convexUpdates.laneId = updates.laneId
       if (updates.status !== undefined) convexUpdates.status = updates.status
-      if (updates.athleteSlots !== undefined)
-        convexUpdates.athleteSlots = updates.athleteSlots
-      if (updates.coachPrice !== undefined)
-        convexUpdates.coachPrice = updates.coachPrice
-      if (updates.duration !== undefined)
-        convexUpdates.duration = updates.duration
-      if (updates.customerName !== undefined)
-        convexUpdates.customerName = updates.customerName
-      if (updates.customerEmail !== undefined)
-        convexUpdates.customerEmail = updates.customerEmail
-      if (updates.additionalLaneIds !== undefined)
-        convexUpdates.additionalLaneIds = updates.additionalLaneIds
-      if (updates.accessCode !== undefined)
-        convexUpdates.accessCode = updates.accessCode
-      if (updates.refilledMinutes !== undefined)
-        convexUpdates.refilledMinutes = updates.refilledMinutes
+      if (updates.duration !== undefined) convexUpdates.duration = updates.duration
+      if (updates.customerName !== undefined) convexUpdates.customerName = updates.customerName
+      if (updates.customerEmail !== undefined) convexUpdates.customerEmail = updates.customerEmail
+      if (updates.customerPhone !== undefined) convexUpdates.customerPhone = updates.customerPhone
+      if (updates.coachPrice !== undefined) convexUpdates.coachPrice = updates.coachPrice
+      if (updates.athleteSlots !== undefined) convexUpdates.athleteSlots = updates.athleteSlots
+      if (updates.additionalLaneIds !== undefined) convexUpdates.additionalLaneIds = updates.additionalLaneIds
+      if (updates.accessCode !== undefined) convexUpdates.accessCode = updates.accessCode
+      if (updates.refilledMinutes !== undefined) convexUpdates.refilledMinutes = updates.refilledMinutes
+      if (updates.notes !== undefined) convexUpdates.notes = updates.notes
 
       await updateBookingMut({
         id: bookingId as Id<"bookings">,

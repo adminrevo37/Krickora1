@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
-import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
+import { createFileRoute, useNavigate, Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { useAuth } from '../hooks/useAuth'
+import { getAWSTNow } from '../lib/booking-data'
 import { useImpersonation } from '../hooks/useImpersonation'
 import AdminBookingCalendar from '../components/AdminBookingCalendar'
 import ClosureManager from '../components/ClosureManager'
@@ -159,6 +160,9 @@ function AdminPage() {
   const { section } = Route.useSearch()
   const navigate = useNavigate()
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  // BUG-6: Detect child routes (e.g. /admin/analytics) to render <Outlet /> instead of section panels
+  const pathname = useRouterState({ select: (s) => s.location.pathname })
+  const isChildRoute = pathname.startsWith('/admin/') && pathname.length > '/admin/'.length
 
   const setSection = (s: Section) => {
     navigate({ to: '/admin', search: { section: s }, replace: true })
@@ -221,19 +225,23 @@ function AdminPage() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           </button>
-          <h1 className="text-base font-semibold text-gray-800">{SECTION_TITLES[section]}</h1>
+          <h1 className="text-base font-semibold text-gray-800">{isChildRoute ? 'Analytics' : SECTION_TITLES[section]}</h1>
         </div>
 
-        {/* Section content */}
-        <div className="p-6 space-y-6">
-          {section === 'bookings'   && <AdminBookingCalendar />}
-          {section === 'closures'   && <ClosureManager selectedDate={new Date()} />}
-          {section === 'customers'  && <CustomersTab />}
-          {section === 'coaches'    && <CoachesTab />}
-          {section === 'statements' && <StatementsTab />}
-          {section === 'discounts'  && <AdminDiscountCodesTab />}
-          {section === 'settings'   && <SettingsPanel />}
-        </div>
+        {/* Section content — child routes (e.g. /admin/analytics) render via <Outlet /> */}
+        {isChildRoute ? (
+          <Outlet />
+        ) : (
+          <div className="p-6 space-y-6">
+            {section === 'bookings'   && <AdminBookingCalendar />}
+            {section === 'closures'   && <ClosureManager selectedDate={new Date()} />}
+            {section === 'customers'  && <CustomersTab />}
+            {section === 'coaches'    && <CoachesTab />}
+            {section === 'statements' && <StatementsTab />}
+            {section === 'discounts'  && <AdminDiscountCodesTab />}
+            {section === 'settings'   && <SettingsPanel />}
+          </div>
+        )}
       </main>
     </div>
   )
@@ -397,9 +405,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
     setBusy(true)
     try {
       const args: any = { email: user.email, name, phone, role }
-      if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color }
-      // defaultSessionDuration is not in the deployed Convex schema for adminUpdateUserProfile
-      // and causes an argument validation Server Error — omitted until Convex is updated
+      if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color; args.defaultSessionDuration = defaultSessionDuration }
       await updateProfile(args)
       onClose()
     } catch (err: any) { alert(err?.message ?? 'Failed') }
@@ -678,7 +684,7 @@ function CoachBalanceCells({
     )
   }
 
-  const now = new Date()
+  const now = getAWSTNow()
   const pad = (n: number) => String(n).padStart(2, '0')
   const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
 

@@ -2,7 +2,6 @@ import { useState, useMemo } from 'react'
 import {
   LANES,
   PRICING,
-  generateTimeSlots,
   getCurrentWeekDays,
   getCoachRolling7Days,
   getAWSTNow,
@@ -20,11 +19,11 @@ import {
   getCustomerDurations,
   getValidCoachStartTimes,
   isWeekday,
-  CLOSING_HOUR,
   type Booking,
   type Lane,
   type TimeSlot,
 } from '../lib/booking-data'
+import { getHoursForDate } from '../lib/settings-store'
 import { useBookings } from '../hooks/useBookingStore'
 import { useLaneBlocks } from '../hooks/useLaneBlocks'
 import { useAuth } from '../hooks/useAuth'
@@ -54,7 +53,6 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
     return getCurrentWeekDays()
   }, [isL1Coach, coachWindowDays])
 
-  const allTimeSlots = useMemo(() => generateTimeSlots(), [])
   const [selectedDay, setSelectedDay] = useState<Date>(() => {
     if (isL1Coach) return weekDays[0] // Today for L1 coaches (rolling window)
     // Always default to today if it exists in the weekDays array
@@ -66,6 +64,13 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
     const firstFuture = weekDays.find(d => d >= awstNow)
     return firstFuture ?? weekDays[0]
   })
+
+  const allTimeSlots = useMemo(() => {
+    const { open, close } = getHoursForDate(settings, selectedDay)
+    const slots: TimeSlot[] = []
+    for (let h = open; h < close; h += 0.5) slots.push({ hour: h, label: formatTime(h) })
+    return slots
+  }, [selectedDay, settings])
   const { bookings, addBooking, canBookTime } = useBookings()
   const { isLaneBlocked } = useLaneBlocks()
   const { isOnWaitlist, getWaitlistCount } = useWaitlist(user?.id)
@@ -237,7 +242,7 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h3 className="text-xl font-bold text-gray-800">{selectedDay.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</h3>
-          <p className="text-sm text-gray-500 mt-0.5">{isToday(selectedDay) ? '🟢 Today' : formatDayLabel(selectedDay)} &middot; 7am - 9pm AWST &middot; 5 Lanes</p>
+          <p className="text-sm text-gray-500 mt-0.5">{isToday(selectedDay) ? '🟢 Today' : formatDayLabel(selectedDay)} &middot; {formatTime(getHoursForDate(settings, selectedDay).open)} - {formatTime(getHoursForDate(settings, selectedDay).close)} AWST &middot; 5 Lanes</p>
         </div>
         <div className="flex items-center gap-3">
           {waitlistMode ? (

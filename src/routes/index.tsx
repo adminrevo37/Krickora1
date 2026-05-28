@@ -246,8 +246,8 @@ function LandingPage({ onSignIn, onSignUp }: { onSignIn: () => void; onSignUp: (
                 {settings ? `$${settings.customerPricePerHour}` : <span className="text-2xl text-gray-300">—</span>}
               </div>
               <div className="text-sm text-gray-500 mt-0.5">per hour</div>
-              {settings?.customerPrice90Min != null && (
-                <div className="mt-2 text-sm font-semibold text-emerald-600">${settings.customerPrice90Min} / 90 min</div>
+              {(settings as any)?.customerPrice90Min != null && (
+                <div className="mt-2 text-sm font-semibold text-emerald-600">${(settings as any).customerPrice90Min} / 90 min</div>
               )}
             </div>
 
@@ -263,8 +263,8 @@ function LandingPage({ onSignIn, onSignUp }: { onSignIn: () => void; onSignUp: (
                 {settings ? `$${settings.trumanPricePerHour}` : <span className="text-2xl text-gray-300">—</span>}
               </div>
               <div className="text-sm text-gray-500 mt-0.5">per hour</div>
-              {settings?.trumanPrice90Min != null && (
-                <div className="mt-2 text-sm font-semibold text-amber-600">${settings.trumanPrice90Min} / 90 min</div>
+              {(settings as any)?.trumanPrice90Min != null && (
+                <div className="mt-2 text-sm font-semibold text-amber-600">${(settings as any).trumanPrice90Min} / 90 min</div>
               )}
             </div>
 
@@ -274,7 +274,7 @@ function LandingPage({ onSignIn, onSignUp }: { onSignIn: () => void; onSignUp: (
               <div className="font-bold text-gray-800 mb-0.5">Opening Hours</div>
               <div className="text-[11px] text-gray-500 mb-4">7 days a week</div>
               <div className="text-2xl sm:text-3xl font-extrabold text-blue-600">
-                {settings
+                {settings?.openingHour != null && settings?.closingHour != null
                   ? `${fmtH(settings.openingHour)} – ${fmtH(settings.closingHour)}`
                   : <span className="text-2xl text-gray-300">—</span>
                 }

@@ -111,9 +111,11 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
 
   const userBookings = useMemo(() => (user || impersonatedEmail)
     ? bookings.filter(b =>
-        (effectiveEmail ? b.customerEmail.toLowerCase() === effectiveEmail.toLowerCase() : false ||
-         (!impersonatedEmail && b.userId === user?.id) ||
-         (!impersonatedEmail && isAthleteInBooking(b))) &&
+        (
+          (effectiveEmail && b.customerEmail.toLowerCase() === effectiveEmail.toLowerCase()) ||
+          (!impersonatedEmail && b.userId === user?.id) ||
+          (!impersonatedEmail && isAthleteInBooking(b))
+        ) &&
         b.status !== 'tentative',
       ).sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour)
     : [],

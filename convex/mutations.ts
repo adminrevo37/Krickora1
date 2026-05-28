@@ -159,6 +159,7 @@ export const createBooking = mutation({
       const laneNameMap: Record<string, string> = {
         bm1: "Bowling Machine Lane 1",
         bm2: "Bowling Machine Lane 2",
+        bm3: "Bowling Machine Lane 3",
         ru1: "Run-Up Lane 1",
         ru2: "Run-Up Lane 2",
       };
@@ -198,6 +199,7 @@ export const createBooking = mutation({
       const laneNameMap: Record<string, string> = {
         bm1: "Bowling Machine Lane 1",
         bm2: "Bowling Machine Lane 2",
+        bm3: "Bowling Machine Lane 3",
         ru1: "Run-Up Lane 1",
         ru2: "Run-Up Lane 2",
       };

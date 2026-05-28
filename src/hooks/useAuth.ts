@@ -48,8 +48,6 @@ export function useAuth() {
   // This prevents a transient 401/403 (from blocked tracker CORS) from
   // immediately flipping isAuthenticated to false and triggering a redirect.
   const wasAuthenticatedRef = useRef(false)
-  const authStableTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
   // Update the ref when we confirm authentication
   if (betterAuthUser && !wasAuthenticatedRef.current) {
     wasAuthenticatedRef.current = true
@@ -98,6 +96,7 @@ export function useAuth() {
   // ── Convex mutations ─────────────────────────────────────────────────
   const updateCustomerMutation = useMutation(api.mutations.updateCustomer)
   const createCoachInviteMutation = useMutation(api.mutations.createCoachInvite)
+  const useCustomerCreditMutation = useMutation(api.mutations.useCustomerCredit)
   const adminSetPasswordAction = useAction(api.adminPassword.adminSetPassword)
   // updateCustomerByEmailMutation: the ONLY mutation used for customer creation/update.
   // Confirmed present in the deployed Convex backend (initial commit, no auth check).
@@ -147,14 +146,6 @@ export function useAuth() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [betterAuthUser?.email, betterAuthUser?.name, customerRecord])
 
-  // ── Cleanup stabilization timer on unmount ───────────────────────────
-  useEffect(() => {
-    return () => {
-      if (authStableTimerRef.current) {
-        clearTimeout(authStableTimerRef.current)
-      }
-    }
-  }, [])
 
   // ── Derived role from Convex ─────────────────────────────────────────
   const customerRole = customerRecord?.role ?? 'customer'
@@ -288,9 +279,17 @@ export function useAuth() {
     }
   }, [allCustomersAll, updateCustomerMutation])
 
-  const useCredit = useCallback((_userId: string, _amount: number) => {
-    return true
-  }, [])
+  const useCredit = useCallback(async (userId: string, amount: number): Promise<boolean> => {
+    // Look up the customer's email from their Convex _id
+    const c = allCustomersAll.find((c: any) => c._id === userId)
+    if (!c?.email) return false
+    try {
+      await useCustomerCreditMutation({ email: c.email, amount })
+      return true
+    } catch {
+      return false
+    }
+  }, [allCustomersAll, useCustomerCreditMutation])
 
   // ── Coach invites ────────────────────────────────────────────────────
   const getCoachInvites = useCallback(() => {

@@ -104,6 +104,7 @@ export async function createPaymentLink(req: CheckoutSessionRequest): Promise<{ 
 // (when the new duration costs more than the original booking)
 export async function createTopUpCheckoutSession(params: {
   bookingId: string
+  laneId: string
   laneName: string
   date: string
   startHour: number
@@ -113,7 +114,7 @@ export async function createTopUpCheckoutSession(params: {
   topUpAmountCents: number
 }): Promise<CheckoutSessionResponse> {
   return createCheckoutSession({
-    laneId: '',
+    laneId: params.laneId,
     laneName: params.laneName,
     date: params.date,
     startHour: params.startHour,

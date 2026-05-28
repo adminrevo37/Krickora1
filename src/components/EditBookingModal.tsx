@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { useAction, useQuery } from 'convex/react'
+import { useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { LANES, getLanePrice, type Booking } from '../lib/booking-data'
+import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 
 interface EditBookingModalProps {
   booking: Booking
@@ -9,10 +10,7 @@ interface EditBookingModalProps {
   onSuccess: () => void
 }
 
-const DURATION_OPTIONS = [60, 90, 120, 150, 180]
-
 export default function EditBookingModal({ booking, onClose, onSuccess }: EditBookingModalProps) {
-  const settings = useQuery(api.queries.getSiteSettings)
   const requestBookingEdit = useAction(api.bookingEdit.requestBookingEdit)
   const [newDuration, setNewDuration] = useState(booking.duration)
   const [loading, setLoading] = useState(false)
@@ -29,10 +27,15 @@ export default function EditBookingModal({ booking, onClose, onSuccess }: EditBo
   const newPrice = getPrice(newDuration)
   const priceDiff = newPrice - currentPrice
 
-  const closingHour = settings?.closingHour ?? 21
-  const maxDuration = Math.floor((closingHour - booking.startHour) * 60)
+  const closingHour = getHoursForDate(getSettingsStore().get(), booking.date).close
+  const settingsMaxDuration = getSettingsStore().get().customerMaxDurationMinutes ?? 180
+  const maxDuration = Math.min(
+    Math.floor((closingHour - booking.startHour) * 60),
+    settingsMaxDuration,
+  )
 
-  const validOptions = DURATION_OPTIONS.filter(d => d <= maxDuration && d >= 60)
+  // Build duration options dynamically in 30-min steps from 60 up to maxDuration
+  const validOptions = Array.from({ length: Math.floor((maxDuration - 60) / 30) + 1 }, (_, i) => 60 + i * 30)
 
   const handleSubmit = async () => {
     if (newDuration === booking.duration) {
@@ -55,11 +58,12 @@ export default function EditBookingModal({ booking, onClose, onSuccess }: EditBo
         const laneObj = LANES.find(l => l.id === booking.laneId)
         const session = await createTopUpCheckoutSession({
           bookingId: booking.id,
+          laneId: booking.laneId,
           laneName: laneObj?.name ?? booking.laneId,
           date: booking.date,
           startHour: booking.startHour,
           newDuration,
-          customerName: booking.customerEmail,
+          customerName: booking.customerName,
           customerEmail: booking.customerEmail,
           topUpAmountCents: result.priceDifference,
         })
@@ -121,7 +125,7 @@ export default function EditBookingModal({ booking, onClose, onSuccess }: EditBo
                 : 'bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700'
           }`}>
             {priceDiff > 0 && `+$${(priceDiff).toFixed(2)} — you'll be charged the difference`}
-            {priceDiff < 0 && `-$${Math.abs(priceDiff).toFixed(2)} — refund issued automatically`}
+            {priceDiff < 0 && `-$${Math.abs(priceDiff).toFixed(2)} — credit will be added to your account`}
             {priceDiff === 0 && 'No price change'}
             <div className="text-xs opacity-75 mt-0.5">New total: ${newPrice}</div>
           </div>

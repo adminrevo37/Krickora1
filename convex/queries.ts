@@ -1,15 +1,53 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
+import { requireAdmin } from "./lib/adminGuard";
 
 // ============================================================================
 // BOOKING QUERIES
 // ============================================================================
 
-// List all bookings (active, not cancelled)
+// List all bookings — PII stripped server-side for non-admin callers (SEC-1 fix).
+// Admins get full data. Authenticated users get full PII only for their own bookings.
+// Unauthenticated users get scheduling data only (name/email/phone stripped).
 export const listBookings = query({
   args: {},
   handler: async (ctx) => {
-    return await ctx.db.query("bookings").collect();
+    const bookings = await ctx.db.query("bookings").collect();
+    const identity = await ctx.auth.getUserIdentity();
+
+    if (!identity) {
+      // Unauthenticated — strip all PII for calendar display only
+      return bookings.map((b: any) => ({
+        ...b,
+        customerName: 'Booked',
+        customerEmail: '',
+        customerPhone: undefined,
+      }));
+    }
+
+    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
+    const callerCustomer = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
+      .first();
+
+    if (callerCustomer?.role === "admin") {
+      return bookings; // Admins see full PII for all bookings
+    }
+
+    // Authenticated non-admin: full PII for own bookings, stripped for others
+    return bookings.map((b: any) => {
+      const isOwner =
+        (b.userId != null && b.userId === identity.subject) ||
+        b.customerEmail.toLowerCase() === callerEmail;
+      if (isOwner) return b;
+      return {
+        ...b,
+        customerName: 'Booked',
+        customerEmail: '',
+        customerPhone: undefined,
+      };
+    });
   },
 });
 
@@ -73,10 +111,11 @@ export const getBooking = query({
 // STRIPE PAYMENT QUERIES
 // ============================================================================
 
-// List all stripePayments
+// List all stripePayments — admin only (contains customer PII + payment amounts)
 export const listStripePayments = query({
   args: {},
   handler: async (ctx) => {
+    await requireAdmin(ctx);
     return await ctx.db.query("stripePayments").collect();
   },
 });
@@ -93,10 +132,11 @@ export const getStripePayment = query({
 // CUSTOMER QUERIES
 // ============================================================================
 
-// List all customers
+// List all customers — admin only (contains PII for all users)
 export const listCustomers = query({
   args: {},
   handler: async (ctx) => {
+    await requireAdmin(ctx);
     return await ctx.db.query("customers").collect();
   },
 });
@@ -172,10 +212,11 @@ export const listAthletesByCoach = query({
 // COACH INVITE QUERIES
 // ============================================================================
 
-// List all coach invites
+// List all coach invites — admin only
 export const listCoachInvites = query({
   args: {},
   handler: async (ctx) => {
+    await requireAdmin(ctx);
     return await ctx.db.query("coachInvites").order("desc").collect();
   },
 });
@@ -195,10 +236,11 @@ export const getCoachInviteByToken = query({
 // WAITLIST QUERIES
 // ============================================================================
 
-// List all waitlist entries
+// List all waitlist entries — admin only (contains user PII)
 export const listWaitlistEntries = query({
   args: {},
   handler: async (ctx) => {
+    await requireAdmin(ctx);
     return await ctx.db.query("waitlist").collect();
   },
 });
@@ -255,10 +297,11 @@ export const listWaitlistNotifications = query({
 // PAYMENT QUERIES
 // ============================================================================
 
-// List all payments
+// List all payments — admin only (financial data)
 export const listPayments = query({
   args: {},
   handler: async (ctx) => {
+    await requireAdmin(ctx);
     return await ctx.db.query("payments").collect();
   },
 });
@@ -280,10 +323,11 @@ export const listPaymentsByCoach = query({
 // ============================================================================
 
 // Returns daily/weekly/monthly totals for customer revenue (stripePayments)
-// and coach revenue (payments table). Amounts assumed to be in dollars.
+// and coach revenue (payments table). Admin only — contains financial data.
 export const getRevenueBreakdown = query({
   args: {},
   handler: async (ctx) => {
+    await requireAdmin(ctx);
     const now = new Date();
     const y = now.getFullYear();
     const m = now.getMonth();

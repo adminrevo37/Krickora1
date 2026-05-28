@@ -189,13 +189,14 @@ export function getActiveHalfHoursForLane(
   dateKey: string,
 ): Set<number> {
   const activeHalfHours = new Set<number>()
+  const dayClose = getHoursForDate(getSettingsStore().get(), dateKey).close
   const laneBookings = bookings.filter(
     b => bookingOccupiesLane(b, laneId) && b.date === dateKey && b.status !== 'cancelled'
   )
   for (const b of laneBookings) {
     const endHour = b.startHour + b.duration / 60
     if (b.startHour !== Math.floor(b.startHour)) activeHalfHours.add(b.startHour)
-    if (endHour !== Math.floor(endHour) && endHour < CLOSING_HOUR) activeHalfHours.add(endHour)
+    if (endHour !== Math.floor(endHour) && endHour < dayClose) activeHalfHours.add(endHour)
   }
   return activeHalfHours
 }
@@ -241,10 +242,11 @@ export function isLastMinuteBooking(dateKey: string, startHour: number): boolean
 function hasNoOtherViableOptions(bookings: Booking[], laneId: string, dateKey: string, startHour: number, durationMinutes: number): boolean {
   const laneBookings = bookings.filter(b => bookingOccupiesLane(b, laneId) && b.date === dateKey && b.status !== 'cancelled')
   const activeHalfHours = getActiveHalfHoursForLane(bookings, laneId, dateKey)
+  const { open: dayOpen, close: dayClose } = getHoursForDate(getSettingsStore().get(), dateKey)
 
   // Count how many other start times could fit this duration without a dead gap
   let viableAlternatives = 0
-  for (let h = OPENING_HOUR; h < CLOSING_HOUR; h += 0.5) {
+  for (let h = dayOpen; h < dayClose; h += 0.5) {
     if (h === startHour) continue // skip the slot we're evaluating
     const isOccupied = laneBookings.some(b => {
       const bEnd = b.startHour + b.duration / 60
@@ -254,7 +256,7 @@ function hasNoOtherViableOptions(bookings: Booking[], laneId: string, dateKey: s
     const isHalfHour = h !== Math.floor(h)
     if (isHalfHour && !activeHalfHours.has(h)) continue
     const nextStart = getNextBookingStart(bookings, laneId, dateKey, h)
-    const availMins = Math.min(Math.round((nextStart - h) * 60), Math.round((CLOSING_HOUR - h) * 60))
+    const availMins = Math.min(Math.round((nextStart - h) * 60), Math.round((dayClose - h) * 60))
     if (availMins < durationMinutes) continue
     if (!wouldCreateDeadGap(h, durationMinutes, nextStart)) {
       viableAlternatives++
@@ -268,10 +270,11 @@ function hasNoOtherViableOptions(bookings: Booking[], laneId: string, dateKey: s
  * Used to determine if gap prevention should be relaxed across the facility.
  */
 function noViableOptionsOnAnyLane(bookings: Booking[], dateKey: string, durationMinutes: number): boolean {
+  const { open: dayOpen, close: dayClose } = getHoursForDate(getSettingsStore().get(), dateKey)
   for (const lane of LANES) {
     const laneBookings = bookings.filter(b => bookingOccupiesLane(b, lane.id) && b.date === dateKey && b.status !== 'cancelled')
     const activeHalfHours = getActiveHalfHoursForLane(bookings, lane.id, dateKey)
-    for (let h = OPENING_HOUR; h < CLOSING_HOUR; h += 0.5) {
+    for (let h = dayOpen; h < dayClose; h += 0.5) {
       const isOccupied = laneBookings.some(b => {
         const bEnd = b.startHour + b.duration / 60
         return h >= b.startHour && h < bEnd
@@ -280,7 +283,7 @@ function noViableOptionsOnAnyLane(bookings: Booking[], dateKey: string, duration
       const isHalfHour = h !== Math.floor(h)
       if (isHalfHour && !activeHalfHours.has(h)) continue
       const nextStart = getNextBookingStart(bookings, lane.id, dateKey, h)
-      const availMins = Math.min(Math.round((nextStart - h) * 60), Math.round((CLOSING_HOUR - h) * 60))
+      const availMins = Math.min(Math.round((nextStart - h) * 60), Math.round((dayClose - h) * 60))
       if (availMins < durationMinutes) continue
       if (!wouldCreateDeadGap(h, durationMinutes, nextStart)) {
         return false // found at least one viable option somewhere
@@ -339,8 +342,9 @@ export function getAvailableStartTimes(bookings: Booking[], laneId: string, date
   const times: number[] = []
   const laneBookings = bookings.filter(b => bookingOccupiesLane(b, laneId) && b.date === dateKey && b.status !== 'cancelled')
   const activeHalfHours = getActiveHalfHoursForLane(bookings, laneId, dateKey)
+  const { open, close } = getHoursForDate(getSettingsStore().get(), dateKey)
 
-  for (let h = OPENING_HOUR; h < CLOSING_HOUR; h += 0.5) {
+  for (let h = open; h < close; h += 0.5) {
     const isOccupied = laneBookings.some(b => {
       const bEnd = b.startHour + b.duration / 60
       return h >= b.startHour && h < bEnd
@@ -350,7 +354,7 @@ export function getAvailableStartTimes(bookings: Booking[], laneId: string, date
     if (isHalfHour && !activeHalfHours.has(h)) continue
     const nextStart = getNextBookingStart(bookings, laneId, dateKey, h)
     const availableMinutes = Math.round((nextStart - h) * 60)
-    const toClose = Math.round((CLOSING_HOUR - h) * 60)
+    const toClose = Math.round((close - h) * 60)
     const effectiveAvail = Math.min(availableMinutes, toClose)
 
     // Standard rule: need at least 60 min of space
@@ -371,9 +375,10 @@ export function getAvailableStartTimes(bookings: Booking[], laneId: string, date
 // Coach start times — weekdays: 3:30pm only; weekends: on the hour
 export function getValidCoachStartTimes(date: Date): number[] {
   if (!isWeekday(date)) {
-    // Saturday & Sunday: every whole hour within opening hours
+    // Saturday & Sunday: every whole hour within per-day opening hours
+    const { open, close } = getHoursForDate(getSettingsStore().get(), date)
     const times: number[] = []
-    for (let h = OPENING_HOUR; h < CLOSING_HOUR; h++) times.push(h)
+    for (let h = open; h < close; h++) times.push(h)
     return times
   }
   // Monday–Friday: 3:30pm only
@@ -384,7 +389,7 @@ export function getValidCoachStartTimes(date: Date): number[] {
 export function getMaxDuration(bookings: Booking[], laneId: string, dateKey: string, startHour: number, isCoach: boolean): number {
   const s = getSettingsStore().get()
   const dayClose = getHoursForDate(s, dateKey).close
-  const laneBookings = bookings.filter(b => b.laneId === laneId && b.date === dateKey && b.status !== 'cancelled')
+  const laneBookings = bookings.filter(b => bookingOccupiesLane(b, laneId) && b.date === dateKey && b.status !== 'cancelled')
   let maxEnd = dayClose
   for (const b of laneBookings) {
     if (b.startHour > startHour && b.startHour < maxEnd) maxEnd = b.startHour
@@ -629,7 +634,8 @@ export function isSlotBooked(bookings: Booking[], laneId: string, dateKey: strin
 
 export function canBookSlot(bookings: Booking[], laneId: string, dateKey: string, startHour: number, durationMinutes: number): boolean {
   const endHour = startHour + durationMinutes / 60
-  if (endHour > CLOSING_HOUR) return false
+  const dayClose = getHoursForDate(getSettingsStore().get(), dateKey).close
+  if (endHour > dayClose) return false
   return !bookings.some(b => {
     if (!bookingOccupiesLane(b, laneId) || b.date !== dateKey || b.status === 'cancelled') return false
     const bEnd = b.startHour + b.duration / 60
