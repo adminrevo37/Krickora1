@@ -42,7 +42,7 @@ export const PRICING = {
 
 // Coach pricing (1-hour minimum; per-hour rate only)
 // Rate is sourced from admin panel settings (siteSettings.coachPerHour)
-import { getSettingsStore } from './settings-store'
+import { getSettingsStore, getHoursForDate } from './settings-store'
 
 export const COACH_PRICING = {
   get perHour(): number {
@@ -208,7 +208,8 @@ export function isSlotVisibleForLane(hour: number, activeHalfHours: Set<number>)
 // Gap management
 function getNextBookingStart(bookings: Booking[], laneId: string, dateKey: string, afterHour: number): number {
   const laneBookings = bookings.filter(b => bookingOccupiesLane(b, laneId) && b.date === dateKey && b.status !== 'cancelled')
-  let nextStart = CLOSING_HOUR
+  const dayClose = getHoursForDate(getSettingsStore().get(), dateKey).close
+  let nextStart = dayClose
   for (const b of laneBookings) {
     if (b.startHour > afterHour && b.startHour < nextStart) nextStart = b.startHour
   }
@@ -375,13 +376,14 @@ export function getValidCoachStartTimes(date: Date): number[] {
 
 // Max duration
 export function getMaxDuration(bookings: Booking[], laneId: string, dateKey: string, startHour: number, isCoach: boolean): number {
+  const s = getSettingsStore().get()
+  const dayClose = getHoursForDate(s, dateKey).close
   const laneBookings = bookings.filter(b => b.laneId === laneId && b.date === dateKey && b.status !== 'cancelled')
-  let maxEnd = CLOSING_HOUR
+  let maxEnd = dayClose
   for (const b of laneBookings) {
     if (b.startHour > startHour && b.startHour < maxEnd) maxEnd = b.startHour
   }
   const maxMinutes = Math.round((maxEnd - startHour) * 60)
-  const s = getSettingsStore().get()
   const absoluteMax = isCoach ? (s.coachMaxDurationMinutes ?? 600) : (s.customerMaxDurationMinutes ?? 180)
   return Math.min(maxMinutes, absoluteMax)
 }
