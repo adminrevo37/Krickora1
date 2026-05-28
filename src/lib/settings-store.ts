@@ -70,6 +70,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   l1CoachOpenHour: 0,
   l2CoachOpenDay: 'sunday',
   l2CoachOpenHour: 17,
+  customerMaxDurationMinutes: 180,
 }
 
 const JS_DAY_TO_KEY: DayKey[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']

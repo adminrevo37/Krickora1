@@ -296,10 +296,10 @@ export function getCustomerDurations(bookings: Booking[], laneId: string, dateKe
   const lastMinute = isLastMinuteBooking(dateKey, startHour)
   const durations: number[] = []
 
-  // Build candidate durations dynamically from settings (60, 90, 120 ... up to customerMaxDurationMinutes)
-  const customerMax = getSettingsStore().get().customerMaxDurationMinutes ?? 120
+  // Build candidate durations in 1-hour increments (60, 120, 180 ... up to customerMaxDurationMinutes)
+  const customerMax = getSettingsStore().get().customerMaxDurationMinutes ?? 180
   const candidates: number[] = []
-  for (let d = 60; d <= customerMax; d += 30) candidates.push(d)
+  for (let d = 60; d <= customerMax; d += 60) candidates.push(d)
 
   for (const d of candidates) {
     if (d > maxMins) continue
@@ -382,7 +382,7 @@ export function getMaxDuration(bookings: Booking[], laneId: string, dateKey: str
   }
   const maxMinutes = Math.round((maxEnd - startHour) * 60)
   const s = getSettingsStore().get()
-  const absoluteMax = isCoach ? (s.coachMaxDurationMinutes ?? 600) : (s.customerMaxDurationMinutes ?? 120)
+  const absoluteMax = isCoach ? (s.coachMaxDurationMinutes ?? 600) : (s.customerMaxDurationMinutes ?? 180)
   return Math.min(maxMinutes, absoluteMax)
 }
 

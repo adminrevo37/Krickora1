@@ -517,7 +517,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                     <button key={d} onClick={() => setDuration(d)}
                       className={`p-3 rounded-xl border-2 transition-all text-left ${duration === d ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 shadow-md' : 'border-gray-200 dark:border-gray-700'}`}>
                       <div className="text-lg font-bold text-gray-800 dark:text-gray-200">${getCustomerPrice(lane, selectedVariant?.id ?? null, d)}</div>
-                      <div className="text-sm text-gray-600 dark:text-gray-400">{d === 60 ? '1 Hour' : d === 90 ? '1.5 Hours' : d === 120 ? '2 Hours' : `${d}min`}</div>
+                      <div className="text-sm text-gray-600 dark:text-gray-400">{d === 60 ? '1 Hour' : d === 120 ? '2 Hours' : d === 180 ? '3 Hours' : `${Math.floor(d / 60)}hr${d % 60 > 0 ? ` ${d % 60}min` : ''}`}</div>
                       <div className="text-xs text-gray-500 mt-1">{formatTime(startHour)} - {formatTime(startHour + d / 60)}</div>
                     </button>
                   ))}
