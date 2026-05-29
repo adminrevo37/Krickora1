@@ -1095,7 +1095,7 @@ function generateServerAccessCode(existingCodes: Set<string>): string {
   let code: string;
   let attempts = 0;
   do {
-    const num = 100000 + Math.floor(Math.random() * 900000);
+    const num = 1000 + Math.floor(Math.random() * 9000); // 4-digit codes (1000-9999)
     code = num.toString();
     attempts++;
   } while (existingCodes.has(code) && attempts < 100);

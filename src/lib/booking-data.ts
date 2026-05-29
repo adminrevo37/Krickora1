@@ -666,7 +666,7 @@ export function generateGoogleCalendarUrl(booking: {
   const durationLabel = booking.duration >= 60
     ? `${Math.floor(booking.duration / 60)}hr${booking.duration % 60 > 0 ? ` ${booking.duration % 60}min` : ''}`
     : `${booking.duration}min`
-  const accessCodeLine = booking.accessCode ? `\n\n🔑 Door Access Code: ${booking.accessCode.length === 6 ? booking.accessCode.slice(0, 3) + '-' + booking.accessCode.slice(3) : booking.accessCode}\nEnter this code at the facility door keypad.` : ''
+  const accessCodeLine = booking.accessCode ? `\n\n🔑 Door Access Code: ${booking.accessCode.length === 6 ? booking.accessCode.slice(0, 3) + '-' + booking.accessCode.slice(3) : booking.accessCode.length === 4 ? booking.accessCode.slice(0, 2) + '-' + booking.accessCode.slice(2) : booking.accessCode}\nEnter this code at the facility door keypad.` : ''
   const details = encodeURIComponent(`Booking for ${booking.customerName}\n${laneStr}${booking.variantName ? ` - ${booking.variantName}` : ''}\nDuration: ${durationLabel}${accessCodeLine}\n\nBooked via Krickora`)
   const location = encodeURIComponent('Krickora')
   const dates = `${formatGCalDate(startDate)}/${formatGCalDate(endDate)}`
@@ -696,7 +696,7 @@ export function generateOutlookCalendarUrl(booking: {
   const durationLabel = booking.duration >= 60
     ? `${Math.floor(booking.duration / 60)}hr${booking.duration % 60 > 0 ? ` ${booking.duration % 60}min` : ''}`
     : `${booking.duration}min`
-  const accessCodeLine = booking.accessCode ? `\n\n🔑 Door Access Code: ${booking.accessCode.length === 6 ? booking.accessCode.slice(0, 3) + '-' + booking.accessCode.slice(3) : booking.accessCode}\nEnter this code at the facility door keypad.` : ''
+  const accessCodeLine = booking.accessCode ? `\n\n🔑 Door Access Code: ${booking.accessCode.length === 6 ? booking.accessCode.slice(0, 3) + '-' + booking.accessCode.slice(3) : booking.accessCode.length === 4 ? booking.accessCode.slice(0, 2) + '-' + booking.accessCode.slice(2) : booking.accessCode}\nEnter this code at the facility door keypad.` : ''
   const body = encodeURIComponent(`Booking for ${booking.customerName}\n${laneStr}${booking.variantName ? ` - ${booking.variantName}` : ''}\nDuration: ${durationLabel}${accessCodeLine}\n\nBooked via Krickora`)
   const location = encodeURIComponent('Krickora')
   const startISO = encodeURIComponent(formatOutlookDate(startDate))

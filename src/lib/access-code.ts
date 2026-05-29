@@ -1,24 +1,25 @@
 /**
  * Door Access Code Generator
- * Generates unique 6-digit numeric codes for facility entry upon booking confirmation.
+ * Generates unique 4-digit numeric codes for facility entry upon booking confirmation.
  * Codes are time-based and unique per booking to prevent reuse.
+ * Note: legacy 6-digit codes from before 2026-05-30 are still valid on existing bookings.
  */
 
 // Store active codes to prevent duplicates within the same session
 const activeCodes = new Set<string>()
 
 /**
- * Generate a unique 6-digit door access code.
+ * Generate a unique 4-digit door access code.
  * Uses crypto for randomness and checks for duplicates.
  */
 export function generateAccessCode(): string {
   let code: string
   let attempts = 0
   do {
-    // Generate a random 6-digit code (100000-999999)
+    // Generate a random 4-digit code (1000-9999)
     const array = new Uint32Array(1)
     crypto.getRandomValues(array)
-    const num = 100000 + (array[0] % 900000)
+    const num = 1000 + (array[0] % 9000)
     code = num.toString()
     attempts++
   } while (activeCodes.has(code) && attempts < 100)
@@ -32,11 +33,13 @@ export function generateAccessCode(): string {
 }
 
 /**
- * Format access code for display with a dash in the middle (e.g., "482-193")
+ * Format access code for display with a dash (e.g., 4-digit "48-21", legacy 6-digit "482-193").
+ * Handles both formats for backwards compatibility with existing bookings.
  */
 export function formatAccessCode(code: string): string {
-  if (code.length !== 6) return code
-  return `${code.slice(0, 3)}-${code.slice(3)}`
+  if (code.length === 4) return `${code.slice(0, 2)}-${code.slice(2)}`
+  if (code.length === 6) return `${code.slice(0, 3)}-${code.slice(3)}`
+  return code
 }
 
 /**
