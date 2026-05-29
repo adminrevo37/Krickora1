@@ -281,6 +281,17 @@ function LandingPage({ onSignIn, onSignUp }: { onSignIn: () => void; onSignUp: (
               </div>
               <div className="text-sm text-gray-500 mt-1">Daily</div>
             </div>
+
+            {/* Location */}
+            <div className="rounded-2xl border-2 border-purple-200 bg-purple-50 p-6 text-center sm:col-span-1">
+              <div className="text-3xl mb-3">📍</div>
+              <div className="font-bold text-gray-800 mb-0.5">Location</div>
+              <div className="text-[11px] text-gray-500 mb-4">Stirling, Perth WA</div>
+              <div className="text-sm font-semibold text-purple-700 leading-snug">
+                78 Jones Street<br />Stirling WA 6021
+              </div>
+              <div className="text-xs text-gray-500 mt-2">Free on-site parking</div>
+            </div>
           </div>
         </div>
       </section>
@@ -310,6 +321,32 @@ function LandingPage({ onSignIn, onSignUp }: { onSignIn: () => void; onSignUp: (
                 </div>
                 <h3 className="font-bold text-gray-800 text-sm sm:text-base mb-1 leading-snug">{s.title}</h3>
                 <p className="text-xs sm:text-sm text-gray-500 leading-relaxed">{s.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── WHAT TO BRING ─────────────────────────────────────────────────── */}
+      <section className="py-16 sm:py-20 bg-white">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-10">
+            <h2 className="text-3xl sm:text-4xl font-bold text-gray-900">What to Bring</h2>
+            <p className="mt-2 text-gray-500 text-base sm:text-lg">
+              Everything you need for your training session
+            </p>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 max-w-3xl mx-auto">
+            {[
+              { icon: '👟', title: 'Cricket Shoes', desc: 'Trainers or cricket shoes with grip' },
+              { icon: '🏏', title: 'Your Gear', desc: 'Bat, pads, gloves — or hire on-site' },
+              { icon: '💧', title: 'Water', desc: 'Stay hydrated during your session' },
+              { icon: '👕', title: 'Comfy Clothes', desc: 'Anything you can move freely in' },
+            ].map((item) => (
+              <div key={item.title} className="rounded-2xl border border-gray-100 bg-gray-50 p-5 text-center">
+                <div className="text-4xl mb-3">{item.icon}</div>
+                <div className="font-semibold text-gray-800 text-sm mb-1">{item.title}</div>
+                <div className="text-xs text-gray-500 leading-relaxed">{item.desc}</div>
               </div>
             ))}
           </div>
