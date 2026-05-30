@@ -119,8 +119,9 @@ const AUTH_PREFLIGHT_PATHS = [
   "/api/auth/sign-in/email",
   "/api/auth/sign-up/email",
   "/api/auth/sign-out",
-  "/api/auth/sign-in/social",
-  "/api/auth/callback/google",
+  // NOTE: /sign-in/social + /callback/google preflight routes removed — Google
+  // sign-in is disabled (no provider configured). Restore these when Google is
+  // set up (SPEC_SECURITY_HARDENING #8).
   "/api/auth/session",
   "/api/auth/csrf",
 ];

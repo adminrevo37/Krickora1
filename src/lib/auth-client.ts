@@ -90,7 +90,12 @@ export const authClient = createAuthClient({
 
 export const AUTH_CONFIG = {
   emailEnabled: true,
-  googleEnabled: true,
+  // Google sign-in is DISABLED until set up properly (SPEC_SECURITY_HARDENING #8):
+  // requires a Google Cloud OAuth client, a published privacy-policy URL on the
+  // consent screen, GOOGLE_CLIENT_ID/SECRET env vars, socialProviders.google in
+  // auth.ts, and Better Auth account-linking. Was half-wired/broken before. Do
+  // NOT re-enable until the backend provider + account-linking are deployed.
+  googleEnabled: false,
   anonymousEnabled: false,
 };
 
