@@ -463,6 +463,65 @@ export const listPaymentsByCoach = query({
 
 
 // ============================================================================
+// CUSTOMER PAYMENTS + CREDIT HISTORY (SPEC_PAYMENTS_AND_CREDIT #5)
+// ============================================================================
+
+// A customer's own payment history, derived from their bookings. Self or admin
+// only; [] otherwise. Coach bookings (weekly-billed, not prepaid) are excluded.
+export const listMyPayments = query({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    const normalized = args.email.toLowerCase().trim();
+    if (!caller.identity) return [];
+    if (!caller.isAdmin && caller.email !== normalized) return [];
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", normalized))
+      .collect();
+    return bookings
+      .filter(
+        (b: any) =>
+          !b.isCoachBooking &&
+          ((b.priceInCents ?? 0) > 0 || (b.creditApplied ?? 0) > 0)
+      )
+      .map((b: any) => ({
+        bookingId: b._id.toString(),
+        date: b.date,
+        laneId: b.laneId,
+        startHour: b.startHour,
+        duration: b.duration,
+        amountPaid: (b.priceInCents ?? 0) / 100,
+        creditApplied: b.creditApplied ?? 0,
+        status: b.status,
+        paymentStatus: b.paymentStatus,
+        stripeSessionId: b.stripeSessionId,
+        discountCode: b.discountCode,
+      }));
+  },
+});
+
+// A customer's credit-movement history (creditLedger). Self or admin only.
+export const listCreditLedger = query({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    const normalized = args.email.toLowerCase().trim();
+    if (!caller.identity) return [];
+    if (!caller.isAdmin && caller.email !== normalized) return [];
+    const customer = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", normalized))
+      .first();
+    if (!customer) return [];
+    return await ctx.db
+      .query("creditLedger")
+      .withIndex("by_customerId", (q: any) => q.eq("customerId", customer._id))
+      .collect();
+  },
+});
+
+// ============================================================================
 // REVENUE BREAKDOWN QUERIES
 // ============================================================================
 

@@ -66,7 +66,9 @@ function StatementsPage() {
   // have the isCoachBooking flag set but still belong to this coach.
   const allCoachBookings = (bookings ?? []).filter(
     (b: any) =>
-      b.status !== 'cancelled' &&
+      // Late-cancelled coach bookings are charged in full and stay on the
+      // statement (SPEC_PAYMENTS_AND_CREDIT #4).
+      (b.status !== 'cancelled' || b.coachLateCancelCharged === true) &&
       (b.isCoachBooking === true || (typeof b.coachPrice === 'number' && b.coachPrice > 0))
   )
   // Past/today: included in totals and running balance
@@ -97,7 +99,7 @@ function StatementsPage() {
       kind: 'booking',
       date: b.date,
       sortKey: `${b.date}T${String(b.startHour ?? 0).padStart(5, '0')}`,
-      label: `${formatHour(b.startHour)} • ${b.duration} min`,
+      label: `${formatHour(b.startHour)} • ${b.duration} min${b.coachLateCancelCharged ? ' • Late cancel' : ''}`,
       lane: b.laneId || '—',
       amount: bookingCost(b),
       raw: b,

@@ -21,7 +21,7 @@ interface BookingModalProps {
 }
 
 export default function BookingModal({ lane, date, startHour, existingBookings, onClose, onConfirm }: BookingModalProps) {
-  const { user, isCoach, getCreditBalance, useCredit, customerRecord } = useAuth()
+  const { user, isCoach, getCreditBalance, customerRecord } = useAuth()
   const hasVariants = !!(lane.variants && lane.variants.length > 0)
   const [selectedVariant, setSelectedVariant] = useState<LaneVariant | null>(hasVariants ? lane.variants![0] : null)
   const [additionalLanes, setAdditionalLanes] = useState<string[]>([])
@@ -265,7 +265,9 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const handleContinueToPayment = () => {
     if (!user) { setShowAuth(true); return }
     if (isCoach) { handleCoachBooking(); return }
-    if (appliedDiscount?.bypassStripe && totalPrice === 0) {
+    // Nothing left to charge (a discount and/or account credit covers the full
+    // amount) → confirm directly, skip Stripe (SPEC_PAYMENTS_AND_CREDIT #1).
+    if (totalPrice === 0) {
       handleDiscountBooking()
       return
     }
@@ -287,7 +289,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       discountCode: appliedDiscount?.code,
       creditApplied: creditToApply > 0 ? creditToApply : undefined,
     }
-    if (applyCredit && creditToApply > 0) await useCredit(user.id, creditToApply)
+    // Credit is deducted server-side at confirmation (createBooking) via the
+    // credit ledger — do NOT deduct client-side (avoids double-spend).
     setConfirmedBooking(booking); setStep('success')
     setTimeout(() => onConfirm(booking), 4000)
 
@@ -362,8 +365,9 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       const session = await createCheckoutSession(checkoutReq)
 
       if (session.url) {
-        // Consume credit only now — we're committed to the Stripe redirect
-        if (applyCredit && creditToApply > 0) await useCredit(user.id, creditToApply)
+        // Credit is deducted server-side when the Stripe webhook confirms the
+        // booking (confirmBookingPayment) — NOT here. If the customer abandons
+        // checkout, the slot is released and no credit is spent.
         window.location.assign(session.url)
         return
       }

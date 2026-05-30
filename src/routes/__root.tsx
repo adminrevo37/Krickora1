@@ -79,6 +79,9 @@ function RootComponent() {
                           <Link to="/bookings" onClick={() => setShowUserMenu(false)} className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
                             <span>📅</span> My Bookings
                           </Link>
+                          <Link to="/payments" onClick={() => setShowUserMenu(false)} className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
+                            <span>💳</span> Payments &amp; Credit
+                          </Link>
                           <div className="my-1 border-t border-gray-100" />
                           <button onClick={async () => { await signOutUser(); setShowUserMenu(false) }} className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg">
                             <span>🚪</span> Sign Out

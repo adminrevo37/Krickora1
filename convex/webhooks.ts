@@ -1,6 +1,8 @@
 import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { redeemCredit } from "./lib/credit";
+import { releaseHoldForBooking } from "./lib/slotHolds";
 
 /**
  * Idempotent: marks a booking as paid/confirmed and sends the payment
@@ -54,6 +56,18 @@ export const confirmBookingPayment = internalMutation({
     }
 
     await ctx.db.patch(booking._id, patch);
+
+    // SPEC_PAYMENTS_AND_CREDIT #1/#3: deduct any account credit applied to this
+    // booking ATOMICALLY on confirmation (never on the abandoned path), and free
+    // the checkout slot hold now that the booking is confirmed.
+    if ((b.creditApplied ?? 0) > 0 && b.customerEmail) {
+      await redeemCredit(ctx, {
+        email: b.customerEmail,
+        amount: b.creditApplied,
+        bookingId: booking._id.toString(),
+      });
+    }
+    await releaseHoldForBooking(ctx, booking._id.toString());
 
     // Send payment confirmation email
     if (b.customerEmail) {

@@ -54,6 +54,44 @@ export default defineSchema({
     .index("by_email", ["email"])
     .index("by_role", ["role"]),
 
+  // Account-credit movement log (SPEC_PAYMENTS_AND_CREDIT #1). Every change to
+  // customers.creditBalance appends one row — the user-facing credit history.
+  // delta > 0 = credit issued (cancellation, modify decrease, admin grant),
+  // delta < 0 = credit redeemed at checkout.
+  creditLedger: defineTable({
+    customerId: v.id("customers"),
+    delta: v.number(), // dollars; signed
+    balanceAfter: v.number(), // resulting creditBalance, for clean history display
+    reason: v.string(), // 'cancellation' | 'modify_decrease' | 'admin_grant' | 'redeemed' | 'admin_adjust' | 'account_deleted'
+    bookingId: v.optional(v.string()),
+    note: v.optional(v.string()),
+    at: v.string(), // ISO timestamp
+  })
+    .index("by_customerId", ["customerId"])
+    .index("by_bookingId", ["bookingId"]),
+
+  // Temporary slot holds — ONE unified mechanism (SPEC_PAYMENTS_AND_CREDIT #3,
+  // shared with SPEC_WAITLIST_OFFER_REDESIGN). 'checkout' = a pending_payment
+  // booking awaiting Stripe; 'waitlist' = a first-refusal offer hold (waitlist
+  // build populates these). Expired holds are swept by the releaseExpiredHolds
+  // cron + the Stripe checkout.session.expired webhook.
+  slotHolds: defineTable({
+    laneId: v.string(),
+    additionalLaneIds: v.optional(v.array(v.string())),
+    date: v.string(), // YYYY-MM-DD
+    startHour: v.number(),
+    duration: v.number(), // minutes
+    holdType: v.string(), // 'checkout' | 'waitlist'
+    bookingId: v.optional(v.string()), // checkout holds → the pending_payment booking
+    userId: v.optional(v.string()),
+    userEmail: v.optional(v.string()),
+    expiresAt: v.number(), // Unix ms
+    createdAt: v.string(),
+  })
+    .index("by_laneId_date", ["laneId", "date"])
+    .index("by_bookingId", ["bookingId"])
+    .index("by_expiresAt", ["expiresAt"]),
+
   // Audit log for role / permission / tier changes (SEC decision #3).
   roleAuditLog: defineTable({
     targetEmail: v.string(),
@@ -125,6 +163,10 @@ export default defineSchema({
     lockSyncStatus: v.optional(v.string()), // 'pending' | 'synced' | 'failed' | 'removed'
     lockCodeId: v.optional(v.string()), // Reference to lockCodes table entry
     reminderSent: v.optional(v.boolean()), // Whether 6-hour reminder email was sent
+    // Coach billing: when a coach late-cancels (within coachLateCancellationHours)
+    // the slot is charged in full and kept on the coach statement even though the
+    // booking is cancelled (SPEC_PAYMENTS_AND_CREDIT #4).
+    coachLateCancelCharged: v.optional(v.boolean()),
     // Payment tracking
     paymentStatus: v.optional(v.string()), // 'paid' | 'pending' | 'failed'
     paymentEmailSent: v.optional(v.boolean()), // Dedup guard — prevents duplicate payment confirmation emails
@@ -251,6 +293,9 @@ export default defineSchema({
     // Admin second-factor gate (SPEC_SECURITY_HARDENING #2 — re-enter own password)
     adminGateEnabled: v.optional(v.boolean()),           // default false — do NOT enable until /admin prompt is deployed
     adminUnlockMinutes: v.optional(v.number()),          // default 45 — how long an admin unlock lasts
+    // Abandoned-checkout backstop (SPEC_PAYMENTS_AND_CREDIT #3). A pending_payment
+    // booking's slot is released this many minutes after creation if unpaid.
+    abandonedCheckoutMinutes: v.optional(v.number()),    // default 10
   }).index("by_key", ["key"]),
 
   // Admin unlock sessions (SPEC_SECURITY_HARDENING #2). One row per admin email;

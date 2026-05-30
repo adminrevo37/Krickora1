@@ -52,6 +52,10 @@ export const createCheckoutSession = action({
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       mode: "payment",
+      // Stripe minimum is 30 min from now. When it lapses, the
+      // checkout.session.expired webhook releases the held slot (the cron
+      // backstop releases earlier per abandonedCheckoutMinutes).
+      expires_at: Math.floor(Date.now() / 1000) + 30 * 60,
       customer_email: args.customerEmail,
       line_items: [
         {

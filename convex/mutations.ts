@@ -2,6 +2,13 @@ import { mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { requireAdmin, requireAdminUnlocked, getAuthUserSafe } from "./lib/adminGuard";
+import { issueCredit, redeemCredit, recordCreditMovement } from "./lib/credit";
+import {
+  abandonedCheckoutMs,
+  createCheckoutHold,
+  releaseHoldForBooking,
+  hasActiveHoldConflict,
+} from "./lib/slotHolds";
 
 // ============================================================================
 // BOOKING MUTATIONS
@@ -144,6 +151,20 @@ export const createBooking = mutation({
       }
     }
 
+    // Respect active slot holds (in-flight checkout / waitlist offer) — the
+    // shared hold mechanism (SPEC_PAYMENTS_AND_CREDIT #3). Expired holds are
+    // ignored here and cleaned up by the sweep.
+    if (
+      await hasActiveHoldConflict(ctx, {
+        laneIds: allLaneIds,
+        date: args.date,
+        startHour: args.startHour,
+        endHour,
+      })
+    ) {
+      throw new Error("This slot is no longer available. Please choose another time.");
+    }
+
     // For coach bookings, all assigned athletes share the coach's access code
     const normalizedAthleteSlots = args.athleteSlots && args.isCoachBooking && args.accessCode
       ? args.athleteSlots.map((s) => ({
@@ -175,6 +196,34 @@ export const createBooking = mutation({
       tentativeSourceId: args.tentativeSourceId,
       tentativeForDate: args.tentativeForDate,
     });
+
+    // SPEC_PAYMENTS_AND_CREDIT #3: a pending_payment booking holds its slot via a
+    // checkout slotHold; if the customer abandons Stripe it's released by the
+    // sweep / expired webhook. Confirmation deletes the hold.
+    if (args.status === "pending_payment") {
+      await createCheckoutHold(ctx, {
+        bookingId: id.toString(),
+        laneId: args.laneId,
+        additionalLaneIds: args.additionalLaneIds,
+        date: args.date,
+        startHour: args.startHour,
+        duration: args.duration,
+        userId: args.userId,
+        userEmail: args.customerEmail,
+        expiresAtMs: Date.now() + (await abandonedCheckoutMs(ctx)),
+      });
+    }
+
+    // If a confirmed booking redeems account credit, deduct it now (atomic at
+    // confirmation — never on the pending/abandoned path). Stripe-paid bookings
+    // are deducted later in confirmBookingPayment.
+    if (args.status === "confirmed" && (args.creditApplied ?? 0) > 0 && args.customerEmail) {
+      await redeemCredit(ctx, {
+        email: args.customerEmail,
+        amount: args.creditApplied as number,
+        bookingId: id.toString(),
+      });
+    }
 
     // Send booking confirmation email for confirmed bookings
     if (args.status === "confirmed" && args.customerEmail) {
@@ -427,15 +476,12 @@ export const updateBooking = mutation({
         if (creditAmt > 0) {
           const credEmail = ((cleanUpdates as any).customerEmail ?? (existing as any).customerEmail ?? "").toLowerCase().trim();
           if (credEmail) {
-            const credCustomer = await ctx.db
-              .query("customers")
-              .withIndex("by_email", (q: any) => q.eq("email", credEmail))
-              .first();
-            if (credCustomer) {
-              await ctx.db.patch(credCustomer._id, {
-                creditBalance: (credCustomer.creditBalance ?? 0) + creditAmt,
-              });
-            }
+            await issueCredit(ctx, {
+              email: credEmail,
+              amount: creditAmt,
+              reason: "modify_decrease",
+              bookingId: id.toString(),
+            });
           }
         }
       }
@@ -526,19 +572,22 @@ export const cancelBooking = mutation({
       }
     }
 
+    const cancelSettings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+
+    // Hours until the session starts (AWST) — shared by both policy checks below.
+    const [cYear, cMonth, cDay] = booking.date.split("-").map(Number);
+    const cWhole = Math.floor(booking.startHour);
+    const cMins = Math.round((booking.startHour - cWhole) * 60);
+    const bookingStart = new Date(cYear, cMonth - 1, cDay, cWhole, cMins, 0);
+    const awstNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Australia/Perth" }));
+    const hoursUntil = (bookingStart.getTime() - awstNow.getTime()) / (1000 * 60 * 60);
+
     // Time-based policy enforcement for customer bookings
     if (booking.status !== "tentative" && !booking.isCoachBooking) {
-      const siteSettings = await ctx.db
-        .query("siteSettings")
-        .withIndex("by_key", (q: any) => q.eq("key", "global"))
-        .first();
-      const customerCancellationHours = (siteSettings as any)?.customerCancellationHours ?? siteSettings?.cancellationHoursBefore ?? 2;
-      const [cYear, cMonth, cDay] = booking.date.split("-").map(Number);
-      const cWhole = Math.floor(booking.startHour);
-      const cMins = Math.round((booking.startHour - cWhole) * 60);
-      const bookingStart = new Date(cYear, cMonth - 1, cDay, cWhole, cMins, 0);
-      const awstNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Australia/Perth" }));
-      const hoursUntil = (bookingStart.getTime() - awstNow.getTime()) / (1000 * 60 * 60);
+      const customerCancellationHours = (cancelSettings as any)?.customerCancellationHours ?? cancelSettings?.cancellationHoursBefore ?? 2;
       if (hoursUntil < customerCancellationHours) {
         // Admin bypass — admins can always cancel
         const callerCheck = await ctx.db
@@ -553,11 +602,48 @@ export const cancelBooking = mutation({
       }
     }
 
+    // SPEC_PAYMENTS_AND_CREDIT #4: coach late-cancel = charged in full. Coaches
+    // (and admins acting on coach bookings) may cancel, but if it's inside the
+    // late-cancel window the slot stays on the coach statement as a charge.
+    let coachLateCancelCharged = false;
+    if (booking.isCoachBooking && booking.status !== "tentative") {
+      const coachLateHours = (cancelSettings as any)?.coachLateCancellationHours ?? 24;
+      if (hoursUntil < coachLateHours) {
+        coachLateCancelCharged = true;
+      }
+    }
+
     await ctx.db.patch(args.id, {
       status: "cancelled",
       cancelledAt: new Date().toISOString(),
       cancelledByUserId: args.cancelledByUserId,
+      ...(coachLateCancelCharged ? { coachLateCancelCharged: true } : {}),
     });
+
+    // SPEC_PAYMENTS_AND_CREDIT #2: cancelling a PAID customer booking auto-issues
+    // the value back as account credit (cash charged + any credit previously
+    // applied) — no Stripe card refund. Coach bookings aren't prepaid online, so
+    // they're never credited; unpaid (pending_payment) bookings have nothing to
+    // return. Admins may still issue a manual Stripe refund as an exception.
+    if (
+      !booking.isCoachBooking &&
+      booking.status === "confirmed" &&
+      booking.customerEmail
+    ) {
+      const cashPaid = (booking as any).priceInCents != null ? (booking as any).priceInCents / 100 : 0;
+      const creditToIssue = cashPaid + ((booking as any).creditApplied ?? 0);
+      if (creditToIssue > 0) {
+        await issueCredit(ctx, {
+          email: booking.customerEmail,
+          amount: creditToIssue,
+          reason: "cancellation",
+          bookingId: args.id.toString(),
+        });
+      }
+    }
+
+    // Release any checkout hold tied to this booking (frees it for the sweep).
+    await releaseHoldForBooking(ctx, args.id.toString());
 
     // Sync cancellation to Google Calendar
     if (booking.googleCalendarEventId) {
@@ -598,21 +684,21 @@ export const deleteBooking = mutation({
     await requireAdmin(ctx);
     const delBooking = await ctx.db.get(args.id);
     if (delBooking) {
-      // DI-7: Add account credit for the booking's value (credit, not Stripe refund)
-      if (delBooking.status !== "cancelled") {
-        const creditAmt = delBooking.coachPrice != null
-          ? delBooking.coachPrice
-          : ((delBooking as any).priceInCents != null ? (delBooking as any).priceInCents / 100 : 0);
+      // DI-7: Add account credit for the booking's value (credit, not Stripe refund).
+      // Coach bookings are billed weekly (not prepaid online), so they are NOT
+      // credited — only customer-paid value (cash charged + credit previously
+      // applied) is returned as credit.
+      if (delBooking.status !== "cancelled" && !delBooking.isCoachBooking) {
+        const cashPaid = (delBooking as any).priceInCents != null ? (delBooking as any).priceInCents / 100 : 0;
+        const creditAmt = cashPaid + ((delBooking as any).creditApplied ?? 0);
         if (creditAmt > 0 && delBooking.customerEmail) {
-          const credCustomer = await ctx.db
-            .query("customers")
-            .withIndex("by_email", (q: any) => q.eq("email", delBooking.customerEmail.toLowerCase().trim()))
-            .first();
-          if (credCustomer) {
-            await ctx.db.patch(credCustomer._id, {
-              creditBalance: (credCustomer.creditBalance ?? 0) + creditAmt,
-            });
-          }
+          await issueCredit(ctx, {
+            email: delBooking.customerEmail,
+            amount: creditAmt,
+            reason: "cancellation",
+            bookingId: args.id.toString(),
+            note: "Booking deleted by admin",
+          });
         }
       }
 
@@ -2027,7 +2113,7 @@ export const deletePayment = mutation({
 // ============================================================================
 
 export const addCustomerCredit = mutation({
-  args: { email: v.string(), amount: v.number() },
+  args: { email: v.string(), amount: v.number(), note: v.optional(v.string()) },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
     const normalizedEmail = args.email.toLowerCase().trim();
@@ -2040,13 +2126,18 @@ export const addCustomerCredit = mutation({
         name: normalizedEmail.split("@")[0],
         email: normalizedEmail,
         role: "customer",
-        creditBalance: args.amount,
+        creditBalance: 0,
         createdAt: new Date().toISOString(),
       });
-      return newId;
+      customer = await ctx.db.get(newId);
     }
-    await ctx.db.patch(customer._id, {
-      creditBalance: (customer.creditBalance ?? 0) + args.amount,
+    if (!customer) throw new Error("Customer not found.");
+    // Route through the credit helper so the movement is logged to creditLedger.
+    await recordCreditMovement(ctx, {
+      customer,
+      delta: args.amount,
+      reason: args.amount >= 0 ? "admin_grant" : "admin_adjust",
+      note: args.note,
     });
     return customer._id;
   },
@@ -2068,17 +2159,10 @@ export const useCustomerCredit = mutation({
         throw new Error("You can only use your own credits.");
       }
     }
-    const customer = await ctx.db
-      .query("customers")
-      .withIndex("by_email", (q: any) => q.eq("email", args.email.toLowerCase().trim()))
-      .first();
-    if (!customer) return 0;
-    const available = customer.creditBalance ?? 0;
-    const used = Math.min(available, args.amount);
-    await ctx.db.patch(customer._id, {
-      creditBalance: available - used,
-    });
-    return used;
+    // NOTE: credit redemption for bookings is now deducted server-side at
+    // confirmation (createBooking / confirmBookingPayment) via redeemCredit —
+    // this mutation remains for any direct/admin adjustment use and is logged.
+    return await redeemCredit(ctx, { email: targetEmail, amount: args.amount });
   },
 });
 

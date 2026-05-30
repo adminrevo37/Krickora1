@@ -14,6 +14,7 @@ import Stripe from "stripe";
  *
  * Events to subscribe:
  *   - checkout.session.completed
+ *   - checkout.session.expired
  *   - payment_intent.payment_failed
  */
 export const stripeWebhook = httpAction(async (ctx, request) => {
@@ -59,6 +60,17 @@ export const stripeWebhook = httpAction(async (ctx, request) => {
           });
         } else {
           console.warn("[stripe-webhook] checkout.session.completed without bookingId metadata");
+        }
+        break;
+      }
+
+      case "checkout.session.expired": {
+        const session = event.data.object as Stripe.Checkout.Session;
+        const bookingId = session.metadata?.bookingId;
+        if (bookingId) {
+          await ctx.runMutation(internal.slotHolds.releaseCheckoutBooking, {
+            bookingId,
+          });
         }
         break;
       }

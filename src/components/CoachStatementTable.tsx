@@ -34,7 +34,9 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName }: 
 
   const allCoachBookings = (bookings as any[]).filter(
     (b) =>
-      b.status !== 'cancelled' &&
+      // Late-cancelled coach bookings are charged in full and stay on the
+      // statement (SPEC_PAYMENTS_AND_CREDIT #4).
+      (b.status !== 'cancelled' || b.coachLateCancelCharged === true) &&
       (b.isCoachBooking === true || (typeof b.coachPrice === 'number' && b.coachPrice > 0))
   )
   // Past/today: count in totals and running balance
@@ -64,7 +66,7 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName }: 
       kind: 'booking',
       date: b.date,
       sortKey: `${b.date}T${String(b.startHour ?? 0).padStart(5, '0')}`,
-      label: `${formatHour(b.startHour)} • ${b.duration} min`,
+      label: `${formatHour(b.startHour)} • ${b.duration} min${b.coachLateCancelCharged ? ' • Late cancel' : ''}`,
       lane: b.laneId || '—',
       amount: bookingCost(b),
     })

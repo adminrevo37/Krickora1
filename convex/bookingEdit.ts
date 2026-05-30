@@ -1,6 +1,7 @@
 import { action, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { issueCredit } from "./lib/credit";
 
 // ============================================================================
 // BOOKING EDIT FEATURE
@@ -148,15 +149,12 @@ export const _requestBookingEdit = internalMutation({
       });
       // SEC-6: Credit the customer's account instead of issuing a Stripe refund
       const creditAmountDollars = Math.abs(priceDifference) / 100;
-      const creditCustomer = await ctx.db
-        .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", booking.customerEmail.toLowerCase().trim()))
-        .first();
-      if (creditCustomer) {
-        await ctx.db.patch(creditCustomer._id, {
-          creditBalance: (creditCustomer.creditBalance ?? 0) + creditAmountDollars,
-        });
-      }
+      await issueCredit(ctx, {
+        email: booking.customerEmail,
+        amount: creditAmountDollars,
+        reason: "modify_decrease",
+        bookingId: args.bookingId,
+      });
       return { requiresPayment: false, priceDifference, credited: true };
     }
 

@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as StatementsRouteImport } from './routes/statements'
 import { Route as ProfileRouteImport } from './routes/profile'
+import { Route as PaymentsRouteImport } from './routes/payments'
 import { Route as BookingsRouteImport } from './routes/bookings'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
@@ -25,6 +26,11 @@ const StatementsRoute = StatementsRouteImport.update({
 const ProfileRoute = ProfileRouteImport.update({
   id: '/profile',
   path: '/profile',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PaymentsRoute = PaymentsRouteImport.update({
+  id: '/payments',
+  path: '/payments',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BookingsRoute = BookingsRouteImport.update({
@@ -57,6 +63,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
   '/bookings': typeof BookingsRoute
+  '/payments': typeof PaymentsRoute
   '/profile': typeof ProfileRoute
   '/statements': typeof StatementsRoute
   '/admin/analytics': typeof AdminAnalyticsRoute
@@ -66,6 +73,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
   '/bookings': typeof BookingsRoute
+  '/payments': typeof PaymentsRoute
   '/profile': typeof ProfileRoute
   '/statements': typeof StatementsRoute
   '/admin/analytics': typeof AdminAnalyticsRoute
@@ -76,6 +84,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
   '/bookings': typeof BookingsRoute
+  '/payments': typeof PaymentsRoute
   '/profile': typeof ProfileRoute
   '/statements': typeof StatementsRoute
   '/admin/analytics': typeof AdminAnalyticsRoute
@@ -87,6 +96,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/bookings'
+    | '/payments'
     | '/profile'
     | '/statements'
     | '/admin/analytics'
@@ -96,6 +106,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/bookings'
+    | '/payments'
     | '/profile'
     | '/statements'
     | '/admin/analytics'
@@ -105,6 +116,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admin'
     | '/bookings'
+    | '/payments'
     | '/profile'
     | '/statements'
     | '/admin/analytics'
@@ -115,6 +127,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRouteWithChildren
   BookingsRoute: typeof BookingsRoute
+  PaymentsRoute: typeof PaymentsRoute
   ProfileRoute: typeof ProfileRoute
   StatementsRoute: typeof StatementsRoute
   CheckoutSuccessRoute: typeof CheckoutSuccessRoute
@@ -134,6 +147,13 @@ declare module '@tanstack/react-router' {
       path: '/profile'
       fullPath: '/profile'
       preLoaderRoute: typeof ProfileRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/payments': {
+      id: '/payments'
+      path: '/payments'
+      fullPath: '/payments'
+      preLoaderRoute: typeof PaymentsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/bookings': {
@@ -188,6 +208,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRouteWithChildren,
   BookingsRoute: BookingsRoute,
+  PaymentsRoute: PaymentsRoute,
   ProfileRoute: ProfileRoute,
   StatementsRoute: StatementsRoute,
   CheckoutSuccessRoute: CheckoutSuccessRoute,
