@@ -160,6 +160,11 @@ function AdminPage() {
   const { section } = Route.useSearch()
   const navigate = useNavigate()
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  // Admin second-factor gate (SPEC_SECURITY_HARDENING #2). Inert unless
+  // adminGateEnabled is set in settings. expiresAt comes from the server; the
+  // client decides if the unlock is still valid (queries can't read the clock).
+  const gate = useQuery((api as any).adminGate.getAdminGateStatus)
+  const [localUnlocked, setLocalUnlocked] = useState(false)
   // BUG-6: Detect child routes (e.g. /admin/analytics) to render <Outlet /> instead of section panels
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const isChildRoute = pathname.startsWith('/admin/') && pathname.length > '/admin/'.length
@@ -185,6 +190,16 @@ function AdminPage() {
         <p className="text-gray-500">You don&apos;t have permission to view this page.</p>
       </div>
     )
+  }
+
+  // Second-factor gate: when enabled and not unlocked, require the admin to
+  // re-enter their own password before showing the panel.
+  const gateLocked =
+    gate?.enabled === true &&
+    !localUnlocked &&
+    !(gate?.expiresAt && Date.now() < gate.expiresAt)
+  if (gateLocked) {
+    return <AdminUnlock onUnlocked={() => setLocalUnlocked(true)} />
   }
 
   return (
@@ -243,6 +258,60 @@ function AdminPage() {
           </div>
         )}
       </main>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Admin unlock prompt (second factor — re-enter own password)
+// ---------------------------------------------------------------------------
+
+function AdminUnlock({ onUnlocked }: { onUnlocked: () => void }) {
+  const verify = useAction((api as any).adminGateActions.verifyAdminPassword)
+  const [pw, setPw] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!pw) return
+    setBusy(true); setErr(null)
+    try {
+      const res = await verify({ password: pw })
+      if (res?.success) { setPw(''); onUnlocked() }
+      else setErr(res?.error ?? 'Incorrect password')
+    } catch (e: any) {
+      setErr(e?.message ?? 'Verification failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="max-w-sm mx-auto px-4 py-16">
+      <div className="text-center mb-6">
+        <div className="text-5xl mb-4">🔐</div>
+        <h2 className="text-2xl font-bold text-gray-800 mb-1">Confirm it&apos;s you</h2>
+        <p className="text-gray-500 text-sm">Re-enter your account password to access the admin panel.</p>
+      </div>
+      <form onSubmit={submit} className="space-y-3">
+        <input
+          type="password"
+          autoFocus
+          autoComplete="current-password"
+          value={pw}
+          onChange={e => setPw(e.target.value)}
+          placeholder="Your password"
+          className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm"
+        />
+        {err && <p className="text-sm text-red-600">{err}</p>}
+        <button
+          disabled={busy || !pw}
+          className="w-full px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors"
+        >
+          {busy ? 'Checking…' : 'Unlock admin'}
+        </button>
+      </form>
     </div>
   )
 }

@@ -1,7 +1,7 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { requireAdmin, getAuthUserSafe } from "./lib/adminGuard";
+import { requireAdmin, requireAdminUnlocked, getAuthUserSafe } from "./lib/adminGuard";
 
 // ============================================================================
 // BOOKING MUTATIONS
@@ -1938,9 +1938,11 @@ export const updateSiteSettings = mutation({
     minAthleteDurationMinutes: v.optional(v.number()),
     customerCancellationHours: v.optional(v.number()),
     coachLateCancellationHours: v.optional(v.number()),
+    adminGateEnabled: v.optional(v.boolean()),
+    adminUnlockMinutes: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     const existing = await ctx.db
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))

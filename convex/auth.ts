@@ -15,7 +15,7 @@ import { betterAuth } from "better-auth";
 import type { BetterAuthOptions } from "better-auth";
 import authSchema from "./betterAuth/schema";
 import authConfig from "./auth.config";
-import { requireAdmin, getCallerContext, writeRoleAudit } from "./lib/adminGuard";
+import { requireAdmin, requireAdminUnlocked, getCallerContext, writeRoleAudit } from "./lib/adminGuard";
 
 const siteUrl = process.env.SITE_URL || "";
 
@@ -460,7 +460,7 @@ export const listAllUsers = query({
 export const setUserRole = mutation({
   args: { userId: v.string(), role: v.string() },
   handler: async (ctx, { userId, role }) => {
-    const adminUser = await requireAdmin(ctx);
+    const adminUser = await requireAdminUnlocked(ctx);
     try {
       // 1) Update the Better Auth user record
       await ctx.runMutation(components.betterAuth.adapter.updateOne, {

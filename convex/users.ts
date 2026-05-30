@@ -4,7 +4,7 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { components } from "./_generated/api";
-import { requireAdmin, writeRoleAudit } from "./lib/adminGuard";
+import { requireAdmin, requireAdminUnlocked, writeRoleAudit } from "./lib/adminGuard";
 
 export const makeAdmin = mutation({
   args: { email: v.string() },
@@ -12,7 +12,7 @@ export const makeAdmin = mutation({
     // SEC decision #3: privilege escalation is admin-only. Previously UNGUARDED
     // — any caller could promote any email to admin. The very first admin must
     // be bootstrapped out-of-band (Convex dashboard), not via this mutation.
-    const adminUser = await requireAdmin(ctx);
+    const adminUser = await requireAdminUnlocked(ctx);
     const normalizedEmail = email.toLowerCase().trim();
     const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, {
       model: "user",
@@ -105,7 +105,7 @@ export const adminUpdateUserProfile = mutation({
 export const adminDeleteUser = mutation({
   args: { email: v.string() },
   handler: async (ctx, { email }) => {
-    const admin = await requireAdmin(ctx);
+    const admin = await requireAdminUnlocked(ctx);
     const normalizedEmail = email.toLowerCase().trim();
     if (admin.email?.toLowerCase?.().trim?.() === normalizedEmail) {
       throw new Error("You cannot delete your own account.");

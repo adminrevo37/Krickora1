@@ -60,6 +60,38 @@ export async function requireAdminAction(ctx: any): Promise<{
 }
 
 /**
+ * Admin guard for sensitive WRITE mutations that ALSO enforces the second-factor
+ * unlock (SPEC_SECURITY_HARDENING #2) when siteSettings.adminGateEnabled is on.
+ * Drop-in replacement for requireAdmin: behaves identically while the gate is
+ * off. Mutation context only (reads the clock).
+ */
+export async function requireAdminUnlocked(ctx: any): Promise<{
+  _id: string;
+  email: string;
+  role?: string;
+}> {
+  const user = await requireAdmin(ctx);
+  const settings = await ctx.db
+    .query("siteSettings")
+    .withIndex("by_key", (q: any) => q.eq("key", "global"))
+    .first();
+  if (!settings?.adminGateEnabled) return user as any;
+  const email = (user as any).email?.toLowerCase?.().trim?.() ?? "";
+  const unlock = email
+    ? await ctx.db
+        .query("adminUnlocks")
+        .withIndex("by_email", (q: any) => q.eq("email", email))
+        .first()
+    : null;
+  if (!unlock || unlock.expiresAt < Date.now()) {
+    throw new Error(
+      "Admin session locked — re-enter your password in the admin panel to continue."
+    );
+  }
+  return user as any;
+}
+
+/**
  * Resolve the caller's identity, normalised email and admin status in one shot.
  * Safe in any query/mutation context — never throws. Returns isAdmin=false and
  * email="" for unauthenticated callers.

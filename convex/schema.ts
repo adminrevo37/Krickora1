@@ -248,7 +248,17 @@ export default defineSchema({
     // Cancellation rules (separated by user type)
     customerCancellationHours: v.optional(v.number()),   // default 2 — customers cannot cancel within N hours
     coachLateCancellationHours: v.optional(v.number()),  // default 24 — coach charged if they cancel within N hours
+    // Admin second-factor gate (SPEC_SECURITY_HARDENING #2 — re-enter own password)
+    adminGateEnabled: v.optional(v.boolean()),           // default false — do NOT enable until /admin prompt is deployed
+    adminUnlockMinutes: v.optional(v.number()),          // default 45 — how long an admin unlock lasts
   }).index("by_key", ["key"]),
+
+  // Admin unlock sessions (SPEC_SECURITY_HARDENING #2). One row per admin email;
+  // present + unexpired = that admin re-entered their password recently.
+  adminUnlocks: defineTable({
+    email: v.string(),
+    expiresAt: v.number(), // Unix ms
+  }).index("by_email", ["email"]),
 
   // Discount codes
   discountCodes: defineTable({
