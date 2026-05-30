@@ -3,6 +3,7 @@
 import { action, internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { requireAdminAction } from "./lib/adminGuard";
 
 const SEAM_API_BASE = "https://connect.getseam.com";
 
@@ -48,7 +49,8 @@ async function seamFetch(path: string, options: RequestInit = {}): Promise<any> 
  */
 export const listDevices = action({
   args: {},
-  handler: async () => {
+  handler: async (ctx) => {
+    await requireAdminAction(ctx);
     const data = await seamFetch("/devices/list", {
       method: "POST",
       body: JSON.stringify({
@@ -83,7 +85,8 @@ export const listDevices = action({
  */
 export const getDeviceStatus = action({
   args: { deviceId: v.string() },
-  handler: async (_ctx, args) => {
+  handler: async (ctx, args) => {
+    await requireAdminAction(ctx);
     const data = await seamFetch("/devices/get", {
       method: "POST",
       body: JSON.stringify({ device_id: args.deviceId }),
@@ -328,7 +331,8 @@ export const syncBookingToLocks = internalAction({
  */
 export const testConnection = action({
   args: {},
-  handler: async () => {
+  handler: async (ctx) => {
+    await requireAdminAction(ctx);
     try {
       const data = await seamFetch("/health", { method: "GET" });
       return { connected: true, ok: data.ok ?? true };
@@ -355,7 +359,8 @@ export const testConnection = action({
  */
 export const listDeviceAccessCodes = action({
   args: { deviceId: v.string() },
-  handler: async (_ctx, args) => {
+  handler: async (ctx, args) => {
+    await requireAdminAction(ctx);
     const data = await seamFetch("/access_codes/list", {
       method: "POST",
       body: JSON.stringify({ device_id: args.deviceId }),

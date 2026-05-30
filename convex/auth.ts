@@ -9,13 +9,13 @@ import { convex } from "@convex-dev/better-auth/plugins";
 import { admin } from "better-auth/plugins";
 import { components } from "./_generated/api";
 import { DataModel } from "./_generated/dataModel";
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { betterAuth } from "better-auth";
 import type { BetterAuthOptions } from "better-auth";
 import authSchema from "./betterAuth/schema";
 import authConfig from "./auth.config";
-import { requireAdmin } from "./lib/adminGuard";
+import { requireAdmin, getCallerContext, writeRoleAudit } from "./lib/adminGuard";
 
 const siteUrl = process.env.SITE_URL || "";
 
@@ -108,6 +108,9 @@ export function createAuthOptions(ctx?: GenericCtx<DataModel>): BetterAuthOption
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: false,
+      // SEC decision #7: NIST-aligned — length over forced complexity.
+      minPasswordLength: 10,
+      maxPasswordLength: 128,
       sendResetPassword: async ({ user, url }: { user: any; url: string }) => {
         try {
           const emailUrl = process.env.SHIPPER_EMAIL_URL;
@@ -293,7 +296,7 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
             const normalizedEmail = (user.email || "").toLowerCase().trim();
             if (!normalizedEmail) return;
             const { internal } = await import("./_generated/api");
-            await runMutation(internal.auth.ensureCustomerExists, {
+            await runMutation(internal.auth.ensureCustomerExistsInternal, {
               email: normalizedEmail,
               name: user.name || undefined,
             });
@@ -375,12 +378,15 @@ export const getCurrentUser = query({
 });
 
 /**
- * Get user by email address
+ * Get user by email address — admin only (prevents account enumeration,
+ * SEC decision #5). Returns null for non-admins.
  */
 export const getUserByEmail = query({
   args: { email: v.string() },
   handler: async (ctx, { email }) => {
     try {
+      const caller = await getCallerContext(ctx);
+      if (!caller.isAdmin) return null;
       const user = (await ctx.runQuery(
         components.betterAuth.adapter.findOne,
         {
@@ -454,8 +460,9 @@ export const listAllUsers = query({
 export const setUserRole = mutation({
   args: { userId: v.string(), role: v.string() },
   handler: async (ctx, { userId, role }) => {
-    await requireAdmin(ctx);
+    const adminUser = await requireAdmin(ctx);
     try {
+      // 1) Update the Better Auth user record
       await ctx.runMutation(components.betterAuth.adapter.updateOne, {
         input: {
           model: "user",
@@ -463,6 +470,32 @@ export const setUserRole = mutation({
           update: { role } as any,
         },
       });
+
+      // 2) SEC #7 dual-role sync: the app reads customers.role, which can drift
+      // from the Better Auth user.role. Keep both in sync. Resolve the email
+      // from the auth user, then patch the matching customers record.
+      const authUser: any = await ctx.runQuery(
+        components.betterAuth.adapter.findOne,
+        { model: "user", where: [{ field: "_id", value: userId }] }
+      );
+      const targetEmail = authUser?.email?.toLowerCase?.().trim?.() ?? "";
+      if (targetEmail) {
+        const customer = await ctx.db
+          .query("customers")
+          .withIndex("by_email", (q: any) => q.eq("email", targetEmail))
+          .first();
+        const oldRole = customer?.role;
+        if (customer && customer.role !== role) {
+          await ctx.db.patch(customer._id, { role });
+        }
+        await writeRoleAudit(ctx, {
+          targetEmail,
+          field: "role",
+          oldValue: oldRole,
+          newValue: role,
+          changedByEmail: (adminUser as any).email ?? "",
+        });
+      }
       return { success: true };
     } catch (e: any) {
       return { success: false, error: e?.message ?? "Failed to update role" };
@@ -534,29 +567,56 @@ export const deleteUser = mutation({
  * in case the databaseHook didn't fire (e.g. race condition, error).
  * This prevents the "No customer found" crash.
  */
+// Shared creation logic (no auth — callers must enforce their own guard).
+async function ensureCustomerImpl(
+  ctx: any,
+  args: { email: string; name?: string }
+): Promise<any | null> {
+  const normalizedEmail = args.email.toLowerCase().trim();
+  if (!normalizedEmail) return null;
+
+  const existing = await ctx.db
+    .query("customers")
+    .withIndex("by_email", (q: any) => q.eq("email", normalizedEmail))
+    .first();
+
+  if (existing) return existing._id;
+
+  return await ctx.db.insert("customers", {
+    name: args.name || normalizedEmail.split("@")[0] || "New User",
+    email: normalizedEmail,
+    role: "customer",
+    creditBalance: 0,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * Trusted server-side variant — called from the signup databaseHook (no user
+ * identity available at that point). NOT client-callable.
+ */
+export const ensureCustomerExistsInternal = internalMutation({
+  args: { email: v.string(), name: v.optional(v.string()) },
+  handler: async (ctx, args) => ensureCustomerImpl(ctx, args),
+});
+
+/**
+ * Public safety-net called by the frontend after sign-in/sign-up.
+ * SEC: must be authenticated, and may only ensure the caller's OWN record
+ * (or admin for any). Prevents arbitrary record creation / enumeration.
+ */
 export const ensureCustomerExists = mutation({
   args: {
     email: v.string(),
     name: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) throw new Error("Not authorized");
     const normalizedEmail = args.email.toLowerCase().trim();
-    if (!normalizedEmail) return null;
-
-    const existing = await ctx.db
-      .query("customers")
-      .withIndex("by_email", (q: any) => q.eq("email", normalizedEmail))
-      .first();
-
-    if (existing) return existing._id;
-
-    const id = await ctx.db.insert("customers", {
-      name: args.name || normalizedEmail.split("@")[0] || "New User",
-      email: normalizedEmail,
-      role: "customer",
-      creditBalance: 0,
-      createdAt: new Date().toISOString(),
-    });
-    return id;
+    if (!caller.isAdmin && caller.email !== normalizedEmail) {
+      throw new Error("Not authorized");
+    }
+    return ensureCustomerImpl(ctx, args);
   },
 });

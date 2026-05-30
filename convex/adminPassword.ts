@@ -3,17 +3,31 @@
  * Admin-only action to reset/set a user's password directly.
  * Uses Better Auth's own APIs so the credential account is created
  * exactly the way sign-up would create it.
+ *
+ * SECURITY (SEC hardening): the password-setting logic lives in an
+ * internalAction (not client-callable). The public `adminSetPassword` action is
+ * a thin admin-gated wrapper. `adminPasswordTrigger.triggerSetPassword`
+ * (admin-gated mutation) schedules the internal action directly — a scheduled
+ * action has no auth identity, so it must call the un-gated internal variant.
  */
-import { action } from "./_generated/server";
+import { action, internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { createAuth } from "./auth";
+import { requireAdminAction } from "./lib/adminGuard";
 
-export const adminSetPassword = action({
-  args: { email: v.string(), password: v.string() },
-  handler: async (ctx, { email, password }) => {
+type SetPasswordResult = { success: boolean; message: string; userId?: string };
+
+// Un-guarded core logic shared by both entrypoints. A plain function (not an
+// action) so callers invoke it directly — no runAction hop, and no same-module
+// `internal.adminPassword.*` self-reference (which broke type inference).
+async function doSetPassword(
+  ctx: any,
+  { email, password }: { email: string; password: string }
+): Promise<SetPasswordResult> {
+  {
     const normalized = email.toLowerCase().trim();
-    if (password.length < 8) {
-      throw new Error("Password must be at least 8 characters");
+    if (password.length < 10) {
+      throw new Error("Password must be at least 10 characters");
     }
 
     const auth = createAuth(ctx as any);
@@ -88,5 +102,22 @@ export const adminSetPassword = action({
       message: `Password updated for ${normalized}`,
       userId: user.id,
     };
+  }
+}
+
+// Internal action — used only by adminPasswordTrigger.triggerSetPassword to
+// SCHEDULE a password set (a mutation can't run node logic inline). Not
+// client-callable.
+export const setPasswordInternal = internalAction({
+  args: { email: v.string(), password: v.string() },
+  handler: async (ctx, args): Promise<SetPasswordResult> => doSetPassword(ctx, args),
+});
+
+// Public, admin-gated entrypoint (called directly from the admin panel).
+export const adminSetPassword = action({
+  args: { email: v.string(), password: v.string() },
+  handler: async (ctx, args): Promise<SetPasswordResult> => {
+    await requireAdminAction(ctx);
+    return doSetPassword(ctx, args);
   },
 });

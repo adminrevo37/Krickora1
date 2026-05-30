@@ -4,11 +4,15 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { components } from "./_generated/api";
-import { requireAdmin } from "./lib/adminGuard";
+import { requireAdmin, writeRoleAudit } from "./lib/adminGuard";
 
 export const makeAdmin = mutation({
   args: { email: v.string() },
   handler: async (ctx, { email }) => {
+    // SEC decision #3: privilege escalation is admin-only. Previously UNGUARDED
+    // — any caller could promote any email to admin. The very first admin must
+    // be bootstrapped out-of-band (Convex dashboard), not via this mutation.
+    const adminUser = await requireAdmin(ctx);
     const normalizedEmail = email.toLowerCase().trim();
     const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, {
       model: "user",
@@ -20,6 +24,13 @@ export const makeAdmin = mutation({
     });
     const customer = await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", normalizedEmail)).first();
     if (customer) await ctx.db.patch(customer._id, { role: "admin" });
+    await writeRoleAudit(ctx, {
+      targetEmail: normalizedEmail,
+      field: "role",
+      oldValue: customer?.role,
+      newValue: "admin",
+      changedByEmail: (adminUser as any).email ?? "",
+    });
     return { success: true, message: `${normalizedEmail} is now an admin.` };
   },
 });
@@ -51,7 +62,7 @@ export const adminChangeEmail = mutation({
 export const adminUpdateUserProfile = mutation({
   args: { email: v.string(), name: v.optional(v.string()), phone: v.optional(v.string()), role: v.optional(v.string()), coachTier: v.optional(v.string()), color: v.optional(v.string()), defaultSessionDuration: v.optional(v.number()) },
   handler: async (ctx, { email, name, phone, role, coachTier, color, defaultSessionDuration }) => {
-    await requireAdmin(ctx);
+    const adminUser = await requireAdmin(ctx);
     const normalizedEmail = email.toLowerCase().trim();
     // Sync name to Better Auth user record — wrapped in try/catch so an adapter
     // failure doesn't prevent the customer record from being updated.
@@ -79,6 +90,13 @@ export const adminUpdateUserProfile = mutation({
       if (color !== undefined) updates.color = color || undefined;
       if (defaultSessionDuration !== undefined) updates.defaultSessionDuration = defaultSessionDuration || undefined;
       if (Object.keys(updates).length > 0) await ctx.db.patch(customer._id, updates);
+      // SEC #3: audit privilege-relevant changes
+      if (role !== undefined && role !== customer.role) {
+        await writeRoleAudit(ctx, { targetEmail: normalizedEmail, field: "role", oldValue: customer.role, newValue: role, changedByEmail: (adminUser as any).email ?? "" });
+      }
+      if (coachTier !== undefined && coachTier !== customer.coachTier) {
+        await writeRoleAudit(ctx, { targetEmail: normalizedEmail, field: "coachTier", oldValue: customer.coachTier, newValue: coachTier, changedByEmail: (adminUser as any).email ?? "" });
+      }
     }
     return { success: true };
   },

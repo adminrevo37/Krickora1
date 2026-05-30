@@ -45,10 +45,35 @@ export default defineSchema({
         })
       )
     ),
+    // Soft-delete / anonymisation (SEC decision #6). When set, the account is
+    // deactivated; booking + payment history is retained but PII is anonymised.
+    deactivatedAt: v.optional(v.string()),
+    anonymizedAt: v.optional(v.string()),
     createdAt: v.string(),
   })
     .index("by_email", ["email"])
     .index("by_role", ["role"]),
+
+  // Audit log for role / permission / tier changes (SEC decision #3).
+  roleAuditLog: defineTable({
+    targetEmail: v.string(),
+    field: v.string(), // 'role' | 'coachTier' | 'deactivated' | ...
+    oldValue: v.optional(v.string()),
+    newValue: v.optional(v.string()),
+    changedByEmail: v.string(),
+    changedAt: v.string(),
+  })
+    .index("by_targetEmail", ["targetEmail"])
+    .index("by_changedAt", ["changedAt"]),
+
+  // Rate-limit buckets (SEC decision #5 fallback — used when the official
+  // @convex-dev/rate-limiter component cannot be installed on Shipper's locked
+  // Convex). key = `${action}:${identifier}` (identifier = userId or email).
+  rateLimits: defineTable({
+    key: v.string(),
+    windowStart: v.number(), // Unix ms — start of the current fixed window
+    count: v.number(),
+  }).index("by_key", ["key"]),
 
   bookings: defineTable({
     laneId: v.string(),

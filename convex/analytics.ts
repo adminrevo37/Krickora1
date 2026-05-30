@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { getCallerContext } from "./lib/adminGuard";
 
 // ============================================================================
 // TRACK EVENT — public mutation for client-side tracker
@@ -35,10 +36,12 @@ export const trackEvent = mutation({
 // ADMIN QUERIES
 // ============================================================================
 
-// Get recent events (last N)
+// Get recent events (last N) — admin only.
 export const getRecentEvents = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.isAdmin) return [];
     const limit = args.limit ?? 100;
     return await ctx.db
       .query("analytics")
@@ -55,6 +58,8 @@ export const getPageviews = query({
     endTimestamp: v.number(),
   },
   handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.isAdmin) return [];
     const events = await ctx.db
       .query("analytics")
       .withIndex("by_type_timestamp", (q: any) =>
@@ -72,6 +77,8 @@ export const getEventSummary = query({
     endTimestamp: v.number(),
   },
   handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.isAdmin) return { total: 0, breakdown: {}, uniqueSessions: 0 };
     const events = await ctx.db
       .query("analytics")
       .withIndex("by_timestamp")

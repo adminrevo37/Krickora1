@@ -1,6 +1,23 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
-import { requireAdmin } from "./lib/adminGuard";
+import { requireAdmin, getCallerContext, stripBookingPII } from "./lib/adminGuard";
+
+// Scope a list of bookings to the caller: full PII for own bookings (or admin),
+// sanitised "Booked"/stripped for everyone else (SEC-1, decision #1).
+function scopeBookings(
+  bookings: any[],
+  caller: { identity: any | null; email: string; isAdmin: boolean }
+): any[] {
+  if (caller.isAdmin) return bookings;
+  return bookings.map((b: any) => {
+    const isOwner =
+      (caller.identity != null &&
+        b.userId != null &&
+        b.userId === caller.identity.subject) ||
+      (caller.email !== "" && b.customerEmail?.toLowerCase() === caller.email);
+    return isOwner ? b : stripBookingPII(b);
+  });
+}
 
 // ============================================================================
 // BOOKING QUERIES
@@ -51,34 +68,42 @@ export const listBookings = query({
   },
 });
 
-// List bookings by date
+// List bookings by date — PII scoped to caller (SEC-1).
 export const listBookingsByDate = query({
   args: { date: v.string() },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const bookings = await ctx.db
       .query("bookings")
       .withIndex("by_date", (q: any) => q.eq("date", args.date))
       .collect();
+    return scopeBookings(bookings, await getCallerContext(ctx));
   },
 });
 
-// List bookings by lane and date
+// List bookings by lane and date — PII scoped to caller (SEC-1).
 export const listBookingsByLaneAndDate = query({
   args: { laneId: v.string(), date: v.string() },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const bookings = await ctx.db
       .query("bookings")
       .withIndex("by_laneId_date", (q: any) =>
         q.eq("laneId", args.laneId).eq("date", args.date)
       )
       .collect();
+    return scopeBookings(bookings, await getCallerContext(ctx));
   },
 });
 
-// List bookings by user ID
+// List bookings by user ID — own bookings only (or admin). Returns [] otherwise.
 export const listBookingsByUserId = query({
   args: { userId: v.string() },
   handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return [];
+    if (!caller.isAdmin && caller.identity.subject !== args.userId) {
+      // A caller may only list their own bookings by userId.
+      return [];
+    }
     return await ctx.db
       .query("bookings")
       .withIndex("by_userId", (q: any) => q.eq("userId", args.userId))
@@ -86,24 +111,55 @@ export const listBookingsByUserId = query({
   },
 });
 
-// List bookings by customer email
+// List bookings by customer email — own bookings only (or admin). [] otherwise.
 export const listBookingsByEmail = query({
   args: { email: v.string() },
   handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    const normalized = args.email.toLowerCase().trim();
+    if (!caller.identity) return [];
+    if (!caller.isAdmin && caller.email !== normalized) return [];
     return await ctx.db
       .query("bookings")
       .withIndex("by_customerEmail", (q: any) =>
-        q.eq("customerEmail", args.email.toLowerCase().trim())
+        q.eq("customerEmail", normalized)
       )
       .collect();
   },
 });
 
-// Get a single booking by ID
+// Get a single booking by ID — PII scoped to caller (SEC-1).
 export const getBooking = query({
   args: { id: v.id("bookings") },
   handler: async (ctx, args) => {
-    return await ctx.db.get(args.id);
+    const booking = await ctx.db.get(args.id);
+    if (!booking) return null;
+    const [scoped] = scopeBookings([booking], await getCallerContext(ctx));
+    return scoped;
+  },
+});
+
+// Public availability — slot + status only, NO PII. Safe for unauthenticated
+// calendar rendering (SEC-1 build order #1).
+export const listPublicAvailability = query({
+  args: { date: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const bookings = args.date
+      ? await ctx.db
+          .query("bookings")
+          .withIndex("by_date", (q: any) => q.eq("date", args.date))
+          .collect()
+      : await ctx.db.query("bookings").collect();
+    return bookings
+      .filter((b: any) => b.status !== "cancelled")
+      .map((b: any) => ({
+        laneId: b.laneId,
+        additionalLaneIds: b.additionalLaneIds,
+        date: b.date,
+        startHour: b.startHour,
+        duration: b.duration,
+        status: b.status,
+      }));
   },
 });
 
@@ -120,11 +176,17 @@ export const listStripePayments = query({
   },
 });
 
-// Get a single stripePayment by ID
+// Get a single stripePayment by ID — admin or the paying customer only.
 export const getStripePayment = query({
   args: { id: v.id("stripePayments") },
   handler: async (ctx, args) => {
-    return await ctx.db.get(args.id);
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return null;
+    const payment = await ctx.db.get(args.id);
+    if (!payment) return null;
+    if (caller.isAdmin) return payment;
+    if (payment.customerEmail?.toLowerCase() === caller.email) return payment;
+    return null;
   },
 });
 
@@ -141,35 +203,57 @@ export const listCustomers = query({
   },
 });
 
-// Get customer by email
+// Get customer by email — self or admin only (returns null otherwise).
 export const getCustomerByEmail = query({
   args: { email: v.string() },
   handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return null;
+    const normalized = args.email.toLowerCase().trim();
+    if (!caller.isAdmin && caller.email !== normalized) return null;
     return await ctx.db
       .query("customers")
-      .withIndex("by_email", (q: any) =>
-        q.eq("email", args.email.toLowerCase().trim())
-      )
+      .withIndex("by_email", (q: any) => q.eq("email", normalized))
       .first();
   },
 });
 
-// List customers by role
+// List customers by role.
+// Admin → full records. Authenticated non-admin → name/id/role only (no contact
+// PII), so coach pickers keep working without leaking email/phone/credit.
+// Unauthenticated → [].
 export const listCustomersByRole = query({
   args: { role: v.string() },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return [];
+    const rows = await ctx.db
       .query("customers")
       .withIndex("by_role", (q: any) => q.eq("role", args.role))
       .collect();
+    if (caller.isAdmin) return rows;
+    return rows.map((c: any) => ({
+      _id: c._id,
+      name: c.name,
+      role: c.role,
+      color: c.color,
+      coachTier: c.coachTier,
+      defaultSessionDuration: c.defaultSessionDuration,
+    }));
   },
 });
 
-// Get customer by ID
+// Get customer by ID — self or admin only (returns null otherwise).
 export const getCustomer = query({
   args: { id: v.id("customers") },
   handler: async (ctx, args) => {
-    return await ctx.db.get(args.id);
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return null;
+    const customer = await ctx.db.get(args.id);
+    if (!customer) return null;
+    if (caller.isAdmin) return customer;
+    if (customer.email?.toLowerCase() === caller.email) return customer;
+    return null;
   },
 });
 
@@ -179,6 +263,24 @@ export const listAthletesByCoach = query({
   args: { coachId: v.string() },
   handler: async (ctx, args) => {
     if (!args.coachId) return [];
+    // Auth: only the coach themselves (by _id or email) or an admin may list a
+    // coach's athletes. Returns [] for anyone else.
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return [];
+    if (!caller.isAdmin) {
+      const callerCustomer = caller.email
+        ? await ctx.db
+            .query("customers")
+            .withIndex("by_email", (q: any) => q.eq("email", caller.email))
+            .first()
+        : null;
+      const matchesCoach =
+        callerCustomer &&
+        callerCustomer.role === "coach" &&
+        (callerCustomer._id === args.coachId ||
+          callerCustomer.email === args.coachId.toLowerCase().trim());
+      if (!matchesCoach) return [];
+    }
     // Get all customers (role=customer) who have this coach in their assignedCoachIds
     const allCustomers = await ctx.db
       .query("customers")
@@ -245,10 +347,13 @@ export const listWaitlistEntries = query({
   },
 });
 
-// List waitlist entries by user
+// List waitlist entries by user — self or admin only.
 export const listWaitlistByUser = query({
   args: { userId: v.string() },
   handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return [];
+    if (!caller.isAdmin && caller.identity.subject !== args.userId) return [];
     return await ctx.db
       .query("waitlist")
       .withIndex("by_userId", (q: any) => q.eq("userId", args.userId))
@@ -256,36 +361,59 @@ export const listWaitlistByUser = query({
   },
 });
 
-// List waitlist entries for a specific slot
+// Strip identifying fields from a waitlist row for non-admin callers, keeping
+// only what's needed to compute position/membership.
+function scopeWaitlist(rows: any[], caller: { isAdmin: boolean; identity: any | null }) {
+  if (caller.isAdmin) return rows;
+  return rows.map((w: any) => ({
+    _id: w._id,
+    laneId: w.laneId,
+    date: w.date,
+    hour: w.hour,
+    notified: w.notified,
+    isMine: caller.identity != null && w.userId === caller.identity.subject,
+  }));
+}
+
+// List waitlist entries for a specific slot — PII scoped (position/count only).
 export const listWaitlistForSlot = query({
   args: { laneId: v.string(), date: v.string(), hour: v.number() },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return [];
+    const rows = await ctx.db
       .query("waitlist")
       .withIndex("by_slot", (q: any) =>
         q.eq("laneId", args.laneId).eq("date", args.date).eq("hour", args.hour)
       )
       .collect();
+    return scopeWaitlist(rows, caller);
   },
 });
 
-// List waitlist entries for a lane+date
+// List waitlist entries for a lane+date — PII scoped (position/count only).
 export const listWaitlistByLaneDate = query({
   args: { laneId: v.string(), date: v.string() },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return [];
+    const rows = await ctx.db
       .query("waitlist")
       .withIndex("by_laneId_date", (q: any) =>
         q.eq("laneId", args.laneId).eq("date", args.date)
       )
       .collect();
+    return scopeWaitlist(rows, caller);
   },
 });
 
-// List waitlist notifications for a user
+// List waitlist notifications for a user — self or admin only.
 export const listWaitlistNotifications = query({
   args: { userId: v.string() },
   handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return [];
+    if (!caller.isAdmin && caller.identity.subject !== args.userId) return [];
     return await ctx.db
       .query("waitlistNotifications")
       .withIndex("by_userId", (q: any) => q.eq("userId", args.userId))
@@ -306,10 +434,26 @@ export const listPayments = query({
   },
 });
 
-// List payments by coach
+// List payments by coach — the coach themselves (by _id or email) or admin.
 export const listPaymentsByCoach = query({
   args: { coachId: v.string() },
   handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return [];
+    if (!caller.isAdmin) {
+      const callerCustomer = caller.email
+        ? await ctx.db
+            .query("customers")
+            .withIndex("by_email", (q: any) => q.eq("email", caller.email))
+            .first()
+        : null;
+      const isThisCoach =
+        callerCustomer &&
+        callerCustomer.role === "coach" &&
+        (callerCustomer._id === args.coachId ||
+          callerCustomer.email === args.coachId.toLowerCase().trim());
+      if (!isThisCoach) return [];
+    }
     return await ctx.db
       .query("payments")
       .withIndex("by_coachId", (q: any) => q.eq("coachId", args.coachId))
@@ -473,6 +617,7 @@ export const validateDiscountCode = query({
 export const previewMergeConsecutiveCoachBookings = query({
   args: {},
   handler: async (ctx) => {
+    await requireAdmin(ctx); // admin-only merge preview (exposes coach schedule)
     // Fetch all non-cancelled coach bookings
     const allBookings = await ctx.db
       .query("bookings")

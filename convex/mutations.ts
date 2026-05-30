@@ -50,13 +50,35 @@ export const createBooking = mutation({
       const isForSelf =
         (args.userId != null && args.userId === createIdentity.subject) ||
         args.customerEmail.toLowerCase() === callerEmail;
-      if (!isForSelf) {
-        const callerCustomer = await ctx.db
-          .query("customers")
-          .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
-          .first();
-        if (callerCustomer?.role !== "admin") {
-          throw new Error("You can only create bookings for yourself.");
+      const callerCustomer = callerEmail
+        ? await ctx.db
+            .query("customers")
+            .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
+            .first()
+        : null;
+      const isAdminCaller = callerCustomer?.role === "admin";
+      if (!isForSelf && !isAdminCaller) {
+        throw new Error("You can only create bookings for yourself.");
+      }
+
+      // SEC decision #4: a verified email is required to COMPLETE the FIRST
+      // booking, so the door-code email (email-only delivery) reliably lands.
+      // Exempt admins and coach/manual bookings. Later bookings are unaffected.
+      if (!isAdminCaller && !args.isCoachBooking) {
+        const authUser = await getAuthUserSafe(ctx);
+        const verified = (authUser as any)?.emailVerified === true;
+        if (!verified) {
+          const bookerEmail = args.customerEmail.toLowerCase().trim();
+          const priorByEmail = await ctx.db
+            .query("bookings")
+            .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", bookerEmail))
+            .collect();
+          const hasPrior = priorByEmail.some((b: any) => b.status !== "cancelled");
+          if (!hasPrior) {
+            throw new Error(
+              "Please verify your email address before making your first booking. Check your inbox for the verification link."
+            );
+          }
         }
       }
     }
