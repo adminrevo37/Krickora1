@@ -42,12 +42,80 @@ function durationLabel(m: number): string {
   return m === 60 ? "1 hour" : m === 90 ? "1.5 hours" : m === 120 ? "2 hours" : `${m} minutes`;
 }
 
+// Format a YYYY-MM-DD booking date as a weekday-long label in AWST (Bug #4).
+// toLocaleDateString without an explicit timeZone uses the Convex server zone
+// (UTC), which can flip the weekday at the day boundary for AWST recipients.
+function fmtAwstDateLabel(dateStr: string): string {
+  return new Date(dateStr + "T00:00:00").toLocaleDateString("en-US", {
+    timeZone: "Australia/Perth",
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
 // Resolve athlete slots to their owning ACCOUNT (parent) email + child name and
-// schedule ONE consolidated allocation email per account — SPEC_PARENT_ATHLETE_MODEL.
-// Recipient = the account email; addressed with the child's name. Siblings in
-// the same event are grouped into a single email per account. Falls back to a
-// name->customer match for legacy slots with no athleteId. These emails are
-// mandatory (NOT prefs-gated) — the parent is a third party to the coach booking.
+// group them per account (sibling consolidation) — SPEC_PARENT_ATHLETE_MODEL.
+// Recipient = the account email; addressed with the child's name. Falls back to
+// a name->customer match for legacy slots with no athleteId. Shared by every
+// athlete-email helper below so recipient resolution never drifts.
+async function groupSlotsByAccount(
+  ctx: any,
+  slots: Array<{
+    athleteId?: string;
+    athleteName: string;
+    startHour: number;
+    durationMinutes: number;
+    accessCode?: string;
+  }>
+): Promise<
+  Array<{
+    to: string;
+    entries: Array<{ name: string; startHour: number; durationMinutes: number; accessCode?: string }>;
+  }>
+> {
+  const groups = new Map<
+    string,
+    Array<{ name: string; startHour: number; durationMinutes: number; accessCode?: string }>
+  >();
+  for (const slot of slots) {
+    let to = "";
+    let name = slot.athleteName;
+    if (slot.athleteId) {
+      const athlete = await ctx.db.get(slot.athleteId as any);
+      if (athlete) {
+        name = athlete.name;
+        const account = await ctx.db.get(athlete.accountCustomerId);
+        to = account?.email ?? "";
+      }
+    }
+    if (!to) {
+      // Legacy fallback: match the denormalised name to a customer record.
+      const cust = await ctx.db
+        .query("customers")
+        .filter((q: any) => q.eq(q.field("name"), slot.athleteName))
+        .first();
+      to = cust?.email ?? "";
+    }
+    if (!to) continue;
+    const list = groups.get(to) ?? [];
+    list.push({
+      name,
+      startHour: slot.startHour,
+      durationMinutes: slot.durationMinutes,
+      accessCode: slot.accessCode,
+    });
+    groups.set(to, list);
+  }
+  return Array.from(groups.entries()).map(([to, entries]) => ({ to, entries }));
+}
+
+const fmtTimeRange = (startHour: number, durationMinutes: number): string =>
+  `${fmtHour12(startHour)} - ${fmtHour12(startHour + durationMinutes / 60)}`;
+
+// Schedule ONE consolidated allocation email per account. Recipient = parent
+// account email, addressed with the child's name. Mandatory (NOT prefs-gated).
 async function scheduleAllocationEmails(
   ctx: any,
   opts: {
@@ -65,65 +133,28 @@ async function scheduleAllocationEmails(
   }
 ): Promise<void> {
   const laneName = LANE_NAME_MAP[opts.laneId] ?? opts.laneId.toUpperCase();
-  const formattedDate = new Date(opts.date + "T00:00:00").toLocaleDateString("en-US", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-  // accountEmail -> [{ name, timeSlot, durationMin, accessCode }]
-  const groups = new Map<
-    string,
-    Array<{ name: string; timeSlot: string; durationMin: number; accessCode: string }>
-  >();
-  for (const slot of opts.slots) {
-    let to = "";
-    let athleteName = slot.athleteName;
-    if (slot.athleteId) {
-      const athlete = await ctx.db.get(slot.athleteId as any);
-      if (athlete) {
-        athleteName = athlete.name;
-        const account = await ctx.db.get(athlete.accountCustomerId);
-        to = account?.email ?? "";
-      }
-    }
-    if (!to) {
-      // Legacy fallback: match the denormalised name to a customer record.
-      const cust = await ctx.db
-        .query("customers")
-        .filter((q: any) => q.eq(q.field("name"), slot.athleteName))
-        .first();
-      to = cust?.email ?? "";
-    }
-    if (!to) continue;
-    const slotEnd = slot.startHour + slot.durationMinutes / 60;
-    const list = groups.get(to) ?? [];
-    list.push({
-      name: athleteName,
-      timeSlot: `${fmtHour12(slot.startHour)} - ${fmtHour12(slotEnd)}`,
-      durationMin: slot.durationMinutes,
-      accessCode: slot.accessCode ?? opts.bookingAccessCode ?? "N/A",
-    });
-    groups.set(to, list);
-  }
-  for (const [to, sessions] of groups) {
-    if (sessions.length === 1) {
-      const s = sessions[0];
+  const formattedDate = fmtAwstDateLabel(opts.date);
+  const groups = await groupSlotsByAccount(ctx, opts.slots);
+  for (const { to, entries } of groups) {
+    const code = entries[0].accessCode ?? opts.bookingAccessCode ?? "N/A";
+    if (entries.length === 1) {
+      const s = entries[0];
       await ctx.scheduler.runAfter(0, internal.emails.sendAthleteAllocation, {
         to,
         athleteName: s.name,
         coachName: opts.coachName,
         laneName,
         date: formattedDate,
-        timeSlot: s.timeSlot,
-        duration: durationLabel(s.durationMin),
-        accessCode: s.accessCode,
+        timeSlot: fmtTimeRange(s.startHour, s.durationMinutes),
+        duration: durationLabel(s.durationMinutes),
+        accessCode: s.accessCode ?? code,
       });
     } else {
-      // Sibling consolidation: one email per account listing each child.
-      const names = sessions.map((s) => s.name).join(" & ");
-      const combinedTime = sessions.map((s) => `${s.name}: ${s.timeSlot}`).join("; ");
-      const totalDur = sessions.reduce((a, s) => a + s.durationMin, 0);
+      const names = entries.map((s) => s.name).join(" & ");
+      const combinedTime = entries
+        .map((s) => `${s.name}: ${fmtTimeRange(s.startHour, s.durationMinutes)}`)
+        .join("; ");
+      const totalDur = entries.reduce((a, s) => a + s.durationMinutes, 0);
       await ctx.scheduler.runAfter(0, internal.emails.sendAthleteAllocation, {
         to,
         athleteName: names,
@@ -132,10 +163,187 @@ async function scheduleAllocationEmails(
         date: formattedDate,
         timeSlot: combinedTime,
         duration: durationLabel(totalDur),
-        accessCode: sessions[0].accessCode,
+        accessCode: code,
       });
     }
   }
+}
+
+// Notify athletes that a coach session was cancelled (Bug #1) — no door code /
+// instructions (the session is off for them). One email per account.
+async function scheduleAthleteCancellationEmails(
+  ctx: any,
+  opts: {
+    slots: Array<{ athleteId?: string; athleteName: string; startHour: number; durationMinutes: number }>;
+    laneId: string;
+    date: string;
+    coachName: string;
+  }
+): Promise<void> {
+  const laneName = LANE_NAME_MAP[opts.laneId] ?? opts.laneId.toUpperCase();
+  const formattedDate = fmtAwstDateLabel(opts.date);
+  const groups = await groupSlotsByAccount(ctx, opts.slots);
+  for (const { to, entries } of groups) {
+    const names = entries.map((s) => s.name).join(" & ");
+    const timeSlot = entries
+      .map((s) => fmtTimeRange(s.startHour, s.durationMinutes))
+      .join("; ");
+    await ctx.scheduler.runAfter(0, internal.emails.sendAthleteCancellation, {
+      to,
+      athleteName: names,
+      coachName: opts.coachName,
+      laneName,
+      date: formattedDate,
+      timeSlot,
+    });
+  }
+}
+
+// Notify athletes dropped from a coach session during an edit (decision #3a).
+async function scheduleAthleteRemovedEmails(
+  ctx: any,
+  opts: {
+    slots: Array<{ athleteId?: string; athleteName: string; startHour: number; durationMinutes: number }>;
+    laneId: string;
+    date: string;
+    coachName: string;
+  }
+): Promise<void> {
+  const laneName = LANE_NAME_MAP[opts.laneId] ?? opts.laneId.toUpperCase();
+  const formattedDate = fmtAwstDateLabel(opts.date);
+  const groups = await groupSlotsByAccount(ctx, opts.slots);
+  for (const { to, entries } of groups) {
+    const names = entries.map((s) => s.name).join(" & ");
+    const timeSlot = entries
+      .map((s) => fmtTimeRange(s.startHour, s.durationMinutes))
+      .join("; ");
+    await ctx.scheduler.runAfter(0, internal.emails.sendAthleteRemoved, {
+      to,
+      athleteName: names,
+      coachName: opts.coachName,
+      laneName,
+      date: formattedDate,
+      timeSlot,
+    });
+  }
+}
+
+// Notify athletes whose coach session moved (decision #3b) — carries the new
+// time + door code. Slots passed are already shifted to the new window.
+async function scheduleAthleteRescheduleEmails(
+  ctx: any,
+  opts: {
+    slots: Array<{ athleteId?: string; athleteName: string; startHour: number; durationMinutes: number }>;
+    laneId: string;
+    oldDate?: string;
+    newDate: string;
+    bookingAccessCode?: string;
+    coachName: string;
+  }
+): Promise<void> {
+  const laneName = LANE_NAME_MAP[opts.laneId] ?? opts.laneId.toUpperCase();
+  const formattedOld = opts.oldDate ? fmtAwstDateLabel(opts.oldDate) : undefined;
+  const formattedNew = fmtAwstDateLabel(opts.newDate);
+  const code = opts.bookingAccessCode ?? "N/A";
+  const groups = await groupSlotsByAccount(ctx, opts.slots);
+  for (const { to, entries } of groups) {
+    const names = entries.map((s) => s.name).join(" & ");
+    const timeSlot = entries
+      .map((s) => fmtTimeRange(s.startHour, s.durationMinutes))
+      .join("; ");
+    const totalDur = entries.reduce((a, s) => a + s.durationMinutes, 0);
+    await ctx.scheduler.runAfter(0, internal.emails.sendAthleteReschedule, {
+      to,
+      athleteName: names,
+      coachName: opts.coachName,
+      laneName,
+      oldDate: formattedOld,
+      newDate: formattedNew,
+      timeSlot,
+      duration: durationLabel(totalDur),
+      accessCode: code,
+    });
+  }
+}
+
+// ── Allocation audit log (Part 2) ───────────────────────────────────────────
+// Append one entry recording an allocation change on a booking. Best-effort —
+// never blocks the mutation. Kept forever (low volume; useful for disputes).
+async function writeAllocationAudit(
+  ctx: any,
+  opts: {
+    bookingId: string;
+    actorUserId?: string;
+    actorName?: string;
+    action: "allocate" | "reallocate" | "remove" | "cancel" | "reschedule";
+    before?: any[];
+    after?: any[];
+  }
+): Promise<void> {
+  try {
+    await ctx.db.insert("allocationAuditLog", {
+      bookingId: opts.bookingId,
+      at: new Date().toISOString(),
+      actorUserId: opts.actorUserId,
+      actorName: opts.actorName,
+      action: opts.action,
+      before: opts.before,
+      after: opts.after,
+    });
+  } catch (e) {
+    console.error("[allocationAudit] failed to write entry:", e);
+  }
+}
+
+// Bug #3: find same-athlete time conflicts across OTHER active coach bookings on
+// the same date. Returns human-readable warning strings (empty = no clash). Only
+// athleteId-bearing slots can be matched reliably across bookings.
+async function detectAthleteConflicts(
+  ctx: any,
+  opts: {
+    excludeBookingId: any;
+    date: string;
+    slots: Array<{ athleteId?: string; athleteName: string; startHour: number; durationMinutes: number }>;
+  }
+): Promise<string[]> {
+  const candidateById = new Map<string, Array<{ name: string; start: number; end: number }>>();
+  for (const s of opts.slots) {
+    if (!s.athleteId) continue;
+    const list = candidateById.get(s.athleteId as string) ?? [];
+    list.push({ name: s.athleteName, start: s.startHour, end: s.startHour + s.durationMinutes / 60 });
+    candidateById.set(s.athleteId as string, list);
+  }
+  if (candidateById.size === 0) return [];
+
+  const sameDay = await ctx.db
+    .query("bookings")
+    .withIndex("by_date", (q: any) => q.eq("date", opts.date))
+    .collect();
+
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+  for (const other of sameDay) {
+    if (other._id === opts.excludeBookingId) continue;
+    if (other.status === "cancelled" || !other.isCoachBooking) continue;
+    for (const os of other.athleteSlots ?? []) {
+      if (!os.athleteId) continue;
+      const candidates = candidateById.get(os.athleteId as string);
+      if (!candidates) continue;
+      const oStart = os.startHour;
+      const oEnd = os.startHour + os.durationMinutes / 60;
+      for (const c of candidates) {
+        if (c.start < oEnd && oStart < c.end) {
+          const key = `${os.athleteId}:${other._id}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          warnings.push(
+            `${c.name} is already booked with ${other.customerName} at ${fmtHour12(oStart)}.`
+          );
+        }
+      }
+    }
+  }
+  return warnings;
 }
 
 // ============================================================================
@@ -857,6 +1065,25 @@ export const cancelBooking = mutation({
       });
     }
 
+    // Bug #1: notify allocated athletes that the coach session is cancelled.
+    // Slots are KEPT (decision #2) — record stays on the coach's Cancelled tab.
+    // Covers admin-initiated cancels too (same mutation). Mandatory emails.
+    if (booking.isCoachBooking && booking.athleteSlots && booking.athleteSlots.length > 0) {
+      await scheduleAthleteCancellationEmails(ctx, {
+        slots: booking.athleteSlots,
+        laneId: booking.laneId,
+        date: booking.date,
+        coachName: booking.customerName,
+      });
+      await writeAllocationAudit(ctx, {
+        bookingId: args.id.toString(),
+        actorUserId: args.cancelledByUserId,
+        action: "cancel",
+        before: booking.athleteSlots,
+        after: booking.athleteSlots,
+      });
+    }
+
     return args.id;
   },
 });
@@ -1137,12 +1364,48 @@ export const editBookingDuration = mutation({
     const coachPer30MinEdit = editDurSettings?.coachPer30Min ?? 15;
     const newCoachPrice = halfHours * coachPer30MinEdit;
 
+    // Bug #7: keep-what-fits when shortening a coach booking. Start time is
+    // unchanged, so only slots that now extend past the new end are dropped
+    // (never left dangling outside the window); dropped athletes get a removed
+    // email + audit entry. Kept slots are untouched.
+    const prevDurSlots = booking.athleteSlots ?? [];
+    const durDroppedSlots: any[] = [];
+    let durAdjustedSlots: any = booking.athleteSlots;
+    if (isShortening && prevDurSlots.length > 0) {
+      const newEnd = booking.startHour + args.newDuration / 60;
+      const kept: any[] = [];
+      for (const slot of prevDurSlots) {
+        const slotEnd = slot.startHour + slot.durationMinutes / 60;
+        if (slotEnd > newEnd + 0.001) durDroppedSlots.push(slot);
+        else kept.push(slot);
+      }
+      durAdjustedSlots = kept.length > 0 ? kept : undefined;
+    }
+
     await ctx.db.patch(args.id, {
       duration: args.newDuration,
       coachPrice: newCoachPrice,
+      ...(isShortening && prevDurSlots.length > 0 ? { athleteSlots: durAdjustedSlots } : {}),
     });
 
-    return args.id;
+    if (booking.isCoachBooking && durDroppedSlots.length > 0) {
+      await scheduleAthleteRemovedEmails(ctx, {
+        slots: durDroppedSlots,
+        laneId: booking.laneId,
+        date: booking.date,
+        coachName: booking.customerName,
+      });
+      await writeAllocationAudit(ctx, {
+        bookingId: args.id.toString(),
+        actorUserId: args.userId,
+        actorName: booking.customerName,
+        action: "remove",
+        before: prevDurSlots,
+        after: durAdjustedSlots ?? [],
+      });
+    }
+
+    return { id: args.id, droppedAthletes: durDroppedSlots.map((s: any) => s.athleteName) };
   },
 });
 
@@ -1287,22 +1550,27 @@ export const rescheduleBooking = mutation({
       newCoachPrice = halfHours * coachRatePer30;
     }
 
-    // Adjust athlete slots if start time changed
-    let adjustedAthleteSlots = booking.athleteSlots;
-    if (booking.athleteSlots && booking.athleteSlots.length > 0) {
+    // Bug #7: keep-what-fits. Shift every athlete slot by the time delta and
+    // keep those that still fit the new window. Slots that no longer fit are NOT
+    // silently dropped — the coach is told (return value), dropped athletes get a
+    // removed email, and the rest get a reschedule email (#3b).
+    const prevAthleteSlots = booking.athleteSlots ?? [];
+    const keptSlots: any[] = [];
+    const droppedSlots: any[] = [];
+    let adjustedAthleteSlots: any = booking.athleteSlots;
+    if (prevAthleteSlots.length > 0) {
       const timeDiff = args.newStartHour - booking.startHour;
-      adjustedAthleteSlots = booking.athleteSlots.map((slot) => ({
-        ...slot,
-        startHour: slot.startHour + timeDiff,
-      }));
       const newBookingEnd = args.newStartHour + args.newDuration / 60;
-      for (const slot of adjustedAthleteSlots) {
-        const slotEnd = slot.startHour + slot.durationMinutes / 60;
-        if (slot.startHour < args.newStartHour || slotEnd > newBookingEnd) {
-          adjustedAthleteSlots = undefined;
-          break;
+      for (const slot of prevAthleteSlots) {
+        const shifted = { ...slot, startHour: slot.startHour + timeDiff };
+        const slotEnd = shifted.startHour + shifted.durationMinutes / 60;
+        if (shifted.startHour < args.newStartHour - 0.001 || slotEnd > newBookingEnd + 0.001) {
+          droppedSlots.push(slot); // report the original (pre-shift) slot
+        } else {
+          keptSlots.push(shifted);
         }
       }
+      adjustedAthleteSlots = keptSlots.length > 0 ? keptSlots : undefined;
     }
 
     // Apply the reschedule
@@ -1371,10 +1639,46 @@ export const rescheduleBooking = mutation({
       });
     }
 
+    // decision #3b + Bug #7: notify allocated athletes. Kept athletes get a
+    // reschedule email (new time + door code); dropped athletes get a removed
+    // email. Mandatory; grouped per account.
+    if (booking.isCoachBooking) {
+      if (keptSlots.length > 0) {
+        await scheduleAthleteRescheduleEmails(ctx, {
+          slots: keptSlots,
+          laneId: newLaneId,
+          oldDate: booking.date,
+          newDate: args.newDate,
+          bookingAccessCode: args.newAccessCode ?? booking.accessCode,
+          coachName: booking.customerName,
+        });
+      }
+      if (droppedSlots.length > 0) {
+        await scheduleAthleteRemovedEmails(ctx, {
+          slots: droppedSlots,
+          laneId: booking.laneId,
+          date: booking.date,
+          coachName: booking.customerName,
+        });
+      }
+      if (keptSlots.length > 0 || droppedSlots.length > 0) {
+        await writeAllocationAudit(ctx, {
+          bookingId: args.id.toString(),
+          actorUserId: args.userId,
+          actorName: booking.customerName,
+          action: "reschedule",
+          before: prevAthleteSlots,
+          after: keptSlots,
+        });
+      }
+    }
+
     // Reset reminder flag so the new time gets a fresh reminder
     await ctx.db.patch(args.id, { reminderSent: false });
 
-    return args.id;
+    // Return dropped athlete names so the client can warn the coach (Bug #7 —
+    // never a silent drop).
+    return { id: args.id, droppedAthletes: droppedSlots.map((s: any) => s.athleteName) };
   },
 });
 
@@ -1410,24 +1714,30 @@ export const updateBookingAthleteSlots = mutation({
       })
     ),
     userId: v.string(),
+    // Bug #3: set true to proceed past a same-athlete double-booking warning.
+    confirmedOverride: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.id);
     if (!booking) throw new Error("Booking not found.");
     if (!booking.isCoachBooking) throw new Error("Only coach bookings can have athlete allocations.");
     if (booking.status === "cancelled") throw new Error("Cannot edit a cancelled booking.");
-    // Allow edit if: user is the booking owner, OR user is the coach (by email match), OR user is an admin
+    // Bug #5: authorize on identity, not name. Allow if: booking owner (by id or
+    // email), OR the coach whose email matches the booking's, OR an admin. The
+    // name comparison is dropped (two coaches sharing a name could collide).
+    let actorName: string | undefined = booking.customerName;
     if (booking.userId !== args.userId) {
       const requester = await ctx.db
         .query("customers")
         .withIndex("by_email", (q: any) => q.eq("email", args.userId))
         .first();
       const requesterById: any = requester ?? (await ctx.db.get(args.userId as any).catch(() => null));
+      actorName = requesterById?.name ?? actorName;
       const isAdmin = requesterById?.role === "admin";
       const isAssignedCoach =
         requesterById?.role === "coach" &&
-        (requesterById?.email === booking.customerEmail ||
-          requesterById?.name === booking.customerName);
+        (requesterById?._id === booking.userId ||
+          requesterById?.email === booking.customerEmail);
       if (!isAdmin && !isAssignedCoach) {
         throw new Error("You can only edit your own bookings.");
       }
@@ -1447,6 +1757,23 @@ export const updateBookingAthleteSlots = mutation({
       }
       if (slot.durationMinutes < minAthleteMins) {
         throw new Error(`Minimum athlete session is ${minAthleteMins} minutes.`);
+      }
+    }
+
+    // Bug #3: warn (don't block) if an athlete is allocated to ANOTHER active
+    // coach session that overlaps in time on the same date. Lane sharing within
+    // THIS booking is fine — the only conflict is the same athlete in two
+    // different sessions at once. Coach confirms via confirmedOverride to proceed.
+    if (!args.confirmedOverride) {
+      const conflicts = await detectAthleteConflicts(ctx, {
+        excludeBookingId: args.id,
+        date: booking.date,
+        slots: args.athleteSlots,
+      });
+      if (conflicts.length > 0) {
+        // CONFLICT:: prefix lets the client recognise this as a soft warning and
+        // re-submit with confirmedOverride after the coach clicks Proceed.
+        throw new Error("CONFLICT::" + conflicts.join(" "));
       }
     }
 
@@ -1493,6 +1820,29 @@ export const updateBookingAthleteSlots = mutation({
         coachName: booking.customerName,
       });
     }
+
+    // decision #3a: notify athletes dropped from the booking during this edit
+    // (present before, absent now). Mandatory removed-from-session email.
+    const finalKeys = new Set(finalSlots.map((s) => prevKey(s)));
+    const removedSlots = prevSlots.filter((ps) => !finalKeys.has(prevKey(ps)));
+    if (removedSlots.length > 0) {
+      await scheduleAthleteRemovedEmails(ctx, {
+        slots: removedSlots,
+        laneId: booking.laneId,
+        date: booking.date,
+        coachName: booking.customerName,
+      });
+    }
+
+    // Part 2: record the allocation change.
+    await writeAllocationAudit(ctx, {
+      bookingId: args.id.toString(),
+      actorUserId: args.userId,
+      actorName,
+      action: prevSlots.length === 0 ? "allocate" : removedSlots.length > 0 ? "remove" : "reallocate",
+      before: prevSlots,
+      after: finalSlots,
+    });
 
     // Trigger Google Calendar update if calendar event exists
     if (booking.googleCalendarEventId) {
@@ -1626,6 +1976,7 @@ export const updateCustomerByEmail = mutation({
     creditBalance: v.optional(v.number()),
     color: v.optional(v.string()),
     defaultSessionDuration: v.optional(v.number()),
+    athleteCapacity: v.optional(v.number()),
     bookingEmailsEnabled: v.optional(v.boolean()),
     emailPrefs: v.optional(v.array(v.object({ slug: v.string(), enabled: v.boolean() }))),
   },

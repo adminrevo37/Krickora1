@@ -239,6 +239,7 @@ export const listCustomersByRole = query({
       color: c.color,
       coachTier: c.coachTier,
       defaultSessionDuration: c.defaultSessionDuration,
+      athleteCapacity: c.athleteCapacity,
     }));
   },
 });
@@ -327,6 +328,28 @@ export const listAthletesByCoach = query({
       });
     }
     return results;
+  },
+});
+
+// Allocation change history for a booking (SPEC_COACH_ALLOCATION_AND_PLANNER
+// Part 2). Admin, the coach who owns the booking, or the booking owner only.
+// Newest first.
+export const getAllocationAuditLog = query({
+  args: { bookingId: v.string() },
+  handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return [];
+    const booking: any = await ctx.db.get(args.bookingId as any).catch(() => null);
+    if (!booking) return [];
+    const isOwnerOrCoach =
+      caller.isAdmin ||
+      (booking.customerEmail?.toLowerCase() === caller.email);
+    if (!isOwnerOrCoach) return [];
+    const rows = await ctx.db
+      .query("allocationAuditLog")
+      .withIndex("by_booking", (q: any) => q.eq("bookingId", args.bookingId))
+      .collect();
+    return rows.sort((a: any, b: any) => (a.at < b.at ? 1 : -1));
   },
 });
 

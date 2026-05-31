@@ -1,10 +1,19 @@
 import { internalAction, action } from "./_generated/server";
 import { v } from "convex/values";
 
-// Templates that users CANNOT opt out of (transactional/auth)
+// Templates that users CANNOT opt out of (transactional/auth + all athlete
+// notifications). Athlete emails are MANDATORY per the notifications redesign
+// (SPEC_NOTIFICATIONS_REDESIGN #8, A1–A5): the recipient is the parent account,
+// a third party to the coach booking, so they are never prefs-gated.
 const MANDATORY_TEMPLATES = new Set([
   "password-reset",
   "email-verification",
+  "athlete-allocation",
+  "athlete-cancellation",
+  "athlete-removed",
+  "athlete-reschedule",
+  "athlete-added",
+  "athlete-invite",
 ]);
 
 // Check if recipient has a specific email template enabled (defaults to true).
@@ -452,6 +461,83 @@ export const sendAthleteInvite = internalAction({
       childName: args.childName,
       coachName: args.coachName,
       signUpUrl: "https://krickora.com",
+    });
+  },
+});
+
+// Coach cancelled a session an athlete was allocated to (Bug #1). The session
+// is off for them — no instructions link / door code / add-to-calendar. Sent to
+// the parent account, addressed with the child's name (sibling-consolidated by
+// the caller). Mandatory.
+export const sendAthleteCancellation = internalAction({
+  args: {
+    to: v.string(),
+    athleteName: v.string(),
+    coachName: v.string(),
+    laneName: v.string(),
+    date: v.string(),
+    timeSlot: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    return await sendEmail("athlete-cancellation", args.to, {
+      athleteName: args.athleteName,
+      coachName: args.coachName,
+      laneName: args.laneName,
+      date: args.date,
+      timeSlot: args.timeSlot,
+    });
+  },
+});
+
+// Athlete dropped from a coach session during an edit (decision #3a). No
+// instructions link / door code — they are no longer attending. Mandatory.
+export const sendAthleteRemoved = internalAction({
+  args: {
+    to: v.string(),
+    athleteName: v.string(),
+    coachName: v.string(),
+    laneName: v.string(),
+    date: v.string(),
+    timeSlot: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    return await sendEmail("athlete-removed", args.to, {
+      athleteName: args.athleteName,
+      coachName: args.coachName,
+      laneName: args.laneName,
+      date: args.date,
+      timeSlot: args.timeSlot,
+    });
+  },
+});
+
+// Coach session moved (reschedule / time change) affecting an athlete's slot
+// (decision #3b). Carries the new time + door code + Facility Instructions link
+// (attend-a-session layout). Sent to the parent account. Mandatory.
+export const sendAthleteReschedule = internalAction({
+  args: {
+    to: v.string(),
+    athleteName: v.string(),
+    coachName: v.string(),
+    laneName: v.string(),
+    oldDate: v.optional(v.string()),
+    newDate: v.string(),
+    timeSlot: v.string(),
+    duration: v.string(),
+    accessCode: v.string(),
+    calendarUrl: v.optional(v.string()),
+  },
+  handler: async (_ctx, args) => {
+    return await sendEmail("athlete-reschedule", args.to, {
+      athleteName: args.athleteName,
+      coachName: args.coachName,
+      laneName: args.laneName,
+      oldDate: args.oldDate ?? "",
+      newDate: args.newDate,
+      timeSlot: args.timeSlot,
+      duration: args.duration,
+      accessCode: args.accessCode,
+      calendarUrl: args.calendarUrl ?? "https://krickora.com",
     });
   },
 });

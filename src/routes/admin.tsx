@@ -476,6 +476,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
   const [color, setColor] = useState(user.color || '')
   const [role, setRole] = useState(user.role || 'user')
   const [defaultSessionDuration, setDefaultSessionDuration] = useState<number>(user.defaultSessionDuration || 60)
+  const [athleteCapacity, setAthleteCapacity] = useState<number>(user.athleteCapacity || 1)
   const [busy, setBusy] = useState(false)
 
   const save = async (e: React.FormEvent) => {
@@ -483,7 +484,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
     setBusy(true)
     try {
       const args: any = { email: user.email, name, phone, role }
-      if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color; args.defaultSessionDuration = defaultSessionDuration }
+      if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color; args.defaultSessionDuration = defaultSessionDuration; args.athleteCapacity = athleteCapacity }
       await updateProfile(args)
       onClose()
     } catch (err: any) { alert(err?.message ?? 'Failed') }
@@ -545,6 +546,15 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
               <select value={defaultSessionDuration} onChange={e => setDefaultSessionDuration(Number(e.target.value))} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
                 {[30, 45, 60, 75, 90, 120].map(d => (
                   <option key={d} value={d}>{d} min</option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-sm">
+              <span className="font-medium text-gray-700">Athletes per session</span>
+              <p className="text-xs text-gray-400 mb-1">Max athletes at once — pre-fills that many back-to-back slots when allocating (1 = one-on-one)</p>
+              <select value={athleteCapacity} onChange={e => setAthleteCapacity(Number(e.target.value))} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
+                {[1, 2, 3, 4].map(n => (
+                  <option key={n} value={n}>{n === 1 ? '1 (one-on-one)' : `${n} athletes`}</option>
                 ))}
               </select>
             </label>

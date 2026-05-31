@@ -220,9 +220,12 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     return await rescheduleBooking(booking.id, { ...opts, userId: user.id })
   }
 
-  const handleSaveAthleteSlots = async (slots: { athleteName: string; startHour: number; durationMinutes: number }[]) => {
+  const handleSaveAthleteSlots = async (
+    slots: { athleteId?: string; athleteName: string; startHour: number; durationMinutes: number }[],
+    opts?: { confirmedOverride?: boolean },
+  ) => {
     if (!user || !athleteEditBooking) return { success: false, error: 'Not signed in.' }
-    return await updateAthleteSlots(athleteEditBooking.id, slots, user.id)
+    return await updateAthleteSlots(athleteEditBooking.id, slots, user.id, opts?.confirmedOverride)
   }
 
   // ── lane / pricing helpers ──────────────────────────────────────────────────
@@ -956,6 +959,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           onClose={() => setAthleteEditBooking(null)}
           bottomSheet={isCoach}
           defaultSessionDuration={(customerRecord as any)?.defaultSessionDuration ?? undefined}
+          athleteCapacity={(customerRecord as any)?.athleteCapacity ?? undefined}
         />
       )}
     </div>

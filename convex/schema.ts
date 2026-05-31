@@ -36,6 +36,7 @@ export default defineSchema({
     color: v.optional(v.string()),
     coachTier: v.optional(v.string()), // 'L1' | 'L2'
     defaultSessionDuration: v.optional(v.number()), // coach default athlete slot duration in minutes
+    athleteCapacity: v.optional(v.number()), // coach max athletes per session (1-4); drives auto-populate
     bookingEmailsEnabled: v.optional(v.boolean()),
     emailPrefs: v.optional(
       v.array(
@@ -117,6 +118,19 @@ export default defineSchema({
   })
     .index("by_targetEmail", ["targetEmail"])
     .index("by_changedAt", ["changedAt"]),
+
+  // Allocation change history (SPEC_COACH_ALLOCATION_AND_PLANNER Part 2).
+  // One row per allocation change on a coach booking — who, when, what changed.
+  // before/after are athleteSlots snapshots. Kept forever (low volume).
+  allocationAuditLog: defineTable({
+    bookingId: v.string(),
+    at: v.string(), // ISO timestamp
+    actorUserId: v.optional(v.string()),
+    actorName: v.optional(v.string()),
+    action: v.string(), // 'allocate' | 'reallocate' | 'remove' | 'cancel' | 'reschedule'
+    before: v.optional(v.array(v.any())),
+    after: v.optional(v.array(v.any())),
+  }).index("by_booking", ["bookingId"]),
 
   // Rate-limit buckets (SEC decision #5 fallback — used when the official
   // @convex-dev/rate-limiter component cannot be installed on Shipper's locked

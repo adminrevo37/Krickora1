@@ -287,6 +287,43 @@ export const addAthleteToCoach = mutation({
   },
 });
 
+// A coach (or admin) removes an athlete from THEIR OWN roster — pulls the
+// coach's _id from the athlete's assignedCoachIds. Only affects future dropdown
+// availability; past bookings/allocations are untouched (Part 4 "Removal").
+export const removeAthleteFromCoach = mutation({
+  args: {
+    coachId: v.string(),
+    athleteId: v.id("athletes"),
+  },
+  handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) throw new Error("Authentication required.");
+    const callerCustomer = await getCallerCustomer(ctx);
+    const isSelfCoach =
+      callerCustomer &&
+      callerCustomer.role === "coach" &&
+      (callerCustomer._id === args.coachId ||
+        callerCustomer.email === args.coachId.toLowerCase().trim());
+    if (!caller.isAdmin && !isSelfCoach) {
+      throw new Error("Only the coach or an admin can remove athletes from a roster.");
+    }
+    const athlete = await ctx.db.get(args.athleteId);
+    if (!athlete) throw new Error("Athlete not found.");
+    // Normalise the coach to their _id (callers may pass an email).
+    let coachIdNorm = args.coachId;
+    const coachByEmail = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", args.coachId.toLowerCase().trim()))
+      .first();
+    if (coachByEmail && coachByEmail.role === "coach") coachIdNorm = coachByEmail._id;
+    const next = (athlete.assignedCoachIds ?? []).filter(
+      (c: string) => c !== coachIdNorm && c !== args.coachId
+    );
+    await ctx.db.patch(args.athleteId, { assignedCoachIds: next });
+    return { success: true };
+  },
+});
+
 // Small deterministic string hash (no Math.random in Convex determinism rules).
 function hashString(s: string): number {
   let h = 0;

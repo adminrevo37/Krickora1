@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
-import { useQuery } from 'convex/react'
+import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { formatTime, type AthleteSlot } from '../lib/booking-data'
 
@@ -8,11 +8,16 @@ interface AthleteAllocationEditorProps {
   bookingDuration: number // in minutes
   currentSlots: AthleteSlot[]
   coachId: string // The coach's customer _id or email to fetch their athletes
-  onSave: (slots: AthleteSlot[]) => Promise<{ success: boolean; error?: string }>
+  onSave: (slots: AthleteSlot[], opts?: { confirmedOverride?: boolean }) => Promise<{ success: boolean; error?: string; conflict?: boolean }>
   onClose: () => void
   bottomSheet?: boolean // render as a mobile bottom sheet instead of a centred modal
   defaultSessionDuration?: number // coach's preferred default slot length in minutes
+  athleteCapacity?: number // coach's max athletes per session (1-4) — drives auto-populate
 }
+
+// Bug #6: snap an hour value to the nearest quarter to avoid float drift
+// (e.g. 9.5000000001). All slot start times pass through this.
+const roundToQuarter = (h: number) => Math.round(h * 4) / 4
 
 export default function AthleteAllocationEditor({
   bookingStartHour,
@@ -23,18 +28,32 @@ export default function AthleteAllocationEditor({
   onClose,
   bottomSheet = false,
   defaultSessionDuration,
+  athleteCapacity,
 }: AthleteAllocationEditorProps) {
-  // Default to a single empty slot (1:1 private coaching) when no existing slots.
+  const bookingEndHour = bookingStartHour + bookingDuration / 60
   // Use the coach's configured default session duration, capped at the booking length.
-  // The dropdown is auto-opened so the coach can immediately pick their athlete.
   const defaultSlotDuration = Math.min(defaultSessionDuration ?? 60, bookingDuration)
-  const defaultSlot: AthleteSlot = {
-    athleteName: '',
-    startHour: bookingStartHour,
-    durationMinutes: defaultSlotDuration,
+
+  // Part 2.5 — auto-populate: lay out up to `athleteCapacity` empty slots
+  // back-to-back at the preferred interval, starting at booking start (capped to
+  // the window). The coach just picks who goes in each pre-made slot, and can
+  // delete/shift to insert rest-break gaps. Capacity 1 = a single 1:1 slot.
+  const buildAutoSlots = (): AthleteSlot[] => {
+    const cap = Math.max(1, Math.min(athleteCapacity ?? 1, 4))
+    const out: AthleteSlot[] = []
+    let cursor = bookingStartHour
+    for (let i = 0; i < cap; i++) {
+      const remaining = Math.round((bookingEndHour - cursor) * 60)
+      if (remaining < 15) break
+      const dur = Math.min(defaultSlotDuration, remaining)
+      out.push({ athleteName: '', startHour: roundToQuarter(cursor), durationMinutes: dur })
+      cursor += dur / 60
+    }
+    return out.length > 0 ? out : [{ athleteName: '', startHour: bookingStartHour, durationMinutes: defaultSlotDuration }]
   }
+
   const [slots, setSlots] = useState<AthleteSlot[]>(
-    currentSlots.length > 0 ? currentSlots.map(s => ({ ...s })) : [defaultSlot]
+    currentSlots.length > 0 ? currentSlots.map(s => ({ ...s })) : buildAutoSlots()
   )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -46,9 +65,47 @@ export default function AthleteAllocationEditor({
   // Review mode: when athletes are already allocated, show a clean read-only summary
   // so coaches can quickly confirm without accidentally editing anything
   const [reviewMode, setReviewMode] = useState(currentSlots.length > 0)
+  // Bug #3: same-athlete double-booking warning (coach confirms to proceed).
+  const [conflictWarning, setConflictWarning] = useState<string | null>(null)
+  // Part 4: coach-managed roster — add an athlete by parent email + child name.
+  const [showAddAthlete, setShowAddAthlete] = useState(false)
+  const [addParentEmail, setAddParentEmail] = useState('')
+  const [addChildName, setAddChildName] = useState('')
+  const [addBusy, setAddBusy] = useState(false)
+  const [addFeedback, setAddFeedback] = useState<string | null>(null)
 
   // Fetch athletes assigned to this coach from Convex
   const athletes = useQuery(api.queries.listAthletesByCoach, coachId ? { coachId } : "skip")
+  const addAthleteToCoach = useMutation(api.athletes.addAthleteToCoach)
+  const removeAthleteFromCoach = useMutation(api.athletes.removeAthleteFromCoach)
+
+  const handleAddAthlete = async () => {
+    const email = addParentEmail.trim()
+    const child = addChildName.trim()
+    if (!email || !child) { setAddFeedback('Enter both the parent email and the athlete name.'); return }
+    setAddBusy(true)
+    setAddFeedback(null)
+    try {
+      const res = await addAthleteToCoach({ coachId, parentEmail: email, childName: child })
+      setAddFeedback(res?.accountExists ? `Added ${child} — they're now in your list.` : `Invite sent to ${email}.`)
+      setAddParentEmail('')
+      setAddChildName('')
+      if (res?.accountExists) setShowAddAthlete(false)
+    } catch (err: any) {
+      setAddFeedback(err?.message ?? 'Could not add athlete.')
+    } finally {
+      setAddBusy(false)
+    }
+  }
+
+  const handleRemoveFromRoster = async (athleteId: string, name: string) => {
+    if (!confirm(`Remove ${name} from your roster? Past bookings are unaffected; they just won't appear when allocating future sessions.`)) return
+    try {
+      await removeAthleteFromCoach({ coachId, athleteId: athleteId as any })
+    } catch (err: any) {
+      alert(err?.message ?? 'Could not remove athlete.')
+    }
+  }
 
   // Timeout for loading state — if athletes haven't loaded in 5 seconds, show fallback
   useEffect(() => {
@@ -60,12 +117,10 @@ export default function AthleteAllocationEditor({
     return () => clearTimeout(timer)
   }, [athletes])
 
-  const bookingEndHour = bookingStartHour + bookingDuration / 60
-
   const getValidStartTimes = useCallback(() => {
     const times: number[] = []
-    for (let h = bookingStartHour; h < bookingEndHour; h += 0.25) {
-      times.push(Math.round(h * 100) / 100)
+    for (let h = bookingStartHour; h < bookingEndHour - 0.001; h += 0.25) {
+      times.push(roundToQuarter(h))
     }
     return times
   }, [bookingStartHour, bookingEndHour])
@@ -126,7 +181,7 @@ export default function AthleteAllocationEditor({
     const updated = [...slots]
     const oldSlot = updated[index]
     if (field === 'startHour') {
-      const newStart = value
+      const newStart = roundToQuarter(value)
       const maxDur = Math.round((bookingEndHour - newStart) * 60)
       const newDur = Math.min(oldSlot.durationMinutes, maxDur)
       updated[index] = {
@@ -146,22 +201,22 @@ export default function AthleteAllocationEditor({
   }
 
   const validate = (): string | null => {
-    if (slots.length === 0) return null
-    for (let i = 0; i < slots.length; i++) {
-      const s = slots[i]
-      if (!s.athleteName.trim()) return `Athlete ${i + 1} needs to be selected.`
+    // Empty (unselected) slots are auto-populate placeholders — they are ignored
+    // on save, not errors. Only validate filled slots.
+    const filled = slots.filter(s => s.athleteName.trim())
+    for (const s of filled) {
       if (s.startHour < bookingStartHour) return `${s.athleteName}'s start time is before the booking starts.`
       const slotEnd = s.startHour + s.durationMinutes / 60
       if (slotEnd > bookingEndHour + 0.001) return `${s.athleteName}'s session extends past the booking end.`
       if (s.durationMinutes < 15) return `${s.athleteName}'s session must be at least 15 minutes.`
     }
-    const names = slots.map(s => s.athleteName.toLowerCase().trim()).filter(Boolean)
+    const names = filled.map(s => s.athleteName.toLowerCase().trim())
     const uniqueNames = new Set(names)
     if (uniqueNames.size !== names.length) return 'Each athlete can only be allocated once.'
     return null
   }
 
-  const handleSave = async () => {
+  const handleSave = async (confirmedOverride = false) => {
     const validationError = validate()
     if (validationError) {
       setError(validationError)
@@ -170,17 +225,22 @@ export default function AthleteAllocationEditor({
     setSaving(true)
     setError(null)
     setSuccessMsg(null)
+    if (!confirmedOverride) setConflictWarning(null)
     const cleanSlots = slots.filter(s => s.athleteName.trim()).map(s => ({
       athleteId: s.athleteId,
       athleteName: s.athleteName.trim(),
       startHour: s.startHour,
       durationMinutes: s.durationMinutes,
     }))
-    const result = await onSave(cleanSlots)
+    const result = await onSave(cleanSlots, { confirmedOverride })
     setSaving(false)
     if (result.success) {
+      setConflictWarning(null)
       setSuccessMsg('Athlete allocations saved!')
       setTimeout(() => onClose(), 1200)
+    } else if (result.conflict) {
+      // Bug #3: soft warning — coach can confirm to proceed.
+      setConflictWarning(result.error ?? 'This athlete is already booked at that time.')
     } else {
       setError(result.error ?? 'Failed to save.')
     }
@@ -554,6 +614,61 @@ export default function AthleteAllocationEditor({
             </div>
           )}
 
+          {/* Part 4 — coach-managed roster: add an athlete who isn't in the list yet */}
+          <div className="border-t border-gray-100 dark:border-gray-800 pt-3">
+            {!showAddAthlete ? (
+              <button
+                onClick={() => { setShowAddAthlete(true); setAddFeedback(null) }}
+                className="w-full py-2 text-xs font-semibold text-gray-500 dark:text-gray-400 hover:text-orange-500 transition-colors flex items-center justify-center gap-1.5"
+              >
+                <span className="text-sm">＋</span> Add a new athlete to your list
+              </button>
+            ) : (
+              <div className="bg-gray-50 dark:bg-gray-800/50 rounded-xl p-3 border border-gray-200 dark:border-gray-700 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-gray-600 dark:text-gray-400">Add an athlete</span>
+                  <button onClick={() => setShowAddAthlete(false)} className="text-gray-400 hover:text-gray-600 text-xs">✕</button>
+                </div>
+                <p className="text-[10px] text-gray-400">If they already have an account we'll add them straight away; otherwise we email the parent an invite to register.</p>
+                <input
+                  value={addChildName}
+                  onChange={e => setAddChildName(e.target.value)}
+                  placeholder="Athlete name"
+                  className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none text-gray-800 dark:text-gray-200 placeholder-gray-400"
+                />
+                <input
+                  value={addParentEmail}
+                  onChange={e => setAddParentEmail(e.target.value)}
+                  type="email"
+                  placeholder="Parent / account email"
+                  className="w-full px-3 py-2 text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-orange-500 outline-none text-gray-800 dark:text-gray-200 placeholder-gray-400"
+                />
+                <button
+                  onClick={handleAddAthlete}
+                  disabled={addBusy}
+                  className="w-full py-2 bg-emerald-500 hover:bg-emerald-600 disabled:bg-emerald-300 text-white font-semibold text-sm rounded-lg transition-colors"
+                >
+                  {addBusy ? 'Adding…' : 'Add athlete'}
+                </button>
+                {addFeedback && <p className="text-[11px] text-gray-600 dark:text-gray-300">{addFeedback}</p>}
+              </div>
+            )}
+          </div>
+
+          {/* Bug #3 — same-athlete double-booking warning (coach confirms to proceed) */}
+          {conflictWarning && (
+            <div className="bg-amber-50 dark:bg-amber-900/20 rounded-xl p-3 border border-amber-300 dark:border-amber-700/50 space-y-2">
+              <div className="flex items-start gap-2">
+                <span className="text-base">⚠️</span>
+                <p className="text-xs text-amber-800 dark:text-amber-300">{conflictWarning} Allocate them anyway?</p>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setConflictWarning(null)} className="flex-1 px-3 py-1.5 text-xs font-semibold text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">Cancel</button>
+                <button onClick={() => handleSave(true)} disabled={saving} className="flex-1 px-3 py-1.5 text-xs font-bold text-white bg-amber-500 hover:bg-amber-600 rounded-lg disabled:opacity-60">Proceed anyway</button>
+              </div>
+            </div>
+          )}
+
         </div>
         )} {/* end !reviewMode */}
 
@@ -593,7 +708,7 @@ export default function AthleteAllocationEditor({
                 {currentSlots.length > 0 ? '← Back' : 'Cancel'}
               </button>
               <button
-                onClick={handleSave}
+                onClick={() => handleSave()}
                 disabled={saving}
                 className="flex-1 px-6 py-2.5 bg-orange-500 hover:bg-orange-600 disabled:bg-orange-300 text-white font-bold text-sm rounded-xl shadow-md transition-all disabled:cursor-not-allowed active:scale-95"
               >

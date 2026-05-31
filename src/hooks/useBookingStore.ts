@@ -320,7 +320,12 @@ export function useBookings() {
   )
 
   const updateAthleteSlots = useCallback(
-    async (bookingId: string, athleteSlots: { athleteId?: string; athleteName: string; startHour: number; durationMinutes: number }[], userId: string) => {
+    async (
+      bookingId: string,
+      athleteSlots: { athleteId?: string; athleteName: string; startHour: number; durationMinutes: number }[],
+      userId: string,
+      confirmedOverride?: boolean,
+    ) => {
       try {
         await updateAthleteSlotsMut({
           id: bookingId as Id<"bookings">,
@@ -328,10 +333,19 @@ export function useBookings() {
           // validator types it as Id<"athletes"> — cast at the boundary.
           athleteSlots: athleteSlots as any,
           userId,
+          confirmedOverride,
         })
         return { success: true }
       } catch (err: any) {
-        return { success: false, error: err?.message ?? 'Failed to update athlete allocations.' }
+        const msg: string = err?.message ?? 'Failed to update athlete allocations.'
+        // Bug #3: a same-athlete double-booking is a soft warning, not a hard
+        // failure. The mutation tags it with CONFLICT:: — surface it so the UI
+        // can confirm and re-submit with confirmedOverride.
+        if (typeof msg === 'string' && msg.includes('CONFLICT::')) {
+          const human = (msg.split('CONFLICT::')[1] ?? '').split('\n')[0].trim()
+          return { success: false, conflict: true, error: human || 'This athlete is already booked at that time.' }
+        }
+        return { success: false, error: msg }
       }
     },
     [updateAthleteSlotsMut]

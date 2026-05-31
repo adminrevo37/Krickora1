@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { useMutation } from 'convex/react'
+import { useMutation, useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { LANES, formatTime, getCoachPrice, getCustomerPrice, canBookSlot, getAWSTNow, type Booking } from '../lib/booking-data'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
@@ -82,6 +82,12 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
   }, [booking.isCoachBooking, booking.variantId, laneId, duration])
 
   const history = booking.modificationHistory ?? []
+
+  // Part 2 — allocation change history (coach bookings only).
+  const allocationAudit = useQuery(
+    api.queries.getAllocationAuditLog,
+    booking.isCoachBooking ? { bookingId: booking.id } : 'skip',
+  )
 
   // Detect whether a cancellation is already recorded in the history array
   const hasCancelledInHistory = history.some(h =>
@@ -234,6 +240,47 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                         </span>
                       </div>
                     ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Allocation change history (Part 2) — coach bookings only */}
+              {booking.isCoachBooking && allocationAudit && allocationAudit.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide mb-2">
+                    🧾 Allocation History
+                    <span className="ml-2 text-[10px] font-normal text-gray-400 normal-case tracking-normal">
+                      ({allocationAudit.length} change{allocationAudit.length !== 1 ? 's' : ''})
+                    </span>
+                  </h4>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {allocationAudit.map((entry: any) => {
+                      const label: Record<string, string> = {
+                        allocate: 'Athletes allocated',
+                        reallocate: 'Allocation changed',
+                        remove: 'Athlete(s) removed',
+                        cancel: 'Session cancelled',
+                        reschedule: 'Session rescheduled',
+                      }
+                      const names = (slots: any[] | undefined) =>
+                        (slots ?? []).map((s) => s.athleteName).join(', ') || '—'
+                      return (
+                        <div key={entry._id} className="bg-gray-50 dark:bg-gray-800 rounded-lg p-2.5 text-xs">
+                          <div className="flex justify-between mb-1">
+                            <span className="font-semibold text-gray-700 dark:text-gray-300">
+                              {label[entry.action] ?? entry.action}
+                            </span>
+                            <span className="text-gray-500">{new Date(entry.at).toLocaleString()}</span>
+                          </div>
+                          <p className="text-[10px] text-gray-500 dark:text-gray-400">
+                            {entry.actorName ? `By ${entry.actorName} · ` : ''}
+                            <span className="text-gray-400">was:</span> {names(entry.before)}
+                            {' → '}
+                            <span className="text-gray-400">now:</span> {names(entry.after)}
+                          </p>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
               )}
