@@ -66,6 +66,12 @@ export async function releaseHoldForBooking(ctx: any, bookingId: string): Promis
  * True if any UNEXPIRED hold on `laneIds`/`date` overlaps [startHour, endHour).
  * Skips holds belonging to `excludeBookingId` (the booking being created/edited).
  * Expired holds are ignored (the sweep will delete them).
+ *
+ * Waitlist offer holds (SPEC_WAITLIST_OFFER_REDESIGN) are exclusive to one
+ * member: the held user passes their OWN waitlist hold (`callerUserId`), and
+ * coaches/admin bypass waitlist holds entirely (`bypassWaitlistHolds`) since the
+ * first-refusal reservation only fences off other customers. Checkout holds
+ * always block regardless of these flags.
  */
 export async function hasActiveHoldConflict(
   ctx: any,
@@ -75,6 +81,8 @@ export async function hasActiveHoldConflict(
     startHour: number;
     endHour: number;
     excludeBookingId?: string;
+    callerUserId?: string;
+    bypassWaitlistHolds?: boolean;
   }
 ): Promise<boolean> {
   const now = Date.now();
@@ -86,6 +94,10 @@ export async function hasActiveHoldConflict(
     const conflict = holds.some((h: any) => {
       if (h.expiresAt <= now) return false; // expired — not blocking
       if (args.excludeBookingId && h.bookingId === args.excludeBookingId) return false;
+      if (h.holdType === "waitlist") {
+        if (args.bypassWaitlistHolds) return false; // coach/admin not fenced off
+        if (args.callerUserId && h.userId === args.callerUserId) return false; // the offeree
+      }
       const holdLanes = [h.laneId, ...((h.additionalLaneIds as string[]) ?? [])];
       if (!holdLanes.includes(laneId)) return false;
       const hEnd = h.startHour + h.duration / 60;

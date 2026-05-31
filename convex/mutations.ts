@@ -11,6 +11,10 @@ import {
   hasActiveHoldConflict,
 } from "./lib/slotHolds";
 import {
+  scheduleWaitlistAdvance,
+  consumeWaitlistHoldForBooking,
+} from "./waitlist";
+import {
   getAWSTNow,
   checkBookingHorizon,
   checkLeadTime,
@@ -429,6 +433,24 @@ export async function applyBookingChange(
     reminderSent: false,
   });
 
+  // SPEC_WAITLIST_OFFER_REDESIGN: a reschedule/modify away from the old slot
+  // frees it — offer it to the next waitlisted member. `booking.*` here still
+  // holds the PRE-patch (old) slot. An in-place extend leaves the booking
+  // covering the old hours, so the engine just sees it filled and no-ops.
+  await scheduleWaitlistAdvance(ctx, {
+    laneId: booking.laneId,
+    date: booking.date,
+    startHour: booking.startHour,
+    duration: booking.duration,
+  });
+  // The NEW slot is now filled by this booking — clear any waitlist on it (#6).
+  await scheduleWaitlistAdvance(ctx, {
+    laneId: change.newLaneId,
+    date: change.newDate,
+    startHour: change.newStartHour,
+    duration: change.newDuration,
+  });
+
   // Delete old calendar events, then create fresh ones at the new slot.
   if (oldCalEventId) {
     await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
@@ -716,13 +738,17 @@ export const createBooking = mutation({
 
     // Respect active slot holds (in-flight checkout / waitlist offer) — the
     // shared hold mechanism (SPEC_PAYMENTS_AND_CREDIT #3). Expired holds are
-    // ignored here and cleaned up by the sweep.
+    // ignored here and cleaned up by the sweep. A waitlist first-refusal hold is
+    // exclusive: the held member passes their own (callerUserId), and coaches/
+    // admin aren't fenced off by a customer offer (bypassWaitlistHolds).
     if (
       await hasActiveHoldConflict(ctx, {
         laneIds: allLaneIds,
         date: args.date,
         startHour: args.startHour,
         endHour,
+        callerUserId: args.userId,
+        bypassWaitlistHolds: callerRole !== "customer",
       })
     ) {
       throw new Error("This slot is no longer available. Please choose another time.");
@@ -761,6 +787,17 @@ export const createBooking = mutation({
       notes: args.notes,
       paymentStatus: args.paymentStatus,
       priceInCents: args.priceInCents,
+    });
+
+    // SPEC_WAITLIST_OFFER_REDESIGN: if this booking is the waitlisted member
+    // acting on their exclusive offer, consume the waitlist hold + mark their
+    // entry booked so the queue doesn't roll on while they (potentially) pay.
+    await consumeWaitlistHoldForBooking(ctx, {
+      userId: args.userId,
+      laneId: args.laneId,
+      date: args.date,
+      startHour: args.startHour,
+      duration: args.duration,
     });
 
     // SPEC_PAYMENTS_AND_CREDIT #3: a pending_payment booking holds its slot via a
@@ -1194,6 +1231,15 @@ export const cancelBooking = mutation({
 
     // Release any checkout hold tied to this booking (frees it for the sweep).
     await releaseHoldForBooking(ctx, args.id.toString());
+
+    // SPEC_WAITLIST_OFFER_REDESIGN: the slot just freed — offer it to the next
+    // waitlisted member (sequential first-refusal). Auto-triggered, no admin.
+    await scheduleWaitlistAdvance(ctx, {
+      laneId: booking.laneId,
+      date: booking.date,
+      startHour: booking.startHour,
+      duration: booking.duration,
+    });
 
     // Sync cancellation to Google Calendar
     if (booking.googleCalendarEventId) {
@@ -3179,6 +3225,12 @@ export const removeFromWaitlist = mutation({
 });
 
 // Notify waitlisted users when a slot opens up — ADMIN ONLY
+// SPEC_WAITLIST_OFFER_REDESIGN: retired the old notify-ALL blast (it emailed
+// every waitlisted user at once AND deleted every entry before anyone booked —
+// the core "race condition" bug). This is now an ADMIN MANUAL OVERRIDE that just
+// kicks the sequential first-refusal engine for the given slot-hours; the engine
+// makes one exclusive offer at a time and rolls on automatically. Signature kept
+// (laneName unused) so any existing caller keeps working.
 export const notifyWaitlistedUsers = mutation({
   args: {
     laneId: v.string(),
@@ -3188,59 +3240,14 @@ export const notifyWaitlistedUsers = mutation({
   },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
-    const notificationIds: string[] = [];
-
     for (const hour of args.hours) {
-      const waitlisted = await ctx.db
-        .query("waitlist")
-        .withIndex("by_slot", (q: any) =>
-          q.eq("laneId", args.laneId).eq("date", args.date).eq("hour", hour)
-        )
-        .collect();
-
-      const otherCount = Math.max(0, waitlisted.length - 1);
-      for (const entry of waitlisted) {
-        const bookingUrl = `/?book=${args.laneId}&date=${args.date}&hour=${hour}`;
-        const notifId = await ctx.db.insert("waitlistNotifications", {
-          userId: entry.userId,
-          userEmail: entry.userEmail,
-          userName: entry.userName,
-          laneId: args.laneId,
-          laneName: args.laneName,
-          date: args.date,
-          hour,
-          sentAt: new Date().toISOString(),
-          bookingUrl,
-          dismissed: false,
-        });
-        notificationIds.push(notifId);
-
-        // Email every waitlisted user (first-come-first-served)
-        const fmtHour = (h: number) => {
-          const hr = Math.floor(h);
-          const min = Math.round((h - hr) * 60);
-          const period = hr >= 12 ? "PM" : "AM";
-          const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
-          return `${display}:${min.toString().padStart(2, "0")} ${period}`;
-        };
-        const formattedDate = new Date(args.date + "T00:00:00").toLocaleDateString("en-US", {
-          weekday: "long", year: "numeric", month: "long", day: "numeric",
-        });
-        await ctx.scheduler.runAfter(0, internal.emails.sendWaitlistVacancy, {
-          to: entry.userEmail,
-          customerName: entry.userName,
-          laneName: args.laneName,
-          date: formattedDate,
-          timeSlot: `${fmtHour(hour)} - ${fmtHour(hour + 1)}`,
-          bookingUrl: `https://krickora.com${bookingUrl}`,
-          otherWaitlistCount: String(otherCount),
-        });
-
-        await ctx.db.delete(entry._id);
-      }
+      await ctx.scheduler.runAfter(0, internal.waitlist.advanceWaitlistOffer, {
+        laneId: args.laneId,
+        date: args.date,
+        hour,
+      });
     }
-
-    return notificationIds;
+    return { triggered: args.hours.length };
   },
 });
 
@@ -3307,6 +3314,7 @@ export const updateSiteSettings = mutation({
     adminGateEnabled: v.optional(v.boolean()),
     adminUnlockMinutes: v.optional(v.number()),
     abandonedCheckoutMinutes: v.optional(v.number()),
+    waitlistOfferHoldMinutes: v.optional(v.number()),
     dailyHours: v.optional(
       v.array(
         v.object({

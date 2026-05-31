@@ -246,10 +246,11 @@ export default function SettingsPanel() {
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-100">
           <h3 className="text-lg font-bold text-gray-800">💳 Payments & Holds</h3>
-          <p className="text-sm text-gray-500 mt-0.5">How long an unpaid checkout holds its slot before release</p>
+          <p className="text-sm text-gray-500 mt-0.5">How long an unpaid checkout holds its slot, and how long a freed slot is reserved for the next waitlisted member</p>
         </div>
         <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           <NumberInput label="Abandoned checkout release (minutes)" value={settings.abandonedCheckoutMinutes ?? 10} onChange={(v) => updateSettings({ abandonedCheckoutMinutes: v })} />
+          <NumberInput label="Waitlist offer hold (minutes)" value={settings.waitlistOfferHoldMinutes ?? 15} onChange={(v) => updateSettings({ waitlistOfferHoldMinutes: v })} />
         </div>
       </div>
 

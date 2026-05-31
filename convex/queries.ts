@@ -390,6 +390,48 @@ export const listWaitlistEntries = query({
   },
 });
 
+// Admin waitlist + offer dashboard (SPEC_WAITLIST_OFFER_REDESIGN). Returns every
+// non-terminal waitlist entry (waiting/offered) with PII + the active first-
+// refusal holds, so the admin UI can show queues, the current offeree, and a
+// live countdown. Entries come back oldest-first (queue order).
+export const listWaitlistAdmin = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+    const all = await ctx.db.query("waitlist").collect();
+    const entries = all
+      .filter((e: any) => {
+        const st = e.status ?? "waiting";
+        return st === "waiting" || st === "offered";
+      })
+      .sort((a: any, b: any) => a._creationTime - b._creationTime)
+      .map((e: any) => ({
+        _id: e._id,
+        userId: e.userId,
+        userName: e.userName,
+        userEmail: e.userEmail,
+        laneId: e.laneId,
+        date: e.date,
+        hour: e.hour,
+        status: e.status ?? "waiting",
+        offerExpiresAt: e.offerExpiresAt ?? null,
+        createdAt: e._creationTime,
+      }));
+    const now = Date.now();
+    const holds = (await ctx.db.query("slotHolds").collect())
+      .filter((h: any) => h.holdType === "waitlist" && h.expiresAt > now)
+      .map((h: any) => ({
+        laneId: h.laneId,
+        date: h.date,
+        startHour: h.startHour,
+        userId: h.userId,
+        userEmail: h.userEmail,
+        expiresAt: h.expiresAt,
+      }));
+    return { entries, holds };
+  },
+});
+
 // List waitlist entries by user — self or admin only.
 export const listWaitlistByUser = query({
   args: { userId: v.string() },

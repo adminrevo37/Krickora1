@@ -375,13 +375,17 @@ export const sendWaitlistVacancy = internalAction({
     timeSlot: v.string(),
     bookingUrl: v.string(),
     otherWaitlistCount: v.string(),
+    // SPEC_WAITLIST_OFFER_REDESIGN: exclusive first-refusal offer. The slot is
+    // held for THIS member only until offerDeadline (AWST), then it rolls to the
+    // next person. Template copy must convey "reserved for you until {deadline}".
+    offerDeadline: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     if (!(await emailEnabledForUser(ctx, args.to, "waitlist-vacancy"))) {
       console.log(`[waitlist-vacancy] Skipped — user disabled this email: ${args.to}`);
       return { success: false, skipped: true, reason: "User disabled this email" };
     }
-    console.log(`[waitlist-vacancy] Sending to ${args.to} for ${args.laneName} ${args.date} ${args.timeSlot}`);
+    console.log(`[waitlist-vacancy] Sending to ${args.to} for ${args.laneName} ${args.date} ${args.timeSlot} (held until ${args.offerDeadline ?? "n/a"})`);
     const result = await sendEmail("waitlist-vacancy", args.to, {
       customerName: args.customerName,
       laneName: args.laneName,
@@ -389,6 +393,7 @@ export const sendWaitlistVacancy = internalAction({
       timeSlot: args.timeSlot,
       bookingUrl: args.bookingUrl,
       otherWaitlistCount: args.otherWaitlistCount,
+      offerDeadline: args.offerDeadline ?? "",
     });
     if (!result.success) {
       console.error(`[waitlist-vacancy] Failed to ${args.to}: ${result.reason}`);

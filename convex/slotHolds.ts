@@ -1,5 +1,6 @@
 import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+import { scheduleWaitlistAdvance } from "./waitlist";
 
 /**
  * Abandoned-checkout slot release (SPEC_PAYMENTS_AND_CREDIT #3).
@@ -50,8 +51,15 @@ async function releaseAbandonedBooking(ctx: any, booking: any): Promise<boolean>
     .withIndex("by_bookingId", (q: any) => q.eq("bookingId", booking._id.toString()))
     .collect();
   for (const h of holds) await ctx.db.delete(h._id);
-  // TODO (SPEC_WAITLIST_OFFER_REDESIGN): trigger the sequential waitlist offer
-  // for this freed slot here once the waitlist build lands.
+  // SPEC_WAITLIST_OFFER_REDESIGN: a released (abandoned) booking frees its slot —
+  // offer it to the next waitlisted member. A reverted pending_edit_payment keeps
+  // its CONFIRMED slot, so the engine there just sees it filled and no-ops.
+  await scheduleWaitlistAdvance(ctx, {
+    laneId: booking.laneId,
+    date: booking.date,
+    startHour: booking.startHour,
+    duration: booking.duration,
+  });
   return unpaidPending;
 }
 
@@ -74,9 +82,19 @@ export const releaseExpiredHolds = internalMutation({
           continue; // releaseAbandonedBooking already deleted the hold(s)
         }
       }
-      // Waitlist offer holds (and orphaned checkout holds) — just drop them.
-      // The waitlist build will add re-offer logic before deleting its own.
+      // Waitlist offer holds — the engine's self-scheduled roll-on normally
+      // fires first; this backstop catches a missed one. Drop the expired hold
+      // and re-run the engine so the offer rolls to the next member.
+      const wasWaitlist = hold.holdType === "waitlist";
       await ctx.db.delete(hold._id);
+      if (wasWaitlist) {
+        await scheduleWaitlistAdvance(ctx, {
+          laneId: hold.laneId,
+          date: hold.date,
+          startHour: hold.startHour,
+          duration: hold.duration,
+        });
+      }
     }
 
     return { expiredHolds: expired.length, releasedBookings };

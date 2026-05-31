@@ -9,6 +9,7 @@ import SettingsPanel from '../components/SettingsPanel'
 import CoachStatementTable from '../components/CoachStatementTable'
 import AdminDiscountCodesTab from '../components/AdminDiscountCodesTab'
 import AdminFaultInbox from '../components/AdminFaultInbox'
+import WaitlistAdmin from '../components/WaitlistAdmin'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 
@@ -20,11 +21,11 @@ type Section =
   | 'bookings' | 'closures'
   | 'customers' | 'coaches'
   | 'statements' | 'discounts'
-  | 'faults' | 'settings'
+  | 'faults' | 'waitlist' | 'settings'
 
 const VALID_SECTIONS: Section[] = [
   'bookings', 'closures', 'customers', 'coaches',
-  'statements', 'discounts', 'faults', 'settings',
+  'statements', 'discounts', 'faults', 'waitlist', 'settings',
 ]
 
 export const Route = createFileRoute('/admin')({
@@ -69,6 +70,7 @@ const NAV_GROUPS: Array<{
     label: 'Operations',
     items: [
       { id: 'faults',     label: 'Fault Reports', icon: '🛠️' },
+      { id: 'waitlist',   label: 'Waitlist',      icon: '🎟️' },
     ],
   },
   {
@@ -87,6 +89,7 @@ const SECTION_TITLES: Record<Section, string> = {
   statements: 'Statements',
   discounts:  'Discounts',
   faults:     'Fault Reports',
+  waitlist:   'Waitlist',
   settings:   'Settings',
 }
 
@@ -263,6 +266,7 @@ function AdminPage() {
             {section === 'statements' && <StatementsTab />}
             {section === 'discounts'  && <AdminDiscountCodesTab />}
             {section === 'faults'     && <AdminFaultInbox />}
+            {section === 'waitlist'   && <WaitlistAdmin />}
             {section === 'settings'   && <SettingsPanel />}
           </div>
         )}

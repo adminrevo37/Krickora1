@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import { redeemCredit } from "./lib/credit";
 import { recordDiscountRedemption } from "./lib/discounts";
 import { releaseHoldForBooking } from "./lib/slotHolds";
+import { scheduleWaitlistAdvance } from "./waitlist";
 import { applyBookingChange } from "./mutations";
 
 /**
@@ -78,6 +79,13 @@ export const confirmBookingPayment = internalMutation({
           });
         }
         await releaseHoldForBooking(ctx, booking._id.toString());
+        // Slot now confirmed at the new time — clear any waitlist for it (#6).
+        await scheduleWaitlistAdvance(ctx, {
+          laneId: newLaneId,
+          date: newDate,
+          startHour: newStartHour,
+          duration: pe.newDuration ?? b.duration,
+        });
         return { success: true, isBookingEdit: true };
       }
 
@@ -127,6 +135,18 @@ export const confirmBookingPayment = internalMutation({
     }
 
     await releaseHoldForBooking(ctx, booking._id.toString());
+
+    // SPEC_WAITLIST_OFFER_REDESIGN #6: the slot is now confirmed/paid — clear the
+    // waitlist for it (waiting on a filled slot is moot; members re-add if it
+    // reopens). If the booker was the offeree, this also retires the queue.
+    if (patch.status === "confirmed") {
+      await scheduleWaitlistAdvance(ctx, {
+        laneId: b.laneId,
+        date: b.date,
+        startHour: b.startHour,
+        duration: b.duration,
+      });
+    }
 
     // Send payment confirmation email
     if (b.customerEmail) {

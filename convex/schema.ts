@@ -257,6 +257,13 @@ export default defineSchema({
     date: v.string(), // YYYY-MM-DD
     hour: v.number(),
     notified: v.boolean(),
+    // SPEC_WAITLIST_OFFER_REDESIGN: sequential first-refusal lifecycle.
+    // 'waiting' (default, also covers legacy rows with no status) | 'offered'
+    // (currently holds an exclusive offer until offerExpiresAt) | 'booked'
+    // (this user booked the slot) | 'expired' (offer lapsed / slot was filled).
+    // Optional so existing rows need no migration — read as (status ?? 'waiting').
+    status: v.optional(v.string()),
+    offerExpiresAt: v.optional(v.string()), // ISO; set while status='offered'
   })
     .index("by_userId", ["userId"])
     .index("by_slot", ["laneId", "date", "hour"])
@@ -368,6 +375,10 @@ export default defineSchema({
     // Abandoned-checkout backstop (SPEC_PAYMENTS_AND_CREDIT #3). A pending_payment
     // booking's slot is released this many minutes after creation if unpaid.
     abandonedCheckoutMinutes: v.optional(v.number()),    // default 10
+    // Waitlist first-refusal offer hold (SPEC_WAITLIST_OFFER_REDESIGN #3). How
+    // long a freed slot is reserved exclusively for the next waitlisted member
+    // before the offer rolls to the person behind them. Default 15.
+    waitlistOfferHoldMinutes: v.optional(v.number()),    // default 15
   }).index("by_key", ["key"]),
 
   // Admin unlock sessions (SPEC_SECURITY_HARDENING #2). One row per admin email;
