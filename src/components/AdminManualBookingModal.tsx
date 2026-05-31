@@ -1,10 +1,14 @@
 import { useMemo, useState, useEffect } from 'react'
+import { useAction } from 'convex/react'
+import { api } from '../../convex/_generated/api'
 import {
   formatDateKey, formatTime, getCustomerPrice, getCoachPrice,
   getCustomerDurations, getCoachDurations, bookingOccupiesLane, LANES, type Lane, type LaneVariant, type Booking,
 } from '../lib/booking-data'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 import { generateAccessCode } from '../lib/access-code'
+
+type PaymentMode = 'comp' | 'offline' | 'request'
 
 export interface AdminCustomerOption {
   _id: string
@@ -20,6 +24,9 @@ export interface BookingConfirmResult {
   succeeded: number
   failed: number
   failedDates: string[]
+  // Created booking IDs, in the same order as the bookings passed to onConfirm
+  // (used to generate per-booking Stripe payment links for the request mode).
+  createdIds?: string[]
 }
 
 interface Props {
@@ -71,6 +78,11 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   const [discountCode, setDiscountCode] = useState('')
   const [priceOverrideStr, setPriceOverrideStr] = useState('')
   const [showAdminOptions, setShowAdminOptions] = useState(false)
+
+  // SPEC_ADMIN_AND_SETTINGS #2: payment mode for manual bookings (customers only;
+  // coach bookings always bill via their statement). Default = paid offline.
+  const [paymentMode, setPaymentMode] = useState<PaymentMode>('offline')
+  const createPaymentLink = useAction(api.stripe.createPaymentLink)
 
   // Admin notes
   const [notes, setNotes] = useState('')
@@ -128,6 +140,14 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
     try {
       const validOccurrences = occurrenceInfo.filter(o => !o.conflict)
       if (validOccurrences.length === 0) throw new Error('No valid dates available — all selected dates have conflicts.')
+
+      // Payment mode (customers only). Coaches always bill via statement.
+      const isRequest = !isCoach && paymentMode === 'request'
+      const isComp = !isCoach && paymentMode === 'comp'
+      const perBookingCents = Math.round((isComp ? 0 : price) * 100)
+      const bookingStatus = isRequest ? 'pending_payment' : 'confirmed'
+      const bookingPaymentStatus = isCoach ? undefined : isRequest ? 'pending' : 'paid'
+
       const bookings: Booking[] = []
       for (const occ of validOccurrences) {
         bookings.push({
@@ -141,18 +161,52 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
           customerEmail: customer.email,
           customerPhone: customer.phone,
           userId: customer._id,
-          status: 'confirmed',
+          status: bookingStatus,
+          paymentStatus: bookingPaymentStatus,
+          priceInCents: isCoach ? undefined : perBookingCents,
           isCoachBooking: isCoach,
           coachPrice: isCoach ? effectivePricePerLane : undefined,
           additionalLaneIds: additionalLaneIds.length > 0 ? additionalLaneIds : undefined,
           accessCode: generateAccessCode(),
           discountCode: discountCode.trim() || undefined,
-          notes: notes.trim() || undefined,
+          notes: notes.trim() || (isComp ? 'Comp (complimentary)' : undefined),
         })
       }
 
       // DI-3 / DI-4: Report per-date results instead of silently swallowing failures
       const result = await onConfirm(bookings)
+
+      // Send-payment-request mode: generate a Stripe payment link per created
+      // pending booking and present them for the admin to send to the customer.
+      if (isRequest && result && result.createdIds && result.createdIds.length > 0) {
+        const laneName = lane.name + (selectedVariant ? ` (${selectedVariant.name})` : '')
+        const links: string[] = []
+        for (let i = 0; i < result.createdIds.length; i++) {
+          const occ = validOccurrences[i]
+          try {
+            const res = await createPaymentLink({
+              laneName,
+              variantName: selectedVariant?.name,
+              date: occ?.dateKey ?? validOccurrences[0].dateKey,
+              startHour,
+              duration,
+              customerName: customer.name,
+              customerEmail: customer.email,
+              priceInCents: perBookingCents,
+              bookingId: result.createdIds[i],
+            })
+            links.push(`${occ?.dateKey ?? ''}: ${res.url}`)
+          } catch { /* skip a failed link; booking still pending */ }
+        }
+        if (links.length > 0) {
+          try { await navigator.clipboard.writeText(links.map(l => l.split(': ').slice(1).join(': ')).join('\n')) } catch {}
+          alert(
+            `Payment request created. Send this pay link to ${customer.name || customer.email}` +
+            ` (copied to clipboard):\n\n${links.join('\n')}`
+          )
+        }
+      }
+
       if (result && result.failed > 0) {
         const summary = result.failedDates.length > 0
           ? `${result.succeeded} booking(s) created. ${result.failed} could not be saved:\n${result.failedDates.slice(0, 4).join('\n')}${result.failedDates.length > 4 ? '\n…and more' : ''}`
@@ -161,6 +215,9 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
         setSubmitting(false)
         return
       }
+      // Request mode keeps the modal open (parent doesn't auto-close) so the
+      // admin can read the pay link — reset the busy state.
+      if (isRequest) setSubmitting(false)
     } catch (e: any) {
       setError(e?.message ?? 'Failed to create booking.')
       setSubmitting(false)
@@ -363,6 +420,34 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
             )}
           </div>
 
+          {/* Payment mode (customers only — coaches bill via statement) */}
+          {!isCoach && (
+            <div>
+              <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">💳 Payment</label>
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  { id: 'offline', label: 'Paid offline', hint: 'Records as paid' },
+                  { id: 'comp', label: 'Comp', hint: 'Free / $0' },
+                  { id: 'request', label: 'Payment request', hint: 'Send pay link' },
+                ] as const).map(m => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setPaymentMode(m.id)}
+                    className={`px-2 py-2 rounded-xl border text-center transition-all ${
+                      paymentMode === m.id
+                        ? 'bg-emerald-500 border-emerald-500 text-white'
+                        : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-100'
+                    }`}
+                  >
+                    <div className="text-xs font-semibold">{m.label}</div>
+                    <div className={`text-[10px] ${paymentMode === m.id ? 'text-emerald-50' : 'text-gray-400'}`}>{m.hint}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Admin Notes */}
           <div>
             <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">
@@ -387,7 +472,16 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
           </div>
 
           <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-3 border border-blue-200 dark:border-blue-800/50">
-            <p className="text-xs text-blue-700 dark:text-blue-400">🛡️ Admin manual booking — no payment collected. {selectedLaneCount > 1 ? `${selectedLaneCount} lanes will be booked per session.` : ''}</p>
+            <p className="text-xs text-blue-700 dark:text-blue-400">
+              🛡️ {isCoach
+                ? 'Coach booking — charged to the coach statement.'
+                : paymentMode === 'comp'
+                  ? 'Complimentary — recorded as paid at $0, no charge.'
+                  : paymentMode === 'request'
+                    ? 'A Stripe pay link will be generated for you to send the customer; the slot is held until they pay.'
+                    : 'Recorded as paid offline — no Stripe charge.'}
+              {selectedLaneCount > 1 ? ` ${selectedLaneCount} lanes per session.` : ''}
+            </p>
           </div>
 
           {error && (
@@ -400,7 +494,13 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
             <button onClick={onClose} disabled={submitting} className="flex-1 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all disabled:opacity-50">Cancel</button>
             <button onClick={handleConfirm} disabled={submitting || availableDurations.length === 0 || (totalSessions - conflictCount) === 0}
               className={`flex-[2] py-3 font-semibold rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600' : 'bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600'}`}>
-              {submitting ? 'Creating...' : `Confirm — $${displayTotal}`}
+              {submitting
+                ? 'Creating...'
+                : !isCoach && paymentMode === 'request'
+                  ? `Create & get pay link — $${displayTotal}`
+                  : !isCoach && paymentMode === 'comp'
+                    ? 'Confirm Comp Booking'
+                    : `Confirm — $${displayTotal}`}
             </button>
           </div>
         </div>

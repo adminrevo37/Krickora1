@@ -96,6 +96,9 @@ export function useBookings() {
         discountCode: booking.discountCode,
         tentativeSourceId: booking.tentativeSourceId,
         tentativeForDate: booking.tentativeForDate,
+        notes: booking.notes,
+        paymentStatus: booking.paymentStatus,
+        priceInCents: booking.priceInCents,
       })
       return id
     },

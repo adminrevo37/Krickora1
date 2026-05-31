@@ -130,7 +130,9 @@ export interface Booking {
   customerEmail: string
   customerPhone?: string
   userId?: string
-  status: 'confirmed' | 'pending' | 'cancelled' | 'tentative'
+  status: 'confirmed' | 'pending' | 'pending_payment' | 'cancelled' | 'tentative'
+  paymentStatus?: 'paid' | 'pending' | 'failed'
+  priceInCents?: number
   stripeSessionId?: string
   isCoachBooking?: boolean
   coachPrice?: number

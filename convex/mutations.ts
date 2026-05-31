@@ -49,6 +49,11 @@ export const createBooking = mutation({
     tentativeSourceId: v.optional(v.string()),
     tentativeForDate: v.optional(v.string()),
     notes: v.optional(v.string()),
+    // Admin manual booking (SPEC_ADMIN_AND_SETTINGS #2): comp / paid-offline record
+    // a price + paid status with no Stripe; send-payment-request creates a pending
+    // booking. These let the admin stamp the booking without going through checkout.
+    paymentStatus: v.optional(v.string()),
+    priceInCents: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     // SEC-1: Auth guard — logged-in users may only book for themselves unless admin
@@ -196,6 +201,9 @@ export const createBooking = mutation({
       discountCode: args.discountCode,
       tentativeSourceId: args.tentativeSourceId,
       tentativeForDate: args.tentativeForDate,
+      notes: args.notes,
+      paymentStatus: args.paymentStatus,
+      priceInCents: args.priceInCents,
     });
 
     // SPEC_PAYMENTS_AND_CREDIT #3: a pending_payment booking holds its slot via a

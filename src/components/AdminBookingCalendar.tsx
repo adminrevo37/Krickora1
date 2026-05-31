@@ -198,9 +198,14 @@ export default function AdminBookingCalendar() {
   // UX-4: Surface booking errors + DI-3/DI-4: return per-date results
   const handleBookingConfirm = async (newBookings: Booking[]): Promise<BookingConfirmResult> => {
     let succeeded = 0; let failed = 0; const failedDates: string[] = []
+    const createdIds: string[] = []
+    // Defer closing the modal when a payment request is in play so it can show
+    // the generated pay link(s) before unmounting.
+    const isRequest = newBookings.some(b => b.status === 'pending_payment')
     for (const b of newBookings) {
       try {
-        await addBooking(b)
+        const id = await addBooking(b)
+        if (id) createdIds.push(String(id))
         succeeded++
       } catch (e: any) {
         failed++
@@ -210,11 +215,11 @@ export default function AdminBookingCalendar() {
         }
       }
     }
-    if (failed === 0) {
+    if (failed === 0 && !isRequest) {
       setModalOpen(false)
       setSelectedSlot(null)
     }
-    return { succeeded, failed, failedDates }
+    return { succeeded, failed, failedDates, createdIds }
   }
 
   const dayBookings = bookings.filter(b => b.date === dateKey && b.status !== 'cancelled')
