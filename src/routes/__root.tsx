@@ -73,6 +73,11 @@ function RootComponent() {
                               <span>📊</span> Statements
                             </Link>
                           )}
+                          {(isCoach || isAdmin) && (
+                            <Link to="/planner" onClick={() => setShowUserMenu(false)} className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
+                              <span>📋</span> Weekly Planner
+                            </Link>
+                          )}
                           <Link to="/profile" onClick={() => setShowUserMenu(false)} className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
                             <span>👤</span> My Profile
                           </Link>

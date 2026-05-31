@@ -1875,6 +1875,250 @@ export const updateBookingAthleteSlots = mutation({
   },
 });
 
+// ── Coach Weekly Planner: copy-from-last-week (Part 3) ──────────────────────
+// Add/subtract whole days from a YYYY-MM-DD key (UTC-anchored — deterministic,
+// no argless Date()/now).
+function addDaysKey(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getUTCDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+function diffDaysKey(a: string, b: string): number {
+  const [ay, am, ad] = a.split("-").map(Number);
+  const [by, bm, bd] = b.split("-").map(Number);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000);
+}
+const DAY_KEYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+// Rebook a coach's previous-week sessions (times + allocations) into the target
+// week. Each source booking is recreated +delta days; any that can't be (slot
+// taken, lane blocked, closure day, outside operating hours) is SKIPPED and
+// reported — never silently dropped. Athletes no longer on the coach's roster
+// are dropped from the copied allocation and flagged.
+export const copyCoachWeek = mutation({
+  args: {
+    coachId: v.string(),
+    fromWeekStart: v.string(), // YYYY-MM-DD
+    toWeekStart: v.string(),   // YYYY-MM-DD
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Authentication required.");
+    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
+
+    // Resolve the coach record (by email or _id).
+    let coach: any = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", args.coachId.toLowerCase().trim()))
+      .first();
+    if (!coach) coach = await ctx.db.get(args.coachId as any).catch(() => null);
+    if (!coach || coach.role !== "coach") throw new Error("Coach not found.");
+
+    const callerCustomer = callerEmail
+      ? await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", callerEmail)).first()
+      : null;
+    const isAdmin = callerCustomer?.role === "admin";
+    if (!isAdmin && coach.email.toLowerCase() !== callerEmail) {
+      throw new Error("You can only copy your own week.");
+    }
+
+    const delta = diffDaysKey(args.fromWeekStart, args.toWeekStart);
+    if (delta === 0) throw new Error("Source and target weeks are the same.");
+    const fromWeekEnd = addDaysKey(args.fromWeekStart, 6);
+
+    const settings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    const coachPer30 = (settings as any)?.coachPer30Min ?? 15;
+    const dailyHours: any = (settings as any)?.dailyHours;
+
+    // Source = the coach's own non-cancelled coach bookings in the source week.
+    const sourceBookings = (
+      await ctx.db
+        .query("bookings")
+        .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", coach.email))
+        .collect()
+    ).filter(
+      (b: any) =>
+        b.isCoachBooking &&
+        b.status !== "cancelled" &&
+        b.date >= args.fromWeekStart &&
+        b.date <= fromWeekEnd
+    );
+
+    const created: Array<{ date: string; startHour: number; laneId: string }> = [];
+    const skipped: Array<{ date: string; startHour: number; laneId: string; reason: string }> = [];
+    const existingCodes = new Set<string>();
+
+    const coachIdForms = new Set<string>([coach._id as string, coach.email]);
+
+    for (const src of sourceBookings) {
+      const targetDate = addDaysKey(src.date, delta);
+      const lanes: string[] = [src.laneId, ...(src.additionalLaneIds ?? [])];
+      const endHour = src.startHour + src.duration / 60;
+
+      // Closure day?
+      const closure = await ctx.db
+        .query("closures")
+        .withIndex("by_date", (q: any) => q.eq("date", targetDate))
+        .first();
+      if (closure) {
+        skipped.push({ date: targetDate, startHour: src.startHour, laneId: src.laneId, reason: "facility closed that day" });
+        continue;
+      }
+
+      // Operating hours for that weekday (if configured).
+      if (dailyHours) {
+        const [ty, tm, td] = targetDate.split("-").map(Number);
+        const dow = new Date(Date.UTC(ty, tm - 1, td)).getUTCDay();
+        const dh = dailyHours[DAY_KEYS[dow]];
+        if (dh && (dh.closed || src.startHour < dh.open || endHour > dh.close)) {
+          skipped.push({ date: targetDate, startHour: src.startHour, laneId: src.laneId, reason: "outside operating hours" });
+          continue;
+        }
+      }
+
+      // Lane availability (booking overlap + service blocks) + idempotency.
+      let blocked = false;
+      let duplicate = false;
+      for (const lid of lanes) {
+        const laneBookings = await ctx.db
+          .query("bookings")
+          .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", targetDate))
+          .collect();
+        for (const b of laneBookings) {
+          if (b.status === "cancelled") continue;
+          const bEnd = b.startHour + b.duration / 60;
+          const overlaps = src.startHour < bEnd && endHour > b.startHour;
+          if (!overlaps) continue;
+          // An identical own coach booking already there → already copied.
+          if (b.isCoachBooking && b.customerEmail === coach.email && b.startHour === src.startHour && b.laneId === src.laneId) {
+            duplicate = true;
+          } else {
+            blocked = true;
+          }
+        }
+        const laneBlocks = await ctx.db
+          .query("laneBlocks")
+          .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", targetDate))
+          .collect();
+        if (laneBlocks.some((b: any) => src.startHour < b.startHour + b.duration / 60 && endHour > b.startHour)) {
+          blocked = true;
+        }
+      }
+      if (duplicate) {
+        skipped.push({ date: targetDate, startHour: src.startHour, laneId: src.laneId, reason: "already copied" });
+        continue;
+      }
+      if (blocked) {
+        skipped.push({ date: targetDate, startHour: src.startHour, laneId: src.laneId, reason: "slot already booked or blocked" });
+        continue;
+      }
+
+      // Copy allocations — drop athletes no longer on the coach's roster.
+      const newCode = generateServerAccessCode(existingCodes);
+      const nowIso = new Date().toISOString();
+      let droppedRosterCount = 0;
+      const copiedSlots: any[] = [];
+      for (const s of src.athleteSlots ?? []) {
+        if (s.athleteId) {
+          const athlete: any = await ctx.db.get(s.athleteId as any);
+          const stillAssigned =
+            athlete &&
+            (athlete.assignedCoachIds ?? []).some((c: string) => coachIdForms.has(c));
+          if (!stillAssigned) {
+            droppedRosterCount++;
+            continue;
+          }
+        }
+        copiedSlots.push({
+          athleteId: s.athleteId,
+          athleteName: s.athleteName,
+          startHour: s.startHour + 0, // already relative to start time which is unchanged
+          durationMinutes: s.durationMinutes,
+          accessCode: newCode,
+          codeGeneratedAt: nowIso,
+        });
+      }
+
+      const newCoachPrice = (src.duration / 30) * coachPer30;
+      const newId = await ctx.db.insert("bookings", {
+        laneId: src.laneId,
+        variantId: src.variantId,
+        date: targetDate,
+        startHour: src.startHour,
+        duration: src.duration,
+        customerName: coach.name,
+        customerEmail: coach.email,
+        customerPhone: coach.phone,
+        userId: src.userId,
+        status: "confirmed",
+        isCoachBooking: true,
+        coachPrice: newCoachPrice,
+        additionalLaneIds: src.additionalLaneIds,
+        athleteSlots: copiedSlots.length > 0 ? copiedSlots : undefined,
+        accessCode: newCode,
+      } as any);
+
+      if (copiedSlots.length > 0) {
+        await scheduleAllocationEmails(ctx, {
+          slots: copiedSlots,
+          laneId: src.laneId,
+          date: targetDate,
+          bookingAccessCode: newCode,
+          coachName: coach.name,
+        });
+        await writeAllocationAudit(ctx, {
+          bookingId: newId.toString(),
+          actorUserId: callerCustomer?._id ?? coach._id,
+          actorName: coach.name,
+          action: "allocate",
+          before: [],
+          after: copiedSlots,
+        });
+      }
+
+      await ctx.scheduler.runAfter(0, internal.googleCalendar.createCalendarEvent, {
+        bookingId: newId.toString(),
+        laneId: src.laneId,
+        variantId: src.variantId,
+        date: targetDate,
+        startHour: src.startHour,
+        duration: src.duration,
+        customerName: coach.name,
+        customerEmail: coach.email,
+        customerPhone: coach.phone,
+        status: "confirmed",
+        isCoachBooking: true,
+        accessCode: newCode,
+        additionalLaneIds: src.additionalLaneIds,
+        athleteSlots: copiedSlots.map((s) => ({
+          athleteName: s.athleteName,
+          startHour: s.startHour,
+          durationMinutes: s.durationMinutes,
+        })),
+      });
+
+      created.push({ date: targetDate, startHour: src.startHour, laneId: src.laneId });
+      if (droppedRosterCount > 0) {
+        skipped.push({
+          date: targetDate,
+          startHour: src.startHour,
+          laneId: src.laneId,
+          reason: `${droppedRosterCount} athlete(s) skipped — no longer on your roster`,
+        });
+      }
+    }
+
+    return { created, skipped, sourceCount: sourceBookings.length };
+  },
+});
+
 // ============================================================================
 // CUSTOMER MUTATIONS
 // ============================================================================
