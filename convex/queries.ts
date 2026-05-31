@@ -643,9 +643,10 @@ export const listDiscountCodes = query({
   },
 });
 
-// Validate a discount code — public (returns null if invalid/expired/exhausted)
+// Validate a discount code — public (returns null if invalid/expired/exhausted).
+// Pass customerEmail to also enforce the per-customer use limit.
 export const validateDiscountCode = query({
-  args: { code: v.string() },
+  args: { code: v.string(), customerEmail: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const normalised = args.code.trim().toLowerCase();
     if (!normalised) return null;
@@ -659,10 +660,21 @@ export const validateDiscountCode = query({
       const today = new Date().toISOString().slice(0, 10);
       if (doc.expiresAt < today) return null;
     }
-    // Check usage cap (usedCount defaults to 0 for old docs missing the field)
+    // Total usage cap (usedCount defaults to 0 for old docs missing the field)
     if (doc.usageLimit !== undefined && (doc.usedCount ?? 0) >= doc.usageLimit) return null;
+    // Per-customer cap — count this email's prior redemptions of this code
+    const email = (args.customerEmail ?? "").trim().toLowerCase();
+    if (doc.perCustomerLimit !== undefined && email) {
+      const mine = await ctx.db
+        .query("discountRedemptions")
+        .withIndex("by_code_email", (q: any) => q.eq("code", normalised).eq("customerEmail", email))
+        .collect();
+      if (mine.length >= doc.perCustomerLimit) return null;
+    }
     return {
       discount: doc.discount,
+      type: doc.discountType ?? "percent",
+      amountOff: doc.amountOff ?? 0,
       label: doc.label,
       bypassStripe: doc.bypassStripe ?? false,
     };

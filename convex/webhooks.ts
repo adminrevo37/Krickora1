@@ -2,6 +2,7 @@ import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { redeemCredit } from "./lib/credit";
+import { recordDiscountRedemption } from "./lib/discounts";
 import { releaseHoldForBooking } from "./lib/slotHolds";
 
 /**
@@ -67,6 +68,16 @@ export const confirmBookingPayment = internalMutation({
         bookingId: booking._id.toString(),
       });
     }
+
+    // Record discount redemption now that payment succeeded (idempotent).
+    if (b.discountCode) {
+      await recordDiscountRedemption(ctx, {
+        code: b.discountCode,
+        customerEmail: b.customerEmail,
+        bookingId: booking._id.toString(),
+      });
+    }
+
     await releaseHoldForBooking(ctx, booking._id.toString());
 
     // Send payment confirmation email

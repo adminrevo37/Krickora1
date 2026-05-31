@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { requireAdmin, requireAdminUnlocked, getAuthUserSafe } from "./lib/adminGuard";
 import { issueCredit, redeemCredit, recordCreditMovement } from "./lib/credit";
+import { recordDiscountRedemption } from "./lib/discounts";
 import {
   abandonedCheckoutMs,
   createCheckoutHold,
@@ -221,6 +222,16 @@ export const createBooking = mutation({
       await redeemCredit(ctx, {
         email: args.customerEmail,
         amount: args.creditApplied as number,
+        bookingId: id.toString(),
+      });
+    }
+
+    // Record discount redemption for directly-confirmed bookings (free/comp/
+    // bypassStripe). Stripe-paid bookings are recorded in confirmBookingPayment.
+    if (args.status === "confirmed" && args.discountCode) {
+      await recordDiscountRedemption(ctx, {
+        code: args.discountCode,
+        customerEmail: args.customerEmail,
         bookingId: id.toString(),
       });
     }
@@ -2228,11 +2239,14 @@ export const createDiscountCode = mutation({
   args: {
     code: v.string(),
     discount: v.number(),
+    discountType: v.optional(v.string()), // 'percent' | 'fixed' | 'free'
+    amountOff: v.optional(v.number()),
     label: v.string(),
     bypassStripe: v.boolean(),
     active: v.boolean(),
     expiresAt: v.optional(v.string()),
     usageLimit: v.optional(v.number()),
+    perCustomerLimit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
@@ -2243,14 +2257,19 @@ export const createDiscountCode = mutation({
       .withIndex("by_code", (q: any) => q.eq("code", normalised))
       .first();
     if (existing) throw new Error(`Code "${normalised}" already exists.`);
+    const type = args.discountType ?? "percent";
     return await ctx.db.insert("discountCodes", {
       code: normalised,
-      discount: args.discount,
+      // 'free' implies 100% + bypassStripe regardless of the inputs.
+      discount: type === "free" ? 100 : args.discount,
+      discountType: type,
+      amountOff: args.amountOff,
       label: args.label,
-      bypassStripe: args.bypassStripe,
+      bypassStripe: type === "free" ? true : args.bypassStripe,
       active: args.active,
       expiresAt: args.expiresAt,
       usageLimit: args.usageLimit,
+      perCustomerLimit: args.perCustomerLimit,
       usedCount: 0,
       createdAt: new Date().toISOString(),
     });
@@ -2261,16 +2280,26 @@ export const updateDiscountCode = mutation({
   args: {
     id: v.id("discountCodes"),
     discount: v.optional(v.number()),
+    discountType: v.optional(v.string()),
+    amountOff: v.optional(v.number()),
     label: v.optional(v.string()),
     bypassStripe: v.optional(v.boolean()),
     active: v.optional(v.boolean()),
     expiresAt: v.optional(v.string()),
     usageLimit: v.optional(v.number()),
+    perCustomerLimit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
     const { id, ...updates } = args;
-    const clean = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
+    const clean: Record<string, any> = Object.fromEntries(
+      Object.entries(updates).filter(([, val]) => val !== undefined)
+    );
+    // Keep 'free' consistent: force 100% + bypassStripe.
+    if (clean.discountType === "free") {
+      clean.discount = 100;
+      clean.bypassStripe = true;
+    }
     await ctx.db.patch(id, clean);
     return id;
   },

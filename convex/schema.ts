@@ -321,18 +321,35 @@ export default defineSchema({
   // Discount codes
   discountCodes: defineTable({
     code: v.string(),           // lowercase unique code e.g. "julian"
-    discount: v.number(),       // 0–100 percent off
+    discount: v.number(),       // 0–100 percent off (used when discountType = 'percent')
+    // Discount type (SPEC_ADMIN_AND_SETTINGS #3). Absent = 'percent' (backward compat).
+    discountType: v.optional(v.string()), // 'percent' | 'fixed' | 'free'
+    amountOff: v.optional(v.number()),     // dollars off, used when discountType = 'fixed'
     label: v.string(),          // display label e.g. "100% Off — Complimentary"
-    bypassStripe: v.optional(v.boolean()),  // if true, skip payment entirely (optional for backward compat)
+    bypassStripe: v.optional(v.boolean()),  // if true, skip payment entirely (set for 'free')
     active: v.boolean(),
     expiresAt: v.optional(v.string()),      // YYYY-MM-DD or undefined
     usageLimit: v.optional(v.number()),     // max total uses, undefined = unlimited
+    perCustomerLimit: v.optional(v.number()), // max uses per customer, undefined = unlimited
     usedCount: v.optional(v.number()),      // optional for backward compat — defaults to 0 in UI
     createdAt: v.string(),
     createdBy: v.optional(v.string()),
   })
     .index("by_code", ["code"])
     .index("by_active", ["active"]),
+
+  // Per-redemption log for discount codes — enables per-customer limit
+  // enforcement + an accurate total count (SPEC_ADMIN_AND_SETTINGS #3).
+  // One row per confirmed booking that used a code (idempotent by bookingId).
+  discountRedemptions: defineTable({
+    code: v.string(),
+    customerEmail: v.string(),
+    bookingId: v.string(),
+    at: v.string(),
+  })
+    .index("by_code", ["code"])
+    .index("by_code_email", ["code", "customerEmail"])
+    .index("by_bookingId", ["bookingId"]),
 
   // Google Calendar OAuth tokens (singleton - one per admin)
   googleCalendarTokens: defineTable({

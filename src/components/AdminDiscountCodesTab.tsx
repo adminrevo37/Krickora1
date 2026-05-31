@@ -6,23 +6,29 @@ type DiscountDoc = {
   _id: string
   code: string
   discount: number
+  discountType?: string  // 'percent' | 'fixed' | 'free' — absent = 'percent'
+  amountOff?: number
   label: string
   bypassStripe?: boolean  // optional — old docs may not have this field
   active: boolean
   expiresAt?: string
   usageLimit?: number
+  perCustomerLimit?: number
   usedCount?: number  // optional — old docs may not have this field
   createdAt: string
 }
 
 const EMPTY_FORM = {
   code: '',
+  discountType: 'percent',
   discount: 100,
+  amountOff: '',
   label: '',
   bypassStripe: false,
   active: true,
   expiresAt: '',
   usageLimit: '',
+  perCustomerLimit: '',
 }
 
 export default function AdminDiscountCodesTab() {
@@ -47,12 +53,15 @@ export default function AdminDiscountCodesTab() {
   const startEdit = (doc: DiscountDoc) => {
     setForm({
       code: doc.code,
+      discountType: doc.discountType ?? 'percent',
       discount: doc.discount,
+      amountOff: doc.amountOff !== undefined ? String(doc.amountOff) : '',
       label: doc.label,
       bypassStripe: doc.bypassStripe ?? false,
       active: doc.active,
       expiresAt: doc.expiresAt ?? '',
       usageLimit: doc.usageLimit !== undefined ? String(doc.usageLimit) : '',
+      perCustomerLimit: doc.perCustomerLimit !== undefined ? String(doc.perCustomerLimit) : '',
     })
     setEditingId(doc._id)
     setShowForm(true)
@@ -64,13 +73,18 @@ export default function AdminDiscountCodesTab() {
     setError(null)
     setBusy(true)
     try {
+      const isFree = form.discountType === 'free'
+      const isFixed = form.discountType === 'fixed'
       const payload = {
-        discount: Number(form.discount),
+        discountType: form.discountType,
+        discount: isFree ? 100 : Number(form.discount),
+        amountOff: isFixed && form.amountOff !== '' ? Number(form.amountOff) : undefined,
         label: form.label.trim(),
-        bypassStripe: form.bypassStripe,
+        bypassStripe: isFree ? true : form.bypassStripe,
         active: form.active,
         expiresAt: form.expiresAt || undefined,
         usageLimit: form.usageLimit !== '' ? Number(form.usageLimit) : undefined,
+        perCustomerLimit: form.perCustomerLimit !== '' ? Number(form.perCustomerLimit) : undefined,
       }
       if (editingId) {
         await updateMut({ id: editingId as any, ...payload })
@@ -157,17 +171,45 @@ export default function AdminDiscountCodesTab() {
                 />
               </label>
               <label className="block">
-                <span className="text-sm font-medium text-gray-700">Discount (%)</span>
-                <input
-                  required
-                  type="number"
-                  min={1}
-                  max={100}
-                  value={form.discount}
-                  onChange={e => setForm(f => ({ ...f, discount: Number(e.target.value) }))}
-                  className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
-                />
+                <span className="text-sm font-medium text-gray-700">Type</span>
+                <select
+                  value={form.discountType}
+                  onChange={e => setForm(f => ({ ...f, discountType: e.target.value }))}
+                  className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white"
+                >
+                  <option value="percent">Percent off (%)</option>
+                  <option value="fixed">Fixed amount off ($)</option>
+                  <option value="free">100% free (skip payment)</option>
+                </select>
               </label>
+              {form.discountType === 'percent' && (
+                <label className="block">
+                  <span className="text-sm font-medium text-gray-700">Discount (%)</span>
+                  <input
+                    required
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={form.discount}
+                    onChange={e => setForm(f => ({ ...f, discount: Number(e.target.value) }))}
+                    className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                  />
+                </label>
+              )}
+              {form.discountType === 'fixed' && (
+                <label className="block">
+                  <span className="text-sm font-medium text-gray-700">Amount off ($)</span>
+                  <input
+                    required
+                    type="number"
+                    min={1}
+                    step="0.01"
+                    value={form.amountOff}
+                    onChange={e => setForm(f => ({ ...f, amountOff: e.target.value }))}
+                    className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                  />
+                </label>
+              )}
               <label className="block">
                 <span className="text-sm font-medium text-gray-700">Expires on <span className="text-gray-400 font-normal">(optional)</span></span>
                 <input
@@ -178,7 +220,7 @@ export default function AdminDiscountCodesTab() {
                 />
               </label>
               <label className="block">
-                <span className="text-sm font-medium text-gray-700">Usage limit <span className="text-gray-400 font-normal">(optional — blank = unlimited)</span></span>
+                <span className="text-sm font-medium text-gray-700">Total usage limit <span className="text-gray-400 font-normal">(optional — blank = unlimited)</span></span>
                 <input
                   type="number"
                   min={1}
@@ -188,16 +230,29 @@ export default function AdminDiscountCodesTab() {
                   className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
                 />
               </label>
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700">Per-customer limit <span className="text-gray-400 font-normal">(optional — blank = unlimited)</span></span>
+                <input
+                  type="number"
+                  min={1}
+                  value={form.perCustomerLimit}
+                  onChange={e => setForm(f => ({ ...f, perCustomerLimit: e.target.value }))}
+                  placeholder="Unlimited"
+                  className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                />
+              </label>
               <div className="flex flex-col gap-3 pt-1">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={form.bypassStripe}
-                    onChange={e => setForm(f => ({ ...f, bypassStripe: e.target.checked }))}
-                    className="w-4 h-4 accent-emerald-500"
-                  />
-                  <span className="text-sm font-medium text-gray-700">Skip Stripe payment (100% off codes)</span>
-                </label>
+                {form.discountType !== 'free' && (
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={form.bypassStripe}
+                      onChange={e => setForm(f => ({ ...f, bypassStripe: e.target.checked }))}
+                      className="w-4 h-4 accent-emerald-500"
+                    />
+                    <span className="text-sm font-medium text-gray-700">Skip Stripe payment</span>
+                  </label>
+                )}
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
@@ -260,11 +315,20 @@ export default function AdminDiscountCodesTab() {
                         <span className="ml-1.5 text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-semibold">FREE</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 font-semibold text-emerald-600">{doc.discount}%</td>
+                    <td className="px-4 py-3 font-semibold text-emerald-600">
+                      {doc.discountType === 'fixed'
+                        ? `$${doc.amountOff ?? 0}`
+                        : doc.discountType === 'free'
+                          ? 'Free'
+                          : `${doc.discount}%`}
+                    </td>
                     <td className="px-4 py-3 text-gray-700 max-w-[200px] truncate">{doc.label}</td>
                     <td className="px-4 py-3 text-gray-600">
                       {doc.usedCount ?? 0}
                       {doc.usageLimit !== undefined && <span className="text-gray-400"> / {doc.usageLimit}</span>}
+                      {doc.perCustomerLimit !== undefined && (
+                        <span className="block text-[10px] text-gray-400">max {doc.perCustomerLimit}/customer</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-gray-600">{doc.expiresAt ?? <span className="text-gray-400">Never</span>}</td>
                     <td className="px-4 py-3">

@@ -44,7 +44,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
 
   // Discount code state
   const [discountCode, setDiscountCode] = useState('')
-  const [appliedDiscount, setAppliedDiscount] = useState<{ code: string; discount: number; label: string; bypassStripe: boolean } | null>(null)
+  const [appliedDiscount, setAppliedDiscount] = useState<{ code: string; discount: number; type: string; amountOff: number; label: string; bypassStripe: boolean } | null>(null)
   const [discountError, setDiscountError] = useState<string | null>(null)
   const [pendingDiscountCode, setPendingDiscountCode] = useState<string | null>(null)
   const [discountValidating, setDiscountValidating] = useState(false)
@@ -52,7 +52,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   // Live validation of discount code against Convex (fires only when pendingDiscountCode is set)
   const discountQueryResult = useQuery(
     api.queries.validateDiscountCode,
-    pendingDiscountCode !== null ? { code: pendingDiscountCode } : 'skip'
+    pendingDiscountCode !== null ? { code: pendingDiscountCode, customerEmail: user?.email ?? undefined } : 'skip'
   )
   useEffect(() => {
     if (pendingDiscountCode === null) return
@@ -112,7 +112,11 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const priceBeforeDiscount = finalPrice + additionalLanePrice
 
   // Apply discount to total
-  const discountAmount = appliedDiscount ? Math.round(priceBeforeDiscount * appliedDiscount.discount / 100) : 0
+  const discountAmount = appliedDiscount
+    ? appliedDiscount.type === 'fixed'
+      ? Math.min(priceBeforeDiscount, appliedDiscount.amountOff)
+      : Math.round(priceBeforeDiscount * appliedDiscount.discount / 100)
+    : 0
   const totalPrice = Math.max(0, priceBeforeDiscount - discountAmount)
 
   const handleApplyDiscount = () => {
