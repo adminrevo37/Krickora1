@@ -111,6 +111,9 @@ export function generateTimeSlots(): TimeSlot[] {
 
 // Athlete slot for coach tracking
 export interface AthleteSlot {
+  // athleteId = source of truth (athletes table id). Optional for legacy slots
+  // created before the parent/athlete model (SPEC_PARENT_ATHLETE_MODEL).
+  athleteId?: string
   athleteName: string
   startHour: number
   durationMinutes: number

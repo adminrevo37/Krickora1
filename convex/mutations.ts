@@ -19,6 +19,126 @@ import {
 } from "./lib/bookingWindow";
 
 // ============================================================================
+// SHARED HELPERS
+// ============================================================================
+
+const LANE_NAME_MAP: Record<string, string> = {
+  bm1: "Bowling Machine Lane 1",
+  bm2: "Bowling Machine Lane 2",
+  bm3: "Bowling Machine Lane 3",
+  ru1: "Run-Up Lane 1",
+  ru2: "Run-Up Lane 2",
+};
+
+function fmtHour12(h: number): string {
+  const hr = Math.floor(h);
+  const min = Math.round((h - hr) * 60);
+  const period = hr >= 12 ? "PM" : "AM";
+  const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
+  return `${display}:${min.toString().padStart(2, "0")} ${period}`;
+}
+
+function durationLabel(m: number): string {
+  return m === 60 ? "1 hour" : m === 90 ? "1.5 hours" : m === 120 ? "2 hours" : `${m} minutes`;
+}
+
+// Resolve athlete slots to their owning ACCOUNT (parent) email + child name and
+// schedule ONE consolidated allocation email per account — SPEC_PARENT_ATHLETE_MODEL.
+// Recipient = the account email; addressed with the child's name. Siblings in
+// the same event are grouped into a single email per account. Falls back to a
+// name->customer match for legacy slots with no athleteId. These emails are
+// mandatory (NOT prefs-gated) — the parent is a third party to the coach booking.
+async function scheduleAllocationEmails(
+  ctx: any,
+  opts: {
+    slots: Array<{
+      athleteId?: string;
+      athleteName: string;
+      startHour: number;
+      durationMinutes: number;
+      accessCode?: string;
+    }>;
+    laneId: string;
+    date: string;
+    bookingAccessCode?: string;
+    coachName: string;
+  }
+): Promise<void> {
+  const laneName = LANE_NAME_MAP[opts.laneId] ?? opts.laneId.toUpperCase();
+  const formattedDate = new Date(opts.date + "T00:00:00").toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  // accountEmail -> [{ name, timeSlot, durationMin, accessCode }]
+  const groups = new Map<
+    string,
+    Array<{ name: string; timeSlot: string; durationMin: number; accessCode: string }>
+  >();
+  for (const slot of opts.slots) {
+    let to = "";
+    let athleteName = slot.athleteName;
+    if (slot.athleteId) {
+      const athlete = await ctx.db.get(slot.athleteId as any);
+      if (athlete) {
+        athleteName = athlete.name;
+        const account = await ctx.db.get(athlete.accountCustomerId);
+        to = account?.email ?? "";
+      }
+    }
+    if (!to) {
+      // Legacy fallback: match the denormalised name to a customer record.
+      const cust = await ctx.db
+        .query("customers")
+        .filter((q: any) => q.eq(q.field("name"), slot.athleteName))
+        .first();
+      to = cust?.email ?? "";
+    }
+    if (!to) continue;
+    const slotEnd = slot.startHour + slot.durationMinutes / 60;
+    const list = groups.get(to) ?? [];
+    list.push({
+      name: athleteName,
+      timeSlot: `${fmtHour12(slot.startHour)} - ${fmtHour12(slotEnd)}`,
+      durationMin: slot.durationMinutes,
+      accessCode: slot.accessCode ?? opts.bookingAccessCode ?? "N/A",
+    });
+    groups.set(to, list);
+  }
+  for (const [to, sessions] of groups) {
+    if (sessions.length === 1) {
+      const s = sessions[0];
+      await ctx.scheduler.runAfter(0, internal.emails.sendAthleteAllocation, {
+        to,
+        athleteName: s.name,
+        coachName: opts.coachName,
+        laneName,
+        date: formattedDate,
+        timeSlot: s.timeSlot,
+        duration: durationLabel(s.durationMin),
+        accessCode: s.accessCode,
+      });
+    } else {
+      // Sibling consolidation: one email per account listing each child.
+      const names = sessions.map((s) => s.name).join(" & ");
+      const combinedTime = sessions.map((s) => `${s.name}: ${s.timeSlot}`).join("; ");
+      const totalDur = sessions.reduce((a, s) => a + s.durationMin, 0);
+      await ctx.scheduler.runAfter(0, internal.emails.sendAthleteAllocation, {
+        to,
+        athleteName: names,
+        coachName: opts.coachName,
+        laneName,
+        date: formattedDate,
+        timeSlot: combinedTime,
+        duration: durationLabel(totalDur),
+        accessCode: sessions[0].accessCode,
+      });
+    }
+  }
+}
+
+// ============================================================================
 // BOOKING MUTATIONS
 // ============================================================================
 
@@ -42,6 +162,7 @@ export const createBooking = mutation({
     athleteSlots: v.optional(
       v.array(
         v.object({
+          athleteId: v.optional(v.id("athletes")),
           athleteName: v.string(),
           startHour: v.number(),
           durationMinutes: v.number(),
@@ -354,44 +475,17 @@ export const createBooking = mutation({
       });
     }
 
-    // Send athlete allocation emails for coach bookings with initial athlete slots
+    // Send athlete allocation emails for coach bookings with initial athlete
+    // slots — resolved to the parent account email + child name, grouped per
+    // account (SPEC_PARENT_ATHLETE_MODEL).
     if (args.isCoachBooking && normalizedAthleteSlots && normalizedAthleteSlots.length > 0 && (args.status === "confirmed" || args.status === "tentative")) {
-      const laneNameMap: Record<string, string> = {
-        bm1: "Bowling Machine Lane 1",
-        bm2: "Bowling Machine Lane 2",
-        bm3: "Bowling Machine Lane 3",
-        ru1: "Run-Up Lane 1",
-        ru2: "Run-Up Lane 2",
-      };
-      const laneName = laneNameMap[args.laneId] ?? args.laneId.toUpperCase();
-      const formattedDate = new Date(args.date + "T00:00:00").toLocaleDateString("en-US", {
-        weekday: "long", year: "numeric", month: "long", day: "numeric",
+      await scheduleAllocationEmails(ctx, {
+        slots: normalizedAthleteSlots,
+        laneId: args.laneId,
+        date: args.date,
+        bookingAccessCode: args.accessCode,
+        coachName: args.customerName,
       });
-      const fmtHour = (h: number) => {
-        const hr = Math.floor(h);
-        const min = Math.round((h - hr) * 60);
-        const period = hr >= 12 ? "PM" : "AM";
-        const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
-        return `${display}:${min.toString().padStart(2, "0")} ${period}`;
-      };
-      for (const slot of normalizedAthleteSlots) {
-        const athlete = await ctx.db
-          .query("customers")
-          .filter((q: any) => q.eq(q.field("name"), slot.athleteName))
-          .first();
-        if (!athlete?.email) continue;
-        const slotEnd = slot.startHour + slot.durationMinutes / 60;
-        await ctx.scheduler.runAfter(0, internal.emails.sendAthleteAllocation, {
-          to: athlete.email,
-          athleteName: slot.athleteName,
-          coachName: args.customerName,
-          laneName,
-          date: formattedDate,
-          timeSlot: `${fmtHour(slot.startHour)} - ${fmtHour(slotEnd)}`,
-          duration: slot.durationMinutes === 60 ? "1 hour" : `${slot.durationMinutes} minutes`,
-          accessCode: slot.accessCode ?? args.accessCode ?? "N/A",
-        });
-      }
     }
 
     // Trigger Google Calendar sync for confirmed/tentative bookings
@@ -439,6 +533,7 @@ export const updateBooking = mutation({
     athleteSlots: v.optional(
       v.array(
         v.object({
+          athleteId: v.optional(v.id("athletes")),
           athleteName: v.string(),
           startHour: v.number(),
           durationMinutes: v.number(),
@@ -1306,6 +1401,7 @@ export const updateBookingAthleteSlots = mutation({
     id: v.id("bookings"),
     athleteSlots: v.array(
       v.object({
+        athleteId: v.optional(v.id("athletes")),
         athleteName: v.string(),
         startHour: v.number(),
         durationMinutes: v.number(),
@@ -1354,19 +1450,22 @@ export const updateBookingAthleteSlots = mutation({
       }
     }
 
-    // Build a map of previous athlete allocations for change detection
+    // Build a map of previous athlete allocations for change detection.
+    // Keyed by athleteId when present (robust to renames), else the name.
     const prevSlots = booking.athleteSlots ?? [];
+    const prevKey = (s: any) => (s.athleteId as string) ?? s.athleteName;
     const prevMap = new Map<string, { startHour: number; durationMinutes: number; accessCode?: string }>();
     for (const ps of prevSlots) {
-      prevMap.set(ps.athleteName, { startHour: ps.startHour, durationMinutes: ps.durationMinutes, accessCode: ps.accessCode });
+      prevMap.set(prevKey(ps), { startHour: ps.startHour, durationMinutes: ps.durationMinutes, accessCode: ps.accessCode });
     }
 
     // All athletes share the coach's booking access code
     const now = new Date().toISOString();
     const sharedCode = booking.accessCode;
     const finalSlots = args.athleteSlots.map((slot) => {
-      const prev = prevMap.get(slot.athleteName);
+      const prev = prevMap.get(prevKey(slot));
       return {
+        athleteId: slot.athleteId,
         athleteName: slot.athleteName,
         startHour: slot.startHour,
         durationMinutes: slot.durationMinutes,
@@ -1379,43 +1478,19 @@ export const updateBookingAthleteSlots = mutation({
       athleteSlots: finalSlots,
     });
 
-    // Send allocation emails to newly-added or changed athletes
-    const laneNameMap: Record<string, string> = {
-      bm1: "Bowling Machine Lane 1",
-      bm2: "Bowling Machine Lane 2",
-      ru1: "Run-Up Lane 1",
-      ru2: "Run-Up Lane 2",
-    };
-    const laneName = laneNameMap[booking.laneId] ?? booking.laneId.toUpperCase();
-    const formattedDate = new Date(booking.date + "T00:00:00").toLocaleDateString("en-US", {
-      weekday: "long", year: "numeric", month: "long", day: "numeric",
+    // Send allocation emails to newly-added or changed athletes — resolved to
+    // the parent account email + child name, grouped per account.
+    const changedSlots = finalSlots.filter((slot) => {
+      const prev = prevMap.get(prevKey(slot));
+      return !prev || prev.startHour !== slot.startHour || prev.durationMinutes !== slot.durationMinutes;
     });
-    const fmtHour = (h: number) => {
-      const hr = Math.floor(h);
-      const min = Math.round((h - hr) * 60);
-      const period = hr >= 12 ? "PM" : "AM";
-      const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
-      return `${display}:${min.toString().padStart(2, "0")} ${period}`;
-    };
-    for (const slot of finalSlots) {
-      const prev = prevMap.get(slot.athleteName);
-      const changed = !prev || prev.startHour !== slot.startHour || prev.durationMinutes !== slot.durationMinutes;
-      if (!changed) continue;
-      const athlete = await ctx.db
-        .query("customers")
-        .filter((q: any) => q.eq(q.field("name"), slot.athleteName))
-        .first();
-      if (!athlete?.email) continue;
-      const slotEnd = slot.startHour + slot.durationMinutes / 60;
-      await ctx.scheduler.runAfter(0, internal.emails.sendAthleteAllocation, {
-        to: athlete.email,
-        athleteName: slot.athleteName,
+    if (changedSlots.length > 0) {
+      await scheduleAllocationEmails(ctx, {
+        slots: changedSlots,
+        laneId: booking.laneId,
+        date: booking.date,
+        bookingAccessCode: booking.accessCode,
         coachName: booking.customerName,
-        laneName,
-        date: formattedDate,
-        timeSlot: `${fmtHour(slot.startHour)} - ${fmtHour(slotEnd)}`,
-        duration: slot.durationMinutes === 60 ? "1 hour" : `${slot.durationMinutes} minutes`,
-        accessCode: slot.accessCode ?? booking.accessCode ?? "N/A",
       });
     }
 
@@ -1435,7 +1510,13 @@ export const updateBookingAthleteSlots = mutation({
         isCoachBooking: booking.isCoachBooking,
         accessCode: booking.accessCode,
         additionalLaneIds: booking.additionalLaneIds,
-        athleteSlots: finalSlots,
+        // Calendar validator accepts only these 3 fields — strip athleteId /
+        // accessCode / codeGeneratedAt before scheduling.
+        athleteSlots: finalSlots.map((s) => ({
+          athleteName: s.athleteName,
+          startHour: s.startHour,
+          durationMinutes: s.durationMinutes,
+        })),
         laneCalendarEventIds: booking.googleCalendarEventIds,
       });
     }

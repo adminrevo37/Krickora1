@@ -203,8 +203,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     )
   }, [coachAthletes, allocatedAthleteNames, athleteSearchQuery])
 
-  const addAthleteSlot = (athleteName: string) => {
-    if (!athleteName.trim()) return
+  const addAthleteSlot = (athlete: { _id: string; name: string }) => {
+    if (!athlete.name.trim()) return
     const bookingEnd = startHour + duration / 60
     const slotEnd = newAthleteStart + newAthleteDuration / 60
     if (slotEnd > bookingEnd) {
@@ -216,7 +216,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       }
     }
     const newSlot: AthleteSlot = {
-      athleteName: athleteName.trim(),
+      athleteId: athlete._id,
+      athleteName: athlete.name.trim(),
       startHour: newAthleteStart,
       durationMinutes: newAthleteDuration,
     }
@@ -681,7 +682,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                               availableAthletes.map(athlete => (
                                 <button
                                   key={athlete._id}
-                                  onClick={() => addAthleteSlot(athlete.name)}
+                                  onClick={() => addAthleteSlot(athlete)}
                                   className="w-full flex items-center gap-2.5 px-3 py-2.5 hover:bg-orange-50 dark:hover:bg-orange-900/10 transition-colors text-left group"
                                 >
                                   <div className="w-7 h-7 bg-emerald-500 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 group-hover:scale-105 transition-transform">

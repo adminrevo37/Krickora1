@@ -1,4 +1,6 @@
 import { useState, useMemo } from 'react'
+import { useQuery } from 'convex/react'
+import { api } from '../../convex/_generated/api'
 import { useBookings } from '../hooks/useBookingStore'
 import { useAuth } from '../hooks/useAuth'
 import { useWaitlist } from '../hooks/useWaitlist'
@@ -104,9 +106,23 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
     .map(n => n.toLowerCase().trim()), [user, customerRecord])
 
+  // SPEC_PARENT_ATHLETE_MODEL: a coach session belongs in this account's My
+  // Bookings if any allocated slot's athleteId is one of the account's athletes
+  // (the parent's own name ≠ the child's). Legacy slots without athleteId fall
+  // back to the login-name match.
+  const myAthletes = useQuery(api.athletes.listAthletesByAccount, user ? {} : 'skip') ?? []
+  const myAthleteIds = useMemo(
+    () => new Set(myAthletes.map((a: any) => a._id as string)),
+    [myAthletes],
+  )
+
+  const slotIsMine = (s: { athleteId?: string; athleteName: string }) =>
+    (s.athleteId != null && myAthleteIds.has(s.athleteId)) ||
+    athleteNameCandidates.includes(s.athleteName.toLowerCase().trim())
+
   const isAthleteInBooking = (b: Booking) => {
     if (!user || !b.athleteSlots || b.athleteSlots.length === 0) return false
-    return b.athleteSlots.some(s => athleteNameCandidates.includes(s.athleteName.toLowerCase().trim()))
+    return b.athleteSlots.some(slotIsMine)
   }
 
   const userBookings = useMemo(() => (user || impersonatedEmail)
@@ -120,7 +136,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       ).sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour)
     : [],
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  [bookings, user, athleteNameCandidates, effectiveEmail, impersonatedEmail])
+  [bookings, user, athleteNameCandidates, myAthleteIds, effectiveEmail, impersonatedEmail])
 
   const tentativeBookings = user ? getTentativeBookings(user.id) : []
 
@@ -252,7 +268,9 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     { key: 'schedule' as const, label: 'Schedule', count: scheduleBookings.length },
     { key: 'past' as const, label: 'Past', count: pastBookings.length + cancelledBookings.length },
     { key: 'waitlist' as const, label: 'Waitlist', count: userWaitlistEntries.length },
-    ...(isCustomer ? [{ key: 'coaches' as const, label: 'My Coaches', count: assignedCoachIds.length }] : []),
+    // 'My Coaches' tab retired — coach assignment is now per-athlete in
+    // Profile → My Athletes (SPEC_PARENT_ATHLETE_MODEL). Tab content code below
+    // is now unreachable for customers.
   ]
 
   // ── card renderers ───────────────────────────────────────────────────────────
@@ -389,23 +407,28 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   }
 
   const renderAthleteSlotCard = (booking: Booking) => {
-    // User is an athlete allocated inside this coach's booking (not the owner)
+    // A child-athlete of THIS account is allocated inside a coach's booking
+    // (SPEC_PARENT_ATHLETE_MODEL). The slot's name is the child's; the account
+    // holder (parent) sees it here. Picks the first matching slot for display.
     const lane = getLane(booking.laneId)
     const variantName = getVariantName(booking)
-    const mySlot = booking.athleteSlots?.find(s =>
-      athleteNameCandidates.includes(s.athleteName.toLowerCase().trim()),
-    )
+    const mySlot = booking.athleteSlots?.find(slotIsMine)
     if (!mySlot) return null
-    const calParams = { laneName: lane?.name ?? booking.laneId, variantName: variantName ?? undefined, date: booking.date, startHour: mySlot.startHour, duration: mySlot.durationMinutes, customerName: user?.name ?? '', accessCode: mySlot.accessCode }
+    const childName = mySlot.athleteName
+    const isSelfSession = athleteNameCandidates.includes(childName.toLowerCase().trim())
+    const calParams = { laneName: lane?.name ?? booking.laneId, variantName: variantName ?? undefined, date: booking.date, startHour: mySlot.startHour, duration: mySlot.durationMinutes, customerName: childName, accessCode: mySlot.accessCode }
     return (
       <div key={booking.id} className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm">
         <div className="flex items-start justify-between gap-2 mb-2">
           <div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-base font-bold text-gray-900 dark:text-white">
                 {formatTime(mySlot.startHour)} – {formatTime(mySlot.startHour + mySlot.durationMinutes / 60)}
               </span>
               <span className="text-[10px] font-semibold bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 px-1.5 py-0.5 rounded-full uppercase">Coaching</span>
+              {!isSelfSession && (
+                <span className="text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded-full">{childName}</span>
+              )}
             </div>
             <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
               {lane?.icon} {lane?.name ?? booking.laneId}

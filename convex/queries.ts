@@ -257,8 +257,11 @@ export const getCustomer = query({
   },
 });
 
-// List athletes (customers) assigned to a specific coach
-// coachId can be either the Convex _id or the coach's email
+// List ATHLETES assigned to a specific coach (SPEC_PARENT_ATHLETE_MODEL).
+// Reads the athletes table (not customers) so the allocation editor + planner
+// show the kid's name; also returns the owning account's contact details so the
+// coach can reach the parent (decision #10 — own assigned athletes ONLY, never
+// other families). coachId can be the Convex _id or the coach's email.
 export const listAthletesByCoach = query({
   args: { coachId: v.string() },
   handler: async (ctx, args) => {
@@ -281,32 +284,49 @@ export const listAthletesByCoach = query({
           callerCustomer.email === args.coachId.toLowerCase().trim());
       if (!matchesCoach) return [];
     }
-    // Get all customers (role=customer) who have this coach in their assignedCoachIds
-    const allCustomers = await ctx.db
-      .query("customers")
-      .withIndex("by_role", (q: any) => q.eq("role", "customer"))
-      .collect();
-    
-    // Primary: match by Convex _id directly
-    let matched = allCustomers.filter(
-      (c) => c.assignedCoachIds && c.assignedCoachIds.includes(args.coachId)
-    );
-    if (matched.length > 0) return matched;
 
-    // Fallback: coachId might be an email — look up the coach record by email
-    // and use their Convex _id to match
+    // Resolve the coach to their _id (callers may pass an email).
+    let coachId = args.coachId;
     const coachByEmail = await ctx.db
       .query("customers")
-      .withIndex("by_email", (q: any) => q.eq("email", args.coachId.toLowerCase().trim()))
+      .withIndex("by_email", (q: any) =>
+        q.eq("email", args.coachId.toLowerCase().trim())
+      )
       .first();
-    if (coachByEmail && coachByEmail.role === "coach") {
-      matched = allCustomers.filter(
-        (c) => c.assignedCoachIds && c.assignedCoachIds.includes(coachByEmail._id)
-      );
-      if (matched.length > 0) return matched;
-    }
+    if (coachByEmail && coachByEmail.role === "coach") coachId = coachByEmail._id;
 
-    return [];
+    // Athletes whose assignedCoachIds include this coach (either id form).
+    const allAthletes = await ctx.db.query("athletes").collect();
+    const matched = allAthletes.filter(
+      (a: any) =>
+        a.assignedCoachIds &&
+        (a.assignedCoachIds.includes(coachId) ||
+          a.assignedCoachIds.includes(args.coachId))
+    );
+
+    // Enrich with the owning account's contact details.
+    const accountCache = new Map<string, any>();
+    const results: any[] = [];
+    for (const a of matched) {
+      let account = accountCache.get(a.accountCustomerId);
+      if (account === undefined) {
+        account = await ctx.db.get(a.accountCustomerId);
+        accountCache.set(a.accountCustomerId, account);
+      }
+      results.push({
+        _id: a._id,
+        name: a.name,
+        accountCustomerId: a.accountCustomerId,
+        accountEmail: account?.email ?? "",
+        accountName: account?.name ?? "",
+        accountPhone: account?.phone ?? "",
+        isSelf: a.isSelf ?? false,
+        // `email` kept for back-compat with the existing editor UI (it renders
+        // a secondary line / searches on it) — surfaces the parent's email.
+        email: account?.email ?? "",
+      });
+    }
+    return results;
   },
 });
 

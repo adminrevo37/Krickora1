@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { api } from '../../convex/_generated/api'
 import { useAuth } from '../hooks/useAuth'
 import EmailNotificationsCard from '../components/EmailNotificationsCard'
+import MyAthletesCard from '../components/MyAthletesCard'
 
 export const Route = createFileRoute('/profile')({
   component: ProfilePage,
@@ -157,6 +158,11 @@ function ProfilePage() {
           </form>
         )}
       </div>
+      {user.role === 'customer' && (
+        <div className="mt-6">
+          <MyAthletesCard />
+        </div>
+      )}
       <div className="mt-6">
         <EmailNotificationsCard
           customerRecord={customerRecord}

@@ -90,7 +90,9 @@ export function useBookings() {
         isCoachBooking: booking.isCoachBooking,
         coachPrice: booking.coachPrice,
         additionalLaneIds: booking.additionalLaneIds,
-        athleteSlots: booking.athleteSlots,
+        // athleteId carried as string from the UI; validator types it as
+        // Id<"athletes"> — cast at the mutation boundary.
+        athleteSlots: booking.athleteSlots as any,
         creditApplied: booking.creditApplied,
         accessCode: booking.accessCode,
         discountCode: booking.discountCode,
@@ -318,11 +320,13 @@ export function useBookings() {
   )
 
   const updateAthleteSlots = useCallback(
-    async (bookingId: string, athleteSlots: { athleteName: string; startHour: number; durationMinutes: number }[], userId: string) => {
+    async (bookingId: string, athleteSlots: { athleteId?: string; athleteName: string; startHour: number; durationMinutes: number }[], userId: string) => {
       try {
         await updateAthleteSlotsMut({
           id: bookingId as Id<"bookings">,
-          athleteSlots,
+          // athleteId is carried as a string from the editor; the mutation
+          // validator types it as Id<"athletes"> — cast at the boundary.
+          athleteSlots: athleteSlots as any,
           userId,
         })
         return { success: true }

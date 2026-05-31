@@ -108,11 +108,12 @@ export default function AthleteAllocationEditor({
     }
   }
 
-  const selectAthlete = (index: number, name: string) => {
+  const selectAthlete = (index: number, athlete: { _id: string; name: string }) => {
     const updated = [...slots]
     updated[index] = {
       ...updated[index],
-      athleteName: name,
+      athleteId: athlete._id,
+      athleteName: athlete.name,
     }
     setSlots(updated)
     setActiveDropdown(null)
@@ -170,6 +171,7 @@ export default function AthleteAllocationEditor({
     setError(null)
     setSuccessMsg(null)
     const cleanSlots = slots.filter(s => s.athleteName.trim()).map(s => ({
+      athleteId: s.athleteId,
       athleteName: s.athleteName.trim(),
       startHour: s.startHour,
       durationMinutes: s.durationMinutes,
@@ -461,7 +463,7 @@ export default function AthleteAllocationEditor({
                             filteredAthletes.map(athlete => (
                               <button
                                 key={athlete._id}
-                                onClick={() => selectAthlete(index, athlete.name)}
+                                onClick={() => selectAthlete(index, athlete)}
                                 className="w-full flex items-center gap-2.5 px-3 py-2.5 hover:bg-orange-50 dark:hover:bg-orange-900/10 transition-colors text-left group"
                               >
                                 <div className="w-8 h-8 bg-emerald-500 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 group-hover:scale-105 transition-transform">

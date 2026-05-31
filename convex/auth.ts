@@ -582,13 +582,48 @@ async function ensureCustomerImpl(
 
   if (existing) return existing._id;
 
-  return await ctx.db.insert("customers", {
+  const now = new Date().toISOString();
+  const customerId = await ctx.db.insert("customers", {
     name: args.name || normalizedEmail.split("@")[0] || "New User",
     email: normalizedEmail,
     role: "customer",
     creditBalance: 0,
-    createdAt: new Date().toISOString(),
+    createdAt: now,
   });
+
+  // SPEC_PARENT_ATHLETE_MODEL: new accounts get a self-athlete (the account
+  // holder training themselves) so the model is uniform for adults. It stays
+  // invisible to coaches unless a coach is assigned.
+  await ctx.db.insert("athletes", {
+    accountCustomerId: customerId,
+    name: args.name || normalizedEmail.split("@")[0] || "New User",
+    assignedCoachIds: [],
+    isSelf: true,
+    createdAt: now,
+  });
+
+  // Consume any pending athlete-invite (a coach invited this parent before they
+  // had an account): create the named child athlete + assign the inviting coach.
+  try {
+    const invite = await ctx.db
+      .query("coachInvites")
+      .withIndex("by_email", (q: any) => q.eq("email", normalizedEmail))
+      .first();
+    if (invite && !invite.used && invite.kind === "athlete" && invite.childName) {
+      await ctx.db.insert("athletes", {
+        accountCustomerId: customerId,
+        name: invite.childName,
+        assignedCoachIds: invite.coachId ? [invite.coachId] : [],
+        isSelf: false,
+        createdAt: now,
+      });
+      await ctx.db.patch(invite._id, { used: true, usedAt: now });
+    }
+  } catch (e) {
+    console.error("Failed to consume athlete invite on registration:", e);
+  }
+
+  return customerId;
 }
 
 /**

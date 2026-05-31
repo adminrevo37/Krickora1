@@ -54,6 +54,20 @@ export default defineSchema({
     .index("by_email", ["email"])
     .index("by_role", ["role"]),
 
+  // Child-athlete entities (SPEC_PARENT_ATHLETE_MODEL). Separates the ACCOUNT
+  // holder (customers — parent/guardian or adult who logs in, pays, receives
+  // emails) from the ATHLETE (the trainee a coach sees). One account → many
+  // athletes. assignedCoachIds lives HERE now (per-athlete), not on customers.
+  athletes: defineTable({
+    accountCustomerId: v.id("customers"), // owning account (parent/adult)
+    name: v.string(), // the kid's (or adult's) name — what coaches see
+    assignedCoachIds: v.optional(v.array(v.string())), // coach _id(s) for THIS athlete
+    isSelf: v.optional(v.boolean()), // true = the account holder training themselves
+    dob: v.optional(v.string()), // reserved, unused for now — enables future age groups w/o migration
+    notes: v.optional(v.string()), // optional coach/parent notes
+    createdAt: v.string(),
+  }).index("by_account", ["accountCustomerId"]),
+
   // Account-credit movement log (SPEC_PAYMENTS_AND_CREDIT #1). Every change to
   // customers.creditBalance appends one row — the user-facing credit history.
   // delta > 0 = credit issued (cancellation, modify decrease, admin grant),
@@ -131,6 +145,11 @@ export default defineSchema({
     athleteSlots: v.optional(
       v.array(
         v.object({
+          // athleteId = source of truth (id("athletes")). athleteName is
+          // denormalised for history/display if the athlete is renamed/removed
+          // (SPEC_PARENT_ATHLETE_MODEL decision #6). Legacy slots have no
+          // athleteId — recipient resolution falls back to the name match.
+          athleteId: v.optional(v.id("athletes")),
           athleteName: v.string(),
           startHour: v.number(),
           durationMinutes: v.number(),
@@ -239,6 +258,13 @@ export default defineSchema({
     createdAt: v.string(),
     usedAt: v.optional(v.string()),
     used: v.boolean(),
+    // Invite discriminator (SPEC_PARENT_ATHLETE_MODEL). Absent/'coach' = the
+    // original admin→coach registration invite. 'athlete' = a coach inviting a
+    // parent whose account doesn't exist yet; on registration the named child
+    // athlete is auto-created under the new account and the coach assigned.
+    kind: v.optional(v.string()), // 'coach' | 'athlete'
+    childName: v.optional(v.string()), // for kind='athlete' — the child to create
+    coachId: v.optional(v.string()), // for kind='athlete' — coach to auto-assign
   })
     .index("by_token", ["token"])
     .index("by_email", ["email"]),

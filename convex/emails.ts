@@ -419,3 +419,39 @@ export const sendAthleteAllocation = internalAction({
     });
   },
 });
+
+// Parent notification: a coach added one of their children as an athlete
+// (SPEC_PARENT_ATHLETE_MODEL — coach-add path, account already exists).
+// Mandatory (parent is a third party to the coach action) — not prefs-gated.
+export const sendAthleteAdded = internalAction({
+  args: {
+    to: v.string(),
+    parentName: v.string(),
+    childName: v.string(),
+    coachName: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    return await sendEmail("athlete-added", args.to, {
+      parentName: args.parentName,
+      childName: args.childName,
+      coachName: args.coachName,
+    });
+  },
+});
+
+// Invite a parent whose account doesn't exist yet to register so their child
+// can be coached (SPEC_PARENT_ATHLETE_MODEL — coach-add path, no account).
+export const sendAthleteInvite = internalAction({
+  args: {
+    to: v.string(),
+    childName: v.string(),
+    coachName: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    return await sendEmail("athlete-invite", args.to, {
+      childName: args.childName,
+      coachName: args.coachName,
+      signUpUrl: "https://krickora.com",
+    });
+  },
+});
