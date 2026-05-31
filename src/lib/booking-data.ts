@@ -34,15 +34,9 @@ export const LANES: Lane[] = [
   { id: 'ru2', name: '9m Run Up 2', shortName: 'RU 2', type: 'run-up', icon: '🏏' },
 ]
 
-// Default pricing
-export const PRICING = {
-  oneHour: { duration: 60, price: 40, label: '1 Hour', priceLabel: '$40' },
-  oneAndHalf: { duration: 90, price: 55, label: '1.5 Hours', priceLabel: '$55' },
-} as const
-
 // Coach pricing (1-hour minimum; per-hour rate only)
 // Rate is sourced from admin panel settings (siteSettings.coachPerHour)
-import { getSettingsStore, getHoursForDate } from './settings-store'
+import { getSettingsStore, getHoursForDate, DAY_KEYS } from './settings-store'
 
 export const COACH_PRICING = {
   get perHour(): number {
@@ -97,8 +91,19 @@ export interface TimeSlot {
 }
 
 export function generateTimeSlots(): TimeSlot[] {
+  // Derive the bounds from settings (single source of truth) so custom per-day
+  // hours outside 7–21 still render. Spans the widest open/close across the week.
+  let open = OPENING_HOUR
+  let close = CLOSING_HOUR
+  try {
+    const dh = getSettingsStore().get().dailyHours
+    const opens = DAY_KEYS.map((d) => dh[d]).filter((h) => h && !h.closed).map((h) => h.open)
+    const closes = DAY_KEYS.map((d) => dh[d]).filter((h) => h && !h.closed).map((h) => h.close)
+    if (opens.length) open = Math.min(...opens)
+    if (closes.length) close = Math.max(...closes)
+  } catch {}
   const slots: TimeSlot[] = []
-  for (let h = OPENING_HOUR; h < CLOSING_HOUR; h += 0.5) {
+  for (let h = open; h < close; h += 0.5) {
     slots.push({ hour: h, label: formatTime(h) })
   }
   return slots

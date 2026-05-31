@@ -1,7 +1,6 @@
 import { useState, useMemo } from 'react'
 import {
   LANES,
-  PRICING,
   getCurrentWeekDays,
   getCoachRolling7Days,
   getAWSTNow,

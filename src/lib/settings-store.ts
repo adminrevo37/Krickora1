@@ -26,6 +26,7 @@ export interface SiteSettings {
   trumanPricePerHour: number
   trumanPrice90Min: number
   coachPerHour: number
+  coachPer30Min?: number
   cancellationHoursBefore: number
   openingHour: number
   closingHour: number
@@ -40,9 +41,15 @@ export interface SiteSettings {
   l2CoachOpenHour: number
   customerMaxDurationMinutes?: number
   coachMaxDurationMinutes?: number
+  minAthleteDurationMinutes?: number
   coachRescheduleFreezeHours?: number
+  extensionNoticeMinutes?: number
   coachLateCancellationHours?: number
   customerCancellationHours?: number
+  abandonedCheckoutMinutes?: number
+  registrationLocked?: boolean
+  adminGateEnabled?: boolean
+  adminUnlockMinutes?: number
 }
 
 const DEFAULT_DAILY_HOURS: Record<DayKey, DailyHours> = {
@@ -61,6 +68,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   trumanPricePerHour: 50,
   trumanPrice90Min: 70,
   coachPerHour: 25,
+  coachPer30Min: 15,
   cancellationHoursBefore: 2,
   openingHour: 7,
   closingHour: 21,
@@ -75,6 +83,15 @@ const DEFAULT_SETTINGS: SiteSettings = {
   l2CoachOpenHour: 17,
   customerMaxDurationMinutes: 180,
   coachMaxDurationMinutes: 600,
+  minAthleteDurationMinutes: 15,
+  coachRescheduleFreezeHours: 24,
+  extensionNoticeMinutes: 20,
+  customerCancellationHours: 2,
+  coachLateCancellationHours: 24,
+  abandonedCheckoutMinutes: 10,
+  registrationLocked: false,
+  adminGateEnabled: false,
+  adminUnlockMinutes: 45,
 }
 
 const JS_DAY_TO_KEY: DayKey[] = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']

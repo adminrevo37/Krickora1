@@ -41,6 +41,34 @@ function NumberInput({
   )
 }
 
+// ── ToggleRow: boolean setting with label + description ──
+function ToggleRow({
+  label,
+  description,
+  checked,
+  onChange,
+}: {
+  label: string
+  description?: string
+  checked: boolean
+  onChange: (v: boolean) => void
+}) {
+  return (
+    <label className="flex items-start justify-between gap-4 cursor-pointer">
+      <span>
+        <span className="text-sm font-medium text-gray-800">{label}</span>
+        {description && <span className="block text-xs text-gray-500 mt-0.5">{description}</span>}
+      </span>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-1 h-5 w-5 shrink-0"
+      />
+    </label>
+  )
+}
+
 export default function SettingsPanel() {
   const { settings, updateSettings, updateDayHours, resetSettings, isAdmin } = useSettings()
 
@@ -114,6 +142,7 @@ export default function SettingsPanel() {
           <NumberInput label="Customer / hour ($)" value={settings.customerPricePerHour} onChange={(v) => updateSettings({ customerPricePerHour: v })} />
           <NumberInput label="Truman / hour ($)" value={settings.trumanPricePerHour} onChange={(v) => updateSettings({ trumanPricePerHour: v })} />
           <NumberInput label="Coach / hour ($)" value={settings.coachPerHour} onChange={(v) => updateSettings({ coachPerHour: v })} />
+          <NumberInput label="Coach / 30 min ($)" value={settings.coachPer30Min ?? 15} onChange={(v) => updateSettings({ coachPer30Min: v })} />
         </div>
       </div>
 
@@ -180,6 +209,63 @@ export default function SettingsPanel() {
               </label>
               <NumberInput label="Open hour" value={settings.l2CoachOpenHour} onChange={(v) => updateSettings({ l2CoachOpenHour: v })} />
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Cancellation & Time Locks */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h3 className="text-lg font-bold text-gray-800">🔒 Cancellation & Time Locks</h3>
+          <p className="text-sm text-gray-500 mt-0.5">Windows that lock changes/cancellations before a session starts</p>
+        </div>
+        <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <NumberInput label="Customer cancellation cutoff (hours)" value={settings.customerCancellationHours ?? 2} onChange={(v) => updateSettings({ customerCancellationHours: v })} />
+          <NumberInput label="Coach late-cancel charge window (hours)" value={settings.coachLateCancellationHours ?? 24} onChange={(v) => updateSettings({ coachLateCancellationHours: v })} />
+          <NumberInput label="Coach reschedule freeze (hours)" value={settings.coachRescheduleFreezeHours ?? 24} onChange={(v) => updateSettings({ coachRescheduleFreezeHours: v })} />
+          <NumberInput label="Extension notice (minutes before start)" value={settings.extensionNoticeMinutes ?? 20} onChange={(v) => updateSettings({ extensionNoticeMinutes: v })} />
+        </div>
+      </div>
+
+      {/* Session Durations */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h3 className="text-lg font-bold text-gray-800">⏱️ Session Durations</h3>
+          <p className="text-sm text-gray-500 mt-0.5">Maximum and minimum bookable durations</p>
+        </div>
+        <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <NumberInput label="Customer max duration (minutes)" value={settings.customerMaxDurationMinutes ?? 180} step={30} onChange={(v) => updateSettings({ customerMaxDurationMinutes: v })} />
+          <NumberInput label="Coach max duration (minutes)" value={settings.coachMaxDurationMinutes ?? 600} step={30} onChange={(v) => updateSettings({ coachMaxDurationMinutes: v })} />
+          <NumberInput label="Min athlete slot (minutes)" value={settings.minAthleteDurationMinutes ?? 15} step={5} onChange={(v) => updateSettings({ minAthleteDurationMinutes: v })} />
+        </div>
+      </div>
+
+      {/* Payments & Holds */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h3 className="text-lg font-bold text-gray-800">💳 Payments & Holds</h3>
+          <p className="text-sm text-gray-500 mt-0.5">How long an unpaid checkout holds its slot before release</p>
+        </div>
+        <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <NumberInput label="Abandoned checkout release (minutes)" value={settings.abandonedCheckoutMinutes ?? 10} onChange={(v) => updateSettings({ abandonedCheckoutMinutes: v })} />
+        </div>
+      </div>
+
+      {/* Admin Security Gate */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h3 className="text-lg font-bold text-gray-800">🛡️ Admin Security Gate</h3>
+          <p className="text-sm text-gray-500 mt-0.5">Require admins to re-enter their own password before destructive actions</p>
+        </div>
+        <div className="p-6 space-y-4">
+          <ToggleRow
+            label="Require password unlock for admin actions"
+            description="When on, destructive admin writes prompt for your account password. The /admin prompt is deployed — safe to enable."
+            checked={settings.adminGateEnabled ?? false}
+            onChange={(v) => updateSettings({ adminGateEnabled: v })}
+          />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <NumberInput label="Unlock duration (minutes)" value={settings.adminUnlockMinutes ?? 45} onChange={(v) => updateSettings({ adminUnlockMinutes: v })} />
           </div>
         </div>
       </div>

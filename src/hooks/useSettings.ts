@@ -1,9 +1,50 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
-import { getSettingsStore, type SiteSettings, type DayKey, type DailyHours } from '../lib/settings-store'
+import { getSettingsStore, type SiteSettings, type DayKey, type DailyHours, DAY_KEYS } from '../lib/settings-store'
 
 const store = getSettingsStore()
+
+// Every scalar/boolean setting that lives in Convex (siteSettings singleton) and
+// must propagate to every device. dailyHours is synced separately (array ↔ Record).
+const REMOTE_SCALAR_KEYS = [
+  'customerPricePerHour', 'customerPrice90Min',
+  'trumanPricePerHour', 'trumanPrice90Min',
+  'coachPerHour', 'coachPer30Min',
+  'cancellationHoursBefore', 'openingHour', 'closingHour',
+  'minBookingNoticeMinutes', 'coachBookingWindowDays',
+  'customerOpenDay', 'customerOpenHour',
+  'l1CoachOpenDay', 'l1CoachOpenHour',
+  'l2CoachOpenDay', 'l2CoachOpenHour',
+  'customerMaxDurationMinutes', 'coachMaxDurationMinutes',
+  'minAthleteDurationMinutes', 'coachRescheduleFreezeHours',
+  'extensionNoticeMinutes', 'customerCancellationHours',
+  'coachLateCancellationHours', 'abandonedCheckoutMinutes',
+  'registrationLocked', 'adminGateEnabled', 'adminUnlockMinutes',
+] as const
+
+const REMOTE_KEYS = new Set<string>([...REMOTE_SCALAR_KEYS, 'dailyHours'])
+
+// Convex stores dailyHours as an array; the frontend uses a Record keyed by day.
+function remoteHoursToRecord(arr: any): Partial<Record<DayKey, DailyHours>> | null {
+  if (!Array.isArray(arr)) return null
+  const out: Partial<Record<DayKey, DailyHours>> = {}
+  for (const row of arr) {
+    if (row && typeof row.day === 'string') {
+      out[row.day as DayKey] = { open: row.open, close: row.close, closed: row.closed }
+    }
+  }
+  return out
+}
+
+function recordToRemoteHours(rec: Record<DayKey, DailyHours>) {
+  return DAY_KEYS.map((day) => ({
+    day,
+    open: rec[day].open,
+    close: rec[day].close,
+    closed: rec[day].closed,
+  }))
+}
 
 export function useSettings() {
   const [localSettings, setLocalSettings] = useState<SiteSettings>(() => store.get())
@@ -23,20 +64,12 @@ export function useSettings() {
   useEffect(() => {
     if (!remoteSettings) return
     const merged: Partial<SiteSettings> = {}
-    const keys: (keyof SiteSettings)[] = [
-      'customerPricePerHour', 'customerPrice90Min',
-      'trumanPricePerHour', 'trumanPrice90Min',
-      'coachPerHour',
-      'cancellationHoursBefore', 'openingHour', 'closingHour',
-      'minBookingNoticeMinutes', 'coachBookingWindowDays',
-      'customerOpenDay', 'customerOpenHour',
-      'l1CoachOpenDay', 'l1CoachOpenHour',
-      'l2CoachOpenDay', 'l2CoachOpenHour',
-    ]
-    for (const k of keys) {
+    for (const k of REMOTE_SCALAR_KEYS) {
       const v = (remoteSettings as any)[k]
       if (v !== undefined && v !== null) (merged as any)[k] = v
     }
+    const hours = remoteHoursToRecord((remoteSettings as any).dailyHours)
+    if (hours) (merged as any).dailyHours = hours
     if (Object.keys(merged).length > 0) {
       store.update(merged)
     }
@@ -45,37 +78,15 @@ export function useSettings() {
   // Merged settings: remote overrides local defaults when available
   const settings: SiteSettings = useMemo(() => {
     if (!remoteSettings) return localSettings
-    return {
-      ...localSettings,
-      customerPricePerHour: remoteSettings.customerPricePerHour ?? localSettings.customerPricePerHour,
-      customerPrice90Min: remoteSettings.customerPrice90Min ?? localSettings.customerPrice90Min,
-      trumanPricePerHour: remoteSettings.trumanPricePerHour ?? localSettings.trumanPricePerHour,
-      trumanPrice90Min: remoteSettings.trumanPrice90Min ?? localSettings.trumanPrice90Min,
-      coachPerHour: remoteSettings.coachPerHour ?? localSettings.coachPerHour,
-      cancellationHoursBefore: remoteSettings.cancellationHoursBefore ?? localSettings.cancellationHoursBefore,
-      openingHour: remoteSettings.openingHour ?? localSettings.openingHour,
-      closingHour: remoteSettings.closingHour ?? localSettings.closingHour,
-      minBookingNoticeMinutes: remoteSettings.minBookingNoticeMinutes ?? localSettings.minBookingNoticeMinutes,
-      coachBookingWindowDays: remoteSettings.coachBookingWindowDays ?? localSettings.coachBookingWindowDays,
-      customerOpenDay: remoteSettings.customerOpenDay ?? localSettings.customerOpenDay,
-      customerOpenHour: remoteSettings.customerOpenHour ?? localSettings.customerOpenHour,
-      l1CoachOpenDay: (remoteSettings as any).l1CoachOpenDay ?? localSettings.l1CoachOpenDay,
-      l1CoachOpenHour: (remoteSettings as any).l1CoachOpenHour ?? localSettings.l1CoachOpenHour,
-      l2CoachOpenDay: (remoteSettings as any).l2CoachOpenDay ?? localSettings.l2CoachOpenDay,
-      l2CoachOpenHour: (remoteSettings as any).l2CoachOpenHour ?? localSettings.l2CoachOpenHour,
+    const merged: SiteSettings = { ...localSettings }
+    for (const k of REMOTE_SCALAR_KEYS) {
+      const v = (remoteSettings as any)[k]
+      if (v !== undefined && v !== null) (merged as any)[k] = v
     }
+    const hours = remoteHoursToRecord((remoteSettings as any).dailyHours)
+    if (hours) merged.dailyHours = { ...localSettings.dailyHours, ...hours }
+    return merged
   }, [remoteSettings, localSettings])
-
-  const REMOTE_KEYS = new Set([
-    'customerPricePerHour', 'customerPrice90Min',
-    'trumanPricePerHour', 'trumanPrice90Min',
-    'coachPerHour',
-    'cancellationHoursBefore', 'openingHour', 'closingHour',
-    'minBookingNoticeMinutes', 'coachBookingWindowDays',
-    'customerOpenDay', 'customerOpenHour',
-    'l1CoachOpenDay', 'l1CoachOpenHour',
-    'l2CoachOpenDay', 'l2CoachOpenHour',
-  ])
 
   const updateSettings = (updates: Partial<SiteSettings>) => {
     if (!isAdmin) return
@@ -96,6 +107,10 @@ export function useSettings() {
   const updateDayHours = (day: DayKey, hours: Partial<DailyHours>) => {
     if (!isAdmin) return
     store.updateDayHours(day, hours)
+    // Persist the full per-day hours array to Convex (single source of truth)
+    updateSiteSettingsMutation({ dailyHours: recordToRemoteHours(store.get().dailyHours) } as any).catch((e) => {
+      console.error('Failed to persist daily hours:', e)
+    })
   }
 
   const resetSettings = () => {

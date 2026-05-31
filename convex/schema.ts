@@ -272,6 +272,19 @@ export default defineSchema({
     cancellationHoursBefore: v.number(),
     openingHour: v.number(),
     closingHour: v.number(),
+    // Per-day operating hours (single source of truth — was previously
+    // localStorage-only, so the backend + other devices couldn't see it).
+    // openingHour/closingHour above remain the global fallback.
+    dailyHours: v.optional(
+      v.array(
+        v.object({
+          day: v.string(), // 'monday' .. 'sunday'
+          open: v.number(),
+          close: v.number(),
+          closed: v.boolean(),
+        })
+      )
+    ),
     minBookingNoticeMinutes: v.number(),
     coachBookingWindowDays: v.number(),
     customerOpenDay: v.string(),

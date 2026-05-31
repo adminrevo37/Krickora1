@@ -2026,6 +2026,17 @@ export const updateSiteSettings = mutation({
     coachLateCancellationHours: v.optional(v.number()),
     adminGateEnabled: v.optional(v.boolean()),
     adminUnlockMinutes: v.optional(v.number()),
+    abandonedCheckoutMinutes: v.optional(v.number()),
+    dailyHours: v.optional(
+      v.array(
+        v.object({
+          day: v.string(),
+          open: v.number(),
+          close: v.number(),
+          closed: v.boolean(),
+        })
+      )
+    ),
   },
   handler: async (ctx, args) => {
     await requireAdminUnlocked(ctx);
