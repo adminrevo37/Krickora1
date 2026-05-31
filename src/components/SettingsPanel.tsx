@@ -254,6 +254,17 @@ export default function SettingsPanel() {
         </div>
       </div>
 
+      {/* Misc (SPEC_ADD_A_MATE) */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h3 className="text-lg font-bold text-gray-800">⚙️ Misc Settings</h3>
+          <p className="text-sm text-gray-500 mt-0.5">Add-a-Mate and other miscellaneous limits</p>
+        </div>
+        <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <NumberInput label="Max mates per booking" value={settings.maxMatesPerBooking ?? 3} onChange={(v) => updateSettings({ maxMatesPerBooking: v })} />
+        </div>
+      </div>
+
       {/* Admin Security Gate */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-100">

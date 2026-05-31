@@ -173,6 +173,18 @@ export default defineSchema({
       )
     ),
     creditApplied: v.optional(v.number()),
+    // SPEC_ADD_A_MATE: friends (other Krickora ACCOUNTS) added to this booking
+    // for shared front-door access. customerId = the mate's customers._id.
+    // Customer bookings only (never set on coach bookings — those use
+    // athleteSlots). Mates reuse the owner's single accessCode (one front door).
+    mates: v.optional(
+      v.array(
+        v.object({
+          customerId: v.id("customers"),
+          addedAt: v.string(),
+        })
+      )
+    ),
     cancelledAt: v.optional(v.string()),
     cancelledByUserId: v.optional(v.string()),
     refilledMinutes: v.optional(v.number()),
@@ -248,6 +260,37 @@ export default defineSchema({
     .index("by_userId", ["userId"])
     .index("by_customerEmail", ["customerEmail"])
     .index("by_status", ["status"]),
+
+  // SPEC_ADD_A_MATE: persistent saved-mates list (the "friendships" book). One
+  // row per (owner → mate) pair the owner has added to a booking at least once,
+  // so the Add-a-Mate search can suggest them again. Directional: owner saves
+  // mate. No accept/decline. Removing a saved mate deletes the row(s).
+  friendships: defineTable({
+    ownerId: v.id("customers"),
+    mateId: v.id("customers"),
+    savedAt: v.string(),
+  })
+    .index("by_owner", ["ownerId"])
+    .index("by_owner_mate", ["ownerId", "mateId"]),
+
+  // SPEC_ADD_A_MATE: SMS invite tokens for mates who don't have a Krickora
+  // account yet. The owner generates one; the sms: deep link carries the token;
+  // /join consumes it. status: 'pending' | 'joined' | 'invalidated'. Invalidated
+  // when the owner removes the invite or cancels the booking; expiry re-anchors
+  // to the new start on reschedule (SPEC_MODIFY_BOOKING_UPGRADE / applyBookingChange).
+  bookingInvites: defineTable({
+    token: v.string(),
+    bookingId: v.id("bookings"),
+    invitedByCustomerId: v.id("customers"),
+    invitedPhone: v.optional(v.string()),
+    status: v.string(), // 'pending' | 'joined' | 'invalidated'
+    expiresAt: v.number(), // Unix ms — booking start time
+    createdAt: v.string(),
+    joinedByCustomerId: v.optional(v.id("customers")),
+    joinedAt: v.optional(v.string()),
+  })
+    .index("by_token", ["token"])
+    .index("by_bookingId", ["bookingId"]),
 
   waitlist: defineTable({
     userId: v.string(),
@@ -379,6 +422,9 @@ export default defineSchema({
     // long a freed slot is reserved exclusively for the next waitlisted member
     // before the offer rolls to the person behind them. Default 15.
     waitlistOfferHoldMinutes: v.optional(v.number()),    // default 15
+    // SPEC_ADD_A_MATE "Misc Settings". Max mates a customer may add to one
+    // booking (the owner is NOT counted). Default 3 → 4 people total per net.
+    maxMatesPerBooking: v.optional(v.number()),          // default 3
   }).index("by_key", ["key"]),
 
   // Admin unlock sessions (SPEC_SECURITY_HARDENING #2). One row per admin email;

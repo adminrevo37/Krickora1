@@ -5,6 +5,7 @@ import { api } from '../../convex/_generated/api'
 import { useAuth } from '../hooks/useAuth'
 import EmailNotificationsCard from '../components/EmailNotificationsCard'
 import MyAthletesCard from '../components/MyAthletesCard'
+import MyMatesCard from '../components/MyMatesCard'
 
 export const Route = createFileRoute('/profile')({
   component: ProfilePage,
@@ -161,6 +162,11 @@ function ProfilePage() {
       {user.role === 'customer' && (
         <div className="mt-6">
           <MyAthletesCard />
+        </div>
+      )}
+      {user.role === 'customer' && (
+        <div className="mt-6">
+          <MyMatesCard />
         </div>
       )}
       <div className="mt-6">

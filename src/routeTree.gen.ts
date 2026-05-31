@@ -13,8 +13,10 @@ import { Route as StatementsRouteImport } from './routes/statements'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as PlannerRouteImport } from './routes/planner'
 import { Route as PaymentsRouteImport } from './routes/payments'
+import { Route as JoinRouteImport } from './routes/join'
 import { Route as BookingsRouteImport } from './routes/bookings'
 import { Route as AdminRouteImport } from './routes/admin'
+import { Route as AddMateRouteImport } from './routes/add-mate'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CheckoutSuccessRouteImport } from './routes/checkout/success'
 import { Route as AdminAnalyticsRouteImport } from './routes/admin.analytics'
@@ -39,6 +41,11 @@ const PaymentsRoute = PaymentsRouteImport.update({
   path: '/payments',
   getParentRoute: () => rootRouteImport,
 } as any)
+const JoinRoute = JoinRouteImport.update({
+  id: '/join',
+  path: '/join',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const BookingsRoute = BookingsRouteImport.update({
   id: '/bookings',
   path: '/bookings',
@@ -47,6 +54,11 @@ const BookingsRoute = BookingsRouteImport.update({
 const AdminRoute = AdminRouteImport.update({
   id: '/admin',
   path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AddMateRoute = AddMateRouteImport.update({
+  id: '/add-mate',
+  path: '/add-mate',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -67,8 +79,10 @@ const AdminAnalyticsRoute = AdminAnalyticsRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/add-mate': typeof AddMateRoute
   '/admin': typeof AdminRouteWithChildren
   '/bookings': typeof BookingsRoute
+  '/join': typeof JoinRoute
   '/payments': typeof PaymentsRoute
   '/planner': typeof PlannerRoute
   '/profile': typeof ProfileRoute
@@ -78,8 +92,10 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/add-mate': typeof AddMateRoute
   '/admin': typeof AdminRouteWithChildren
   '/bookings': typeof BookingsRoute
+  '/join': typeof JoinRoute
   '/payments': typeof PaymentsRoute
   '/planner': typeof PlannerRoute
   '/profile': typeof ProfileRoute
@@ -90,8 +106,10 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/add-mate': typeof AddMateRoute
   '/admin': typeof AdminRouteWithChildren
   '/bookings': typeof BookingsRoute
+  '/join': typeof JoinRoute
   '/payments': typeof PaymentsRoute
   '/planner': typeof PlannerRoute
   '/profile': typeof ProfileRoute
@@ -103,8 +121,10 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/add-mate'
     | '/admin'
     | '/bookings'
+    | '/join'
     | '/payments'
     | '/planner'
     | '/profile'
@@ -114,8 +134,10 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/add-mate'
     | '/admin'
     | '/bookings'
+    | '/join'
     | '/payments'
     | '/planner'
     | '/profile'
@@ -125,8 +147,10 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/add-mate'
     | '/admin'
     | '/bookings'
+    | '/join'
     | '/payments'
     | '/planner'
     | '/profile'
@@ -137,8 +161,10 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AddMateRoute: typeof AddMateRoute
   AdminRoute: typeof AdminRouteWithChildren
   BookingsRoute: typeof BookingsRoute
+  JoinRoute: typeof JoinRoute
   PaymentsRoute: typeof PaymentsRoute
   PlannerRoute: typeof PlannerRoute
   ProfileRoute: typeof ProfileRoute
@@ -176,6 +202,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PaymentsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/join': {
+      id: '/join'
+      path: '/join'
+      fullPath: '/join'
+      preLoaderRoute: typeof JoinRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/bookings': {
       id: '/bookings'
       path: '/bookings'
@@ -188,6 +221,13 @@ declare module '@tanstack/react-router' {
       path: '/admin'
       fullPath: '/admin'
       preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/add-mate': {
+      id: '/add-mate'
+      path: '/add-mate'
+      fullPath: '/add-mate'
+      preLoaderRoute: typeof AddMateRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -226,8 +266,10 @@ const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AddMateRoute: AddMateRoute,
   AdminRoute: AdminRouteWithChildren,
   BookingsRoute: BookingsRoute,
+  JoinRoute: JoinRoute,
   PaymentsRoute: PaymentsRoute,
   PlannerRoute: PlannerRoute,
   ProfileRoute: ProfileRoute,

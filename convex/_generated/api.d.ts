@@ -35,6 +35,7 @@ import type * as lib_slotHolds from "../lib/slotHolds.js";
 import type * as lib_systemCancel from "../lib/systemCancel.js";
 import type * as lockMutations from "../lockMutations.js";
 import type * as locks from "../locks.js";
+import type * as mates from "../mates.js";
 import type * as mutations from "../mutations.js";
 import type * as queries from "../queries.js";
 import type * as registrationLock from "../registrationLock.js";
@@ -83,6 +84,7 @@ declare const fullApi: ApiFromModules<{
   "lib/systemCancel": typeof lib_systemCancel;
   lockMutations: typeof lockMutations;
   locks: typeof locks;
+  mates: typeof mates;
   mutations: typeof mutations;
   queries: typeof queries;
   registrationLock: typeof registrationLock;

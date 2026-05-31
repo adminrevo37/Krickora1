@@ -22,6 +22,7 @@ import {
   type WindowTier,
 } from "./lib/bookingWindow";
 import { computeCustomerPriceCents } from "./lib/pricing";
+import { notifyMatesOnCancel, notifyMatesOnModify } from "./mates";
 
 // ============================================================================
 // SHARED HELPERS
@@ -450,6 +451,19 @@ export async function applyBookingChange(
     startHour: change.newStartHour,
     duration: change.newDuration,
   });
+
+  // SPEC_ADD_A_MATE M5: tell every mate the new details + re-anchor pending SMS
+  // invite expiry to the new start (customer bookings only; coach bookings have
+  // no mates). `booking.*` is still the PRE-patch doc, so booking.mates is intact.
+  if (!booking.isCoachBooking) {
+    await notifyMatesOnModify(ctx, booking, {
+      newDate: change.newDate,
+      newStartHour: change.newStartHour,
+      newDuration: change.newDuration,
+      newLaneId: change.newLaneId,
+      newAccessCode: accessCode,
+    });
+  }
 
   // Delete old calendar events, then create fresh ones at the new slot.
   if (oldCalEventId) {
@@ -1240,6 +1254,10 @@ export const cancelBooking = mutation({
       startHour: booking.startHour,
       duration: booking.duration,
     });
+
+    // SPEC_ADD_A_MATE M4: tell every mate the booking is off + invalidate any
+    // pending SMS invites. Fires for owner AND admin cancellations (same path).
+    await notifyMatesOnCancel(ctx, booking);
 
     // Sync cancellation to Google Calendar
     if (booking.googleCalendarEventId) {
@@ -3315,6 +3333,7 @@ export const updateSiteSettings = mutation({
     adminUnlockMinutes: v.optional(v.number()),
     abandonedCheckoutMinutes: v.optional(v.number()),
     waitlistOfferHoldMinutes: v.optional(v.number()),
+    maxMatesPerBooking: v.optional(v.number()),
     dailyHours: v.optional(
       v.array(
         v.object({

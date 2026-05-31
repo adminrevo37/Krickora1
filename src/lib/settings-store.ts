@@ -50,6 +50,7 @@ export interface SiteSettings {
   modifyMoveEarlierMaxHours?: number
   abandonedCheckoutMinutes?: number
   waitlistOfferHoldMinutes?: number
+  maxMatesPerBooking?: number
   registrationLocked?: boolean
   adminGateEnabled?: boolean
   adminUnlockMinutes?: number
@@ -95,6 +96,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   modifyMoveEarlierMaxHours: 1,
   abandonedCheckoutMinutes: 10,
   waitlistOfferHoldMinutes: 15,
+  maxMatesPerBooking: 3,
   registrationLocked: false,
   adminGateEnabled: false,
   adminUnlockMinutes: 45,

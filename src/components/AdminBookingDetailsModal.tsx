@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useMutation, useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
+import type { Id } from '../../convex/_generated/dataModel'
 import { LANES, formatTime, getCoachPrice, getCustomerPrice, canBookSlot, getAWSTNow, type Booking } from '../lib/booking-data'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 import { useBookings } from '../hooks/useBookingStore'
@@ -88,6 +89,12 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
     api.queries.getAllocationAuditLog,
     booking.isCoachBooking ? { bookingId: booking.id } : 'skip',
   )
+
+  // SPEC_ADD_A_MATE: mates sharing this (customer) booking's door access.
+  const mates = useQuery(
+    api.mates.listBookingMates,
+    booking.isCoachBooking ? 'skip' : { bookingId: booking.id as Id<'bookings'> },
+  ) ?? []
 
   // Detect whether a cancellation is already recorded in the history array
   const hasCancelledInHistory = history.some(h =>
@@ -239,6 +246,26 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                           {formatTime(slot.startHour)} – {formatTime(slot.startHour + slot.durationMinutes / 60)} · {slot.durationMinutes}min
                         </span>
                       </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Mates (SPEC_ADD_A_MATE) — customer bookings only. Display name
+                  only (first name + last initial) to match the privacy model. */}
+              {!booking.isCoachBooking && mates.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide mb-2">
+                    👥 Mates ({mates.length})
+                  </h4>
+                  <div className="flex flex-wrap gap-1.5">
+                    {mates.map((m: any) => (
+                      <span
+                        key={m.customerId}
+                        className="text-xs px-2.5 py-1 rounded-full bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/50 text-blue-700 dark:text-blue-300"
+                      >
+                        {m.displayName}
+                      </span>
                     ))}
                   </div>
                 </div>

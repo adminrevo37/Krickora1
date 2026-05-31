@@ -14,6 +14,13 @@ const MANDATORY_TEMPLATES = new Set([
   "athlete-reschedule",
   "athlete-added",
   "athlete-invite",
+  // SPEC_ADD_A_MATE M1–M5: the recipient is a mate (or the owner being told a
+  // mate left) — a third party with no other UI signal, so mandatory.
+  "mate-added",
+  "mate-removed",
+  "mate-left",
+  "mate-cancelled",
+  "mate-modified",
 ]);
 
 // Check if recipient has a specific email template enabled (defaults to true).
@@ -541,6 +548,122 @@ export const sendAthleteReschedule = internalAction({
       newDate: args.newDate,
       timeSlot: args.timeSlot,
       duration: args.duration,
+      accessCode: args.accessCode,
+      calendarUrl: args.calendarUrl ?? "https://krickora.com",
+    });
+  },
+});
+
+// ============================================================================
+// MATE NOTIFICATIONS (SPEC_ADD_A_MATE M1–M5). All mandatory — the recipient is
+// a mate (or the owner being told a mate left), a third party to the booking
+// flow. M1/M5 carry the door code + Facility Instructions link (they ARE
+// attending); M2/M3/M4 do not (removal / cancellation).
+// ============================================================================
+
+// M1 — owner added this person to a booking. Booking-confirmation layout minus
+// payment lines, with the door code + "added you" framing.
+export const sendMateAdded = internalAction({
+  args: {
+    to: v.string(),
+    ownerName: v.string(),
+    laneName: v.string(),
+    date: v.string(),
+    timeSlot: v.string(),
+    duration: v.string(),
+    accessCode: v.string(),
+    calendarUrl: v.optional(v.string()),
+  },
+  handler: async (_ctx, args) => {
+    return await sendEmail("mate-added", args.to, {
+      ownerName: args.ownerName,
+      laneName: args.laneName,
+      date: args.date,
+      timeSlot: args.timeSlot,
+      duration: args.duration,
+      accessCode: args.accessCode,
+      calendarUrl: args.calendarUrl ?? "https://krickora.com",
+    });
+  },
+});
+
+// M2 — owner removed this mate from the booking. No door code / instructions.
+export const sendMateRemoved = internalAction({
+  args: {
+    to: v.string(),
+    ownerName: v.string(),
+    laneName: v.string(),
+    date: v.string(),
+    timeSlot: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    return await sendEmail("mate-removed", args.to, {
+      ownerName: args.ownerName,
+      laneName: args.laneName,
+      date: args.date,
+      timeSlot: args.timeSlot,
+    });
+  },
+});
+
+// M3 — a mate removed themselves; tell the owner. No door code / instructions.
+export const sendMateLeft = internalAction({
+  args: {
+    to: v.string(),
+    mateName: v.string(),
+    laneName: v.string(),
+    date: v.string(),
+    timeSlot: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    return await sendEmail("mate-left", args.to, {
+      mateName: args.mateName,
+      laneName: args.laneName,
+      date: args.date,
+      timeSlot: args.timeSlot,
+    });
+  },
+});
+
+// M4 — owner (or admin) cancelled the whole booking; tell every mate. No code.
+export const sendMateCancelled = internalAction({
+  args: {
+    to: v.string(),
+    ownerName: v.string(),
+    laneName: v.string(),
+    date: v.string(),
+    timeSlot: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    return await sendEmail("mate-cancelled", args.to, {
+      ownerName: args.ownerName,
+      laneName: args.laneName,
+      date: args.date,
+      timeSlot: args.timeSlot,
+    });
+  },
+});
+
+// M5 — owner modified the booking; tell every mate the new details. Same layout
+// as the Booking Modified email (#7) minus payment lines. Carries the new code.
+export const sendMateModified = internalAction({
+  args: {
+    to: v.string(),
+    ownerName: v.string(),
+    newLaneName: v.string(),
+    newDate: v.string(),
+    newTimeSlot: v.string(),
+    newDuration: v.string(),
+    accessCode: v.string(),
+    calendarUrl: v.optional(v.string()),
+  },
+  handler: async (_ctx, args) => {
+    return await sendEmail("mate-modified", args.to, {
+      ownerName: args.ownerName,
+      newLaneName: args.newLaneName,
+      newDate: args.newDate,
+      newTimeSlot: args.newTimeSlot,
+      newDuration: args.newDuration,
       accessCode: args.accessCode,
       calendarUrl: args.calendarUrl ?? "https://krickora.com",
     });

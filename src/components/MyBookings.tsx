@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { Link } from '@tanstack/react-router'
 import { useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { useBookings } from '../hooks/useBookingStore'
@@ -21,6 +22,8 @@ import AthleteAllocationEditor from './AthleteAllocationEditor'
 // merged into one ModifyBookingModal → modifyBooking. EditBookingModal /
 // RescheduleModal are retired (files kept, no longer referenced here).
 import ModifyBookingModal from './ModifyBookingModal'
+// SPEC_ADD_A_MATE: read-only "shared with you" bookings for users who are a mate.
+import MateBookingsSection from './MateBookingsSection'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -500,6 +503,8 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           {cancelCheck.allowed && (
             <button onClick={() => setModifyBookingData(booking)} className="text-[11px] px-2.5 py-1 rounded-lg border border-violet-200 dark:border-violet-800 text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors">✏️ Modify</button>
           )}
+          {/* SPEC_ADD_A_MATE: one-tap to the Add-a-Mate page (customer bookings only). */}
+          <Link to="/add-mate" search={{ bookingId: booking.id }} className="text-[11px] px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors">👥 Add a Mate</Link>
           <button
             onClick={() => handleCancel(booking.id)}
             disabled={cancellingId === booking.id || !cancelCheck.allowed}
@@ -703,6 +708,9 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           ))}
         </div>
       )}
+
+      {/* SPEC_ADD_A_MATE: bookings someone else added you to (read-only). */}
+      <MateBookingsSection />
 
       {/* Tabs */}
       <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-xl p-1 overflow-x-auto">
