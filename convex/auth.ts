@@ -51,7 +51,13 @@ function getTrustedOrigins(request?: Request): string[] {
   const addDynamicOrigin = (url: string | null) => {
     if (!url) return;
     const isDynamicUrl =
-      url.includes(".w.modal.host") || url.includes(".shipper.now") || url.includes(".convex.site");
+      url.includes(".w.modal.host") ||
+      url.includes(".shipper.now") ||
+      url.includes(".convex.site") ||
+      // Vercel: trust the stable alias (krickora-prod.vercel.app) AND the
+      // per-deployment preview URLs (krickora-prod-<hash>-<team>.vercel.app),
+      // which Better Auth would otherwise reject as "Invalid origin".
+      url.includes(".vercel.app");
     if (!isDynamicUrl) return;
     try {
       const parsed = new URL(url);
