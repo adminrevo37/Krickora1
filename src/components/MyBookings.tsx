@@ -407,53 +407,56 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   }
 
   const renderAthleteSlotCard = (booking: Booking) => {
-    // A child-athlete of THIS account is allocated inside a coach's booking
-    // (SPEC_PARENT_ATHLETE_MODEL). The slot's name is the child's; the account
-    // holder (parent) sees it here. Picks the first matching slot for display.
+    // Child-athlete(s) of THIS account are allocated inside a coach's booking
+    // (SPEC_PARENT_ATHLETE_MODEL). The slot name is the child's; the account
+    // holder (parent) sees it here. Renders ONE card per matching child so a
+    // booking with two siblings shows both their sessions, grouped by child.
     const lane = getLane(booking.laneId)
     const variantName = getVariantName(booking)
-    const mySlot = booking.athleteSlots?.find(slotIsMine)
-    if (!mySlot) return null
-    const childName = mySlot.athleteName
-    const isSelfSession = athleteNameCandidates.includes(childName.toLowerCase().trim())
-    const calParams = { laneName: lane?.name ?? booking.laneId, variantName: variantName ?? undefined, date: booking.date, startHour: mySlot.startHour, duration: mySlot.durationMinutes, customerName: childName, accessCode: mySlot.accessCode }
-    return (
-      <div key={booking.id} className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm">
-        <div className="flex items-start justify-between gap-2 mb-2">
-          <div>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-base font-bold text-gray-900 dark:text-white">
-                {formatTime(mySlot.startHour)} – {formatTime(mySlot.startHour + mySlot.durationMinutes / 60)}
-              </span>
-              <span className="text-[10px] font-semibold bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 px-1.5 py-0.5 rounded-full uppercase">Coaching</span>
-              {!isSelfSession && (
-                <span className="text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded-full">{childName}</span>
-              )}
-            </div>
-            <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              {lane?.icon} {lane?.name ?? booking.laneId}
-              {variantName && <span className="ml-1">· {variantName}</span>}
-              · {formatDuration(mySlot.durationMinutes)}
-              · Coach: {booking.customerName}
-            </div>
-          </div>
-          <span className="text-lg">{lane?.icon ?? '🏏'}</span>
-        </div>
-        {mySlot.accessCode && (
-          <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg px-3 py-2 border border-blue-200 dark:border-blue-800/50">
-            <span>🔑</span>
+    const mySlots = (booking.athleteSlots ?? []).filter(slotIsMine)
+    if (mySlots.length === 0) return null
+    return mySlots.map((mySlot, idx) => {
+      const childName = mySlot.athleteName
+      const isSelfSession = athleteNameCandidates.includes(childName.toLowerCase().trim())
+      const calParams = { laneName: lane?.name ?? booking.laneId, variantName: variantName ?? undefined, date: booking.date, startHour: mySlot.startHour, duration: mySlot.durationMinutes, customerName: childName, accessCode: mySlot.accessCode }
+      return (
+        <div key={`${booking.id}-${idx}`} className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-2 mb-2">
             <div>
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">Your Access Code</div>
-              <div className="text-sm font-mono font-bold tracking-[0.2em] text-blue-800 dark:text-blue-200">{formatAccessCode(mySlot.accessCode)}</div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-base font-bold text-gray-900 dark:text-white">
+                  {formatTime(mySlot.startHour)} – {formatTime(mySlot.startHour + mySlot.durationMinutes / 60)}
+                </span>
+                <span className="text-[10px] font-semibold bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 px-1.5 py-0.5 rounded-full uppercase">Coaching</span>
+                {!isSelfSession && (
+                  <span className="text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded-full">{childName}</span>
+                )}
+              </div>
+              <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                {lane?.icon} {lane?.name ?? booking.laneId}
+                {variantName && <span className="ml-1">· {variantName}</span>}
+                · {formatDuration(mySlot.durationMinutes)}
+                · Coach: {booking.customerName}
+              </div>
             </div>
+            <span className="text-lg">{lane?.icon ?? '🏏'}</span>
           </div>
-        )}
-        <div className="mt-2 flex gap-1.5">
-          <a href={generateGoogleCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">📅 Google</a>
-          <a href={generateOutlookCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors">📆 Outlook</a>
+          {mySlot.accessCode && (
+            <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg px-3 py-2 border border-blue-200 dark:border-blue-800/50">
+              <span>🔑</span>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">Your Access Code</div>
+                <div className="text-sm font-mono font-bold tracking-[0.2em] text-blue-800 dark:text-blue-200">{formatAccessCode(mySlot.accessCode)}</div>
+              </div>
+            </div>
+          )}
+          <div className="mt-2 flex gap-1.5">
+            <a href={generateGoogleCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">📅 Google</a>
+            <a href={generateOutlookCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors">📆 Outlook</a>
+          </div>
         </div>
-      </div>
-    )
+      )
+    })
   }
 
   const renderCustomerBookingCard = (booking: Booking) => {
