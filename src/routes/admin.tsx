@@ -748,8 +748,8 @@ function CustomersTab() {
               className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm"
             />
             <input
-              required type="text" placeholder="Password (min 8 characters)"
-              value={custForm.password} minLength={8}
+              required type="text" placeholder="Password (min 10 characters)"
+              value={custForm.password} minLength={10}
               onChange={e => setCustForm({ ...custForm, password: e.target.value })}
               className="sm:col-span-6 px-3 py-2 border border-gray-200 rounded-lg text-sm"
             />
@@ -1213,7 +1213,7 @@ function CoachesTab() {
                 <option value="L1">L1</option>
                 <option value="L2">L2</option>
               </select>
-              <input required type="text" placeholder="Password (min 8 characters)" value={coachForm.password} onChange={e => setCoachForm({ ...coachForm, password: e.target.value })} minLength={8} className="sm:col-span-6 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+              <input required type="text" placeholder="Password (min 10 characters)" value={coachForm.password} onChange={e => setCoachForm({ ...coachForm, password: e.target.value })} minLength={10} className="sm:col-span-6 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
               <button disabled={busyAdd} className="sm:col-span-6 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors">
                 {busyAdd ? 'Creating…' : 'Create Coach Account'}
               </button>

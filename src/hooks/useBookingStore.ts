@@ -137,14 +137,20 @@ export function useBookings() {
       const now = getAWSTNow()
       const hoursUntil =
         (bookingStart.getTime() - now.getTime()) / (1000 * 60 * 60)
-      // Coach bookings can always be cancelled, but will be charged if <24h
+      // Coach bookings can always be cancelled, but will be charged within the
+      // admin-configured late-cancel window (SSOT: coachLateCancellationHours).
       if (booking.isCoachBooking) {
-        if (hoursUntil < 24) {
-          return { allowed: true, willBeCharged: true, reason: 'Cancellation within 24 hours of booking — you will still be charged to your statement.' }
+        const coachLateHours = getSettingsStore().get().coachLateCancellationHours ?? 24
+        if (hoursUntil < coachLateHours) {
+          return { allowed: true, willBeCharged: true, reason: `Cancellation within ${coachLateHours} hour${coachLateHours !== 1 ? 's' : ''} of booking — you will still be charged to your statement.` }
         }
         return { allowed: true }
       }
-      const cancellationHours = getSettingsStore().get().cancellationHoursBefore ?? 2
+      // SSOT: the server enforces customerCancellationHours (falling back to the
+      // legacy cancellationHoursBefore). Mirror that precedence here so the
+      // displayed/enforced cutoff matches the server.
+      const cs = getSettingsStore().get()
+      const cancellationHours = cs.customerCancellationHours ?? cs.cancellationHoursBefore ?? 2
       if (hoursUntil < cancellationHours) {
         return {
           allowed: false,

@@ -590,6 +590,10 @@ export const createBooking = mutation({
     // Caller role/tier is also used below to enforce the weekly-release horizon,
     // lead time and multi-lane cap (SPEC_BOOKING_WINDOW).
     const createIdentity = await ctx.auth.getUserIdentity();
+    // SEC: authentication is REQUIRED. Previously the ownership + email-verify
+    // guards lived inside `if (createIdentity)`, so a logged-out caller skipped
+    // them entirely and could create bookings impersonating any email/userId.
+    if (!createIdentity) throw new Error("Authentication required.");
     let callerCustomer: any = null;
     let isAdminCaller = false;
     if (createIdentity) {
@@ -2807,6 +2811,7 @@ export const updateCustomerByEmail = mutation({
     if (!updByEmailIdentity) throw new Error("Authentication required.");
     const updCallerEmail = updByEmailIdentity.email?.toLowerCase().trim() ?? "";
     const normalizedEmail = args.email.toLowerCase().trim();
+    let updIsAdminCaller = false;
     if (updCallerEmail !== normalizedEmail) {
       const updCallerCustomer = await ctx.db
         .query("customers")
@@ -2815,6 +2820,15 @@ export const updateCustomerByEmail = mutation({
       if (updCallerCustomer?.role !== "admin") {
         throw new Error("You can only update your own profile.");
       }
+      updIsAdminCaller = true;
+    } else {
+      // Self-update: resolve whether the caller is ALSO an admin (admins editing
+      // their own record may still set privileged fields).
+      const selfCustomer = await ctx.db
+        .query("customers")
+        .withIndex("by_email", (q: any) => q.eq("email", updCallerEmail))
+        .first();
+      updIsAdminCaller = selfCustomer?.role === "admin";
     }
     const existing = await ctx.db
       .query("customers")
@@ -2823,19 +2837,34 @@ export const updateCustomerByEmail = mutation({
 
     if (existing) {
       const { email, ...updates } = args;
+      // SEC: a non-admin may only edit profile fields on their OWN record. Strip
+      // privilege/financial fields (role, coachTier, assignedCoachIds,
+      // creditBalance, defaultSessionDuration, athleteCapacity) so a customer
+      // can't self-promote to admin or grant themselves credit via this path.
+      if (!updIsAdminCaller) {
+        delete (updates as any).role;
+        delete (updates as any).coachTier;
+        delete (updates as any).assignedCoachIds;
+        delete (updates as any).creditBalance;
+        delete (updates as any).defaultSessionDuration;
+        delete (updates as any).athleteCapacity;
+      }
       const cleanUpdates = Object.fromEntries(
         Object.entries(updates).filter(([_, v]) => v !== undefined)
       );
       await ctx.db.patch(existing._id, cleanUpdates);
       return existing._id;
     } else {
+      // SEC: only an admin may seed a privileged role / starting credit on a new
+      // record. A non-admin self-creating their own record is always a customer
+      // with zero credit.
       const id = await ctx.db.insert("customers", {
         name: args.name?.trim() || normalizedEmail.split("@")[0],
         email: normalizedEmail,
         phone: args.phone?.trim() || undefined,
-        role: args.role || "customer",
-        assignedCoachIds: args.assignedCoachIds ?? [],
-        creditBalance: args.creditBalance ?? 0,
+        role: updIsAdminCaller ? (args.role || "customer") : "customer",
+        assignedCoachIds: updIsAdminCaller ? (args.assignedCoachIds ?? []) : [],
+        creditBalance: updIsAdminCaller ? (args.creditBalance ?? 0) : 0,
         createdAt: new Date().toISOString(),
       });
       return id;
@@ -3174,10 +3203,14 @@ export const addToWaitlist = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    // Use authenticated identity email when available (verified sender)
+    // SEC: authentication REQUIRED, and the entry's identity fields are forced
+    // from the caller's auth — a caller cannot inject waitlist entries under
+    // another user's id/email (which would drive that user's offer emails).
     const identity = await ctx.auth.getUserIdentity();
-    const authedEmail = identity?.email ?? null;
+    if (!identity) throw new Error("Authentication required.");
+    const authedEmail = identity.email ?? null;
     const authedName = (identity as any)?.name ?? null;
+    const callerUserId = identity.subject;
 
     const ids: string[] = [];
     const insertedEntries: typeof args.entries = [];
@@ -3188,12 +3221,12 @@ export const addToWaitlist = mutation({
           q.eq("laneId", entry.laneId).eq("date", entry.date).eq("hour", entry.hour)
         )
         .collect();
-      const isDuplicate = existing.some((e) => e.userId === entry.userId);
+      const isDuplicate = existing.some((e) => e.userId === callerUserId);
       if (isDuplicate) continue;
 
       const id = await ctx.db.insert("waitlist", {
-        userId: entry.userId,
-        userName: entry.userName,
+        userId: callerUserId,
+        userName: authedName ?? entry.userName,
         userEmail: authedEmail ?? entry.userEmail,
         laneId: entry.laneId,
         date: entry.date,

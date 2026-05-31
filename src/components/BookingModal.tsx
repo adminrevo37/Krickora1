@@ -791,7 +791,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               <div className="border-t border-gray-200 dark:border-gray-700 pt-2"><div className="flex justify-between items-center"><span className="font-semibold">Total</span><span className="text-xl font-bold text-emerald-600">{totalPrice === 0 ? 'FREE' : `$${totalPrice}`}</span></div></div>
             </div>
             <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-3 border border-blue-200 dark:border-blue-800/50">
-              <p className="text-xs text-blue-700 dark:text-blue-400"><strong>Cancellation Policy:</strong> Cancel {getSettingsStore().get().cancellationHoursBefore ?? 2}+ hours before for account credit.</p>
+              <p className="text-xs text-blue-700 dark:text-blue-400"><strong>Cancellation Policy:</strong> Cancel {getSettingsStore().get().customerCancellationHours ?? getSettingsStore().get().cancellationHoursBefore ?? 2}+ hours before for account credit.</p>
             </div>
             <div className="flex gap-3">
               <button onClick={() => { setStep('details'); setError(null) }} className="flex-1 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all">← Back</button>
