@@ -1,5 +1,6 @@
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { sendTemplateEmail } from "./lib/email";
 
 // AWST = UTC+8, no DST
 function nowInAWST(): Date {
@@ -133,33 +134,13 @@ export const sendOne = internalAction({
     bookingsHtml: v.string(),
   },
   handler: async (_ctx, args): Promise<{ success: boolean; reason?: string }> => {
-    const url = process.env.SHIPPER_EMAIL_URL;
-    if (!url || !process.env.SHIPPER_EMAIL_TOKEN) {
-      return { success: false, reason: "Email not configured" };
-    }
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shipper-Token": process.env.SHIPPER_EMAIL_TOKEN,
-      },
-      body: JSON.stringify({
-        to: args.to,
-        templateSlug: "weekly-booking-summary",
-        templateData: {
-          customerName: args.customerName,
-          bookingCount: args.bookingCount,
-          weekRange: args.weekRange,
-          bookingsHtml: args.bookingsHtml,
-          bookingUrl: "https://krickora.com",
-        },
-      }),
+    const result = await sendTemplateEmail("weekly-booking-summary", args.to, {
+      customerName: args.customerName,
+      bookingCount: args.bookingCount,
+      weekRange: args.weekRange,
+      bookingsHtml: args.bookingsHtml,
+      bookingUrl: "https://krickora.com",
     });
-    if (!response.ok) {
-      return { success: false, reason: `HTTP ${response.status}` };
-    }
-    const data = await response.json();
-    if (data.skipped) return { success: false, reason: data.reason };
-    return { success: true };
+    return { success: result.success, reason: result.reason };
   },
 });

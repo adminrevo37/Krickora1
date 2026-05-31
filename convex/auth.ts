@@ -15,6 +15,7 @@ import { betterAuth } from "better-auth";
 import type { BetterAuthOptions } from "better-auth";
 import authSchema from "./betterAuth/schema";
 import authConfig from "./auth.config";
+import { sendTemplateEmail } from "./lib/email";
 import { requireAdmin, requireAdminUnlocked, getCallerContext, writeRoleAudit } from "./lib/adminGuard";
 
 const siteUrl = process.env.SITE_URL || "";
@@ -113,70 +114,24 @@ export function createAuthOptions(ctx?: GenericCtx<DataModel>): BetterAuthOption
       maxPasswordLength: 128,
       sendResetPassword: async ({ user, url }: { user: any; url: string }) => {
         try {
-          const emailUrl = process.env.SHIPPER_EMAIL_URL;
-          const emailToken = process.env.SHIPPER_EMAIL_TOKEN;
-          if (!emailUrl || !emailToken) {
-            console.error("Email not configured: SHIPPER_EMAIL_URL and SHIPPER_EMAIL_TOKEN must be set");
-            return;
-          }
-          const response = await fetch(emailUrl, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Shipper-Token": emailToken,
-            },
-            body: JSON.stringify({
-              to: user.email,
-              templateSlug: "password-reset",
-              templateData: {
-                name: user.name || user.email.split("@")[0],
-                appName: "Krickora",
-                resetUrl: url,
-              },
-            }),
+          const result = await sendTemplateEmail("password-reset", user.email, {
+            name: user.name || user.email.split("@")[0],
+            appName: "Krickora",
+            resetUrl: url,
           });
-          if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            console.error("Password reset email failed:", err?.error?.message || response.status);
-          } else {
-            const data = await response.json();
-            if (data.skipped) console.warn("Password reset email skipped:", data.reason);
-          }
+          if (!result.success) console.warn("Password reset email not sent:", result.reason);
         } catch (e) {
           console.error("Failed to send password reset email:", e);
         }
       },
       sendVerificationEmail: async ({ user, url }: { user: any; url: string }) => {
         try {
-          const emailUrl = process.env.SHIPPER_EMAIL_URL;
-          const emailToken = process.env.SHIPPER_EMAIL_TOKEN;
-          if (!emailUrl || !emailToken) {
-            console.error("Email not configured: SHIPPER_EMAIL_URL and SHIPPER_EMAIL_TOKEN must be set");
-            return;
-          }
-          const response = await fetch(emailUrl, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Shipper-Token": emailToken,
-            },
-            body: JSON.stringify({
-              to: user.email,
-              templateSlug: "email-verification",
-              templateData: {
-                name: user.name || user.email.split("@")[0],
-                appName: "Krickora",
-                verificationUrl: url,
-              },
-            }),
+          const result = await sendTemplateEmail("email-verification", user.email, {
+            name: user.name || user.email.split("@")[0],
+            appName: "Krickora",
+            verificationUrl: url,
           });
-          if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            console.error("Verification email failed:", err?.error?.message || response.status);
-          } else {
-            const data = await response.json();
-            if (data.skipped) console.warn("Verification email skipped:", data.reason);
-          }
+          if (!result.success) console.warn("Verification email not sent:", result.reason);
         } catch (e) {
           console.error("Failed to send verification email:", e);
         }

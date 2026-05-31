@@ -1,5 +1,6 @@
 import { internalAction, action } from "./_generated/server";
 import { v } from "convex/values";
+import { sendTemplateEmail } from "./lib/email";
 
 // Templates that users CANNOT opt out of (transactional/auth + all athlete
 // notifications). Athlete emails are MANDATORY per the notifications redesign
@@ -62,53 +63,15 @@ async function bookingEmailsEnabled(ctx: any, email: string): Promise<boolean> {
 // SHARED EMAIL SENDER HELPER
 // ============================================================================
 
-async function sendEmail(templateSlug: string, to: string, templateData: Record<string, string>): Promise<{ success: boolean; skipped?: boolean; reason?: string }> {
-  const url = process.env.SHIPPER_EMAIL_URL;
-  if (!url || !process.env.SHIPPER_EMAIL_TOKEN) {
-    console.error("Email not configured: SHIPPER_EMAIL_URL and SHIPPER_EMAIL_TOKEN must be set");
-    return { success: false, reason: "Email not configured" };
-  }
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Shipper-Token": process.env.SHIPPER_EMAIL_TOKEN,
-    },
-    body: JSON.stringify({
-      to,
-      templateSlug,
-      templateData,
-    }),
-  });
-  if (!response.ok) {
-    let msg = "Email send failed";
-    try {
-      const err = await response.json();
-      msg = err?.error?.message ?? msg;
-    } catch {
-      msg = `Email send failed: ${response.status} ${response.statusText}`;
-    }
-    if (response.status === 403) {
-      console.warn("Email skipped: recipient not in database —", to);
-      return { success: false, reason: "Recipient not in database" };
-    }
-    if (response.status === 402) {
-      console.warn("Email skipped: insufficient credits");
-      return { success: false, reason: "Insufficient email credits" };
-    }
-    if (response.status === 429) {
-      console.warn("Email rate limited");
-      return { success: false, reason: "Rate limited" };
-    }
-    console.error("Email send error:", msg);
-    return { success: false, reason: msg };
-  }
-  const data = await response.json();
-  if (data.skipped) {
-    console.warn(`Email skipped: ${data.reason}`);
-    return { success: false, skipped: true, reason: data.reason };
-  }
-  return { success: true, ...data };
+// Transport is now Resend (see convex/lib/email.ts). Per-recipient preference
+// gating still happens in each action below via emailEnabledForUser(); this just
+// renders the code-owned template for `templateSlug` and sends it.
+async function sendEmail(
+  templateSlug: string,
+  to: string,
+  templateData: Record<string, string>
+): Promise<{ success: boolean; skipped?: boolean; reason?: string }> {
+  return await sendTemplateEmail(templateSlug, to, templateData);
 }
 
 // ============================================================================
