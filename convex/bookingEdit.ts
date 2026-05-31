@@ -1,6 +1,7 @@
 import { action, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { issueCredit } from "./lib/credit";
 
 // ============================================================================
@@ -26,7 +27,12 @@ export const requestBookingEdit = action({
     newPriceInCents: v.number(),   // frontend calculates from siteSettings
     oldPriceInCents: v.number(),   // frontend calculates from current booking
   },
-  handler: async (ctx, args) => {
+  // Explicit return type breaks the circular inference through internal.* that
+  // otherwise makes this handler implicitly `any` (TS7022/7023).
+  handler: async (
+    ctx,
+    args
+  ): Promise<{ requiresPayment: boolean; priceDifference: number; credited?: boolean }> => {
     return await ctx.runMutation(internal.bookingEdit._requestBookingEdit, args);
   },
 });
@@ -44,7 +50,7 @@ export const _requestBookingEdit = internalMutation({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Authentication required.");
 
-    const booking = await ctx.db.get(args.bookingId as any);
+    const booking = await ctx.db.get(args.bookingId as Id<"bookings">);
     if (!booking) throw new Error("Booking not found.");
     if (booking.status === "cancelled") throw new Error("Cannot edit a cancelled booking.");
     if ((booking as any).status === "pending_edit_payment") {
@@ -181,7 +187,7 @@ export const applyPendingBookingEdit = internalMutation({
     topUpStripeSessionId: v.string(),
   },
   handler: async (ctx, args) => {
-    const booking = await ctx.db.get(args.bookingId as any);
+    const booking = await ctx.db.get(args.bookingId as Id<"bookings">);
     if (!booking) return { success: false, reason: "not_found" };
 
     // Idempotency: already applied

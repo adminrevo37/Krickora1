@@ -12,7 +12,12 @@ import Stripe from "stripe";
 // ---------------------------------------------------------------------------
 export const applyPendingEditFromSession = action({
   args: { stripeSessionId: v.string() },
-  handler: async (ctx, args) => {
+  // Explicit return type breaks the circular inference through internal.* that
+  // otherwise makes this handler implicitly `any` (TS7022/7023).
+  handler: async (
+    ctx,
+    args
+  ): Promise<{ success: boolean; reason?: string; alreadyApplied?: boolean }> => {
     const key = process.env.STRIPE_SECRET_KEY;
     if (!key) throw new Error("STRIPE_SECRET_KEY not configured");
     const stripe = new Stripe(key);
