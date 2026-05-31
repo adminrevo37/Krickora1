@@ -30,6 +30,10 @@ const SECURITY_HEADERS: Record<string, string> = {
 };
 
 // ── Allowed origins for CORS with credentials ─────────────────────────
+// SITE_URL is the deployed frontend origin (e.g. https://krickora-prod.vercel.app
+// or, later, https://krickora.com). Including it here keeps the preflight CORS in
+// step with Better Auth's own trustedOrigins (which already honours SITE_URL).
+const SITE_URL = process.env.SITE_URL || "";
 const ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "http://localhost:3000",
@@ -37,25 +41,33 @@ const ALLOWED_ORIGINS = [
   "https://krickora.shipper.now",
   "https://adventurous-chickadee-53.convex.site",
   "https://adventurous-chickadee-53.convex.cloud",
+  ...(SITE_URL ? [SITE_URL] : []),
 ];
 
 /**
  * Resolve the correct Access-Control-Allow-Origin for a request.
  * Must be a specific origin (not *) when credentials: true.
+ *
+ * BUGFIX: the OPTIONS preflight previously fell back to ALLOWED_ORIGINS[0]
+ * (localhost:5173) for the Vercel frontend, so the browser blocked the
+ * credentialed POST -> "Failed to fetch" on sign-up. Now honours SITE_URL and
+ * any *.vercel.app origin (matching Better Auth's POST-path CORS).
  */
 function resolveOrigin(request?: Request): string {
   const origin = request?.headers.get("origin") || "";
-  // Allow any .shipper.now, .modal.host, .convex.site, .convex.cloud domain
   if (
     ALLOWED_ORIGINS.includes(origin) ||
+    (SITE_URL && origin === SITE_URL) ||
     origin.endsWith(".shipper.now") ||
     origin.endsWith(".w.modal.host") ||
     origin.endsWith(".convex.site") ||
-    origin.endsWith(".convex.cloud")
+    origin.endsWith(".convex.cloud") ||
+    origin.endsWith(".vercel.app")
   ) {
     return origin;
   }
-  return ALLOWED_ORIGINS[0];
+  // Default to the real deployed frontend origin, NOT localhost.
+  return SITE_URL || ALLOWED_ORIGINS[0];
 }
 
 // ── Register Better Auth routes with credentials-aware CORS ────────────
