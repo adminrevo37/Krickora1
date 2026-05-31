@@ -582,6 +582,70 @@ export function getL2WeekDays(): Date[] {
   return days
 }
 
+// ============================================================
+// WEEKLY-RELEASE MODEL (SPEC_BOOKING_WINDOW_AND_RELEASE)
+// ============================================================
+// The current week (Mon–Sun, 7 columns) is always bookable for customers + L2
+// coaches. Next week opens on the configured release day, at/after the release
+// hour, through 23:59:59 of that day — the view then expands to today + the next
+// full week (8 columns). At midnight it reverts to the new current week. L1
+// coaches use the rolling window (getCoachRolling7Days) and are unaffected.
+// The server enforces the same horizon in createBooking (convex/lib/bookingWindow.ts).
+
+type ReleaseRole = 'coach' | 'customer'
+type ReleaseTier = 'L1' | 'L2' | null | undefined
+type ReleaseSettings = {
+  customerOpenDay?: string; customerOpenHour?: number
+  l2CoachOpenDay?: string; l2CoachOpenHour?: number
+}
+
+function releaseFor(role: ReleaseRole, tier: ReleaseTier, s?: ReleaseSettings) {
+  if (role === 'coach' && tier === 'L2') {
+    return { day: s?.l2CoachOpenDay ?? 'sunday', hour: s?.l2CoachOpenHour ?? 17 }
+  }
+  return { day: s?.customerOpenDay ?? 'sunday', hour: s?.customerOpenHour ?? 19 }
+}
+
+/** Is next week currently open for this caller? L1 coaches use the rolling window, never this. */
+export function isNextWeekOpen(role: ReleaseRole, tier: ReleaseTier, s?: ReleaseSettings, now: Date = getAWSTNow()): boolean {
+  if (role === 'coach' && tier !== 'L2') return false
+  const { day, hour } = releaseFor(role, tier, s)
+  const releaseDow = DAY_INDEX[day] ?? 0
+  if (now.getDay() !== releaseDow) return false
+  return now.getHours() + now.getMinutes() / 60 >= hour
+}
+
+/** 7-column current week, expanding to 8 (today + next week) once next week opens. */
+export function getVisibleWeekDays(role: ReleaseRole, tier: ReleaseTier, s?: ReleaseSettings, now: Date = getAWSTNow()): Date[] {
+  if (isNextWeekOpen(role, tier, s, now)) {
+    const today = new Date(now); today.setHours(0, 0, 0, 0)
+    const days: Date[] = []
+    for (let i = 0; i < 8; i++) { const d = new Date(today); d.setDate(today.getDate() + i); days.push(d) }
+    return days
+  }
+  const { day } = releaseFor(role, tier, s)
+  const releaseDow = DAY_INDEX[day] ?? 0
+  const weekStartDow = (releaseDow + 1) % 7 // day after release = week start (Mon for Sun release)
+  const start = new Date(now); start.setHours(0, 0, 0, 0)
+  const offset = (start.getDay() - weekStartDow + 7) % 7
+  start.setDate(start.getDate() - offset)
+  const days: Date[] = []
+  for (let i = 0; i < 7; i++) { const d = new Date(start); d.setDate(start.getDate() + i); days.push(d) }
+  return days
+}
+
+/** Next release moment for this caller, as an AWST-frame Date — drives the countdown banner. */
+export function getNextReleaseDate(role: ReleaseRole, tier: ReleaseTier, s?: ReleaseSettings, now: Date = getAWSTNow()): Date {
+  const { day, hour } = releaseFor(role, tier, s)
+  const releaseDow = DAY_INDEX[day] ?? 0
+  const target = new Date(now)
+  target.setHours(Math.floor(hour), Math.round((hour - Math.floor(hour)) * 60), 0, 0)
+  let dayDiff = (releaseDow - now.getDay() + 7) % 7
+  if (dayDiff === 0 && now.getTime() >= target.getTime()) dayDiff = 7 // release hour passed today → next week
+  target.setDate(target.getDate() + dayDiff)
+  return target
+}
+
 export function formatDateKey(date: Date): string {
   const y = date.getFullYear()
   const m = String(date.getMonth() + 1).padStart(2, '0')

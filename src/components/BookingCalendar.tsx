@@ -1,8 +1,10 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import {
   LANES,
-  getCurrentWeekDays,
   getCoachRolling7Days,
+  getVisibleWeekDays,
+  isNextWeekOpen,
+  getNextReleaseDate,
   getAWSTNow,
   formatDateKey,
   formatDayLabel,
@@ -11,8 +13,6 @@ import {
   isPast,
   isSlotBooked,
   canBookSlot,
-  canAccessCalendar,
-  getCalendarAccessMessage,
   getActiveHalfHoursForLane,
   getAvailableStartTimes,
   getCustomerDurations,
@@ -42,17 +42,18 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
   const { settings } = useSettings()
 
   // Wait for customerRecord to load before deciding tier — otherwise L2 coaches
-  // see a brief L1 flash while Convex resolves the record.
+  // see a brief L1 flash while Convex resolves the record. Tiers are L1/L2 only.
   const coachTierLoaded = customerRecord !== undefined && customerRecord !== null
-  const coachTierEarly = ((customerRecord as any)?.coachTier ?? 'L1') as 'L1' | 'L2' | 'Bowling' | 'BowlingL2'
-  // Only L1 coaches (incl. Bowling L1) get the rolling window. L2 coaches see the weekly view like customers.
+  const coachTierNorm: 'L1' | 'L2' = ((customerRecord as any)?.coachTier === 'L2' || (customerRecord as any)?.coachTier === 'BowlingL2') ? 'L2' : 'L1'
+  // Only L1 coaches get the rolling window. L2 coaches see the weekly view like customers.
   // If the record hasn't loaded yet, default to NON-L1 (weekly view) to avoid an L1 flash for L2 coaches.
-  const isL1Coach = userIsCoach && coachTierLoaded && coachTierEarly !== 'L2' && coachTierEarly !== 'BowlingL2'
+  const isL1Coach = userIsCoach && coachTierLoaded && coachTierNorm !== 'L2'
+  const releaseRole: 'coach' | 'customer' = userIsCoach ? 'coach' : 'customer'
   const coachWindowDays = settings.coachBookingWindowDays ?? 8
   const weekDays = useMemo(() => {
     if (isL1Coach) return getCoachRolling7Days(coachWindowDays)
-    return getCurrentWeekDays()
-  }, [isL1Coach, coachWindowDays])
+    return getVisibleWeekDays(releaseRole, coachTierNorm, settings)
+  }, [isL1Coach, coachWindowDays, releaseRole, coachTierNorm, settings])
 
   const [selectedDay, setSelectedDay] = useState<Date>(() => {
     if (isL1Coach) return weekDays[0] // Today for L1 coaches (rolling window)
@@ -86,11 +87,6 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
   const [waitlistModalOpen, setWaitlistModalOpen] = useState(false)
 
   const dateKey = formatDateKey(selectedDay)
-  const userRole = user?.role ?? 'customer'
-  const coachTier = ((customerRecord as any)?.coachTier ?? 'L1') as 'L1' | 'L2' | 'Bowling' | 'BowlingL2'
-  // Normalise 4-value tier to 2-value for access-control functions
-  const coachTierNorm: 'L1' | 'L2' | null = (coachTier === 'L2' || coachTier === 'BowlingL2') ? 'L2' : 'L1'
-  const hasAccess = canAccessCalendar(userRole as 'coach' | 'customer' | 'admin', coachTierNorm, settings)
 
   const laneActiveHalfHours = useMemo(() => {
     const map = new Map<string, Set<number>>()
@@ -190,26 +186,19 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
   const confirmWaitlist = () => { if (waitlistSelections.length === 0) return; setWaitlistModalOpen(true) }
   const cancelWaitlistMode = () => { setWaitlistMode(false); setWaitlistSelections([]) }
 
-  if (!hasAccess && !isAdmin) {
-    return (
-      <div className="space-y-6">
-        <div className="bg-white rounded-2xl border border-gray-200 p-8 shadow-sm text-center">
-          <div className="text-5xl mb-4">🔒</div>
-          <h2 className="text-xl font-bold text-gray-800 mb-2">Calendar Not Yet Available</h2>
-          <p className="text-sm text-gray-500 mb-4">{getCalendarAccessMessage(userRole as 'coach' | 'customer', coachTierNorm, settings)}</p>
-          <div className="inline-flex items-center gap-2 bg-amber-50 text-amber-700 px-4 py-2 rounded-xl text-sm font-medium">⏰ Check back later</div>
-        </div>
-      </div>
-    )
-  }
-
   // Determine header label
-  const headerLabel = isL1Coach ? `📅 Next ${coachWindowDays} Days (Rolling)` : '📅 This Week'
-  const tierBadge: string | null = userIsCoach ? coachTier : null
+  const nextWeekOpen = !isL1Coach && isNextWeekOpen(releaseRole, coachTierNorm, settings)
+  const headerLabel = isL1Coach
+    ? `📅 Next ${coachWindowDays} Days (Rolling)`
+    : nextWeekOpen ? '📅 This Week + Next Week' : '📅 This Week'
 
   return (
     <div className="space-y-6">
       {showFaultModal && <FaultReportModal onClose={() => setShowFaultModal(false)} />}
+      {/* Weekly-release banner (customers + L2 coaches only) */}
+      {!isL1Coach && (
+        <ReleaseBanner role={releaseRole} tier={coachTierNorm} settings={settings} nextWeekOpen={nextWeekOpen} lastDay={weekDays[weekDays.length - 1]} />
+      )}
       {/* Week Day Selector */}
       <div className="bg-white rounded-2xl border border-gray-200 p-4 shadow-sm">
         <div className="flex items-center justify-between mb-3">
@@ -225,12 +214,12 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
               </button>
             )}
             {userIsCoach && (
-              <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${tierBadge === 'L2' ? 'bg-purple-100 text-purple-700' : tierBadge === 'Bowling' ? 'bg-green-100 text-green-700' : tierBadge === 'BowlingL2' ? 'bg-teal-100 text-teal-700' : 'bg-orange-100 text-orange-700'}`}>🏅 {tierBadge === 'L2' ? 'L2 Coach' : tierBadge === 'Bowling' ? 'Bowling L1 Coach' : tierBadge === 'BowlingL2' ? 'Bowling L2 Coach' : 'L1 Coach'}</span>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${coachTierNorm === 'L2' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700'}`}>🏅 {coachTierNorm === 'L2' ? 'L2 Coach' : 'L1 Coach'}</span>
             )}
             <span className="text-sm text-gray-500">{weekDays[0].toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} &middot; AWST</span>
           </div>
         </div>
-        <div className="grid grid-cols-7 gap-2">
+        <div className={`grid ${weekDays.length === 8 ? 'grid-cols-8' : 'grid-cols-7'} gap-2`}>
           {weekDays.map((day) => {
             const active = formatDateKey(day) === formatDateKey(selectedDay)
             const today = isToday(day)
@@ -427,6 +416,60 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
         <WaitlistModal selectedSlots={waitlistSelections} onClose={() => setWaitlistModalOpen(false)}
           onSuccess={() => { setWaitlistModalOpen(false); setWaitlistMode(false); setWaitlistSelections([]) }} />
       )}
+    </div>
+  )
+}
+
+// Weekly-release notice + live countdown (SPEC_BOOKING_WINDOW #1). Shown to
+// customers + L2 coaches. L1 coaches use the rolling window and never see this.
+function formatReleaseHour(h: number): string {
+  const whole = Math.floor(h)
+  const mins = Math.round((h - whole) * 60)
+  const period = whole >= 12 ? 'pm' : 'am'
+  const display = whole > 12 ? whole - 12 : whole === 0 ? 12 : whole
+  return mins > 0 ? `${display}:${mins.toString().padStart(2, '0')}${period}` : `${display}:00${period}`
+}
+
+function ReleaseBanner({ role, tier, settings, nextWeekOpen, lastDay }: {
+  role: 'coach' | 'customer'; tier: 'L1' | 'L2'; settings: any; nextWeekOpen: boolean; lastDay: Date
+}) {
+  // Tick every second so the countdown stays live.
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  if (nextWeekOpen) {
+    return (
+      <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3 flex items-center gap-2">
+        <span className="text-lg">✅</span>
+        <p className="text-sm font-medium text-emerald-800">
+          Next week is now open — book through {lastDay.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}.
+        </p>
+      </div>
+    )
+  }
+
+  const release = getNextReleaseDate(role, tier, settings)
+  const totalSec = Math.max(0, Math.floor((release.getTime() - getAWSTNow().getTime()) / 1000))
+  const days = Math.floor(totalSec / 86400)
+  const hours = Math.floor((totalSec % 86400) / 3600)
+  const mins = Math.floor((totalSec % 3600) / 60)
+  const secs = totalSec % 60
+  const countdown = days > 0 ? `${days}d ${hours}h ${mins}m` : hours > 0 ? `${hours}h ${mins}m ${secs}s` : `${mins}m ${secs}s`
+
+  const dayName = release.toLocaleDateString('en-US', { weekday: 'long' })
+  const releaseHour = role === 'coach' && tier === 'L2' ? (settings.l2CoachOpenHour ?? 17) : (settings.customerOpenHour ?? 19)
+
+  return (
+    <div className="bg-blue-50 border border-blue-200 rounded-2xl px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+      <p className="text-sm font-medium text-blue-800 flex items-center gap-2">
+        <span className="text-lg">🗓️</span>
+        <span>Next week opens <strong>{dayName} {formatReleaseHour(releaseHour)}</strong> AWST</span>
+        {role === 'coach' && tier === 'L2' && <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 font-semibold">L2 priority</span>}
+      </p>
+      <span className="text-sm font-semibold text-blue-700 tabular-nums">⏳ {countdown}</span>
     </div>
   )
 }

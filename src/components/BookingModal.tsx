@@ -99,8 +99,17 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const otherLanes = LANES.filter(l => l.id !== lane.id)
   const availableAdditionalLanes = otherLanes.filter(l => canBookSlot(existingBookings, l.id, dateKey, startHour, duration))
 
+  // Multi-lane cap (SPEC_BOOKING_WINDOW #4) — customers only; coaches uncapped.
+  // Cap counts the primary lane, so the max number of ADDITIONAL lanes is cap - 1.
+  const maxLanesPerBooking = getSettingsStore().get().customerMaxLanesPerBooking ?? 3
+  const maxAdditionalLanes = isCoach ? Infinity : Math.max(0, maxLanesPerBooking - 1)
+
   const toggleAdditionalLane = (laneId: string) => {
-    setAdditionalLanes(prev => prev.includes(laneId) ? prev.filter(id => id !== laneId) : [...prev, laneId])
+    setAdditionalLanes(prev => {
+      if (prev.includes(laneId)) return prev.filter(id => id !== laneId)
+      if (prev.length >= maxAdditionalLanes) return prev // cap reached
+      return [...prev, laneId]
+    })
   }
 
   const additionalLanePrice = additionalLanes.reduce((sum, lid) => {
@@ -554,16 +563,20 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
             </div>
 
             {/* Multi-lane */}
-            {availableAdditionalLanes.length > 0 && (
+            {availableAdditionalLanes.length > 0 && maxAdditionalLanes > 0 && (
               <div>
-                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Add More Lanes <span className="text-xs font-normal text-gray-400">(optional)</span></label>
+                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Add More Lanes <span className="text-xs font-normal text-gray-400">{isCoach ? '(optional)' : `(optional · up to ${maxLanesPerBooking} lanes total)`}</span></label>
                 <div className="flex flex-wrap gap-2">
-                  {availableAdditionalLanes.map(l => (
-                    <button key={l.id} onClick={() => toggleAdditionalLane(l.id)}
-                      className={`text-xs px-3 py-1.5 rounded-lg border transition-all ${additionalLanes.includes(l.id) ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 font-semibold' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-300'}`}>
-                      {l.icon} {l.shortName} {additionalLanes.includes(l.id) ? '✓' : '+'}
-                    </button>
-                  ))}
+                  {availableAdditionalLanes.map(l => {
+                    const selected = additionalLanes.includes(l.id)
+                    const capReached = !selected && additionalLanes.length >= maxAdditionalLanes
+                    return (
+                      <button key={l.id} onClick={() => toggleAdditionalLane(l.id)} disabled={capReached}
+                        className={`text-xs px-3 py-1.5 rounded-lg border transition-all ${selected ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 font-semibold' : capReached ? 'border-gray-200 dark:border-gray-700 text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-300'}`}>
+                        {l.icon} {l.shortName} {selected ? '✓' : '+'}
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
             )}

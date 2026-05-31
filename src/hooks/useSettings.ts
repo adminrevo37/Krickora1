@@ -16,6 +16,7 @@ const REMOTE_SCALAR_KEYS = [
   'customerOpenDay', 'customerOpenHour',
   'l1CoachOpenDay', 'l1CoachOpenHour',
   'l2CoachOpenDay', 'l2CoachOpenHour',
+  'customerMaxLanesPerBooking',
   'customerMaxDurationMinutes', 'coachMaxDurationMinutes',
   'minAthleteDurationMinutes', 'coachRescheduleFreezeHours',
   'extensionNoticeMinutes', 'customerCancellationHours',

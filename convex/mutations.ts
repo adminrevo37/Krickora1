@@ -10,6 +10,13 @@ import {
   releaseHoldForBooking,
   hasActiveHoldConflict,
 } from "./lib/slotHolds";
+import {
+  getAWSTNow,
+  checkBookingHorizon,
+  checkLeadTime,
+  type WindowRole,
+  type WindowTier,
+} from "./lib/bookingWindow";
 
 // ============================================================================
 // BOOKING MUTATIONS
@@ -56,20 +63,24 @@ export const createBooking = mutation({
     priceInCents: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    // SEC-1: Auth guard — logged-in users may only book for themselves unless admin
+    // SEC-1: Auth guard — logged-in users may only book for themselves unless admin.
+    // Caller role/tier is also used below to enforce the weekly-release horizon,
+    // lead time and multi-lane cap (SPEC_BOOKING_WINDOW).
     const createIdentity = await ctx.auth.getUserIdentity();
+    let callerCustomer: any = null;
+    let isAdminCaller = false;
     if (createIdentity) {
       const callerEmail = createIdentity.email?.toLowerCase().trim() ?? "";
       const isForSelf =
         (args.userId != null && args.userId === createIdentity.subject) ||
         args.customerEmail.toLowerCase() === callerEmail;
-      const callerCustomer = callerEmail
+      callerCustomer = callerEmail
         ? await ctx.db
             .query("customers")
             .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
             .first()
         : null;
-      const isAdminCaller = callerCustomer?.role === "admin";
+      isAdminCaller = callerCustomer?.role === "admin";
       if (!isForSelf && !isAdminCaller) {
         throw new Error("You can only create bookings for yourself.");
       }
@@ -100,15 +111,74 @@ export const createBooking = mutation({
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
       .first();
-    const CLOSING_HOUR = siteSettings?.closingHour ?? 21;
     const endHour = args.startHour + args.duration / 60;
-    if (endHour > CLOSING_HOUR) {
-      throw new Error("Booking extends past closing time.");
-    }
     if (args.duration < 60) {
       throw new Error("Minimum booking duration is 1 hour.");
     }
-    // dedupe marker
+
+    // Per-day operating hours (SSOT — SPEC_BOOKING_WINDOW #2). Resolve the
+    // booking day's open/close from dailyHours, falling back to the global pair.
+    const DOW_NAMES = [
+      "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+    ];
+    const [yy, mm, dd] = args.date.split("-").map(Number);
+    const dowName = DOW_NAMES[new Date(yy, mm - 1, dd).getDay()];
+    const dayHours = siteSettings?.dailyHours?.find((h: any) => h.day === dowName);
+    const OPENING_HOUR = dayHours ? dayHours.open : (siteSettings?.openingHour ?? 7);
+    const CLOSING_HOUR = dayHours ? dayHours.close : (siteSettings?.closingHour ?? 21);
+    if (dayHours?.closed) {
+      throw new Error("The facility is closed on this day.");
+    }
+    if (args.startHour < OPENING_HOUR) {
+      throw new Error("Booking starts before opening time.");
+    }
+    if (endHour > CLOSING_HOUR) {
+      throw new Error("Booking extends past closing time.");
+    }
+
+    // Weekly-release horizon + lead time + multi-lane cap (SPEC_BOOKING_WINDOW
+    // #1/#3/#4). Enforced server-side so a crafted request can't bypass the
+    // calendar UI. Admin callers are exempt (manual / walk-in bookings).
+    const callerRole: WindowRole = isAdminCaller
+      ? "admin"
+      : callerCustomer?.role === "coach"
+        ? "coach"
+        : "customer";
+    const callerTier: WindowTier =
+      callerCustomer?.coachTier === "L2" || callerCustomer?.coachTier === "BowlingL2"
+        ? "L2"
+        : "L1";
+    const awstNow = getAWSTNow();
+
+    const horizonError = checkBookingHorizon(
+      callerRole,
+      callerTier,
+      siteSettings ?? {},
+      args.date,
+      awstNow
+    );
+    if (horizonError) throw new Error(horizonError);
+
+    if (callerRole !== "admin") {
+      const leadError = checkLeadTime(
+        args.date,
+        args.startHour,
+        siteSettings?.minBookingNoticeMinutes ?? 10,
+        awstNow
+      );
+      if (leadError) throw new Error(leadError);
+    }
+
+    // Multi-lane cap — customers only; coaches/admin uncapped.
+    if (callerRole === "customer" && !args.isCoachBooking) {
+      const maxLanes = siteSettings?.customerMaxLanesPerBooking ?? 3;
+      const totalLanes = 1 + (args.additionalLaneIds?.length ?? 0);
+      if (totalLanes > maxLanes) {
+        throw new Error(
+          `You can book at most ${maxLanes} lane${maxLanes !== 1 ? "s" : ""} per booking.`
+        );
+      }
+    }
 
     // Reject bookings on closed dates
     const closure = await ctx.db
@@ -2035,6 +2105,7 @@ export const updateSiteSettings = mutation({
     l1CoachOpenHour: v.optional(v.number()),
     l2CoachOpenDay: v.optional(v.string()),
     l2CoachOpenHour: v.optional(v.number()),
+    customerMaxLanesPerBooking: v.optional(v.number()),
     registrationLocked: v.optional(v.boolean()),
     coachRescheduleFreezeHours: v.optional(v.number()),
     extensionNoticeMinutes: v.optional(v.number()),
@@ -2096,6 +2167,29 @@ export const updateSiteSettings = mutation({
       });
       return id;
     }
+  },
+});
+
+// One-time migration (SPEC_BOOKING_WINDOW #2): collapse the legacy 4-value coach
+// tier set to L1/L2 only. 'Bowling' → 'L1', 'BowlingL2' → 'L2'. Idempotent — run
+// once post-deploy from the admin console; safe to re-run.
+export const migrateCoachTiers = mutation({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+    const customers = await ctx.db.query("customers").collect();
+    let migrated = 0;
+    for (const c of customers) {
+      const tier = (c as any).coachTier;
+      if (tier === "Bowling") {
+        await ctx.db.patch(c._id, { coachTier: "L1" });
+        migrated++;
+      } else if (tier === "BowlingL2") {
+        await ctx.db.patch(c._id, { coachTier: "L2" });
+        migrated++;
+      }
+    }
+    return { migrated };
   },
 });
 

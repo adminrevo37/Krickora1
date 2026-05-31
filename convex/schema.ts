@@ -293,6 +293,9 @@ export default defineSchema({
     l1CoachOpenHour: v.optional(v.number()),
     l2CoachOpenDay: v.optional(v.string()),
     l2CoachOpenHour: v.optional(v.number()),
+    // Max lanes a customer may book in one booking (SPEC_BOOKING_WINDOW #4).
+    // Coaches/admin are exempt. Default 3.
+    customerMaxLanesPerBooking: v.optional(v.number()),
     registrationLocked: v.optional(v.boolean()),
     // Advanced booking rule overrides
     coachRescheduleFreezeHours: v.optional(v.number()),  // default 24 — coach can't self-reschedule within N hours

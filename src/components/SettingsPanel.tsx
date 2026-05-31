@@ -154,6 +154,7 @@ export default function SettingsPanel() {
         <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           <NumberInput label="Cancellation notice (hours)" value={settings.cancellationHoursBefore} onChange={(v) => updateSettings({ cancellationHoursBefore: v })} />
           <NumberInput label="Min booking notice (minutes)" value={settings.minBookingNoticeMinutes} onChange={(v) => updateSettings({ minBookingNoticeMinutes: v })} />
+          <NumberInput label="Max lanes per booking (customer)" value={settings.customerMaxLanesPerBooking ?? 3} onChange={(v) => updateSettings({ customerMaxLanesPerBooking: v })} />
           <NumberInput label="Coach booking window (days)" value={settings.coachBookingWindowDays} onChange={(v) => updateSettings({ coachBookingWindowDays: v })} />
           <NumberInput label="Customer open hour" value={settings.customerOpenHour} onChange={(v) => updateSettings({ customerOpenHour: v })} />
           <label className="block">

@@ -1,5 +1,7 @@
 export type UserRole = 'customer' | 'coach' | 'admin'
-export type CoachTier = 'L1' | 'L2' | 'Bowling' | 'BowlingL2'
+// Tiers are L1/L2 only. Legacy 'Bowling'/'BowlingL2' values are migrated to
+// L1/L2 by mutations.migrateCoachTiers (SPEC_BOOKING_WINDOW #2).
+export type CoachTier = 'L1' | 'L2'
 
 export interface User {
   id: string
