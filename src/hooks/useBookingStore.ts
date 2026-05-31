@@ -53,6 +53,7 @@ export function useBookings() {
   const deleteBookingMut = useMutation(api.mutations.deleteBooking)
   const editDurationMut = useMutation(api.mutations.editBookingDuration)
   const rescheduleMut = useMutation(api.mutations.rescheduleBooking)
+  const modifyMut = useMutation(api.mutations.modifyBooking)
   const updateAthleteSlotsMut = useMutation(api.mutations.updateBookingAthleteSlots)
 
   const bookings: Booking[] = useMemo(() => {
@@ -319,6 +320,40 @@ export function useBookings() {
     [rescheduleMut]
   )
 
+  // Unified modify (SPEC_MODIFY_BOOKING_UPGRADE) — one path for lane/variant/date/
+  // time/duration. Returns requiresPayment + the Stripe top-up amount when a
+  // customer price increase needs paying; the modal then redirects to checkout.
+  const modifyBooking = useCallback(
+    async (bookingId: string, opts: {
+      newDate?: string; newStartHour?: number; newDuration?: number;
+      newLaneId?: string; newVariantId?: string;
+      newAdditionalLaneIds?: string[]; userId: string; newAccessCode?: string;
+    }): Promise<{
+      success: boolean; error?: string;
+      requiresPayment?: boolean; topUpAmountCents?: number;
+      creditAppliedCents?: number; credited?: boolean;
+      priceDifferenceCents?: number; droppedAthletes?: string[];
+    }> => {
+      try {
+        const res = await modifyMut({
+          id: bookingId as Id<"bookings">,
+          newDate: opts.newDate,
+          newStartHour: opts.newStartHour,
+          newDuration: opts.newDuration,
+          newLaneId: opts.newLaneId,
+          newVariantId: opts.newVariantId,
+          newAdditionalLaneIds: opts.newAdditionalLaneIds,
+          newAccessCode: opts.newAccessCode,
+          userId: opts.userId,
+        })
+        return { ...res, success: true }
+      } catch (err: any) {
+        return { success: false, error: err?.message ?? 'Failed to modify booking.' }
+      }
+    },
+    [modifyMut]
+  )
+
   const updateAthleteSlots = useCallback(
     async (
       bookingId: string,
@@ -363,6 +398,7 @@ export function useBookings() {
     updateBooking,
     editBookingDuration,
     rescheduleBooking,
+    modifyBooking,
     createTentativeNextWeek,
     confirmTentative,
     cancelTentative,

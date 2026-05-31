@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import { redeemCredit } from "./lib/credit";
 import { recordDiscountRedemption } from "./lib/discounts";
 import { releaseHoldForBooking } from "./lib/slotHolds";
+import { applyBookingChange } from "./mutations";
 
 /**
  * Idempotent: marks a booking as paid/confirmed and sends the payment
@@ -31,9 +32,56 @@ export const confirmBookingPayment = internalMutation({
       return { success: true, alreadyPaid: true };
     }
 
-    // Booking edit top-up — apply the pending duration/price change inline
+    // Booking edit / unified modify top-up — apply the pending change once paid.
     if (b.status === "pending_edit_payment" && b.pendingEdit) {
       const pe = b.pendingEdit;
+      // A unified modify carries slot fields (date/time/lane); a legacy
+      // duration-only edit (EditBookingModal) carries none of them.
+      const isUnified =
+        pe.newDate !== undefined || pe.newStartHour !== undefined || pe.newLaneId !== undefined;
+
+      if (isUnified) {
+        // Mark paid first, then apply the full change-set (calendar resync, code
+        // regen, athlete keep-what-fits, emails) via the shared helper.
+        await ctx.db.patch(booking._id, {
+          paymentStatus: "paid",
+          stripeSessionId: args.stripeSessionId,
+        });
+        const newDate = pe.newDate ?? b.date;
+        const newStartHour = pe.newStartHour ?? b.startHour;
+        const newLaneId = pe.newLaneId ?? b.laneId;
+        const regenCode =
+          pe.newAccessCode !== undefined ||
+          newDate !== b.date ||
+          newStartHour !== b.startHour ||
+          newLaneId !== b.laneId;
+        await applyBookingChange(ctx, booking, {
+          newDate,
+          newStartHour,
+          newDuration: pe.newDuration,
+          newLaneId,
+          newVariantId: pe.newVariantId,
+          newAdditionalLaneIds: pe.newAdditionalLaneIds ?? b.additionalLaneIds,
+          newAccessCode: pe.newAccessCode,
+          regenCode,
+          newPriceInCents: pe.newPriceInCents,
+          actorUserId: pe.actorUserId ?? b.userId,
+          actorName: b.customerName,
+        });
+        await ctx.db.patch(booking._id, { status: "confirmed", pendingEdit: undefined });
+        // Redeem any account credit applied to the top-up (atomic on confirm).
+        if ((pe.creditApplied ?? 0) > 0 && b.customerEmail) {
+          await redeemCredit(ctx, {
+            email: b.customerEmail,
+            amount: pe.creditApplied,
+            bookingId: booking._id.toString(),
+          });
+        }
+        await releaseHoldForBooking(ctx, booking._id.toString());
+        return { success: true, isBookingEdit: true };
+      }
+
+      // Legacy duration-only edit — unchanged inline behaviour.
       await ctx.db.patch(booking._id, {
         status: "confirmed",
         paymentStatus: "paid",

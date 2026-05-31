@@ -16,9 +16,11 @@ import {
 } from '../lib/booking-data'
 import { formatAccessCode } from '../lib/access-code'
 import AuthModal from './AuthModal'
-import RescheduleModal from './RescheduleModal'
 import AthleteAllocationEditor from './AthleteAllocationEditor'
-import EditBookingModal from './EditBookingModal'
+// SPEC_MODIFY_BOOKING_UPGRADE: the split Edit (duration) + Reschedule flows are
+// merged into one ModifyBookingModal → modifyBooking. EditBookingModal /
+// RescheduleModal are retired (files kept, no longer referenced here).
+import ModifyBookingModal from './ModifyBookingModal'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -72,9 +74,9 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const {
     bookings, cancelBooking, canCancel,
     createTentativeNextWeek, confirmTentative, cancelTentative, getTentativeBookings,
-    rescheduleBooking, updateAthleteSlots,
+    modifyBooking, updateAthleteSlots,
   } = useBookings()
-  const { user, isCoach, isCustomer, getAllCoaches, assignCoach, removeCoach, customerRecord } = useAuth()
+  const { user, isCoach, isCustomer, getAllCoaches, assignCoach, removeCoach, customerRecord, getCreditBalance } = useAuth()
   const { getUserEntries, removeFromWaitlist, notifications, dismissNotification } = useWaitlist(user?.id)
   // When impersonating, filter bookings by the impersonated user's email
   const effectiveEmail = impersonatedEmail ?? user?.email
@@ -89,9 +91,8 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const [cancellingId, setCancellingId] = useState<string | null>(null)
   const [cancelError, setCancelError] = useState<string | null>(null)
   const [showAuth, setShowAuth] = useState(false)
-  const [rescheduleBookingData, setRescheduleBookingData] = useState<Booking | null>(null)
+  const [modifyBookingData, setModifyBookingData] = useState<Booking | null>(null)
   const [athleteEditBooking, setAthleteEditBooking] = useState<Booking | null>(null)
-  const [editBookingData, setEditBookingData] = useState<Booking | null>(null)
 
   const coachIdForAthletes = customerRecord?._id ?? user?.email ?? ''
 
@@ -211,13 +212,13 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     setCancellingId(null)
   }
 
-  const handleReschedule = async (booking: Booking, opts: {
+  const handleModify = async (booking: Booking, opts: {
     newDate: string; newStartHour: number; newDuration: number;
     newLaneId?: string; newVariantId?: string;
     newAdditionalLaneIds?: string[]; newAccessCode?: string;
   }) => {
     if (!user) return { success: false, error: 'Not signed in.' }
-    return await rescheduleBooking(booking.id, { ...opts, userId: user.id })
+    return await modifyBooking(booking.id, { ...opts, userId: user.id })
   }
 
   const handleSaveAthleteSlots = async (
@@ -374,10 +375,10 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             </button>
             {cancelCheck.allowed && (
               <button
-                onClick={() => setRescheduleBookingData(booking)}
-                className="text-[11px] px-2.5 py-1 rounded-lg border border-amber-200 dark:border-amber-800 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
+                onClick={(e) => { e.stopPropagation(); setModifyBookingData(booking) }}
+                className="text-[11px] px-2.5 py-1 rounded-lg border border-violet-200 dark:border-violet-800 text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors"
               >
-                📅 Reschedule
+                ✏️ Modify
               </button>
             )}
             <button
@@ -497,10 +498,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           <a href={generateGoogleCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">📅 Google</a>
           <a href={generateOutlookCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors">📆 Outlook</a>
           {cancelCheck.allowed && (
-            <>
-              <button onClick={() => setEditBookingData(booking)} className="text-[11px] px-2.5 py-1 rounded-lg border border-violet-200 dark:border-violet-800 text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors">✏️ Edit</button>
-              <button onClick={() => setRescheduleBookingData(booking)} className="text-[11px] px-2.5 py-1 rounded-lg border border-amber-200 dark:border-amber-800 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors">📅 Reschedule</button>
-            </>
+            <button onClick={() => setModifyBookingData(booking)} className="text-[11px] px-2.5 py-1 rounded-lg border border-violet-200 dark:border-violet-800 text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors">✏️ Modify</button>
           )}
           <button
             onClick={() => handleCancel(booking.id)}
@@ -662,11 +660,18 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             <p className="text-xs text-gray-500 dark:text-gray-400">{user.email}</p>
           </div>
         </div>
-        {userNotifications.length > 0 && (
-          <span className="flex items-center gap-1 text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-2 py-1 rounded-full font-semibold animate-pulse">
-            🔔 {userNotifications.length}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {!isCoach && getCreditBalance(user.id) > 0 && (
+            <span className="flex items-center gap-1 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 px-2 py-1 rounded-full font-semibold" title="Account credit — applied automatically at checkout">
+              💰 ${getCreditBalance(user.id).toFixed(2)} credit
+            </span>
+          )}
+          {userNotifications.length > 0 && (
+            <span className="flex items-center gap-1 text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-2 py-1 rounded-full font-semibold animate-pulse">
+              🔔 {userNotifications.length}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Error banner */}
@@ -931,21 +936,14 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       )}
 
       {/* ── Modals ── */}
-      {rescheduleBookingData && (
-        <RescheduleModal
-          booking={rescheduleBookingData}
+      {modifyBookingData && (
+        <ModifyBookingModal
+          booking={modifyBookingData}
           allBookings={bookings}
-          onClose={() => setRescheduleBookingData(null)}
-          onReschedule={opts => handleReschedule(rescheduleBookingData, opts)}
+          creditBalance={user ? getCreditBalance(user.id) : 0}
+          onClose={() => setModifyBookingData(null)}
+          onModify={opts => handleModify(modifyBookingData, opts)}
           isCoach={isCoach}
-        />
-      )}
-
-      {editBookingData && (
-        <EditBookingModal
-          booking={editBookingData}
-          onClose={() => setEditBookingData(null)}
-          onSuccess={() => setEditBookingData(null)}
         />
       )}
 

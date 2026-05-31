@@ -47,6 +47,7 @@ export interface SiteSettings {
   extensionNoticeMinutes?: number
   coachLateCancellationHours?: number
   customerCancellationHours?: number
+  modifyMoveEarlierMaxHours?: number
   abandonedCheckoutMinutes?: number
   registrationLocked?: boolean
   adminGateEnabled?: boolean
@@ -90,6 +91,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   extensionNoticeMinutes: 20,
   customerCancellationHours: 2,
   coachLateCancellationHours: 24,
+  modifyMoveEarlierMaxHours: 1,
   abandonedCheckoutMinutes: 10,
   registrationLocked: false,
   adminGateEnabled: false,

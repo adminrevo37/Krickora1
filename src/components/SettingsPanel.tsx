@@ -225,6 +225,7 @@ export default function SettingsPanel() {
           <NumberInput label="Coach late-cancel charge window (hours)" value={settings.coachLateCancellationHours ?? 24} onChange={(v) => updateSettings({ coachLateCancellationHours: v })} />
           <NumberInput label="Coach reschedule freeze (hours)" value={settings.coachRescheduleFreezeHours ?? 24} onChange={(v) => updateSettings({ coachRescheduleFreezeHours: v })} />
           <NumberInput label="Extension notice (minutes before start)" value={settings.extensionNoticeMinutes ?? 20} onChange={(v) => updateSettings({ extensionNoticeMinutes: v })} />
+          <NumberInput label="Modify: max move-earlier inside cutoff (hours)" value={settings.modifyMoveEarlierMaxHours ?? 1} onChange={(v) => updateSettings({ modifyMoveEarlierMaxHours: v })} />
         </div>
       </div>
 

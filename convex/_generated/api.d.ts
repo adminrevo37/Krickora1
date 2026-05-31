@@ -29,6 +29,7 @@ import type * as lib_adminGuard from "../lib/adminGuard.js";
 import type * as lib_bookingWindow from "../lib/bookingWindow.js";
 import type * as lib_credit from "../lib/credit.js";
 import type * as lib_discounts from "../lib/discounts.js";
+import type * as lib_pricing from "../lib/pricing.js";
 import type * as lib_rateLimit from "../lib/rateLimit.js";
 import type * as lib_slotHolds from "../lib/slotHolds.js";
 import type * as lib_systemCancel from "../lib/systemCancel.js";
@@ -75,6 +76,7 @@ declare const fullApi: ApiFromModules<{
   "lib/bookingWindow": typeof lib_bookingWindow;
   "lib/credit": typeof lib_credit;
   "lib/discounts": typeof lib_discounts;
+  "lib/pricing": typeof lib_pricing;
   "lib/rateLimit": typeof lib_rateLimit;
   "lib/slotHolds": typeof lib_slotHolds;
   "lib/systemCancel": typeof lib_systemCancel;

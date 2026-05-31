@@ -16,6 +16,22 @@ import { v } from "convex/values";
 
 /** Cancel a still-unpaid pending booking and drop its hold. Idempotent. */
 async function releaseAbandonedBooking(ctx: any, booking: any): Promise<boolean> {
+  // Abandoned unified-modify top-up (SPEC_MODIFY_BOOKING_UPGRADE): the booking is
+  // still a valid CONFIRMED booking at its original slot — only the unpaid change
+  // is abandoned. Revert it, never cancel it.
+  if (booking.status === "pending_edit_payment" && booking.paymentStatus !== "paid") {
+    await ctx.db.patch(booking._id, {
+      status: "confirmed",
+      pendingEdit: undefined,
+    } as any);
+    const editHolds = await ctx.db
+      .query("slotHolds")
+      .withIndex("by_bookingId", (q: any) => q.eq("bookingId", booking._id.toString()))
+      .collect();
+    for (const h of editHolds) await ctx.db.delete(h._id);
+    return false; // not a released (cancelled) booking
+  }
+
   // Only release if it's still an unpaid pending booking. If it confirmed (paid)
   // in the meantime, leave it alone.
   const unpaidPending =

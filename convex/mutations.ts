@@ -17,6 +17,7 @@ import {
   type WindowRole,
   type WindowTier,
 } from "./lib/bookingWindow";
+import { computeCustomerPriceCents } from "./lib/pricing";
 
 // ============================================================================
 // SHARED HELPERS
@@ -344,6 +345,163 @@ async function detectAthleteConflicts(
     }
   }
   return warnings;
+}
+
+// ── Unified modify apply (SPEC_MODIFY_BOOKING_UPGRADE) ───────────────────────
+// Applies a resolved change-set to a booking and runs every side-effect:
+//   • athlete keep-what-fits (Bug #7 — shift slots, drop those that no longer fit)
+//   • door-code swap (when the slot identity changes) + lock re-sync flag
+//   • Google Calendar resync (always — start/end/lane may have changed)
+//   • owner "rescheduled" email + coach athlete reschedule/removed emails + audit
+//   • reminder reset
+// Pricing/credit/payment decisions are made by the CALLERS (modifyBooking for the
+// immediate path; confirmBookingPayment after a Stripe top-up) — this helper only
+// applies the change. Exported so the webhook can reuse it verbatim.
+export async function applyBookingChange(
+  ctx: any,
+  booking: any,
+  change: {
+    newDate: string;
+    newStartHour: number;
+    newDuration: number;
+    newLaneId: string;
+    newVariantId?: string;
+    newAdditionalLaneIds?: string[];
+    newAccessCode?: string;       // used when regenCode is true
+    regenCode: boolean;           // slot identity changed → new door code + lock re-sync
+    newCoachPrice?: number;       // coach bookings
+    newPriceInCents?: number;     // customer bookings — stored for future diff
+    actorUserId?: string;
+    actorName: string;
+  }
+): Promise<{ droppedAthletes: string[] }> {
+  const accessCode = change.regenCode
+    ? (change.newAccessCode ?? booking.accessCode)
+    : booking.accessCode;
+
+  // Bug #7 keep-what-fits: shift every athlete slot by the time delta and keep
+  // those that still fit the new window. Dropped slots are reported (never silent).
+  const prevAthleteSlots = booking.athleteSlots ?? [];
+  const keptSlots: any[] = [];
+  const droppedSlots: any[] = [];
+  let adjustedAthleteSlots: any = booking.athleteSlots;
+  if (prevAthleteSlots.length > 0) {
+    const timeDiff = change.newStartHour - booking.startHour;
+    const newBookingEnd = change.newStartHour + change.newDuration / 60;
+    for (const slot of prevAthleteSlots) {
+      const shifted = {
+        ...slot,
+        startHour: slot.startHour + timeDiff,
+        // athletes share the booking's door code — follow a regenerated code
+        ...(change.regenCode
+          ? { accessCode, codeGeneratedAt: new Date().toISOString() }
+          : {}),
+      };
+      const slotEnd = shifted.startHour + shifted.durationMinutes / 60;
+      if (shifted.startHour < change.newStartHour - 0.001 || slotEnd > newBookingEnd + 0.001) {
+        droppedSlots.push(slot); // report the original (pre-shift) slot
+      } else {
+        keptSlots.push(shifted);
+      }
+    }
+    adjustedAthleteSlots = keptSlots.length > 0 ? keptSlots : undefined;
+  }
+
+  // Capture old calendar event ids BEFORE patching (for deletion).
+  const oldCalEventId = booking.googleCalendarEventId;
+  const oldCalEventIds = booking.googleCalendarEventIds;
+
+  await ctx.db.patch(booking._id, {
+    date: change.newDate,
+    startHour: change.newStartHour,
+    duration: change.newDuration,
+    laneId: change.newLaneId,
+    variantId: change.newVariantId ?? booking.variantId,
+    additionalLaneIds: change.newAdditionalLaneIds ?? booking.additionalLaneIds,
+    ...(change.newCoachPrice !== undefined ? { coachPrice: change.newCoachPrice } : {}),
+    ...(change.newPriceInCents !== undefined ? { priceInCents: change.newPriceInCents } : {}),
+    athleteSlots: adjustedAthleteSlots,
+    accessCode,
+    // Calendar always re-syncs (time/lane may have changed); clear the old ids.
+    googleCalendarEventId: undefined,
+    googleCalendarEventIds: undefined,
+    ...(change.regenCode ? { lockSyncStatus: "pending" } : {}),
+    reminderSent: false,
+  });
+
+  // Delete old calendar events, then create fresh ones at the new slot.
+  if (oldCalEventId) {
+    await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
+      googleCalendarEventId: oldCalEventId,
+      laneCalendarEventIds: oldCalEventIds,
+    });
+  }
+  await ctx.scheduler.runAfter(500, internal.googleCalendar.createCalendarEvent, {
+    bookingId: booking._id.toString(),
+    laneId: change.newLaneId,
+    variantId: change.newVariantId ?? booking.variantId,
+    date: change.newDate,
+    startHour: change.newStartHour,
+    duration: change.newDuration,
+    customerName: booking.customerName,
+    customerEmail: booking.customerEmail,
+    customerPhone: booking.customerPhone,
+    status: booking.status === "pending_edit_payment" ? "confirmed" : booking.status,
+    isCoachBooking: booking.isCoachBooking,
+    accessCode,
+    additionalLaneIds: change.newAdditionalLaneIds ?? booking.additionalLaneIds,
+    athleteSlots: adjustedAthleteSlots,
+  });
+
+  // Owner "booking modified" email (reuses the rescheduled template).
+  if (booking.customerEmail) {
+    await ctx.scheduler.runAfter(0, internal.emails.sendBookingRescheduled, {
+      to: booking.customerEmail,
+      customerName: booking.customerName || "Valued Customer",
+      oldLaneName: LANE_NAME_MAP[booking.laneId] ?? booking.laneId,
+      oldDate: booking.date,
+      oldTimeSlot: fmtHour12(booking.startHour),
+      newLaneName: LANE_NAME_MAP[change.newLaneId] ?? change.newLaneId,
+      newDate: change.newDate,
+      newTimeSlot: fmtHour12(change.newStartHour),
+      newDuration: durationLabel(change.newDuration),
+      accessCode: accessCode ?? "",
+    });
+  }
+
+  // Coach bookings: notify affected athletes' parents + write the audit entry.
+  if (booking.isCoachBooking) {
+    if (keptSlots.length > 0) {
+      await scheduleAthleteRescheduleEmails(ctx, {
+        slots: keptSlots,
+        laneId: change.newLaneId,
+        oldDate: booking.date,
+        newDate: change.newDate,
+        bookingAccessCode: accessCode,
+        coachName: booking.customerName,
+      });
+    }
+    if (droppedSlots.length > 0) {
+      await scheduleAthleteRemovedEmails(ctx, {
+        slots: droppedSlots,
+        laneId: booking.laneId,
+        date: booking.date,
+        coachName: booking.customerName,
+      });
+    }
+    if (keptSlots.length > 0 || droppedSlots.length > 0) {
+      await writeAllocationAudit(ctx, {
+        bookingId: booking._id.toString(),
+        actorUserId: change.actorUserId,
+        actorName: booking.customerName,
+        action: "reschedule",
+        before: prevAthleteSlots,
+        after: keptSlots,
+      });
+    }
+  }
+
+  return { droppedAthletes: droppedSlots.map((s: any) => s.athleteName) };
 }
 
 // ============================================================================
@@ -1683,6 +1841,361 @@ export const rescheduleBooking = mutation({
 });
 
 // ============================================================================
+// UNIFIED MODIFY BOOKING (SPEC_MODIFY_BOOKING_UPGRADE)
+// ============================================================================
+// One backend path for every customer change type (lane / variant / date / time
+// / duration). Replaces the split EditBookingModal (duration + top-up) and the
+// customer reschedule (which waved price increases through "at the facility").
+//   • Customer price INCREASE → Stripe top-up (account credit applied first; the
+//     change is held in pendingEdit + a slot hold until payment confirms).
+//   • Customer price DECREASE → applied now + the difference added as account credit.
+//   • Coach → coachPrice recalculated, applied now, no online payment.
+//   • Time-lock = the cancellation cutoff, with a safe-change carve-out inside it
+//     (lane/variant swap at same cost; move earlier ≤ N hours; extend-with-top-up).
+// Everything is re-validated here — the client is never trusted.
+export const modifyBooking = mutation({
+  args: {
+    id: v.id("bookings"),
+    newDate: v.optional(v.string()),
+    newStartHour: v.optional(v.number()),
+    newDuration: v.optional(v.number()),
+    newLaneId: v.optional(v.string()),
+    newVariantId: v.optional(v.string()),
+    newAdditionalLaneIds: v.optional(v.array(v.string())),
+    newAccessCode: v.optional(v.string()), // client-generated; used when the code must regenerate
+    userId: v.string(),
+  },
+  // Explicit return type — breaks the circular inference through internal.*.
+  handler: async (
+    ctx,
+    args
+  ): Promise<{
+    success: boolean;
+    requiresPayment: boolean;
+    topUpAmountCents?: number;
+    creditAppliedCents?: number;
+    credited?: boolean;
+    priceDifferenceCents?: number;
+    droppedAthletes?: string[];
+  }> => {
+    const booking = await ctx.db.get(args.id);
+    if (!booking) throw new Error("Booking not found.");
+    if (booking.status === "cancelled") throw new Error("Cannot modify a cancelled booking.");
+    if (booking.status === "tentative") throw new Error("Confirm the tentative booking first, then modify it.");
+    if ((booking as any).status === "pending_edit_payment") {
+      throw new Error("A payment for a previous change is still pending. Complete or cancel it first.");
+    }
+
+    // ── Auth ──────────────────────────────────────────────────────────────────
+    const identity = await ctx.auth.getUserIdentity();
+    const callerEmail = identity?.email?.toLowerCase().trim() ?? "";
+    const isOwner =
+      booking.userId === args.userId ||
+      booking.customerEmail.toLowerCase() === args.userId.toLowerCase() ||
+      (identity?.subject != null && booking.userId === identity.subject) ||
+      (callerEmail !== "" && booking.customerEmail.toLowerCase() === callerEmail);
+    const callerCustomer = callerEmail
+      ? await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", callerEmail)).first()
+      : null;
+    const isAdmin = callerCustomer?.role === "admin";
+    if (!isOwner && !isAdmin) {
+      throw new Error("You can only modify your own bookings.");
+    }
+
+    const settings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+
+    // ── Resolve the effective new field-set (omitted fields keep current) ──────
+    const effDate = args.newDate ?? booking.date;
+    const effStart = args.newStartHour ?? booking.startHour;
+    const effDuration = args.newDuration ?? booking.duration;
+    const effLane = args.newLaneId ?? booking.laneId;
+    const effVariant = args.newVariantId !== undefined ? args.newVariantId : booking.variantId;
+    const effAddl = args.newAdditionalLaneIds ?? booking.additionalLaneIds ?? [];
+
+    const dateChanged = effDate !== booking.date;
+    const startChanged = effStart !== booking.startHour;
+    const durationChanged = effDuration !== booking.duration;
+    const primaryLaneChanged = effLane !== booking.laneId;
+    const sortKey = (a: string[]) => [...a].sort().join(",");
+    const addlChanged = sortKey(effAddl) !== sortKey(booking.additionalLaneIds ?? []);
+    const variantChanged = (effVariant ?? null) !== (booking.variantId ?? null);
+    const anyChange =
+      dateChanged || startChanged || durationChanged || primaryLaneChanged || addlChanged || variantChanged;
+    if (!anyChange) {
+      return { success: true, requiresPayment: false, droppedAthletes: [] };
+    }
+    // Door code regenerates only when the slot identity (day/time/primary lane) moves.
+    const regenCode = dateChanged || startChanged || primaryLaneChanged;
+
+    const isCoach = !!booking.isCoachBooking;
+
+    // ── Validate the new slot (operating hours, closure, conflicts, lead, horizon)
+    const DOW_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const [yy, mm, dd] = effDate.split("-").map(Number);
+    const dowName = DOW_NAMES[new Date(yy, mm - 1, dd).getDay()];
+    const dayHours = settings?.dailyHours?.find((h: any) => h.day === dowName);
+    const OPENING_HOUR = dayHours ? dayHours.open : (settings?.openingHour ?? 7);
+    const CLOSING_HOUR = dayHours ? dayHours.close : (settings?.closingHour ?? 21);
+    if (dayHours?.closed) throw new Error("The facility is closed on that day.");
+
+    const minDuration = isCoach ? 30 : 60;
+    if (effDuration < minDuration) {
+      throw new Error(`Minimum booking duration is ${minDuration} minutes.`);
+    }
+    const newEndHour = effStart + effDuration / 60;
+    if (effStart < OPENING_HOUR) throw new Error(`Bookings cannot start before ${OPENING_HOUR}:00.`);
+    if (newEndHour > CLOSING_HOUR) throw new Error("That change extends past closing time.");
+
+    const closure = await ctx.db
+      .query("closures")
+      .withIndex("by_date", (q: any) => q.eq("date", effDate))
+      .first();
+    if (closure) {
+      throw new Error(`The facility is closed on that date${closure.reason ? `: ${closure.reason}` : "."}`);
+    }
+
+    // Conflict check on every lane (excluding this booking).
+    const allNewLaneIds = [effLane, ...effAddl];
+    for (const lid of allNewLaneIds) {
+      const laneBookings = await ctx.db
+        .query("bookings")
+        .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", effDate))
+        .collect();
+      const conflict = laneBookings.some((b: any) => {
+        if (b._id === args.id || b.status === "cancelled") return false;
+        const bEnd = b.startHour + b.duration / 60;
+        return effStart < bEnd && newEndHour > b.startHour;
+      });
+      if (conflict) throw new Error("That time slot is not available. Please choose another.");
+
+      const laneBlocks = await ctx.db
+        .query("laneBlocks")
+        .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", effDate))
+        .collect();
+      const blocked = laneBlocks.some((b: any) => {
+        const bEnd = b.startHour + b.duration / 60;
+        return effStart < bEnd && newEndHour > b.startHour;
+      });
+      if (blocked) throw new Error("That lane is blocked for service/repair during this time.");
+    }
+
+    const awstNow = getAWSTNow();
+
+    // Active-hold conflict (in-flight checkout / waitlist offer) — exclude self.
+    if (
+      await hasActiveHoldConflict(ctx, {
+        laneIds: allNewLaneIds,
+        date: effDate,
+        startHour: effStart,
+        endHour: newEndHour,
+        excludeBookingId: args.id.toString(),
+      })
+    ) {
+      throw new Error("That time slot is not available. Please choose another.");
+    }
+
+    if (!isAdmin) {
+      const leadError = checkLeadTime(
+        effDate,
+        effStart,
+        settings?.minBookingNoticeMinutes ?? 10,
+        awstNow
+      );
+      if (leadError) throw new Error(leadError);
+
+      const role: WindowRole = isCoach ? "coach" : "customer";
+      const tier: WindowTier =
+        callerCustomer?.coachTier === "L2" || callerCustomer?.coachTier === "BowlingL2" ? "L2" : "L1";
+      const horizonError = checkBookingHorizon(role, tier, settings ?? {}, effDate, awstNow);
+      if (horizonError) throw new Error(horizonError);
+    }
+
+    // ── Time-lock matrix ────────────────────────────────────────────────────
+    const [oY, oM, oD] = booking.date.split("-").map(Number);
+    const oWhole = Math.floor(booking.startHour);
+    const oMins = Math.round((booking.startHour - oWhole) * 60);
+    const originalStart = new Date(oY, oM - 1, oD, oWhole, oMins, 0);
+    const hoursUntilOriginal = (originalStart.getTime() - awstNow.getTime()) / (1000 * 60 * 60);
+
+    if (!isAdmin && hoursUntilOriginal <= 0) {
+      throw new Error("This session has already started — it can no longer be modified.");
+    }
+
+    // ── Pricing (server-authoritative) ────────────────────────────────────────
+    let newCoachPrice: number | undefined;
+    let newPriceInCents: number | undefined;
+    let priceDiffCents = 0;
+    if (isCoach) {
+      const per30 = settings?.coachPer30Min ?? 15;
+      newCoachPrice = (effDuration / 30) * per30;
+    } else {
+      const laneCents = (variantId: string | null) =>
+        computeCustomerPriceCents(settings, variantId, effDuration);
+      newPriceInCents =
+        laneCents(effVariant ?? null) + effAddl.reduce((sum: number) => sum + laneCents(null), 0);
+      // Diff against the recomputed GROSS original (server-authoritative, SEC-6):
+      // this charges/credits the true incremental lane cost and avoids inheriting
+      // any original discount/credit into the difference.
+      const oldGrossCents =
+        computeCustomerPriceCents(settings, booking.variantId ?? null, booking.duration) +
+        (booking.additionalLaneIds ?? []).reduce(
+          (sum: number) => sum + computeCustomerPriceCents(settings, null, booking.duration),
+          0
+        );
+      priceDiffCents = newPriceInCents - oldGrossCents;
+    }
+
+    // ── Coach freeze (any modify) ─────────────────────────────────────────────
+    if (isCoach && !isAdmin) {
+      const freezeHours = settings?.coachRescheduleFreezeHours ?? 24;
+      if (hoursUntilOriginal < freezeHours) {
+        throw new Error(`Coach bookings cannot be modified within ${freezeHours} hours of the session start.`);
+      }
+    }
+
+    // ── Customer safe-change carve-out inside the cancellation window ──────────
+    if (!isCoach && !isAdmin) {
+      const cancelHours = (settings as any)?.customerCancellationHours ?? settings?.cancellationHoursBefore ?? 2;
+      const insideWindow = hoursUntilOriginal < cancelHours;
+      if (insideWindow) {
+        const within = `within ${cancelHours} hour${cancelHours !== 1 ? "s" : ""} of the start time`;
+        if (dateChanged) {
+          throw new Error(`You can't change the date ${within}.`);
+        }
+        const movedLater = effDate === booking.date && effStart > booking.startHour;
+        if (movedLater) {
+          throw new Error(`You can't push the start later ${within}. You can move it earlier or extend it.`);
+        }
+        if (effStart < booking.startHour) {
+          const maxEarlier = settings?.modifyMoveEarlierMaxHours ?? 1;
+          const earlierBy = booking.startHour - effStart;
+          if (earlierBy > maxEarlier + 1e-9) {
+            throw new Error(`You can move the start at most ${maxEarlier} hour${maxEarlier !== 1 ? "s" : ""} earlier ${within}.`);
+          }
+        }
+        if (durationChanged && effDuration < booking.duration) {
+          throw new Error(`You can't shorten the session ${within}.`);
+        }
+        if (priceDiffCents < 0) {
+          throw new Error(`Changes that reduce the price (and add credit) must be made before the cutoff.`);
+        }
+        const isExtend = durationChanged && effDuration > booking.duration;
+        if (priceDiffCents > 0 && !isExtend) {
+          throw new Error(`Only extending the session is allowed when it increases the price ${within}.`);
+        }
+        if (isExtend) {
+          const extNoticeMin = settings?.extensionNoticeMinutes ?? 20;
+          if (hoursUntilOriginal * 60 < extNoticeMin) {
+            throw new Error(`Extensions must be made at least ${extNoticeMin} minutes before the start.`);
+          }
+        }
+      }
+    }
+
+    const actorName = booking.customerName;
+
+    // ── Apply / charge ────────────────────────────────────────────────────────
+    // Coach: recalculate coachPrice, apply now, no online payment.
+    if (isCoach) {
+      const { droppedAthletes } = await applyBookingChange(ctx, booking, {
+        newDate: effDate, newStartHour: effStart, newDuration: effDuration,
+        newLaneId: effLane, newVariantId: effVariant ?? undefined, newAdditionalLaneIds: effAddl,
+        newAccessCode: args.newAccessCode, regenCode, newCoachPrice,
+        actorUserId: args.userId, actorName,
+      });
+      return { success: true, requiresPayment: false, droppedAthletes };
+    }
+
+    // Customer: equal or decrease → apply now (+ credit the decrease).
+    if (priceDiffCents <= 0) {
+      const { droppedAthletes } = await applyBookingChange(ctx, booking, {
+        newDate: effDate, newStartHour: effStart, newDuration: effDuration,
+        newLaneId: effLane, newVariantId: effVariant ?? undefined, newAdditionalLaneIds: effAddl,
+        newAccessCode: args.newAccessCode, regenCode, newPriceInCents,
+        actorUserId: args.userId, actorName,
+      });
+      let credited = false;
+      if (priceDiffCents < 0 && booking.customerEmail) {
+        await issueCredit(ctx, {
+          email: booking.customerEmail,
+          amount: Math.abs(priceDiffCents) / 100,
+          reason: "modify_decrease",
+          bookingId: args.id.toString(),
+        });
+        credited = true;
+      }
+      return { success: true, requiresPayment: false, credited, priceDifferenceCents: priceDiffCents, droppedAthletes };
+    }
+
+    // Customer increase → apply account credit first; Stripe covers the remainder.
+    const customer = booking.customerEmail
+      ? await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", booking.customerEmail.toLowerCase())).first()
+      : null;
+    const creditAvailCents = Math.round((customer?.creditBalance ?? 0) * 100);
+    const creditUseCents = Math.min(creditAvailCents, priceDiffCents);
+    const amountDueCents = priceDiffCents - creditUseCents;
+
+    if (amountDueCents === 0) {
+      // Credit fully covers the increase → apply now, redeem the credit.
+      const { droppedAthletes } = await applyBookingChange(ctx, booking, {
+        newDate: effDate, newStartHour: effStart, newDuration: effDuration,
+        newLaneId: effLane, newVariantId: effVariant ?? undefined, newAdditionalLaneIds: effAddl,
+        newAccessCode: args.newAccessCode, regenCode, newPriceInCents,
+        actorUserId: args.userId, actorName,
+      });
+      if (creditUseCents > 0 && booking.customerEmail) {
+        await redeemCredit(ctx, { email: booking.customerEmail, amount: creditUseCents / 100, bookingId: args.id.toString() });
+      }
+      return { success: true, requiresPayment: false, creditAppliedCents: creditUseCents, priceDifferenceCents: priceDiffCents, droppedAthletes };
+    }
+
+    // amountDue > 0 → stash the full change in pendingEdit + hold the new slot.
+    // confirmBookingPayment applies it (via applyBookingChange) once the top-up
+    // is paid; abandonment reverts the booking to confirmed (releaseAbandonedBooking).
+    await ctx.db.patch(args.id, {
+      status: "pending_edit_payment",
+      pendingEdit: {
+        newDuration: effDuration,
+        newAdditionalLaneIds: effAddl,
+        newPriceInCents: newPriceInCents as number,
+        priceDifference: amountDueCents,
+        newDate: effDate,
+        newStartHour: effStart,
+        newLaneId: effLane,
+        newVariantId: effVariant ?? undefined,
+        newAccessCode: regenCode ? args.newAccessCode : undefined,
+        creditApplied: creditUseCents / 100,
+        actorUserId: args.userId,
+      },
+    });
+    // Hold the new slot for the Stripe checkout window (~30 min, matching the
+    // session's expires_at) so it can't be taken before payment confirms.
+    await createCheckoutHold(ctx, {
+      bookingId: args.id.toString(),
+      laneId: effLane,
+      additionalLaneIds: effAddl,
+      date: effDate,
+      startHour: effStart,
+      duration: effDuration,
+      userId: args.userId,
+      userEmail: booking.customerEmail,
+      expiresAtMs: Date.now() + 30 * 60 * 1000,
+    });
+
+    return {
+      success: true,
+      requiresPayment: true,
+      topUpAmountCents: amountDueCents,
+      creditAppliedCents: creditUseCents,
+      priceDifferenceCents: priceDiffCents,
+    };
+  },
+});
+
+// ============================================================================
 // COACH ATHLETE ALLOCATION MUTATIONS
 // ============================================================================
 
@@ -2790,6 +3303,7 @@ export const updateSiteSettings = mutation({
     minAthleteDurationMinutes: v.optional(v.number()),
     customerCancellationHours: v.optional(v.number()),
     coachLateCancellationHours: v.optional(v.number()),
+    modifyMoveEarlierMaxHours: v.optional(v.number()),
     adminGateEnabled: v.optional(v.boolean()),
     adminUnlockMinutes: v.optional(v.number()),
     abandonedCheckoutMinutes: v.optional(v.number()),

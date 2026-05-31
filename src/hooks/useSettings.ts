@@ -20,6 +20,7 @@ const REMOTE_SCALAR_KEYS = [
   'customerMaxDurationMinutes', 'coachMaxDurationMinutes',
   'minAthleteDurationMinutes', 'coachRescheduleFreezeHours',
   'extensionNoticeMinutes', 'customerCancellationHours',
+  'modifyMoveEarlierMaxHours',
   'coachLateCancellationHours', 'abandonedCheckoutMinutes',
   'registrationLocked', 'adminGateEnabled', 'adminUnlockMinutes',
 ] as const

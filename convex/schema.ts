@@ -207,12 +207,24 @@ export default defineSchema({
     priceInCents: v.optional(v.number()), // Stored price at booking time (used for edit diff calculation)
     // Admin notes (e.g. "Winter Program", "Trial Session")
     notes: v.optional(v.string()),
-    // Pending booking edit (set when a top-up payment is required)
+    // Pending booking edit (set when a top-up payment is required).
+    // SPEC_MODIFY_BOOKING_UPGRADE: this now captures the FULL change-set for a
+    // unified modify (date/time/lane/variant + code), not just duration. The
+    // extra fields are optional so legacy duration-only edits still validate.
+    // Applied by the Stripe webhook (confirmBookingPayment) once the top-up is paid.
     pendingEdit: v.optional(v.object({
       newDuration: v.number(),
       newAdditionalLaneIds: v.optional(v.array(v.string())),
       newPriceInCents: v.number(),
       priceDifference: v.number(), // positive = top-up required, negative = refund
+      // Unified modify additions (SPEC_MODIFY_BOOKING_UPGRADE) — all optional.
+      newDate: v.optional(v.string()),
+      newStartHour: v.optional(v.number()),
+      newLaneId: v.optional(v.string()),
+      newVariantId: v.optional(v.string()),
+      newAccessCode: v.optional(v.string()),     // present → regenerate the door code on apply
+      creditApplied: v.optional(v.number()),     // account credit to redeem on confirm (partial-cover top-up)
+      actorUserId: v.optional(v.string()),       // who initiated (for the allocation audit log)
     })),
     modificationHistory: v.optional(
       v.array(
@@ -343,6 +355,10 @@ export default defineSchema({
     customerMaxDurationMinutes: v.optional(v.number()),   // default 120
     coachMaxDurationMinutes: v.optional(v.number()),      // default 600
     minAthleteDurationMinutes: v.optional(v.number()),    // default 15
+    // Modify-booking move-earlier carve-out (SPEC_MODIFY_BOOKING_UPGRADE). Inside
+    // the customer cancellation window a customer may still pull the start EARLIER
+    // by at most this many hours (and never inside minBookingNoticeMinutes). Default 1.
+    modifyMoveEarlierMaxHours: v.optional(v.number()),
     // Cancellation rules (separated by user type)
     customerCancellationHours: v.optional(v.number()),   // default 2 — customers cannot cancel within N hours
     coachLateCancellationHours: v.optional(v.number()),  // default 24 — coach charged if they cancel within N hours
