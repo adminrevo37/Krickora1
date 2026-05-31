@@ -90,8 +90,13 @@ export function useAuth() {
   )
 
   const allCoachRecords = useQuery(api.queries.listCustomersByRole, { role: 'coach' }) ?? []
-  const allCustomersAll = useQuery(api.queries.listCustomers) ?? []
-  const coachInviteRecords = useQuery(api.queries.listCoachInvites) ?? []
+  // SEC-1: listCustomers / listCoachInvites are admin-only — they throw "Unauthenticated"
+  // for logged-out and non-admin callers. useAuth runs on every page, so calling them
+  // unconditionally crashes the whole app at the root. Gate them on the viewer actually
+  // being an admin (derived from their own record, which returns null safely when logged out).
+  const isAdminViewer = (customerRecord?.role ?? null) === 'admin'
+  const allCustomersAll = useQuery(api.queries.listCustomers, isAdminViewer ? {} : 'skip') ?? []
+  const coachInviteRecords = useQuery(api.queries.listCoachInvites, isAdminViewer ? {} : 'skip') ?? []
 
   // ── Convex mutations ─────────────────────────────────────────────────
   const updateCustomerMutation = useMutation(api.mutations.updateCustomer)
