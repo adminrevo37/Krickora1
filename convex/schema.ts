@@ -422,6 +422,26 @@ export default defineSchema({
     lockBrand: v.string(), // 'schlage' | 'yale' | 'august' | 'other'
   }).index("by_laneId", ["laneId"]),
 
+  // Equipment / facility fault reports (SPEC_ADMIN_AND_SETTINGS #5). Customers
+  // and coaches "submit an issue"; reports land in the admin inbox with the lane
+  // + details (+ optional photo). Admin decides whether to create a laneBlock —
+  // NOT auto-blocked.
+  faultReports: defineTable({
+    laneId: v.optional(v.string()),   // affected lane, or undefined for general
+    category: v.optional(v.string()), // 'equipment' | 'facility' | 'other'
+    details: v.string(),
+    photoStorageId: v.optional(v.id("_storage")), // optional uploaded photo
+    reportedByEmail: v.optional(v.string()),
+    reportedByName: v.optional(v.string()),
+    status: v.string(),               // 'open' | 'resolved' | 'dismissed'
+    adminNote: v.optional(v.string()),
+    resolvedByEmail: v.optional(v.string()),
+    resolvedAt: v.optional(v.string()),
+    createdAt: v.string(),
+  })
+    .index("by_status", ["status"])
+    .index("by_createdAt", ["createdAt"]),
+
   // Coach payments tracking
   payments: defineTable({
     coachId: v.string(),

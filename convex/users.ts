@@ -1,10 +1,25 @@
 /**
  * User management mutations — admin-only operations.
  */
-import { mutation } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { components } from "./_generated/api";
 import { requireAdmin, requireAdminUnlocked, writeRoleAudit } from "./lib/adminGuard";
+
+// Recent role / permission / tier changes — admin only (SPEC_SECURITY_HARDENING
+// #3 audit trail; surfaced in the admin role-management UI).
+export const listRoleAuditLog = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const rows = await ctx.db
+      .query("roleAuditLog")
+      .withIndex("by_changedAt")
+      .order("desc")
+      .take(args.limit ?? 50);
+    return rows;
+  },
+});
 
 export const makeAdmin = mutation({
   args: { email: v.string() },

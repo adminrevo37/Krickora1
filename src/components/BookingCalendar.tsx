@@ -26,6 +26,7 @@ import { getHoursForDate } from '../lib/settings-store'
 import { useBookings } from '../hooks/useBookingStore'
 import { useLaneBlocks } from '../hooks/useLaneBlocks'
 import { useAuth } from '../hooks/useAuth'
+import FaultReportModal from './FaultReportModal'
 import { useWaitlist } from '../hooks/useWaitlist'
 import { useSettings } from '../hooks/useSettings'
 import BookingModal from './BookingModal'
@@ -34,6 +35,7 @@ import WaitlistModal from './WaitlistModal'
 
 export default function BookingCalendar({ impersonatedEmail }: { impersonatedEmail?: string } = {}) {
   const { user, isAdmin: realIsAdmin, isCoach: realIsCoach, customerRecord } = useAuth()
+  const [showFaultModal, setShowFaultModal] = useState(false)
   // When impersonating, behave as a regular customer (not admin/coach)
   const isAdmin = impersonatedEmail ? false : realIsAdmin
   const userIsCoach = impersonatedEmail ? false : realIsCoach
@@ -207,11 +209,21 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
 
   return (
     <div className="space-y-6">
+      {showFaultModal && <FaultReportModal onClose={() => setShowFaultModal(false)} />}
       {/* Week Day Selector */}
       <div className="bg-white rounded-2xl border border-gray-200 p-4 shadow-sm">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-lg font-semibold text-gray-800">{headerLabel}</h2>
           <div className="flex items-center gap-2">
+            {user && (
+              <button
+                onClick={() => setShowFaultModal(true)}
+                className="text-[11px] px-2.5 py-1 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 font-semibold transition-colors"
+                title="Report broken equipment or a facility issue"
+              >
+                🛠️ Report an issue
+              </button>
+            )}
             {userIsCoach && (
               <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${tierBadge === 'L2' ? 'bg-purple-100 text-purple-700' : tierBadge === 'Bowling' ? 'bg-green-100 text-green-700' : tierBadge === 'BowlingL2' ? 'bg-teal-100 text-teal-700' : 'bg-orange-100 text-orange-700'}`}>🏅 {tierBadge === 'L2' ? 'L2 Coach' : tierBadge === 'Bowling' ? 'Bowling L1 Coach' : tierBadge === 'BowlingL2' ? 'Bowling L2 Coach' : 'L1 Coach'}</span>
             )}

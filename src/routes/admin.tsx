@@ -8,6 +8,7 @@ import ClosureManager from '../components/ClosureManager'
 import SettingsPanel from '../components/SettingsPanel'
 import CoachStatementTable from '../components/CoachStatementTable'
 import AdminDiscountCodesTab from '../components/AdminDiscountCodesTab'
+import AdminFaultInbox from '../components/AdminFaultInbox'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 
@@ -19,11 +20,11 @@ type Section =
   | 'bookings' | 'closures'
   | 'customers' | 'coaches'
   | 'statements' | 'discounts'
-  | 'settings'
+  | 'faults' | 'settings'
 
 const VALID_SECTIONS: Section[] = [
   'bookings', 'closures', 'customers', 'coaches',
-  'statements', 'discounts', 'settings',
+  'statements', 'discounts', 'faults', 'settings',
 ]
 
 export const Route = createFileRoute('/admin')({
@@ -65,6 +66,12 @@ const NAV_GROUPS: Array<{
     ],
   },
   {
+    label: 'Operations',
+    items: [
+      { id: 'faults',     label: 'Fault Reports', icon: '🛠️' },
+    ],
+  },
+  {
     label: 'Configure',
     items: [
       { id: 'settings',   label: 'Settings',   icon: '⚙️' },
@@ -79,6 +86,7 @@ const SECTION_TITLES: Record<Section, string> = {
   coaches:    'Coaches',
   statements: 'Statements',
   discounts:  'Discounts',
+  faults:     'Fault Reports',
   settings:   'Settings',
 }
 
@@ -254,6 +262,7 @@ function AdminPage() {
             {section === 'coaches'    && <CoachesTab />}
             {section === 'statements' && <StatementsTab />}
             {section === 'discounts'  && <AdminDiscountCodesTab />}
+            {section === 'faults'     && <AdminFaultInbox />}
             {section === 'settings'   && <SettingsPanel />}
           </div>
         )}
@@ -561,6 +570,45 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
 // Customers tab
 // ---------------------------------------------------------------------------
 
+// Recent role / tier / permission changes (audit trail surfaced to admins).
+function RoleAuditLogPanel() {
+  const [open, setOpen] = useState(false)
+  const log = (useQuery((api.users as any).listRoleAuditLog, open ? { limit: 30 } : 'skip') ?? []) as any[]
+  const fmt = (iso: string) => {
+    const d = new Date(iso)
+    return d.toLocaleDateString('en-AU', { month: 'short', day: 'numeric' }) + ' ' +
+      d.toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' })
+  }
+  return (
+    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full px-6 py-3 flex items-center justify-between text-left hover:bg-gray-50"
+      >
+        <span className="text-sm font-semibold text-gray-700">🔐 Recent role &amp; permission changes</span>
+        <span className="text-gray-400 text-sm">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="border-t border-gray-100 divide-y divide-gray-50 max-h-72 overflow-y-auto">
+          {log.length === 0 ? (
+            <div className="px-6 py-4 text-sm text-gray-400 italic">No role changes recorded yet.</div>
+          ) : (
+            log.map((r: any) => (
+              <div key={r._id} className="px-6 py-2.5 text-xs flex items-center justify-between gap-3">
+                <span className="text-gray-700">
+                  <span className="font-medium">{r.targetEmail}</span> · {r.field}:{' '}
+                  <span className="text-gray-400">{r.oldValue ?? '—'}</span> → <span className="font-medium">{r.newValue ?? '—'}</span>
+                </span>
+                <span className="text-gray-400 shrink-0">{r.changedByEmail} · {fmt(r.changedAt)}</span>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function CustomersTab() {
   const customers = useQuery(api.queries.listCustomers) ?? []
   const list = (customers as any[]).filter(c => c.role !== 'admin' && c.role !== 'coach')
@@ -599,6 +647,7 @@ function CustomersTab() {
 
   return (
     <div className="space-y-6">
+      <RoleAuditLogPanel />
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-4 flex-wrap">
           <div>
