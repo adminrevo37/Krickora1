@@ -14,12 +14,27 @@ export default function ClosureManager({ selectedDate }: { selectedDate: Date })
   const today = new Date(); today.setHours(0,0,0,0)
   const isPast = selectedDate < today
   const currentClosure = closures.find((c) => c.date === dateKey)
+  const activeCount = useQuery(api.closures.countActiveBookingsOnDate, { date: dateKey }) ?? 0
 
   const handleClose = async () => {
+    if (activeCount > 0) {
+      const ok = confirm(
+        `This date has ${activeCount} active booking${activeCount === 1 ? '' : 's'}.\n\n` +
+        `Closing it will CANCEL ${activeCount === 1 ? 'it' : 'them all'}, auto-credit any paid ` +
+        `customers, and email them that the facility is closed.\n\nContinue?`
+      )
+      if (!ok) return
+    }
     setBusy(true)
     try {
-      await addClosure({ date: dateKey, reason: reason.trim() || undefined })
+      const res: any = await addClosure({ date: dateKey, reason: reason.trim() || undefined })
       setReason('')
+      if (res?.cancelledCount > 0) {
+        alert(
+          `Closed. Cancelled ${res.cancelledCount} booking${res.cancelledCount === 1 ? '' : 's'}` +
+          (res.totalCreditIssued > 0 ? ` and issued $${res.totalCreditIssued.toFixed(2)} in account credit.` : '.')
+        )
+      }
     } catch (e: any) {
       alert(e?.message ?? 'Failed to close date')
     } finally {

@@ -31,10 +31,25 @@ export default function LaneBlockModal({ date, prefill, onClose }: Props) {
   const handleSubmit = async () => {
     setError(null)
     if (laneIds.length === 0) { setError('Select at least one lane'); return }
+    const ok = confirm(
+      'Blocking will CANCEL any bookings that overlap this time on the selected ' +
+      'lane(s), auto-credit any paid customers, and email them it was for maintenance.\n\nContinue?'
+    )
+    if (!ok) return
     setSaving(true)
     try {
+      let cancelledCount = 0
+      let totalCredit = 0
       for (const lid of laneIds) {
-        await addBlock({ laneId: lid, date: dateKey, startHour, duration, reason: reason.trim() || undefined })
+        const res: any = await addBlock({ laneId: lid, date: dateKey, startHour, duration, reason: reason.trim() || undefined })
+        cancelledCount += res?.cancelledCount ?? 0
+        totalCredit += res?.totalCreditIssued ?? 0
+      }
+      if (cancelledCount > 0) {
+        alert(
+          `Blocked. Cancelled ${cancelledCount} booking${cancelledCount === 1 ? '' : 's'}` +
+          (totalCredit > 0 ? ` and issued $${totalCredit.toFixed(2)} in account credit.` : '.')
+        )
       }
       onClose()
     } catch (e: any) {

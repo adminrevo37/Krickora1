@@ -208,6 +208,9 @@ export const sendBookingCancellation = internalAction({
     timeSlot: v.string(),
     duration: v.string(),
     calendarUrl: v.optional(v.string()),
+    // Optional human reason (e.g. closure / maintenance). Forward-compatible:
+    // passed to the template as `cancellationReason` for it to render if present.
+    reason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     if (!(await emailEnabledForUser(ctx, args.to, "booking-cancellation"))) {
@@ -220,6 +223,7 @@ export const sendBookingCancellation = internalAction({
       date: args.date,
       timeSlot: args.timeSlot,
       duration: args.duration,
+      cancellationReason: args.reason ?? "",
       bookingUrl: "https://krickora.com",
       calendarUrl: args.calendarUrl ?? "https://krickora.com",
     });

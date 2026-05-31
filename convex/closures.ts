@@ -1,6 +1,7 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { requireAdmin } from "./lib/adminGuard";
+import { systemCancelBooking } from "./lib/systemCancel";
 
 // List all closures
 export const listAll = query({
@@ -34,6 +35,19 @@ export const isClosed = query({
   },
 });
 
+// Count active (non-cancelled) bookings on a date — used to warn the admin
+// before a closure auto-cancels them.
+export const countActiveBookingsOnDate = query({
+  args: { date: v.string() },
+  handler: async (ctx, args) => {
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.eq("date", args.date))
+      .collect();
+    return bookings.filter((b) => b.status !== "cancelled").length;
+  },
+});
+
 export const addClosure = mutation({
   args: {
     date: v.string(),
@@ -51,24 +65,37 @@ export const addClosure = mutation({
       throw new Error("This date is already marked as closed.");
     }
 
-    // Check for active bookings on that date
+    // Auto-cancel every active booking on that date, auto-credit the customers,
+    // and notify them it was a closure (SPEC_ADMIN_AND_SETTINGS #1).
+    const adminEmail = (admin as any)?.email ?? undefined;
+    const reason = args.reason
+      ? `Facility closed: ${args.reason}`
+      : "Facility closed on this date";
     const bookings = await ctx.db
       .query("bookings")
       .withIndex("by_date", (q: any) => q.eq("date", args.date))
       .collect();
-    const activeCount = bookings.filter((b) => b.status !== "cancelled").length;
-    if (activeCount > 0) {
-      throw new Error(
-        `Cannot close this date — there ${activeCount === 1 ? "is" : "are"} ${activeCount} active booking${activeCount === 1 ? "" : "s"}. Cancel them first.`
-      );
+
+    const cancelled: any[] = [];
+    for (const b of bookings) {
+      const summary = await systemCancelBooking(ctx, b, { reason, cancelledByEmail: adminEmail });
+      if (summary) cancelled.push(summary);
     }
 
-    return await ctx.db.insert("closures", {
+    const closureId = await ctx.db.insert("closures", {
       date: args.date,
       reason: args.reason,
       createdAt: new Date().toISOString(),
-      createdBy: (admin as any)?.email ?? undefined,
+      createdBy: adminEmail,
     });
+
+    const totalCredit = cancelled.reduce((sum, c) => sum + (c.creditIssued ?? 0), 0);
+    return {
+      closureId,
+      cancelledCount: cancelled.length,
+      totalCreditIssued: Math.round(totalCredit * 100) / 100,
+      cancelled,
+    };
   },
 });
 
