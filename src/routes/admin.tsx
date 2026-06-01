@@ -672,10 +672,16 @@ function CustomersTab() {
   const setPassword = useAction((api as any).adminPassword.adminSetPassword)
 
   const filtered = search
-    ? list.filter((c: any) =>
-        (c.name || '').toLowerCase().includes(search.toLowerCase()) ||
-        (c.email || '').toLowerCase().includes(search.toLowerCase())
-      )
+    ? list.filter((c: any) => {
+        const q = search.toLowerCase()
+        const phoneDigits = (c.phone || '').replace(/\D/g, '')
+        const qDigits = search.replace(/\D/g, '')
+        return (
+          (c.name || '').toLowerCase().includes(q) ||
+          (c.email || '').toLowerCase().includes(q) ||
+          (qDigits.length >= 3 && phoneDigits.includes(qDigits))
+        )
+      })
     : list
 
   const submitAdd = async (e: React.FormEvent) => {
@@ -706,7 +712,7 @@ function CustomersTab() {
           <div className="flex items-center gap-3">
             <input
               type="search"
-              placeholder="Search name or email…"
+              placeholder="Search name, email or mobile…"
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-56"
