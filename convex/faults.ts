@@ -7,7 +7,7 @@
  * auto-block a lane.
  */
 import { mutation, query } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { requireAdmin } from "./lib/adminGuard";
 
 // Photo upload — returns a short-lived URL the client POSTs the file to.
@@ -16,7 +16,7 @@ export const generateUploadUrl = mutation({
   args: {},
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Sign in to attach a photo.");
+    if (!identity) throw new ConvexError("Sign in to attach a photo.");
     return await ctx.storage.generateUploadUrl();
   },
 });
@@ -31,7 +31,7 @@ export const submitFaultReport = mutation({
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
     const details = args.details.trim();
-    if (!details) throw new Error("Please describe the issue.");
+    if (!details) throw new ConvexError("Please describe the issue.");
 
     let reportedByName: string | undefined;
     const reportedByEmail = identity?.email?.toLowerCase().trim();

@@ -9,6 +9,8 @@
  * mutation that follows instead.
  */
 
+import { ConvexError } from "convex/values";
+
 export interface RateLimitOptions {
   /** Logical action name, e.g. "mate-search", "password-reset". */
   action: string;
@@ -66,5 +68,5 @@ export async function enforceRateLimit(
   message = "Too many requests. Please try again shortly."
 ): Promise<void> {
   const ok = await checkRateLimit(ctx, opts);
-  if (!ok) throw new Error(message);
+  if (!ok) throw new ConvexError(message);
 }

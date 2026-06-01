@@ -11,7 +11,7 @@
  * action has no auth identity, so it must call the un-gated internal variant.
  */
 import { action, internalAction } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { createAuth } from "./auth";
 import { requireAdminAction } from "./lib/adminGuard";
 
@@ -27,7 +27,7 @@ async function doSetPassword(
   {
     const normalized = email.toLowerCase().trim();
     if (password.length < 10) {
-      throw new Error("Password must be at least 10 characters");
+      throw new ConvexError("Password must be at least 10 characters");
     }
 
     const auth = createAuth(ctx as any);
@@ -66,12 +66,12 @@ async function doSetPassword(
         // fall through to the password-update path by re-fetching.
         if (!/already|exists|taken/i.test(msg)) {
           console.error("signUpEmail failed:", err);
-          throw new Error(`Failed to create account: ${msg}`);
+          throw new ConvexError(`Failed to create account: ${msg}`);
         }
         user = await internalAdapter.findUserByEmail(normalized);
         if (user && user.user) user = user.user;
         if (!user?.id) {
-          throw new Error(`Could not resolve user for ${normalized}`);
+          throw new ConvexError(`Could not resolve user for ${normalized}`);
         }
       }
     }

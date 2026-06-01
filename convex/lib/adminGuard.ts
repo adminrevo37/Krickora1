@@ -2,6 +2,7 @@
  * Admin authorization guard for Convex mutations.
  */
 import { authComponent } from "../auth";
+import { ConvexError } from "convex/values";
 
 /**
  * Returns the authenticated Better Auth user, or null if not authenticated.
@@ -23,7 +24,7 @@ export async function requireAdmin(ctx: any): Promise<{
 }> {
   const user = await authComponent.getAuthUser(ctx);
   if (!user) {
-    throw new Error("Not authorized");
+    throw new ConvexError("Not authorized");
   }
   if ((user as any).role === "admin") {
     return user as any;
@@ -39,7 +40,7 @@ export async function requireAdmin(ctx: any): Promise<{
       return user as any;
     }
   }
-  throw new Error("Not authorized");
+  throw new ConvexError("Not authorized");
 }
 
 /**
@@ -54,7 +55,7 @@ export async function requireAdminAction(ctx: any): Promise<{
 }> {
   const user = await authComponent.getAuthUser(ctx);
   if (!user || (user as any).role !== "admin") {
-    throw new Error("Not authorized");
+    throw new ConvexError("Not authorized");
   }
   return user as any;
 }
@@ -84,7 +85,7 @@ export async function requireAdminUnlocked(ctx: any): Promise<{
         .first()
     : null;
   if (!unlock || unlock.expiresAt < Date.now()) {
-    throw new Error(
+    throw new ConvexError(
       "Admin session locked — re-enter your password in the admin panel to continue."
     );
   }

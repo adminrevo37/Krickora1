@@ -1,5 +1,5 @@
 import { query, mutation } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { requireAdmin } from "./lib/adminGuard";
 import { systemCancelBooking, bookingOccupiesLane } from "./lib/systemCancel";
 
@@ -70,7 +70,7 @@ export const addLaneBlock = mutation({
       return args.startHour < bEnd && endHour > b.startHour;
     });
     if (hasBlockConflict) {
-      throw new Error("This time range overlaps an existing lane block.");
+      throw new ConvexError("This time range overlaps an existing lane block.");
     }
 
     const blockId = await ctx.db.insert("laneBlocks", {

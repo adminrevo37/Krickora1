@@ -6,6 +6,7 @@ import type { Id } from '../../convex/_generated/dataModel'
 import { useAuth } from '../hooks/useAuth'
 import { LANES, formatTime } from '../lib/booking-data'
 import { formatAccessCode } from '../lib/access-code'
+import { getErrorMessage } from '../lib/errors'
 
 export const Route = createFileRoute('/add-mate')({
   component: AddMatePage,
@@ -88,7 +89,7 @@ function AddMatePage() {
       const res = await convex.mutation(api.mates.searchCustomerByMobile, { phone })
       setMatch(res ? (res as any) : 'none')
     } catch (err: any) {
-      flash('error', err?.message ?? 'Search failed')
+      flash('error', getErrorMessage(err) ?? 'Search failed')
     } finally {
       setSearching(false)
     }
@@ -102,7 +103,7 @@ function AddMatePage() {
       setMatch(null)
       setPhone('')
     } catch (err: any) {
-      flash('error', err?.message ?? 'Failed to add mate')
+      flash('error', getErrorMessage(err) ?? 'Failed to add mate')
     } finally {
       setBusy(false)
     }
@@ -115,7 +116,7 @@ function AddMatePage() {
       await removeMate({ bookingId: bookingId as Id<'bookings'>, mateCustomerId: mateCustomerId as Id<'customers'> })
       flash('success', `Removed ${name}`)
     } catch (err: any) {
-      flash('error', err?.message ?? 'Failed to remove mate')
+      flash('error', getErrorMessage(err) ?? 'Failed to remove mate')
     } finally {
       setBusy(false)
     }
@@ -126,7 +127,7 @@ function AddMatePage() {
     try {
       await removeSaved({ mateCustomerId: mateCustomerId as Id<'customers'> })
     } catch (err: any) {
-      flash('error', err?.message ?? 'Failed to remove saved mate')
+      flash('error', getErrorMessage(err) ?? 'Failed to remove saved mate')
     } finally {
       setBusy(false)
     }
@@ -149,7 +150,7 @@ function AddMatePage() {
       // Best-effort open of the native Messages app.
       window.location.href = smsHref
     } catch (err: any) {
-      flash('error', err?.message ?? 'Failed to create invite')
+      flash('error', getErrorMessage(err) ?? 'Failed to create invite')
     } finally {
       setBusy(false)
     }

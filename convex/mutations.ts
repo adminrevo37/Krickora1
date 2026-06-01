@@ -1,5 +1,5 @@
 import { mutation, internalMutation } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import { requireAdmin, requireAdminUnlocked, getAuthUserSafe } from "./lib/adminGuard";
 import { issueCredit, redeemCredit, recordCreditMovement } from "./lib/credit";
@@ -613,7 +613,7 @@ export const createBooking = mutation({
     // SEC: authentication is REQUIRED. Previously the ownership + email-verify
     // guards lived inside `if (createIdentity)`, so a logged-out caller skipped
     // them entirely and could create bookings impersonating any email/userId.
-    if (!createIdentity) throw new Error("Authentication required.");
+    if (!createIdentity) throw new ConvexError("Authentication required.");
     let callerCustomer: any = null;
     let isAdminCaller = false;
     if (createIdentity) {
@@ -629,7 +629,7 @@ export const createBooking = mutation({
         : null;
       isAdminCaller = callerCustomer?.role === "admin";
       if (!isForSelf && !isAdminCaller) {
-        throw new Error("You can only create bookings for yourself.");
+        throw new ConvexError("You can only create bookings for yourself.");
       }
 
       // SEC decision #4: a verified email is required to COMPLETE the FIRST
@@ -646,7 +646,7 @@ export const createBooking = mutation({
             .collect();
           const hasPrior = priorByEmail.some((b: any) => b.status !== "cancelled");
           if (!hasPrior) {
-            throw new Error(
+            throw new ConvexError(
               "Please verify your email address before making your first booking. Check your inbox for the verification link."
             );
           }
@@ -660,7 +660,7 @@ export const createBooking = mutation({
       .first();
     const endHour = args.startHour + args.duration / 60;
     if (args.duration < 60) {
-      throw new Error("Minimum booking duration is 1 hour.");
+      throw new ConvexError("Minimum booking duration is 1 hour.");
     }
 
     // Per-day operating hours (SSOT — SPEC_BOOKING_WINDOW #2). Resolve the
@@ -674,13 +674,13 @@ export const createBooking = mutation({
     const OPENING_HOUR = dayHours ? dayHours.open : (siteSettings?.openingHour ?? 7);
     const CLOSING_HOUR = dayHours ? dayHours.close : (siteSettings?.closingHour ?? 21);
     if (dayHours?.closed) {
-      throw new Error("The facility is closed on this day.");
+      throw new ConvexError("The facility is closed on this day.");
     }
     if (args.startHour < OPENING_HOUR) {
-      throw new Error("Booking starts before opening time.");
+      throw new ConvexError("Booking starts before opening time.");
     }
     if (endHour > CLOSING_HOUR) {
-      throw new Error("Booking extends past closing time.");
+      throw new ConvexError("Booking extends past closing time.");
     }
 
     // Weekly-release horizon + lead time + multi-lane cap (SPEC_BOOKING_WINDOW
@@ -704,7 +704,7 @@ export const createBooking = mutation({
       args.date,
       awstNow
     );
-    if (horizonError) throw new Error(horizonError);
+    if (horizonError) throw new ConvexError(horizonError);
 
     if (callerRole !== "admin") {
       const leadError = checkLeadTime(
@@ -713,7 +713,7 @@ export const createBooking = mutation({
         siteSettings?.minBookingNoticeMinutes ?? 10,
         awstNow
       );
-      if (leadError) throw new Error(leadError);
+      if (leadError) throw new ConvexError(leadError);
     }
 
     // Multi-lane cap — customers only; coaches/admin uncapped.
@@ -721,7 +721,7 @@ export const createBooking = mutation({
       const maxLanes = siteSettings?.customerMaxLanesPerBooking ?? 3;
       const totalLanes = 1 + (args.additionalLaneIds?.length ?? 0);
       if (totalLanes > maxLanes) {
-        throw new Error(
+        throw new ConvexError(
           `You can book at most ${maxLanes} lane${maxLanes !== 1 ? "s" : ""} per booking.`
         );
       }
@@ -733,7 +733,7 @@ export const createBooking = mutation({
       .withIndex("by_date", (q: any) => q.eq("date", args.date))
       .first();
     if (closure) {
-      throw new Error(`Facility is closed on this date${closure.reason ? `: ${closure.reason}` : "."}`);
+      throw new ConvexError(`Facility is closed on this date${closure.reason ? `: ${closure.reason}` : "."}`);
     }
 
     // Check for conflicts on all lanes
@@ -753,7 +753,7 @@ export const createBooking = mutation({
       });
 
       if (hasConflict) {
-        throw new Error(
+        throw new ConvexError(
           "This slot is no longer available. Please choose another time."
         );
       }
@@ -770,7 +770,7 @@ export const createBooking = mutation({
         return args.startHour < bEnd && endHour > b.startHour;
       });
       if (hasBlockConflict) {
-        throw new Error("This lane is blocked for service/repair during this time.");
+        throw new ConvexError("This lane is blocked for service/repair during this time.");
       }
     }
 
@@ -789,7 +789,7 @@ export const createBooking = mutation({
         bypassWaitlistHolds: callerRole !== "customer",
       })
     ) {
-      throw new Error("This slot is no longer available. Please choose another time.");
+      throw new ConvexError("This slot is no longer available. Please choose another time.");
     }
 
     // R1/R3 — SERVER-AUTHORITATIVE PRICE. Never trust the client price for a
@@ -814,7 +814,7 @@ export const createBooking = mutation({
       if (args.discountCode) {
         const vd = await validateDiscount(ctx, args.discountCode, args.customerEmail);
         if (!vd) {
-          throw new Error("This discount code is not valid, has expired, or has reached its usage limit.");
+          throw new ConvexError("This discount code is not valid, has expired, or has reached its usage limit.");
         }
         discountedCents = Math.max(0, grossCents - discountAmountCents(grossCents, vd));
       }
@@ -1116,7 +1116,7 @@ export const updateBooking = mutation({
           return effNewStartHour < bEnd && endHourUpd > b.startHour;
         });
         if (hasConflictUpd) {
-          throw new Error("Cannot update — the new time slot conflicts with an existing booking.");
+          throw new ConvexError("Cannot update — the new time slot conflicts with an existing booking.");
         }
       }
     }
@@ -1205,13 +1205,13 @@ export const cancelBooking = mutation({
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.id);
-    if (!booking) throw new Error("Booking not found.");
+    if (!booking) throw new ConvexError("Booking not found.");
     if (booking.status === "cancelled")
-      throw new Error("Already cancelled.");
+      throw new ConvexError("Already cancelled.");
 
     // Auth guard: only booking owner or admin can cancel
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Authentication required to cancel a booking.");
+    if (!identity) throw new ConvexError("Authentication required to cancel a booking.");
     const callerEmail = identity.email?.toLowerCase().trim() ?? "";
     const isOwner =
       (booking.userId != null && booking.userId === identity.subject) ||
@@ -1222,7 +1222,7 @@ export const cancelBooking = mutation({
         .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
         .first();
       if (callerCustomer?.role !== "admin") {
-        throw new Error("You can only cancel your own bookings.");
+        throw new ConvexError("You can only cancel your own bookings.");
       }
     }
 
@@ -1249,7 +1249,7 @@ export const cancelBooking = mutation({
           .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
           .first();
         if (callerCheck?.role !== "admin") {
-          throw new Error(
+          throw new ConvexError(
             `Bookings can only be cancelled at least ${customerCancellationHours} hour${customerCancellationHours !== 1 ? "s" : ""} before the session starts.`
           );
         }
@@ -1560,9 +1560,9 @@ export const editBookingDuration = mutation({
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.id);
-    if (!booking) throw new Error("Booking not found.");
-    if (booking.status === "cancelled") throw new Error("Cannot edit a cancelled booking.");
-    if (booking.userId !== args.userId && booking.customerEmail !== args.userId) throw new Error("You can only edit your own bookings.");
+    if (!booking) throw new ConvexError("Booking not found.");
+    if (booking.status === "cancelled") throw new ConvexError("Cannot edit a cancelled booking.");
+    if (booking.userId !== args.userId && booking.customerEmail !== args.userId) throw new ConvexError("You can only edit your own bookings.");
 
     const editDurSettings = await ctx.db
       .query("siteSettings")
@@ -1571,10 +1571,10 @@ export const editBookingDuration = mutation({
     const CLOSING_HOUR = editDurSettings?.closingHour ?? 21;
     const newEndHour = booking.startHour + args.newDuration / 60;
     if (newEndHour > CLOSING_HOUR) {
-      throw new Error("New duration extends past closing time.");
+      throw new ConvexError("New duration extends past closing time.");
     }
     if (args.newDuration < 30) {
-      throw new Error("Minimum booking duration is 30 minutes.");
+      throw new ConvexError("Minimum booking duration is 30 minutes.");
     }
 
     const isShortening = args.newDuration < booking.duration;
@@ -1594,7 +1594,7 @@ export const editBookingDuration = mutation({
     if (isExtending) {
       const extensionNoticeMin = editDurSettings?.extensionNoticeMinutes ?? 20;
       if (minutesUntil <= extensionNoticeMin) {
-        throw new Error(`Extensions must be made more than ${extensionNoticeMin} minutes before the booking starts.`);
+        throw new ConvexError(`Extensions must be made more than ${extensionNoticeMin} minutes before the booking starts.`);
       }
     }
 
@@ -1603,7 +1603,7 @@ export const editBookingDuration = mutation({
       const cancellationHours = (editDurSettings as any)?.coachLateCancellationHours ?? editDurSettings?.cancellationHoursBefore ?? 24;
       const hoursUntil = minutesUntil / 60;
       if (hoursUntil < cancellationHours) {
-        throw new Error(
+        throw new ConvexError(
           `Bookings can only be shortened at least ${cancellationHours} hour${cancellationHours !== 1 ? "s" : ""} before the session starts. You are charged for the original duration.`
         );
       }
@@ -1627,7 +1627,7 @@ export const editBookingDuration = mutation({
         });
 
         if (hasConflict) {
-          throw new Error(
+          throw new ConvexError(
             "Cannot extend — another booking conflicts with the new duration."
           );
         }
@@ -1702,9 +1702,9 @@ export const rescheduleBooking = mutation({
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.id);
-    if (!booking) throw new Error("Booking not found.");
-    if (booking.status === "cancelled") throw new Error("Cannot reschedule a cancelled booking.");
-    if (booking.status === "tentative") throw new Error("Confirm the tentative booking first, then reschedule.");
+    if (!booking) throw new ConvexError("Booking not found.");
+    if (booking.status === "cancelled") throw new ConvexError("Cannot reschedule a cancelled booking.");
+    if (booking.status === "tentative") throw new ConvexError("Confirm the tentative booking first, then reschedule.");
 
     // SEC-2: server-side identity for auth. B-1: rescheduleBooking is the COACH
     // PLANNER path only (drag/resize of coach sessions — no online payment).
@@ -1713,7 +1713,7 @@ export const rescheduleBooking = mutation({
     // non-admin may reschedule ONLY a coach booking they own. This closes the
     // customer-bypass that let a crafted request skip modifyBooking's checks.
     const reschedIdentity = await ctx.auth.getUserIdentity();
-    if (!reschedIdentity) throw new Error("Authentication required.");
+    if (!reschedIdentity) throw new ConvexError("Authentication required.");
     const reschedCallerEmail = reschedIdentity.email?.toLowerCase().trim() ?? "";
     const reschedCaller = reschedCallerEmail ? await ctx.db
       .query("customers")
@@ -1729,10 +1729,10 @@ export const rescheduleBooking = mutation({
 
     if (!isAdminCaller) {
       if (!booking.isCoachBooking) {
-        throw new Error("Use Modify to change this booking.");
+        throw new ConvexError("Use Modify to change this booking.");
       }
       if (!isOwner) {
-        throw new Error("You can only reschedule your own bookings.");
+        throw new ConvexError("You can only reschedule your own bookings.");
       }
     }
 
@@ -1753,7 +1753,7 @@ export const rescheduleBooking = mutation({
     const hoursUntilOriginal = (originalStart.getTime() - awstNow.getTime()) / (1000 * 60 * 60);
 
     if (hoursUntilOriginal < cancellationHours) {
-      throw new Error(
+      throw new ConvexError(
         `Bookings can only be rescheduled at least ${cancellationHours} hour${cancellationHours !== 1 ? "s" : ""} before the session starts.`
       );
     }
@@ -1761,7 +1761,7 @@ export const rescheduleBooking = mutation({
     // Coaches cannot self-reschedule within N hours of booking start
     const coachFreezeHours = settings?.coachRescheduleFreezeHours ?? 24;
     if (booking.isCoachBooking && hoursUntilOriginal < coachFreezeHours && !isAdminCaller) {
-      throw new Error(
+      throw new ConvexError(
         `Coach bookings cannot be rescheduled within ${coachFreezeHours} hours of the session start time.`
       );
     }
@@ -1778,16 +1778,16 @@ export const rescheduleBooking = mutation({
     const OPENING_HOUR = rDayHours ? rDayHours.open : (settings?.openingHour ?? 7);
     const CLOSING_HOUR = rDayHours ? rDayHours.close : (settings?.closingHour ?? 21);
     if (rDayHours?.closed) {
-      throw new Error("The facility is closed on this day.");
+      throw new ConvexError("The facility is closed on this day.");
     }
     if (args.newStartHour < OPENING_HOUR) {
-      throw new Error(`Bookings cannot start before ${OPENING_HOUR}:00.`);
+      throw new ConvexError(`Bookings cannot start before ${OPENING_HOUR}:00.`);
     }
     if (newEndHour > CLOSING_HOUR) {
-      throw new Error("New booking extends past closing time.");
+      throw new ConvexError("New booking extends past closing time.");
     }
     if (args.newDuration < 30) {
-      throw new Error("Minimum booking duration is 30 minutes.");
+      throw new ConvexError("Minimum booking duration is 30 minutes.");
     }
 
     // Reject reschedules onto a closed date (closures table).
@@ -1796,7 +1796,7 @@ export const rescheduleBooking = mutation({
       .withIndex("by_date", (q: any) => q.eq("date", args.newDate))
       .first();
     if (rClosure) {
-      throw new Error(`Facility is closed on this date${rClosure.reason ? `: ${rClosure.reason}` : "."}`);
+      throw new ConvexError(`Facility is closed on this date${rClosure.reason ? `: ${rClosure.reason}` : "."}`);
     }
 
     // Validate new booking is in the future
@@ -1808,7 +1808,7 @@ export const rescheduleBooking = mutation({
     const minNotice = settings?.minBookingNoticeMinutes ?? 10;
     const minutesUntilNew = (new Date(newStartAwstStr).getTime() - awstNow.getTime()) / (1000 * 60);
     if (minutesUntilNew < minNotice) {
-      throw new Error(`New booking must be at least ${minNotice} minutes in the future.`);
+      throw new ConvexError(`New booking must be at least ${minNotice} minutes in the future.`);
     }
 
     // Check for conflicts at the new slot (excluding the current booking)
@@ -1830,7 +1830,7 @@ export const rescheduleBooking = mutation({
       });
 
       if (hasConflict) {
-        throw new Error(
+        throw new ConvexError(
           "The new time slot is not available. Please choose another time."
         );
       }
@@ -1845,7 +1845,7 @@ export const rescheduleBooking = mutation({
         return args.newStartHour < bEnd && newEndHour > bl.startHour;
       });
       if (hasBlockConflict) {
-        throw new Error("This lane is blocked for service/repair during this time.");
+        throw new ConvexError("This lane is blocked for service/repair during this time.");
       }
     }
 
@@ -1862,7 +1862,7 @@ export const rescheduleBooking = mutation({
         bypassWaitlistHolds: true,
       })
     ) {
-      throw new Error("The new time slot is not available. Please choose another time.");
+      throw new ConvexError("The new time slot is not available. Please choose another time.");
     }
 
     // Calculate new price (use settings-driven rate — fixes hardcoded * 15 bug)
@@ -2045,11 +2045,11 @@ export const modifyBooking = mutation({
     droppedAthletes?: string[];
   }> => {
     const booking = await ctx.db.get(args.id);
-    if (!booking) throw new Error("Booking not found.");
-    if (booking.status === "cancelled") throw new Error("Cannot modify a cancelled booking.");
-    if (booking.status === "tentative") throw new Error("Confirm the tentative booking first, then modify it.");
+    if (!booking) throw new ConvexError("Booking not found.");
+    if (booking.status === "cancelled") throw new ConvexError("Cannot modify a cancelled booking.");
+    if (booking.status === "tentative") throw new ConvexError("Confirm the tentative booking first, then modify it.");
     if ((booking as any).status === "pending_edit_payment") {
-      throw new Error("A payment for a previous change is still pending. Complete or cancel it first.");
+      throw new ConvexError("A payment for a previous change is still pending. Complete or cancel it first.");
     }
 
     // ── Auth ──────────────────────────────────────────────────────────────────
@@ -2065,7 +2065,7 @@ export const modifyBooking = mutation({
       : null;
     const isAdmin = callerCustomer?.role === "admin";
     if (!isOwner && !isAdmin) {
-      throw new Error("You can only modify your own bookings.");
+      throw new ConvexError("You can only modify your own bookings.");
     }
 
     const settings = await ctx.db
@@ -2105,22 +2105,22 @@ export const modifyBooking = mutation({
     const dayHours = settings?.dailyHours?.find((h: any) => h.day === dowName);
     const OPENING_HOUR = dayHours ? dayHours.open : (settings?.openingHour ?? 7);
     const CLOSING_HOUR = dayHours ? dayHours.close : (settings?.closingHour ?? 21);
-    if (dayHours?.closed) throw new Error("The facility is closed on that day.");
+    if (dayHours?.closed) throw new ConvexError("The facility is closed on that day.");
 
     const minDuration = isCoach ? 30 : 60;
     if (effDuration < minDuration) {
-      throw new Error(`Minimum booking duration is ${minDuration} minutes.`);
+      throw new ConvexError(`Minimum booking duration is ${minDuration} minutes.`);
     }
     const newEndHour = effStart + effDuration / 60;
-    if (effStart < OPENING_HOUR) throw new Error(`Bookings cannot start before ${OPENING_HOUR}:00.`);
-    if (newEndHour > CLOSING_HOUR) throw new Error("That change extends past closing time.");
+    if (effStart < OPENING_HOUR) throw new ConvexError(`Bookings cannot start before ${OPENING_HOUR}:00.`);
+    if (newEndHour > CLOSING_HOUR) throw new ConvexError("That change extends past closing time.");
 
     const closure = await ctx.db
       .query("closures")
       .withIndex("by_date", (q: any) => q.eq("date", effDate))
       .first();
     if (closure) {
-      throw new Error(`The facility is closed on that date${closure.reason ? `: ${closure.reason}` : "."}`);
+      throw new ConvexError(`The facility is closed on that date${closure.reason ? `: ${closure.reason}` : "."}`);
     }
 
     // Conflict check on every lane (excluding this booking).
@@ -2135,7 +2135,7 @@ export const modifyBooking = mutation({
         const bEnd = b.startHour + b.duration / 60;
         return effStart < bEnd && newEndHour > b.startHour;
       });
-      if (conflict) throw new Error("That time slot is not available. Please choose another.");
+      if (conflict) throw new ConvexError("That time slot is not available. Please choose another.");
 
       const laneBlocks = await ctx.db
         .query("laneBlocks")
@@ -2145,7 +2145,7 @@ export const modifyBooking = mutation({
         const bEnd = b.startHour + b.duration / 60;
         return effStart < bEnd && newEndHour > b.startHour;
       });
-      if (blocked) throw new Error("That lane is blocked for service/repair during this time.");
+      if (blocked) throw new ConvexError("That lane is blocked for service/repair during this time.");
     }
 
     const awstNow = getAWSTNow();
@@ -2160,7 +2160,7 @@ export const modifyBooking = mutation({
         excludeBookingId: args.id.toString(),
       })
     ) {
-      throw new Error("That time slot is not available. Please choose another.");
+      throw new ConvexError("That time slot is not available. Please choose another.");
     }
 
     if (!isAdmin) {
@@ -2170,13 +2170,13 @@ export const modifyBooking = mutation({
         settings?.minBookingNoticeMinutes ?? 10,
         awstNow
       );
-      if (leadError) throw new Error(leadError);
+      if (leadError) throw new ConvexError(leadError);
 
       const role: WindowRole = isCoach ? "coach" : "customer";
       const tier: WindowTier =
         callerCustomer?.coachTier === "L2" || callerCustomer?.coachTier === "BowlingL2" ? "L2" : "L1";
       const horizonError = checkBookingHorizon(role, tier, settings ?? {}, effDate, awstNow);
-      if (horizonError) throw new Error(horizonError);
+      if (horizonError) throw new ConvexError(horizonError);
     }
 
     // ── Time-lock matrix ────────────────────────────────────────────────────
@@ -2187,7 +2187,7 @@ export const modifyBooking = mutation({
     const hoursUntilOriginal = (originalStart.getTime() - awstNow.getTime()) / (1000 * 60 * 60);
 
     if (!isAdmin && hoursUntilOriginal <= 0) {
-      throw new Error("This session has already started — it can no longer be modified.");
+      throw new ConvexError("This session has already started — it can no longer be modified.");
     }
 
     // ── Pricing (server-authoritative) ────────────────────────────────────────
@@ -2218,7 +2218,7 @@ export const modifyBooking = mutation({
     if (isCoach && !isAdmin) {
       const freezeHours = settings?.coachRescheduleFreezeHours ?? 24;
       if (hoursUntilOriginal < freezeHours) {
-        throw new Error(`Coach bookings cannot be modified within ${freezeHours} hours of the session start.`);
+        throw new ConvexError(`Coach bookings cannot be modified within ${freezeHours} hours of the session start.`);
       }
     }
 
@@ -2229,33 +2229,33 @@ export const modifyBooking = mutation({
       if (insideWindow) {
         const within = `within ${cancelHours} hour${cancelHours !== 1 ? "s" : ""} of the start time`;
         if (dateChanged) {
-          throw new Error(`You can't change the date ${within}.`);
+          throw new ConvexError(`You can't change the date ${within}.`);
         }
         const movedLater = effDate === booking.date && effStart > booking.startHour;
         if (movedLater) {
-          throw new Error(`You can't push the start later ${within}. You can move it earlier or extend it.`);
+          throw new ConvexError(`You can't push the start later ${within}. You can move it earlier or extend it.`);
         }
         if (effStart < booking.startHour) {
           const maxEarlier = settings?.modifyMoveEarlierMaxHours ?? 1;
           const earlierBy = booking.startHour - effStart;
           if (earlierBy > maxEarlier + 1e-9) {
-            throw new Error(`You can move the start at most ${maxEarlier} hour${maxEarlier !== 1 ? "s" : ""} earlier ${within}.`);
+            throw new ConvexError(`You can move the start at most ${maxEarlier} hour${maxEarlier !== 1 ? "s" : ""} earlier ${within}.`);
           }
         }
         if (durationChanged && effDuration < booking.duration) {
-          throw new Error(`You can't shorten the session ${within}.`);
+          throw new ConvexError(`You can't shorten the session ${within}.`);
         }
         if (priceDiffCents < 0) {
-          throw new Error(`Changes that reduce the price (and add credit) must be made before the cutoff.`);
+          throw new ConvexError(`Changes that reduce the price (and add credit) must be made before the cutoff.`);
         }
         const isExtend = durationChanged && effDuration > booking.duration;
         if (priceDiffCents > 0 && !isExtend) {
-          throw new Error(`Only extending the session is allowed when it increases the price ${within}.`);
+          throw new ConvexError(`Only extending the session is allowed when it increases the price ${within}.`);
         }
         if (isExtend) {
           const extNoticeMin = settings?.extensionNoticeMinutes ?? 20;
           if (hoursUntilOriginal * 60 < extNoticeMin) {
-            throw new Error(`Extensions must be made at least ${extNoticeMin} minutes before the start.`);
+            throw new ConvexError(`Extensions must be made at least ${extNoticeMin} minutes before the start.`);
           }
         }
       }
@@ -2398,9 +2398,9 @@ export const updateBookingAthleteSlots = mutation({
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.id);
-    if (!booking) throw new Error("Booking not found.");
-    if (!booking.isCoachBooking) throw new Error("Only coach bookings can have athlete allocations.");
-    if (booking.status === "cancelled") throw new Error("Cannot edit a cancelled booking.");
+    if (!booking) throw new ConvexError("Booking not found.");
+    if (!booking.isCoachBooking) throw new ConvexError("Only coach bookings can have athlete allocations.");
+    if (booking.status === "cancelled") throw new ConvexError("Cannot edit a cancelled booking.");
     // Bug #5: authorize on identity, not name. Allow if: booking owner (by id or
     // email), OR the coach whose email matches the booking's, OR an admin. The
     // name comparison is dropped (two coaches sharing a name could collide).
@@ -2418,7 +2418,7 @@ export const updateBookingAthleteSlots = mutation({
         (requesterById?._id === booking.userId ||
           requesterById?.email === booking.customerEmail);
       if (!isAdmin && !isAssignedCoach) {
-        throw new Error("You can only edit your own bookings.");
+        throw new ConvexError("You can only edit your own bookings.");
       }
     }
 
@@ -2432,10 +2432,10 @@ export const updateBookingAthleteSlots = mutation({
     for (const slot of args.athleteSlots) {
       const slotEnd = slot.startHour + slot.durationMinutes / 60;
       if (slot.startHour < booking.startHour || slotEnd > bookingEnd + 0.001) {
-        throw new Error(`Athlete "${slot.athleteName}" session falls outside the booking window.`);
+        throw new ConvexError(`Athlete "${slot.athleteName}" session falls outside the booking window.`);
       }
       if (slot.durationMinutes < minAthleteMins) {
-        throw new Error(`Minimum athlete session is ${minAthleteMins} minutes.`);
+        throw new ConvexError(`Minimum athlete session is ${minAthleteMins} minutes.`);
       }
     }
 
@@ -2452,7 +2452,7 @@ export const updateBookingAthleteSlots = mutation({
       if (conflicts.length > 0) {
         // CONFLICT:: prefix lets the client recognise this as a soft warning and
         // re-submit with confirmedOverride after the coach clicks Proceed.
-        throw new Error("CONFLICT::" + conflicts.join(" "));
+        throw new ConvexError("CONFLICT::" + conflicts.join(" "));
       }
     }
 
@@ -2586,7 +2586,7 @@ export const copyCoachWeek = mutation({
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Authentication required.");
+    if (!identity) throw new ConvexError("Authentication required.");
     const callerEmail = identity.email?.toLowerCase().trim() ?? "";
 
     // Resolve the coach record (by email or _id).
@@ -2595,18 +2595,18 @@ export const copyCoachWeek = mutation({
       .withIndex("by_email", (q: any) => q.eq("email", args.coachId.toLowerCase().trim()))
       .first();
     if (!coach) coach = await ctx.db.get(args.coachId as any).catch(() => null);
-    if (!coach || coach.role !== "coach") throw new Error("Coach not found.");
+    if (!coach || coach.role !== "coach") throw new ConvexError("Coach not found.");
 
     const callerCustomer = callerEmail
       ? await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", callerEmail)).first()
       : null;
     const isAdmin = callerCustomer?.role === "admin";
     if (!isAdmin && coach.email.toLowerCase() !== callerEmail) {
-      throw new Error("You can only copy your own week.");
+      throw new ConvexError("You can only copy your own week.");
     }
 
     const delta = diffDaysKey(args.fromWeekStart, args.toWeekStart);
-    if (delta === 0) throw new Error("Source and target weeks are the same.");
+    if (delta === 0) throw new ConvexError("Source and target weeks are the same.");
     const fromWeekEnd = addDaysKey(args.fromWeekStart, 6);
 
     const settings = await ctx.db
@@ -2816,7 +2816,7 @@ export const upsertCustomer = mutation({
   handler: async (ctx, args) => {
     // Require authentication for all callers
     const authUser = await getAuthUserSafe(ctx);
-    if (!authUser) throw new Error("Not authorized");
+    if (!authUser) throw new ConvexError("Not authorized");
 
     const callerEmail = ((authUser as any).email ?? "").toLowerCase().trim();
     const normalizedEmail = args.email.toLowerCase().trim();
@@ -2833,8 +2833,8 @@ export const upsertCustomer = mutation({
 
     // Non-admins may only upsert their own record and cannot elevate role
     if (!isAdmin) {
-      if (callerEmail !== normalizedEmail) throw new Error("Not authorized");
-      if (args.role && args.role !== "customer") throw new Error("Not authorized");
+      if (callerEmail !== normalizedEmail) throw new ConvexError("Not authorized");
+      if (args.role && args.role !== "customer") throw new ConvexError("Not authorized");
     }
     const existing = await ctx.db
       .query("customers")
@@ -2906,7 +2906,7 @@ export const updateCustomerByEmail = mutation({
   handler: async (ctx, args) => {
     // SEC-3: Must be authenticated; can update own profile or be admin
     const updByEmailIdentity = await ctx.auth.getUserIdentity();
-    if (!updByEmailIdentity) throw new Error("Authentication required.");
+    if (!updByEmailIdentity) throw new ConvexError("Authentication required.");
     const updCallerEmail = updByEmailIdentity.email?.toLowerCase().trim() ?? "";
     const normalizedEmail = args.email.toLowerCase().trim();
     let updIsAdminCaller = false;
@@ -2916,7 +2916,7 @@ export const updateCustomerByEmail = mutation({
         .withIndex("by_email", (q: any) => q.eq("email", updCallerEmail))
         .first();
       if (updCallerCustomer?.role !== "admin") {
-        throw new Error("You can only update your own profile.");
+        throw new ConvexError("You can only update your own profile.");
       }
       updIsAdminCaller = true;
     } else {
@@ -3002,7 +3002,7 @@ export const createCoachInvite = mutation({
       .withIndex("by_email", (q: any) => q.eq("email", normalizedEmail))
       .first();
     if (existingCustomer) {
-      throw new Error("An account with this email already exists.");
+      throw new ConvexError("An account with this email already exists.");
     }
 
     const existingInvite = await ctx.db
@@ -3010,7 +3010,7 @@ export const createCoachInvite = mutation({
       .withIndex("by_email", (q: any) => q.eq("email", normalizedEmail))
       .first();
     if (existingInvite && !existingInvite.used) {
-      throw new Error("An unused invite already exists for this email.");
+      throw new ConvexError("An unused invite already exists for this email.");
     }
 
     const id = await ctx.db.insert("coachInvites", {
@@ -3037,7 +3037,7 @@ export const createCustomer = mutation({
     await requireAdmin(ctx);
     const normalizedEmail = args.email.toLowerCase().trim();
     if (!normalizedEmail || !args.name.trim()) {
-      throw new Error("Name and email are required.");
+      throw new ConvexError("Name and email are required.");
     }
 
     const existing = await ctx.db
@@ -3083,7 +3083,7 @@ export const createCoach = mutation({
     const fullName = (args.name && args.name.trim())
       || [args.firstName?.trim(), args.lastName?.trim()].filter(Boolean).join(" ").trim();
     if (!normalizedEmail || !fullName) {
-      throw new Error("First name, last name, and email are required.");
+      throw new ConvexError("First name, last name, and email are required.");
     }
 
     const existing = await ctx.db
@@ -3092,7 +3092,7 @@ export const createCoach = mutation({
       .first();
     if (existing) {
       if (existing.role === "coach") {
-        throw new Error("This user is already a coach.");
+        throw new ConvexError("This user is already a coach.");
       }
       await ctx.db.patch(existing._id, {
         role: "coach",
@@ -3230,7 +3230,7 @@ export const sendBookingEmail = mutation({
   handler: async (ctx, args) => {
     // SEC-4: Must be authenticated; can send to self or be admin
     const sendEmailIdentity = await ctx.auth.getUserIdentity();
-    if (!sendEmailIdentity) throw new Error("Authentication required.");
+    if (!sendEmailIdentity) throw new ConvexError("Authentication required.");
     const sendCallerEmail = sendEmailIdentity.email?.toLowerCase().trim() ?? "";
     if (sendCallerEmail !== args.customerEmail.toLowerCase().trim()) {
       const sendCallerCustomer = await ctx.db
@@ -3238,7 +3238,7 @@ export const sendBookingEmail = mutation({
         .withIndex("by_email", (q: any) => q.eq("email", sendCallerEmail))
         .first();
       if (sendCallerCustomer?.role !== "admin") {
-        throw new Error("You can only send booking emails for your own bookings.");
+        throw new ConvexError("You can only send booking emails for your own bookings.");
       }
     }
     await ctx.scheduler.runAfter(
@@ -3318,7 +3318,7 @@ export const addToWaitlist = mutation({
     // from the caller's auth — a caller cannot inject waitlist entries under
     // another user's id/email (which would drive that user's offer emails).
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Authentication required.");
+    if (!identity) throw new ConvexError("Authentication required.");
     const authedEmail = identity.email ?? null;
     const authedName = (identity as any)?.name ?? null;
     const callerUserId = identity.subject;
@@ -3365,9 +3365,9 @@ export const removeFromWaitlist = mutation({
   args: { id: v.id("waitlist") },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Authentication required.");
+    if (!identity) throw new ConvexError("Authentication required.");
     const entry = await ctx.db.get(args.id);
-    if (!entry) throw new Error("Waitlist entry not found.");
+    if (!entry) throw new ConvexError("Waitlist entry not found.");
     const callerEmail = identity.email?.toLowerCase().trim() ?? "";
     const isOwner =
       entry.userId === identity.subject ||
@@ -3378,7 +3378,7 @@ export const removeFromWaitlist = mutation({
         .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
         .first();
       if (callerCustomer?.role !== "admin") {
-        throw new Error("You can only remove your own waitlist entries.");
+        throw new ConvexError("You can only remove your own waitlist entries.");
       }
     }
     await ctx.db.delete(args.id);
@@ -3419,9 +3419,9 @@ export const dismissWaitlistNotification = mutation({
   handler: async (ctx, args) => {
     // SEC-5: Only the notification owner (or admin) can dismiss it
     const dismissIdentity = await ctx.auth.getUserIdentity();
-    if (!dismissIdentity) throw new Error("Authentication required.");
+    if (!dismissIdentity) throw new ConvexError("Authentication required.");
     const notification = await ctx.db.get(args.id);
-    if (!notification) throw new Error("Notification not found.");
+    if (!notification) throw new ConvexError("Notification not found.");
     const isOwner =
       notification.userId === dismissIdentity.subject ||
       (notification as any).userEmail?.toLowerCase() === dismissIdentity.email?.toLowerCase();
@@ -3431,7 +3431,7 @@ export const dismissWaitlistNotification = mutation({
         .withIndex("by_email", (q: any) => q.eq("email", dismissIdentity.email?.toLowerCase() ?? ""))
         .first();
       if (dismissCallerCustomer?.role !== "admin") {
-        throw new Error("You can only dismiss your own notifications.");
+        throw new ConvexError("You can only dismiss your own notifications.");
       }
     }
     await ctx.db.patch(args.id, { dismissed: true });
@@ -3616,7 +3616,7 @@ export const addCustomerCredit = mutation({
       });
       customer = await ctx.db.get(newId);
     }
-    if (!customer) throw new Error("Customer not found.");
+    if (!customer) throw new ConvexError("Customer not found.");
     // Route through the credit helper so the movement is logged to creditLedger.
     await recordCreditMovement(ctx, {
       customer,
@@ -3632,7 +3632,7 @@ export const useCustomerCredit = mutation({
   args: { email: v.string(), amount: v.number() },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Authentication required.");
+    if (!identity) throw new ConvexError("Authentication required.");
     const callerEmail = identity.email?.toLowerCase().trim() ?? "";
     const targetEmail = args.email.toLowerCase().trim();
     if (callerEmail !== targetEmail) {
@@ -3641,7 +3641,7 @@ export const useCustomerCredit = mutation({
         .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
         .first();
       if (callerCustomer?.role !== "admin") {
-        throw new Error("You can only use your own credits.");
+        throw new ConvexError("You can only use your own credits.");
       }
     }
     // NOTE: credit redemption for bookings is now deducted server-side at
@@ -3714,12 +3714,12 @@ export const createDiscountCode = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
     const normalised = args.code.trim().toLowerCase();
-    if (!normalised) throw new Error("Code cannot be empty.");
+    if (!normalised) throw new ConvexError("Code cannot be empty.");
     const existing = await ctx.db
       .query("discountCodes")
       .withIndex("by_code", (q: any) => q.eq("code", normalised))
       .first();
-    if (existing) throw new Error(`Code "${normalised}" already exists.`);
+    if (existing) throw new ConvexError(`Code "${normalised}" already exists.`);
     const type = args.discountType ?? "percent";
     return await ctx.db.insert("discountCodes", {
       code: normalised,

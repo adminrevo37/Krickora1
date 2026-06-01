@@ -3,7 +3,7 @@
 // sees). One account -> many athletes; per-athlete coach assignment lives here.
 import { query, mutation } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { requireAdmin, getCallerContext } from "./lib/adminGuard";
 import { getAWSTNow } from "./lib/bookingWindow";
 
@@ -26,14 +26,14 @@ async function authorizeAccount(
   accountCustomerId?: string
 ): Promise<{ accountId: string; isAdmin: boolean }> {
   const caller = await getCallerContext(ctx);
-  if (!caller.identity) throw new Error("Authentication required.");
+  if (!caller.identity) throw new ConvexError("Authentication required.");
   const callerCustomer = await getCallerCustomer(ctx);
   // Default target = the caller's own account.
   const targetId = (accountCustomerId as string) || callerCustomer?._id;
-  if (!targetId) throw new Error("No account found for the current user.");
+  if (!targetId) throw new ConvexError("No account found for the current user.");
   if (caller.isAdmin) return { accountId: targetId, isAdmin: true };
   if (!callerCustomer || callerCustomer._id !== targetId) {
-    throw new Error("You can only manage your own athletes.");
+    throw new ConvexError("You can only manage your own athletes.");
   }
   return { accountId: targetId, isAdmin: false };
 }
@@ -95,7 +95,7 @@ export const createAthlete = mutation({
   handler: async (ctx, args) => {
     const { accountId } = await authorizeAccount(ctx, args.accountCustomerId);
     const name = args.name.trim();
-    if (!name) throw new Error("Athlete name is required.");
+    if (!name) throw new ConvexError("Athlete name is required.");
     return await ctx.db.insert("athletes", {
       accountCustomerId: accountId as any,
       name,
@@ -117,12 +117,12 @@ export const updateAthlete = mutation({
   },
   handler: async (ctx, args) => {
     const athlete = await ctx.db.get(args.athleteId);
-    if (!athlete) throw new Error("Athlete not found.");
+    if (!athlete) throw new ConvexError("Athlete not found.");
     await authorizeAccount(ctx, athlete.accountCustomerId);
     const updates: Record<string, any> = {};
     if (args.name !== undefined) {
       const n = args.name.trim();
-      if (!n) throw new Error("Athlete name cannot be empty.");
+      if (!n) throw new ConvexError("Athlete name cannot be empty.");
       updates.name = n;
     }
     if (args.dob !== undefined) updates.dob = args.dob.trim() || undefined;
@@ -141,7 +141,7 @@ export const setAthleteCoaches = mutation({
   },
   handler: async (ctx, args) => {
     const athlete = await ctx.db.get(args.athleteId);
-    if (!athlete) throw new Error("Athlete not found.");
+    if (!athlete) throw new ConvexError("Athlete not found.");
     await authorizeAccount(ctx, athlete.accountCustomerId);
     // De-dupe + drop empties.
     const coachIds = Array.from(
@@ -156,10 +156,10 @@ export const removeAthlete = mutation({
   args: { athleteId: v.id("athletes") },
   handler: async (ctx, args) => {
     const athlete = await ctx.db.get(args.athleteId);
-    if (!athlete) throw new Error("Athlete not found.");
+    if (!athlete) throw new ConvexError("Athlete not found.");
     await authorizeAccount(ctx, athlete.accountCustomerId);
     if (await hasFutureAllocations(ctx, args.athleteId as string)) {
-      throw new Error(
+      throw new ConvexError(
         "This athlete has upcoming coaching sessions. Ask the coach to remove them from those sessions first."
       );
     }
@@ -183,7 +183,7 @@ export const addAthleteToCoach = mutation({
   },
   handler: async (ctx, args) => {
     const caller = await getCallerContext(ctx);
-    if (!caller.identity) throw new Error("Authentication required.");
+    if (!caller.identity) throw new ConvexError("Authentication required.");
     const callerCustomer = await getCallerCustomer(ctx);
     // Only the coach themselves (by _id or email) or an admin may add.
     const isSelfCoach =
@@ -192,7 +192,7 @@ export const addAthleteToCoach = mutation({
       (callerCustomer._id === args.coachId ||
         callerCustomer.email === args.coachId.toLowerCase().trim());
     if (!caller.isAdmin && !isSelfCoach) {
-      throw new Error("Only the coach or an admin can add athletes.");
+      throw new ConvexError("Only the coach or an admin can add athletes.");
     }
     // Normalise the coach to their _id so athlete records store ids, not emails.
     let coachIdNorm = args.coachId;
@@ -208,7 +208,7 @@ export const addAthleteToCoach = mutation({
     const parentEmail = args.parentEmail.toLowerCase().trim();
     const childName = args.childName.trim();
     if (!parentEmail || !childName) {
-      throw new Error("Parent email and child name are required.");
+      throw new ConvexError("Parent email and child name are required.");
     }
 
     const account = await ctx.db
@@ -297,7 +297,7 @@ export const removeAthleteFromCoach = mutation({
   },
   handler: async (ctx, args) => {
     const caller = await getCallerContext(ctx);
-    if (!caller.identity) throw new Error("Authentication required.");
+    if (!caller.identity) throw new ConvexError("Authentication required.");
     const callerCustomer = await getCallerCustomer(ctx);
     const isSelfCoach =
       callerCustomer &&
@@ -305,10 +305,10 @@ export const removeAthleteFromCoach = mutation({
       (callerCustomer._id === args.coachId ||
         callerCustomer.email === args.coachId.toLowerCase().trim());
     if (!caller.isAdmin && !isSelfCoach) {
-      throw new Error("Only the coach or an admin can remove athletes from a roster.");
+      throw new ConvexError("Only the coach or an admin can remove athletes from a roster.");
     }
     const athlete = await ctx.db.get(args.athleteId);
-    if (!athlete) throw new Error("Athlete not found.");
+    if (!athlete) throw new ConvexError("Athlete not found.");
     // Normalise the coach to their _id (callers may pass an email).
     let coachIdNorm = args.coachId;
     const coachByEmail = await ctx.db

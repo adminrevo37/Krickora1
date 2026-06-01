@@ -2,12 +2,12 @@
 
 import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import Stripe from "stripe";
 
 function getStripe() {
   const key = process.env.STRIPE_SECRET_KEY;
-  if (!key) throw new Error("STRIPE_SECRET_KEY not configured");
+  if (!key) throw new ConvexError("STRIPE_SECRET_KEY not configured");
   return new Stripe(key);
 }
 
@@ -39,19 +39,19 @@ export const createCheckoutSession = action({
     // createBooking) minus the customer's server-clamped credit. The client value
     // (args.priceInCents) is ignored for the charge.
     if (!args.bookingId) {
-      throw new Error("A booking must be created before checkout.");
+      throw new ConvexError("A booking must be created before checkout.");
     }
     const amountToChargeCents: number | null = await ctx.runQuery(
       internal.queries.getCheckoutAmountCents,
       { bookingId: args.bookingId }
     );
     if (amountToChargeCents == null) {
-      throw new Error("Booking not found for checkout.");
+      throw new ConvexError("Booking not found for checkout.");
     }
     if (amountToChargeCents < 50) {
       // Below Stripe's A$0.50 minimum — a $0 booking should use the free/comp path,
       // not Stripe. Guards against a fully credit/discount-covered booking reaching here.
-      throw new Error("This booking does not require a card payment.");
+      throw new ConvexError("This booking does not require a card payment.");
     }
 
     const formatHour = (h: number) => {
@@ -190,7 +190,7 @@ export const createPaymentLink = action({
     const plIsAdmin = plEmail
       ? await ctx.runQuery(internal.queries.isAdminEmail, { email: plEmail })
       : false;
-    if (!plIsAdmin) throw new Error("Not authorized — admin only.");
+    if (!plIsAdmin) throw new ConvexError("Not authorized — admin only.");
 
     const stripe = getStripe();
 
@@ -251,7 +251,7 @@ export const listRecentPayments = action({
     const lrpIsAdmin = lrpEmail
       ? await ctx.runQuery(internal.queries.isAdminEmail, { email: lrpEmail })
       : false;
-    if (!lrpIsAdmin) throw new Error("Not authorized — admin only.");
+    if (!lrpIsAdmin) throw new ConvexError("Not authorized — admin only.");
 
     const stripe = getStripe();
     const charges = await stripe.charges.list({

@@ -1,5 +1,5 @@
 import { query, mutation } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import { getCallerContext } from "./lib/adminGuard";
 import { enforceRateLimit } from "./lib/rateLimit";
@@ -270,16 +270,16 @@ export const listMateBookings = query({
 // (owner-by-email or admin), and that mates are valid for this booking.
 async function authorizeMateManagement(ctx: any, bookingId: string) {
   const caller = await getCallerContext(ctx);
-  if (!caller.identity) throw new Error("Authentication required.");
+  if (!caller.identity) throw new ConvexError("Authentication required.");
   const booking = await ctx.db.get(bookingId);
-  if (!booking) throw new Error("Booking not found.");
+  if (!booking) throw new ConvexError("Booking not found.");
   if (booking.isCoachBooking) {
-    throw new Error("Mates can't be added to coaching sessions.");
+    throw new ConvexError("Mates can't be added to coaching sessions.");
   }
   const callerCustomer = await getCallerCustomer(ctx);
   const isOwner = callerCustomer && bookingOwnedBy(booking, callerCustomer);
   if (!isOwner && !caller.isAdmin) {
-    throw new Error("You can only manage mates on your own bookings.");
+    throw new ConvexError("You can only manage mates on your own bookings.");
   }
   return { booking, callerCustomer, isAdmin: caller.isAdmin };
 }
@@ -294,9 +294,9 @@ export const addMateToBooking = mutation({
   },
   handler: async (ctx, args) => {
     const { booking, callerCustomer } = await authorizeMateManagement(ctx, args.bookingId);
-    if (booking.status === "cancelled") throw new Error("This booking has been cancelled.");
+    if (booking.status === "cancelled") throw new ConvexError("This booking has been cancelled.");
     if (bookingStartMs(booking.date, booking.startHour) <= awstNowMs()) {
-      throw new Error("This session has already started — mates can't be added.");
+      throw new ConvexError("This session has already started — mates can't be added.");
     }
 
     const settings = await ctx.db
@@ -306,18 +306,18 @@ export const addMateToBooking = mutation({
     const maxMates = settings?.maxMatesPerBooking ?? 3;
 
     const mate = await ctx.db.get(args.mateCustomerId);
-    if (!mate) throw new Error("That account no longer exists.");
+    if (!mate) throw new ConvexError("That account no longer exists.");
 
     // The owner (by email) can't add themselves as a mate.
     if (mate.email && booking.customerEmail?.toLowerCase() === mate.email.toLowerCase()) {
-      throw new Error("You're already on this booking.");
+      throw new ConvexError("You're already on this booking.");
     }
     const current = booking.mates ?? [];
     if (current.some((m: any) => m.customerId === args.mateCustomerId)) {
-      throw new Error("That mate is already on this booking.");
+      throw new ConvexError("That mate is already on this booking.");
     }
     if (current.length >= maxMates) {
-      throw new Error(`You can add at most ${maxMates} mate${maxMates !== 1 ? "s" : ""} to a booking.`);
+      throw new ConvexError(`You can add at most ${maxMates} mate${maxMates !== 1 ? "s" : ""} to a booking.`);
     }
 
     await ctx.db.patch(args.bookingId, {
@@ -360,10 +360,10 @@ export const removeMateFromBooking = mutation({
     const { booking } = await authorizeMateManagement(ctx, args.bookingId);
     // A-3: a cancelled booking already notified its mates (M4 on cancel); don't
     // re-remove / re-email here.
-    if (booking.status === "cancelled") throw new Error("This booking has been cancelled.");
+    if (booking.status === "cancelled") throw new ConvexError("This booking has been cancelled.");
     const current = booking.mates ?? [];
     if (!current.some((m: any) => m.customerId === args.mateCustomerId)) {
-      throw new Error("That mate isn't on this booking.");
+      throw new ConvexError("That mate isn't on this booking.");
     }
     await ctx.db.patch(args.bookingId, {
       mates: current.filter((m: any) => m.customerId !== args.mateCustomerId),
@@ -397,14 +397,14 @@ export const leaveBooking = mutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
     const caller = await getCallerCustomer(ctx);
-    if (!caller) throw new Error("Authentication required.");
+    if (!caller) throw new ConvexError("Authentication required.");
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found.");
+    if (!booking) throw new ConvexError("Booking not found.");
     // A-3: don't leave/notify on a cancelled booking (mates already notified on cancel).
-    if (booking.status === "cancelled") throw new Error("This booking has been cancelled.");
+    if (booking.status === "cancelled") throw new ConvexError("This booking has been cancelled.");
     const current = booking.mates ?? [];
     if (!current.some((m: any) => m.customerId === caller._id)) {
-      throw new Error("You're not on this booking.");
+      throw new ConvexError("You're not on this booking.");
     }
     await ctx.db.patch(args.bookingId, {
       mates: current.filter((m: any) => m.customerId !== caller._id),
@@ -430,7 +430,7 @@ export const removeSavedMate = mutation({
   args: { mateCustomerId: v.id("customers") },
   handler: async (ctx, args) => {
     const caller = await getCallerCustomer(ctx);
-    if (!caller) throw new Error("Authentication required.");
+    if (!caller) throw new ConvexError("Authentication required.");
     const rows = await ctx.db
       .query("friendships")
       .withIndex("by_owner_mate", (q: any) =>
@@ -469,7 +469,7 @@ export const createBookingInvite = mutation({
   },
   handler: async (ctx, args) => {
     const { callerCustomer, booking } = await authorizeMateManagement(ctx, args.bookingId);
-    if (booking.status === "cancelled") throw new Error("This booking has been cancelled.");
+    if (booking.status === "cancelled") throw new ConvexError("This booking has been cancelled.");
     const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
     await ctx.db.insert("bookingInvites", {
       token,
@@ -525,7 +525,7 @@ export const acceptBookingInvite = mutation({
   args: { token: v.string() },
   handler: async (ctx, args) => {
     const caller = await getCallerCustomer(ctx);
-    if (!caller) throw new Error("Sign in to join this booking.");
+    if (!caller) throw new ConvexError("Sign in to join this booking.");
     const invite = await ctx.db
       .query("bookingInvites")
       .withIndex("by_token", (q: any) => q.eq("token", args.token))

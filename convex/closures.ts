@@ -1,5 +1,5 @@
 import { query, mutation } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { requireAdmin } from "./lib/adminGuard";
 import { systemCancelBooking } from "./lib/systemCancel";
 
@@ -62,7 +62,7 @@ export const addClosure = mutation({
       .withIndex("by_date", (q: any) => q.eq("date", args.date))
       .first();
     if (existing) {
-      throw new Error("This date is already marked as closed.");
+      throw new ConvexError("This date is already marked as closed.");
     }
 
     // Auto-cancel every active booking on that date, auto-credit the customers,

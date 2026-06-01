@@ -2,7 +2,7 @@
  * User management mutations — admin-only operations.
  */
 import { mutation, query } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { components } from "./_generated/api";
 import { requireAdmin, requireAdminUnlocked, writeRoleAudit } from "./lib/adminGuard";
 
@@ -33,7 +33,7 @@ export const makeAdmin = mutation({
       model: "user",
       where: [{ field: "email", value: normalizedEmail }],
     });
-    if (!authUser) throw new Error(`No auth user found with email "${normalizedEmail}".`);
+    if (!authUser) throw new ConvexError(`No auth user found with email "${normalizedEmail}".`);
     await ctx.runMutation(components.betterAuth.adapter.updateOne, {
       input: { model: "user", where: [{ field: "_id", value: authUser._id }], update: { role: "admin" } as any },
     });
@@ -124,7 +124,7 @@ export const adminDeleteUser = mutation({
     const admin = await requireAdminUnlocked(ctx);
     const normalizedEmail = email.toLowerCase().trim();
     if (admin.email?.toLowerCase?.().trim?.() === normalizedEmail) {
-      throw new Error("You cannot delete your own account.");
+      throw new ConvexError("You cannot delete your own account.");
     }
     // Delete from customers table
     const customer = await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", normalizedEmail)).first();
@@ -193,7 +193,7 @@ export const setCoachColor = mutation({
     await requireAdmin(ctx);
     const normalizedEmail = email.toLowerCase().trim();
     const customer = await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", normalizedEmail)).first();
-    if (!customer) throw new Error("User not found");
+    if (!customer) throw new ConvexError("User not found");
     await ctx.db.patch(customer._id, { color });
     return { success: true };
   },

@@ -1,7 +1,7 @@
 "use node";
 
 import { action, internalAction } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import { requireAdminAction } from "./lib/adminGuard";
 
@@ -10,7 +10,7 @@ const SEAM_API_BASE = "https://connect.getseam.com";
 function getSeamApiKey(): string {
   const key = process.env.SEAM_API_KEY;
   if (!key) {
-    throw new Error("SEAM_API_KEY not configured. Set it in Convex environment variables.");
+    throw new ConvexError("SEAM_API_KEY not configured. Set it in Convex environment variables.");
   }
   return key;
 }
@@ -34,7 +34,7 @@ async function seamFetch(path: string, options: RequestInit = {}): Promise<any> 
       const errJson = JSON.parse(errText);
       detail = errJson.error?.message || errJson.message || detail;
     } catch {}
-    throw new Error(detail);
+    throw new ConvexError(detail);
   }
 
   return response.json();
