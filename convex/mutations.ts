@@ -1686,23 +1686,32 @@ export const rescheduleBooking = mutation({
     if (booking.status === "cancelled") throw new Error("Cannot reschedule a cancelled booking.");
     if (booking.status === "tentative") throw new Error("Confirm the tentative booking first, then reschedule.");
 
-    // SEC-2: Use server-side identity for auth check; SEC-7: avoid full table scan
+    // SEC-2: server-side identity for auth. B-1: rescheduleBooking is the COACH
+    // PLANNER path only (drag/resize of coach sessions — no online payment).
+    // Customers change their bookings through modifyBooking, which enforces the
+    // full price/credit/time-lock matrix. So: an admin may reschedule anything; a
+    // non-admin may reschedule ONLY a coach booking they own. This closes the
+    // customer-bypass that let a crafted request skip modifyBooking's checks.
     const reschedIdentity = await ctx.auth.getUserIdentity();
-    const reschedCallerEmail = reschedIdentity?.email?.toLowerCase().trim() ?? "";
+    if (!reschedIdentity) throw new Error("Authentication required.");
+    const reschedCallerEmail = reschedIdentity.email?.toLowerCase().trim() ?? "";
+    const reschedCaller = reschedCallerEmail ? await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", reschedCallerEmail))
+      .first() : null;
+    const isAdminCaller = reschedCaller?.role === "admin";
 
-    // Verify ownership — user must own the booking or be admin
     const isOwner =
       booking.userId === args.userId ||
       booking.customerEmail.toLowerCase() === args.userId.toLowerCase() ||
-      (reschedIdentity?.subject != null && booking.userId === reschedIdentity.subject) ||
+      (reschedIdentity.subject != null && booking.userId === reschedIdentity.subject) ||
       (reschedCallerEmail !== "" && booking.customerEmail.toLowerCase() === reschedCallerEmail);
-    if (!isOwner) {
-      // Use identity email for admin lookup (no full table scan)
-      const callerCustomer = reschedCallerEmail ? await ctx.db
-        .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", reschedCallerEmail))
-        .first() : null;
-      if (callerCustomer?.role !== "admin") {
+
+    if (!isAdminCaller) {
+      if (!booking.isCoachBooking) {
+        throw new Error("Use Modify to change this booking.");
+      }
+      if (!isOwner) {
         throw new Error("You can only reschedule your own bookings.");
       }
     }
@@ -1731,24 +1740,26 @@ export const rescheduleBooking = mutation({
 
     // Coaches cannot self-reschedule within N hours of booking start
     const coachFreezeHours = settings?.coachRescheduleFreezeHours ?? 24;
-    if (booking.isCoachBooking && hoursUntilOriginal < coachFreezeHours) {
-      // SEC-7: Use identity email (already fetched above) — no full table scan
-      const coachAdminCheck = reschedCallerEmail ? await ctx.db
-        .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", reschedCallerEmail))
-        .first() : null;
-      if (coachAdminCheck?.role !== "admin") {
-        throw new Error(
-          `Coach bookings cannot be rescheduled within ${coachFreezeHours} hours of the session start time.`
-        );
-      }
+    if (booking.isCoachBooking && hoursUntilOriginal < coachFreezeHours && !isAdminCaller) {
+      throw new Error(
+        `Coach bookings cannot be rescheduled within ${coachFreezeHours} hours of the session start time.`
+      );
     }
 
-    // Validate new time
-    const CLOSING_HOUR = settings?.closingHour ?? 21;
-    const OPENING_HOUR = settings?.openingHour ?? 7;
+    // B-1: per-day operating hours (dailyHours SSOT) + closure check for the NEW
+    // date — previously reschedule only checked the single openingHour/closingHour
+    // pair and ignored closed days / closures entirely (a customer could land a
+    // booking on a closed day via reschedule).
     const newEndHour = args.newStartHour + args.newDuration / 60;
-
+    const RDOW_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const [rdY, rdM, rdD] = args.newDate.split("-").map(Number);
+    const rDowName = RDOW_NAMES[new Date(rdY, rdM - 1, rdD).getDay()];
+    const rDayHours = (settings as any)?.dailyHours?.find((h: any) => h.day === rDowName);
+    const OPENING_HOUR = rDayHours ? rDayHours.open : (settings?.openingHour ?? 7);
+    const CLOSING_HOUR = rDayHours ? rDayHours.close : (settings?.closingHour ?? 21);
+    if (rDayHours?.closed) {
+      throw new Error("The facility is closed on this day.");
+    }
     if (args.newStartHour < OPENING_HOUR) {
       throw new Error(`Bookings cannot start before ${OPENING_HOUR}:00.`);
     }
@@ -1757,6 +1768,15 @@ export const rescheduleBooking = mutation({
     }
     if (args.newDuration < 30) {
       throw new Error("Minimum booking duration is 30 minutes.");
+    }
+
+    // Reject reschedules onto a closed date (closures table).
+    const rClosure = await ctx.db
+      .query("closures")
+      .withIndex("by_date", (q: any) => q.eq("date", args.newDate))
+      .first();
+    if (rClosure) {
+      throw new Error(`Facility is closed on this date${rClosure.reason ? `: ${rClosure.reason}` : "."}`);
     }
 
     // Validate new booking is in the future
@@ -1794,6 +1814,35 @@ export const rescheduleBooking = mutation({
           "The new time slot is not available. Please choose another time."
         );
       }
+
+      // B-1: also respect lane service/repair blocks on the new slot.
+      const rLaneBlocks = await ctx.db
+        .query("laneBlocks")
+        .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", args.newDate))
+        .collect();
+      const hasBlockConflict = rLaneBlocks.some((bl: any) => {
+        const bEnd = bl.startHour + bl.duration / 60;
+        return args.newStartHour < bEnd && newEndHour > bl.startHour;
+      });
+      if (hasBlockConflict) {
+        throw new Error("This lane is blocked for service/repair during this time.");
+      }
+    }
+
+    // B-1: respect active slot holds on the NEW slot (in-flight customer checkout
+    // / waitlist offers). Coach/admin aren't fenced off by a customer waitlist
+    // offer (bypassWaitlistHolds), but an in-flight checkout hold still blocks.
+    if (
+      await hasActiveHoldConflict(ctx, {
+        laneIds: allNewLaneIds,
+        date: args.newDate,
+        startHour: args.newStartHour,
+        endHour: newEndHour,
+        callerUserId: args.userId,
+        bypassWaitlistHolds: true,
+      })
+    ) {
+      throw new Error("The new time slot is not available. Please choose another time.");
     }
 
     // Calculate new price (use settings-driven rate — fixes hardcoded * 15 bug)
