@@ -261,7 +261,7 @@ function AdminPage() {
         ) : (
           <div className="p-6 space-y-6">
             {section === 'bookings'   && <AdminBookingCalendar />}
-            {section === 'closures'   && <ClosureManager selectedDate={new Date()} />}
+            {section === 'closures'   && <ClosuresTab />}
             {section === 'customers'  && <CustomersTab />}
             {section === 'coaches'    && <CoachesTab />}
             {section === 'statements' && <StatementsTab />}
@@ -272,6 +272,40 @@ function AdminPage() {
           </div>
         )}
       </main>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Closures tab — date picker + closure manager for the chosen date
+// ---------------------------------------------------------------------------
+
+function ClosuresTab() {
+  const todayKey = new Date().toISOString().slice(0, 10)
+  const [dateKey, setDateKey] = useState(todayKey)
+  // Parse YYYY-MM-DD as a local date (avoid UTC shift from new Date(str))
+  const [y, m, d] = dateKey.split('-').map(Number)
+  const selectedDate = new Date(y, m - 1, d)
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <label className="text-xs font-semibold text-gray-600 dark:text-gray-400">Date</label>
+        <input
+          type="date"
+          value={dateKey}
+          min={todayKey}
+          onChange={(e) => setDateKey(e.target.value)}
+          className="px-3 py-1.5 text-xs bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:ring-2 focus:ring-red-500"
+        />
+        <button
+          onClick={() => setDateKey(todayKey)}
+          className="text-[11px] px-2.5 py-1.5 rounded-lg bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 font-semibold hover:bg-gray-200"
+        >
+          Today
+        </button>
+      </div>
+      <ClosureManager selectedDate={selectedDate} />
     </div>
   )
 }
