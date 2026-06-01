@@ -265,9 +265,17 @@ export function useAuth() {
   const getCreditBalance = useCallback((userId: string) => {
     const c = allCustomersAll.find(c => c._id === userId)
     if (c) return c.creditBalance ?? 0
-    if (customerRecord && customerRecord._id === userId) return customerRecord.creditBalance ?? 0
+    // N-10: callers pass the auth subject (user.id), which is NOT customers._id,
+    // so the lookups never matched for a normal customer → getCreditBalance always
+    // returned 0, hiding the credit badge AND the "apply credit" option at checkout
+    // (credit showed on the Payments page, which reads the record directly, but was
+    // unusable when booking). Fall back to the signed-in user's own record whether
+    // userId is their customers._id OR their auth-subject id.
+    if (customerRecord && (customerRecord._id === userId || userId === user?.id)) {
+      return customerRecord.creditBalance ?? 0
+    }
     return 0
-  }, [allCustomersAll, customerRecord])
+  }, [allCustomersAll, customerRecord, user])
 
   const addCredit = useCallback(async (userId: string, amount: number) => {
     try {
