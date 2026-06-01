@@ -113,9 +113,12 @@ export async function consumeWaitlistHoldForBooking(
   }
   if (!consumedAny) return;
 
+  // Entries are keyed any-lane ('*') — the customer waitlisted for the HOUR, not
+  // this specific lane (see advanceWaitlistOffer). Look them up by '*', not the
+  // booked lane, or the offeree's entry is never marked booked.
   const entries = await ctx.db
     .query("waitlist")
-    .withIndex("by_laneId_date", (q: any) => q.eq("laneId", args.laneId).eq("date", args.date))
+    .withIndex("by_laneId_date", (q: any) => q.eq("laneId", "*").eq("date", args.date))
     .collect();
   for (const e of entries) {
     if (e.userId !== args.userId) continue;

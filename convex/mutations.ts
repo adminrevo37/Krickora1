@@ -867,6 +867,16 @@ export const createBooking = mutation({
       duration: args.duration,
     });
 
+    // Reconcile the hour's waitlist now that a lane was taken: if the hour is now
+    // fully booked the engine clears the queue (decision #6); otherwise it's a
+    // harmless no-op. Idempotent + hour-based (see advanceWaitlistOffer).
+    await scheduleWaitlistAdvance(ctx, {
+      laneId: args.laneId,
+      date: args.date,
+      startHour: args.startHour,
+      duration: args.duration,
+    });
+
     // SPEC_PAYMENTS_AND_CREDIT #3: a pending_payment booking holds its slot via a
     // checkout slotHold; if the customer abandons Stripe it's released by the
     // sweep / expired webhook. Confirmation deletes the hold.
