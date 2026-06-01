@@ -1,6 +1,8 @@
-import { query } from "./_generated/server";
+import { query, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { requireAdmin, getCallerContext, stripBookingPII } from "./lib/adminGuard";
+import { validateDiscount } from "./lib/discounts";
 
 // Scope a list of bookings to the caller: full PII for own bookings (or admin),
 // sanitised "Booked"/stripped for everyone else (SEC-1, decision #1).
@@ -707,6 +709,51 @@ export const getSiteSettings = query({
   },
 });
 
+// R1 — authoritative amount Stripe should charge for a booking, in cents.
+// createCheckoutSession (a node action that can't touch the DB) calls this so the
+// charge is derived ENTIRELY from server state: the booking's server-computed
+// priceInCents minus the customer's credit, with credit clamped to their actual
+// balance (a client can't inflate creditApplied to underpay). Returns null if the
+// booking is missing. Internal — only the checkout action calls it.
+export const getCheckoutAmountCents = internalQuery({
+  args: { bookingId: v.string() },
+  handler: async (ctx, args): Promise<number | null> => {
+    const booking = await ctx.db.get(args.bookingId as Id<"bookings">);
+    if (!booking) return null;
+    const b = booking as any;
+    const priceCents = Math.max(0, Math.round(b.priceInCents ?? 0));
+    // Clamp the credit to the customer's real balance at charge time.
+    const email = (b.customerEmail ?? "").toLowerCase().trim();
+    let creditAvailCents = 0;
+    if (email) {
+      const customer = await ctx.db
+        .query("customers")
+        .withIndex("by_email", (q: any) => q.eq("email", email))
+        .first();
+      creditAvailCents = Math.round(((customer?.creditBalance ?? 0) as number) * 100);
+    }
+    const requestedCreditCents = Math.round(((b.creditApplied ?? 0) as number) * 100);
+    const creditCents = Math.max(0, Math.min(requestedCreditCents, creditAvailCents, priceCents));
+    return Math.max(0, priceCents - creditCents);
+  },
+});
+
+// Is the given email an admin (by the customers table)? Internal — used by node
+// actions (createPaymentLink) that can't run requireAdmin's DB fallback directly.
+// Matches getCallerContext's admin resolution, avoiding the user.role-only drift.
+export const isAdminEmail = internalQuery({
+  args: { email: v.string() },
+  handler: async (ctx, args): Promise<boolean> => {
+    const email = args.email.toLowerCase().trim();
+    if (!email) return false;
+    const customer = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", email))
+      .first();
+    return customer?.role === "admin";
+  },
+});
+
 // ============================================================================
 // DISCOUNT CODE QUERIES
 // ============================================================================
@@ -733,36 +780,9 @@ export const listDiscountCodes = query({
 export const validateDiscountCode = query({
   args: { code: v.string(), customerEmail: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const normalised = args.code.trim().toLowerCase();
-    if (!normalised) return null;
-    const doc = await ctx.db
-      .query("discountCodes")
-      .withIndex("by_code", (q: any) => q.eq("code", normalised))
-      .first();
-    if (!doc || !doc.active) return null;
-    // Check expiry (YYYY-MM-DD string comparison is safe)
-    if (doc.expiresAt) {
-      const today = new Date().toISOString().slice(0, 10);
-      if (doc.expiresAt < today) return null;
-    }
-    // Total usage cap (usedCount defaults to 0 for old docs missing the field)
-    if (doc.usageLimit !== undefined && (doc.usedCount ?? 0) >= doc.usageLimit) return null;
-    // Per-customer cap — count this email's prior redemptions of this code
-    const email = (args.customerEmail ?? "").trim().toLowerCase();
-    if (doc.perCustomerLimit !== undefined && email) {
-      const mine = await ctx.db
-        .query("discountRedemptions")
-        .withIndex("by_code_email", (q: any) => q.eq("code", normalised).eq("customerEmail", email))
-        .collect();
-      if (mine.length >= doc.perCustomerLimit) return null;
-    }
-    return {
-      discount: doc.discount,
-      type: doc.discountType ?? "percent",
-      amountOff: doc.amountOff ?? 0,
-      label: doc.label,
-      bypassStripe: doc.bypassStripe ?? false,
-    };
+    // Shared server-authoritative validator — same logic createBooking enforces
+    // in the money path (R1/R3), so the client preview and the server agree.
+    return await validateDiscount(ctx, args.code, args.customerEmail);
   },
 });
 

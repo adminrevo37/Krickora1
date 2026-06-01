@@ -174,6 +174,21 @@ export const confirmBookingPayment = internalMutation({
         reference: args.stripeSessionId,
         paymentDate,
       });
+
+      // R4: record the authoritative payment row (Stripe-verified amount/status)
+      // so customer-revenue analytics has a data source. Idempotent per booking.
+      await ctx.runMutation(internal.mutations.recordStripePaymentInternal, {
+        bookingId: booking._id.toString(),
+        stripeSessionId: args.stripeSessionId,
+        customerEmail: b.customerEmail,
+        customerName: b.customerName ?? "Customer",
+        amount: args.amountPaid / 100, // dollars (analytics sums this alongside coach $)
+        currency,
+        status: "paid",
+        laneName,
+        date: b.date,
+        description,
+      });
     }
 
     return { success: true, alreadyPaid: false };

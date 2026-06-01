@@ -90,8 +90,6 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const endHour = startHour + duration / 60
   const price = isCoach ? getCoachPrice(duration) : getCustomerPrice(lane, selectedVariant?.id ?? null, duration)
   const creditBalance = user ? getCreditBalance(user.id) : 0
-  const creditToApply = applyCredit ? Math.min(creditBalance, price) : 0
-  const finalPrice = price - creditToApply
   const customerName = user?.name ?? ''
   const customerEmail = user?.email ?? ''
   const createBookingForStripe = useMutation(api.mutations.createBooking)
@@ -118,15 +116,21 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     return sum + (isCoach ? getCoachPrice(duration) : getCustomerPrice(l, null, duration))
   }, 0)
 
-  const priceBeforeDiscount = finalPrice + additionalLanePrice
+  // Pricing order MUST mirror the server (convex/mutations.ts createBooking +
+  // getCheckoutAmountCents): the discount applies to the GROSS (base + additional
+  // lanes), THEN account credit reduces the post-discount total. Keeping this
+  // identical means this preview equals what Stripe actually charges (SSOT/R1).
+  const priceBeforeDiscount = price + additionalLanePrice
 
-  // Apply discount to total
   const discountAmount = appliedDiscount
     ? appliedDiscount.type === 'fixed'
       ? Math.min(priceBeforeDiscount, appliedDiscount.amountOff)
       : Math.round(priceBeforeDiscount * appliedDiscount.discount / 100)
     : 0
-  const totalPrice = Math.max(0, priceBeforeDiscount - discountAmount)
+  const afterDiscount = Math.max(0, priceBeforeDiscount - discountAmount)
+
+  const creditToApply = applyCredit ? Math.min(creditBalance, afterDiscount) : 0
+  const totalPrice = Math.max(0, afterDiscount - creditToApply)
 
   const handleApplyDiscount = () => {
     setDiscountError(null)

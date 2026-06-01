@@ -15,8 +15,6 @@ import type * as adminPasswordTrigger from "../adminPasswordTrigger.js";
 import type * as analytics from "../analytics.js";
 import type * as athletes from "../athletes.js";
 import type * as auth from "../auth.js";
-import type * as bookingEdit from "../bookingEdit.js";
-import type * as bookingEditActions from "../bookingEditActions.js";
 import type * as closures from "../closures.js";
 import type * as crons from "../crons.js";
 import type * as emails from "../emails.js";
@@ -29,6 +27,7 @@ import type * as lib_adminGuard from "../lib/adminGuard.js";
 import type * as lib_bookingWindow from "../lib/bookingWindow.js";
 import type * as lib_credit from "../lib/credit.js";
 import type * as lib_discounts from "../lib/discounts.js";
+import type * as lib_email from "../lib/email.js";
 import type * as lib_pricing from "../lib/pricing.js";
 import type * as lib_rateLimit from "../lib/rateLimit.js";
 import type * as lib_slotHolds from "../lib/slotHolds.js";
@@ -64,8 +63,6 @@ declare const fullApi: ApiFromModules<{
   analytics: typeof analytics;
   athletes: typeof athletes;
   auth: typeof auth;
-  bookingEdit: typeof bookingEdit;
-  bookingEditActions: typeof bookingEditActions;
   closures: typeof closures;
   crons: typeof crons;
   emails: typeof emails;
@@ -78,6 +75,7 @@ declare const fullApi: ApiFromModules<{
   "lib/bookingWindow": typeof lib_bookingWindow;
   "lib/credit": typeof lib_credit;
   "lib/discounts": typeof lib_discounts;
+  "lib/email": typeof lib_email;
   "lib/pricing": typeof lib_pricing;
   "lib/rateLimit": typeof lib_rateLimit;
   "lib/slotHolds": typeof lib_slotHolds;
@@ -127,5 +125,5 @@ export declare const internal: FilterApi<
 >;
 
 export declare const components: {
-  betterAuth: import("@convex-dev/better-auth/_generated/component.js").ComponentApi<"betterAuth">;
+  betterAuth: import("../betterAuth/_generated/component.js").ComponentApi<"betterAuth">;
 };

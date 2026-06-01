@@ -25,8 +25,34 @@ export const createCheckoutSession = action({
     isCoachBooking: v.optional(v.boolean()),
     bookingId: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  // Explicit return type breaks the circular inference introduced by the
+  // internal.queries.* runQuery below (TS7022/7023), matching the pattern used
+  // elsewhere in the codebase.
+  handler: async (
+    ctx,
+    args
+  ): Promise<{ sessionId: string; url: string | null; description: string }> => {
     const stripe = getStripe();
+
+    // R1 — SERVER-AUTHORITATIVE CHARGE. Never charge the client-supplied price.
+    // Derive the amount entirely from the booking's server-computed price (set in
+    // createBooking) minus the customer's server-clamped credit. The client value
+    // (args.priceInCents) is ignored for the charge.
+    if (!args.bookingId) {
+      throw new Error("A booking must be created before checkout.");
+    }
+    const amountToChargeCents: number | null = await ctx.runQuery(
+      internal.queries.getCheckoutAmountCents,
+      { bookingId: args.bookingId }
+    );
+    if (amountToChargeCents == null) {
+      throw new Error("Booking not found for checkout.");
+    }
+    if (amountToChargeCents < 50) {
+      // Below Stripe's A$0.50 minimum — a $0 booking should use the free/comp path,
+      // not Stripe. Guards against a fully credit/discount-covered booking reaching here.
+      throw new Error("This booking does not require a card payment.");
+    }
 
     const formatHour = (h: number) => {
       const whole = Math.floor(h);
@@ -65,7 +91,7 @@ export const createCheckoutSession = action({
               name: `${args.isCoachBooking ? "Coach Session" : "Net Session"} - ${args.laneName}${variantLabel}`,
               description,
             },
-            unit_amount: args.priceInCents,
+            unit_amount: amountToChargeCents,
           },
           quantity: 1,
         },
@@ -152,7 +178,20 @@ export const createPaymentLink = action({
     priceInCents: v.number(),
     bookingId: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args
+  ): Promise<{ url: string; description: string }> => {
+    // ADMIN ONLY. This mints a Stripe payment link for an arbitrary amount and is
+    // used solely by the admin manual-booking "send payment request" flow. Without
+    // this guard a customer could call it directly to pay $0.01 for a booking.
+    const plIdentity = await ctx.auth.getUserIdentity();
+    const plEmail = plIdentity?.email?.toLowerCase?.().trim?.() ?? "";
+    const plIsAdmin = plEmail
+      ? await ctx.runQuery(internal.queries.isAdminEmail, { email: plEmail })
+      : false;
+    if (!plIsAdmin) throw new Error("Not authorized — admin only.");
+
     const stripe = getStripe();
 
     const formatHour = (h: number) => {
@@ -205,7 +244,15 @@ export const createPaymentLink = action({
 
 export const listRecentPayments = action({
   args: { limit: v.optional(v.number()) },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<any[]> => {
+    // ADMIN ONLY — returns every customer's charge data (emails, amounts, receipts).
+    const lrpIdentity = await ctx.auth.getUserIdentity();
+    const lrpEmail = lrpIdentity?.email?.toLowerCase?.().trim?.() ?? "";
+    const lrpIsAdmin = lrpEmail
+      ? await ctx.runQuery(internal.queries.isAdminEmail, { email: lrpEmail })
+      : false;
+    if (!lrpIsAdmin) throw new Error("Not authorized — admin only.");
+
     const stripe = getStripe();
     const charges = await stripe.charges.list({
       limit: args.limit || 50,

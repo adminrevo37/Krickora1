@@ -1,9 +1,9 @@
-import { mutation } from "./_generated/server";
+import { mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { requireAdmin, requireAdminUnlocked, getAuthUserSafe } from "./lib/adminGuard";
 import { issueCredit, redeemCredit, recordCreditMovement } from "./lib/credit";
-import { recordDiscountRedemption } from "./lib/discounts";
+import { recordDiscountRedemption, validateDiscount, discountAmountCents } from "./lib/discounts";
 import {
   abandonedCheckoutMs,
   createCheckoutHold,
@@ -772,6 +772,35 @@ export const createBooking = mutation({
       throw new Error("This slot is no longer available. Please choose another time.");
     }
 
+    // R1/R3 — SERVER-AUTHORITATIVE PRICE. Never trust the client price for a
+    // real customer booking: a crafted call could otherwise book any slot for
+    // $0.01 (the charge in createCheckoutSession derives from this stored value).
+    // Recompute = base lane (+ variant) + each additional lane at base rate −
+    // server-VALIDATED discount. Coach bookings (billed separately, no Stripe) and
+    // admin manual bookings (comp / paid-offline / payment-request — the admin sets
+    // the amount deliberately, carried by paymentStatus) keep their passed price.
+    const isAdminManual = isAdminCaller && args.paymentStatus !== undefined;
+    let serverPriceCents: number | undefined = args.priceInCents;
+    if (!args.isCoachBooking && !isAdminManual) {
+      let grossCents = computeCustomerPriceCents(
+        siteSettings as any,
+        args.variantId,
+        args.duration
+      );
+      for (const _lid of args.additionalLaneIds ?? []) {
+        grossCents += computeCustomerPriceCents(siteSettings as any, null, args.duration);
+      }
+      let discountedCents = grossCents;
+      if (args.discountCode) {
+        const vd = await validateDiscount(ctx, args.discountCode, args.customerEmail);
+        if (!vd) {
+          throw new Error("This discount code is not valid, has expired, or has reached its usage limit.");
+        }
+        discountedCents = Math.max(0, grossCents - discountAmountCents(grossCents, vd));
+      }
+      serverPriceCents = discountedCents;
+    }
+
     // For coach bookings, all assigned athletes share the coach's access code
     const normalizedAthleteSlots = args.athleteSlots && args.isCoachBooking && args.accessCode
       ? args.athleteSlots.map((s) => ({
@@ -804,7 +833,7 @@ export const createBooking = mutation({
       tentativeForDate: args.tentativeForDate,
       notes: args.notes,
       paymentStatus: args.paymentStatus,
-      priceInCents: args.priceInCents,
+      priceInCents: serverPriceCents,
     });
 
     // SPEC_WAITLIST_OFFER_REDESIGN: if this booking is the waitlisted member
@@ -3052,7 +3081,13 @@ export const useCoachInvite = mutation({
 // ============================================================================
 
 // Create a new stripePayment (user-facing — triggered by checkout flow)
-export const createStripePayment = mutation({
+// R4 — INTERNAL ONLY. Records the authoritative payment row that analytics reads.
+// Previously this was a PUBLIC mutation that trusted client status/amount → anyone
+// could forge "paid" records. It is now internal and called solely by the
+// signature-verified Stripe webhook (confirmBookingPayment), so the recorded
+// amount/status come from Stripe, not the client. This also means real paid
+// bookings finally populate stripePayments (the customer-revenue analytics source).
+export const recordStripePaymentInternal = internalMutation({
   args: {
     bookingId: v.string(),
     stripeSessionId: v.string(),
@@ -3069,6 +3104,13 @@ export const createStripePayment = mutation({
     duration: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Idempotency: don't double-record the same booking on webhook retry.
+    const existing = await ctx.db
+      .query("stripePayments")
+      .filter((q: any) => q.eq(q.field("bookingId"), args.bookingId))
+      .first();
+    if (existing) return existing._id;
+
     const id = await ctx.db.insert("stripePayments", {
       bookingId: args.bookingId,
       stripeSessionId: args.stripeSessionId,
