@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
+import { getErrorMessage } from '../lib/errors'
 import {
   LANES, formatDateKey, formatTime, getAWSTNow, isToday, isSlotBooked,
   getActiveHalfHoursForLane, type Lane, type TimeSlot, type Booking,
@@ -37,7 +38,7 @@ export default function AdminBookingCalendar() {
     try {
       await deleteBookingMut({ id: bookingId as any })
     } catch (e: any) {
-      alert(e?.message ?? 'Failed to delete booking')
+      alert(getErrorMessage(e) ?? 'Failed to delete booking')
     }
   }
   const allCustomers = useQuery(api.queries.listCustomers) ?? []
@@ -209,7 +210,7 @@ export default function AdminBookingCalendar() {
         succeeded++
       } catch (e: any) {
         failed++
-        const msg = e?.message ?? 'Conflict or server error'
+        const msg = getErrorMessage(e) ?? 'Conflict or server error'
         if (!failedDates.some(d => d.startsWith(b.date))) {
           failedDates.push(`${b.date} (${b.laneId}): ${msg}`)
         }
@@ -250,7 +251,7 @@ export default function AdminBookingCalendar() {
 
   const handleRemoveBlock = async (id: string, laneName: string) => {
     if (!confirm(`Remove service block on ${laneName}?`)) return
-    try { await removeBlockMut({ id: id as any }) } catch (e: any) { alert(e?.message ?? 'Failed') }
+    try { await removeBlockMut({ id: id as any }) } catch (e: any) { alert(getErrorMessage(e) ?? 'Failed') }
   }
 
   return (

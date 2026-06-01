@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
+import { getErrorMessage } from '../lib/errors'
 import { LANES } from '../lib/booking-data'
 
 const LANE_LABEL = (id?: string) => (id ? (LANES.find(l => l.id === id)?.name ?? id) : 'General / facility')
@@ -22,7 +23,7 @@ export default function AdminFaultInbox() {
     try {
       await updateStatus({ id: id as any, status, adminNote })
     } catch (e: any) {
-      alert(e?.message ?? 'Failed to update report')
+      alert(getErrorMessage(e) ?? 'Failed to update report')
     } finally {
       setBusyId(null)
     }

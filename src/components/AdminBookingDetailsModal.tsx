@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react'
 import { useMutation, useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
+import { getErrorMessage } from '../lib/errors'
 import { LANES, formatTime, getCoachPrice, getCustomerPrice, canBookSlot, getAWSTNow, type Booking } from '../lib/booking-data'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 import { useBookings } from '../hooks/useBookingStore'
@@ -139,7 +140,7 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
       onSave?.(date)
       onClose()
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to save changes.')
+      setError(getErrorMessage(e) ?? 'Failed to save changes.')
     } finally {
       setSaving(false)
     }
@@ -155,7 +156,7 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
       await cancelMut({ id: booking.id as any, cancelledByUserId: user?.id })
       onClose()
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to cancel booking.')
+      setError(getErrorMessage(e) ?? 'Failed to cancel booking.')
       setSaving(false)
     }
   }

@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useCallback } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
+import { getErrorMessage } from '../lib/errors'
 import { useAuth } from '../hooks/useAuth'
 import { useBookings } from '../hooks/useBookingStore'
 import {
@@ -194,7 +195,7 @@ export default function CoachWeeklyPlanner() {
       setBanner({ kind: 'ok', text: `Booked ${laneShort(laneId)} ${formatTime(startHour)}` })
       setTimeout(() => setBanner(null), 4000)
     } catch (err: any) {
-      setBanner({ kind: 'err', text: err?.message ?? 'Booking failed.' })
+      setBanner({ kind: 'err', text: getErrorMessage(err) ?? 'Booking failed.' })
     }
     setCreateAt(null)
   }
@@ -226,7 +227,7 @@ export default function CoachWeeklyPlanner() {
         : ''
       setBanner({ kind: created > 0 ? 'ok' : 'err', text: `Rebooked ${created} of ${res?.sourceCount ?? 0}.${skipText}` })
     } catch (err: any) {
-      setBanner({ kind: 'err', text: err?.message ?? 'Copy failed.' })
+      setBanner({ kind: 'err', text: getErrorMessage(err) ?? 'Copy failed.' })
     } finally {
       setCopyBusy(false)
       setTimeout(() => setBanner(null), 8000)
@@ -536,11 +537,11 @@ function RosterPanel({ athletes, coachId, addAthleteToCoach, removeAthleteFromCo
       const res = await addAthleteToCoach({ coachId, parentEmail: email.trim(), childName: child.trim() })
       setMsg(res?.accountExists ? `Added ${child.trim()}.` : `Invite sent to ${email.trim()}.`)
       setEmail(''); setChild('')
-    } catch (e: any) { setMsg(e?.message ?? 'Failed to add.') } finally { setBusy(false) }
+    } catch (e: any) { setMsg(getErrorMessage(e) ?? 'Failed to add.') } finally { setBusy(false) }
   }
   const remove = async (id: string, name: string) => {
     if (!confirm(`Remove ${name} from your roster? Past bookings are unaffected.`)) return
-    try { await removeAthleteFromCoach({ coachId, athleteId: id }) } catch (e: any) { alert(e?.message ?? 'Failed.') }
+    try { await removeAthleteFromCoach({ coachId, athleteId: id }) } catch (e: any) { alert(getErrorMessage(e) ?? 'Failed.') }
   }
 
   return (

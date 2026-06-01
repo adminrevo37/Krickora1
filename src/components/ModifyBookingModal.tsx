@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { getErrorMessage } from '../lib/errors'
 import {
   LANES, formatDateKey, formatTime, canBookSlot, getCustomerPrice, getCoachPrice,
   getCoachDurations, getCustomerDurations, getValidCoachStartTimes, getCoachRolling7Days,
@@ -181,7 +182,7 @@ export default function ModifyBookingModal({ booking, allBookings, creditBalance
         setError('Could not start checkout. Please try again.')
         setStep('confirm')
       } catch (err: any) {
-        setError(err?.message ?? 'Could not start checkout. Please try again.')
+        setError(getErrorMessage(err) ?? 'Could not start checkout. Please try again.')
         setStep('confirm')
       }
       return

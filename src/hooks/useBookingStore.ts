@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
+import { getErrorMessage } from '../lib/errors'
 import { type Booking, getAWSTNow } from '../lib/booking-data'
 import type { Id } from '../../convex/_generated/dataModel'
 import { getSettingsStore } from '../lib/settings-store'
@@ -303,7 +304,7 @@ export function useBookings() {
         })
         return { success: true }
       } catch (err: any) {
-        return { success: false, error: err?.message ?? 'Failed to update duration.' }
+        return { success: false, error: getErrorMessage(err) ?? 'Failed to update duration.' }
       }
     },
     [editDurationMut]
@@ -329,7 +330,7 @@ export function useBookings() {
         })
         return { success: true }
       } catch (err: any) {
-        return { success: false, error: err?.message ?? 'Failed to reschedule.' }
+        return { success: false, error: getErrorMessage(err) ?? 'Failed to reschedule.' }
       }
     },
     [rescheduleMut]
@@ -363,7 +364,7 @@ export function useBookings() {
         })
         return { ...res, success: true }
       } catch (err: any) {
-        return { success: false, error: err?.message ?? 'Failed to modify booking.' }
+        return { success: false, error: getErrorMessage(err) ?? 'Failed to modify booking.' }
       }
     },
     [modifyMut]
@@ -387,7 +388,7 @@ export function useBookings() {
         })
         return { success: true }
       } catch (err: any) {
-        const msg: string = err?.message ?? 'Failed to update athlete allocations.'
+        const msg: string = getErrorMessage(err) ?? 'Failed to update athlete allocations.'
         // Bug #3: a same-athlete double-booking is a soft warning, not a hard
         // failure. The mutation tags it with CONFLICT:: — surface it so the UI
         // can confirm and re-submit with confirmedOverride.

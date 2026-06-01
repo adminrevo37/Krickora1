@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
+import { getErrorMessage } from '../lib/errors'
 import { LANES } from '../lib/booking-data'
 
 /**
@@ -44,7 +45,7 @@ export default function FaultReportModal({ onClose }: { onClose: () => void }) {
       })
       setDone(true)
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to submit report.')
+      setError(getErrorMessage(e) ?? 'Failed to submit report.')
     } finally {
       setBusy(false)
     }

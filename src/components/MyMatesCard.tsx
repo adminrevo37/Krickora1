@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
+import { getErrorMessage } from '../lib/errors'
 
 /**
  * "My Mates" — collapsible profile section (SPEC_ADD_A_MATE) listing the saved
@@ -21,7 +22,7 @@ export default function MyMatesCard() {
     try {
       await removeSaved({ mateCustomerId: mateCustomerId as Id<'customers'> })
     } catch (err: any) {
-      alert(err?.message ?? 'Failed to remove mate')
+      alert(getErrorMessage(err) ?? 'Failed to remove mate')
     } finally {
       setBusyId(null)
     }

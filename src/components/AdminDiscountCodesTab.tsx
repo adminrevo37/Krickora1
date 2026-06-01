@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
+import { getErrorMessage } from '../lib/errors'
 
 type DiscountDoc = {
   _id: string
@@ -93,7 +94,7 @@ export default function AdminDiscountCodesTab() {
       }
       resetForm()
     } catch (err: any) {
-      setError(err?.message ?? 'Failed to save discount code.')
+      setError(getErrorMessage(err) ?? 'Failed to save discount code.')
     } finally {
       setBusy(false)
     }
@@ -105,7 +106,7 @@ export default function AdminDiscountCodesTab() {
     try {
       await deleteMut({ id: doc._id as any })
     } catch (err: any) {
-      setError(err?.message ?? 'Failed to delete discount code.')
+      setError(getErrorMessage(err) ?? 'Failed to delete discount code.')
     } finally {
       setBusy(false)
     }
@@ -115,7 +116,7 @@ export default function AdminDiscountCodesTab() {
     try {
       await updateMut({ id: doc._id as any, active: !doc.active })
     } catch (err: any) {
-      setError(err?.message ?? 'Failed to update code.')
+      setError(getErrorMessage(err) ?? 'Failed to update code.')
     }
   }
 

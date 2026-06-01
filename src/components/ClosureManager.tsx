@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
+import { getErrorMessage } from '../lib/errors'
 import { formatDateKey } from '../lib/booking-data'
 
 export default function ClosureManager({ selectedDate }: { selectedDate: Date }) {
@@ -36,7 +37,7 @@ export default function ClosureManager({ selectedDate }: { selectedDate: Date })
         )
       }
     } catch (e: any) {
-      alert(e?.message ?? 'Failed to close date')
+      alert(getErrorMessage(e) ?? 'Failed to close date')
     } finally {
       setBusy(false)
     }
@@ -44,7 +45,7 @@ export default function ClosureManager({ selectedDate }: { selectedDate: Date })
 
   const handleRemove = async (id: string, date: string) => {
     if (!confirm(`Reopen ${date}?`)) return
-    try { await removeClosure({ id: id as any }) } catch (e: any) { alert(e?.message ?? 'Failed') }
+    try { await removeClosure({ id: id as any }) } catch (e: any) { alert(getErrorMessage(e) ?? 'Failed') }
   }
 
   const fmtDate = (d: string) => {

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
+import { getErrorMessage } from '../lib/errors'
 import { LANES, formatDateKey, generateTimeSlots } from '../lib/booking-data'
 
 interface Props {
@@ -53,7 +54,7 @@ export default function LaneBlockModal({ date, prefill, onClose }: Props) {
       }
       onClose()
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to create block')
+      setError(getErrorMessage(e) ?? 'Failed to create block')
     } finally {
       setSaving(false)
     }

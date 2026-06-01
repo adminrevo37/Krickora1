@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from 'convex/react'
+import { getErrorMessage } from '../lib/errors'
 import {
   LANES, canBookSlot, formatDateKey, formatTime, getCustomerPrice, getCoachPrice, getCoachPerHourRate,
   getCoachDurations, getCustomerDurations, getValidCoachStartTimes, isWeekday,
@@ -336,7 +337,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       setTimeout(() => onConfirm(booking), 4000)
       // Email is sent by createBooking mutation — no client-side duplicate
     } catch (err: any) {
-      setError(err?.message ?? 'Could not confirm your booking. Please try again.')
+      setError(getErrorMessage(err) ?? 'Could not confirm your booking. Please try again.')
       setStep('details')
     } finally {
       setIsSubmitting(false)
@@ -394,7 +395,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       setTimeout(() => onConfirm(booking), 4000)
       // Email is sent by createBooking mutation — no client-side duplicate
     } catch (err: any) {
-      setError(err?.message ?? 'Could not confirm your booking. Please try again.')
+      setError(getErrorMessage(err) ?? 'Could not confirm your booking. Please try again.')
       setStep('details')
     } finally {
       setIsSubmitting(false)
@@ -445,7 +446,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       setStep('confirm')
       setIsSubmitting(false)
     } catch (err: any) {
-      setError(err?.message ?? 'Payment failed. Please try again.')
+      setError(getErrorMessage(err) ?? 'Payment failed. Please try again.')
       setStep('confirm')
       setIsSubmitting(false)
     }

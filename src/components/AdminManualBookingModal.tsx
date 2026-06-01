@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect } from 'react'
 import { useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
+import { getErrorMessage } from '../lib/errors'
 import {
   formatDateKey, formatTime, getCustomerPrice, getCoachPrice,
   getCustomerDurations, getCoachDurations, bookingOccupiesLane, LANES, type Lane, type LaneVariant, type Booking,
@@ -219,7 +220,7 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
       // admin can read the pay link — reset the busy state.
       if (isRequest) setSubmitting(false)
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to create booking.')
+      setError(getErrorMessage(e) ?? 'Failed to create booking.')
       setSubmitting(false)
     }
   }

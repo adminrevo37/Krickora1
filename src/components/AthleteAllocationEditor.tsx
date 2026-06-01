@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
+import { getErrorMessage } from '../lib/errors'
 import { formatTime, type AthleteSlot } from '../lib/booking-data'
 
 interface AthleteAllocationEditorProps {
@@ -92,7 +93,7 @@ export default function AthleteAllocationEditor({
       setAddChildName('')
       if (res?.accountExists) setShowAddAthlete(false)
     } catch (err: any) {
-      setAddFeedback(err?.message ?? 'Could not add athlete.')
+      setAddFeedback(getErrorMessage(err) ?? 'Could not add athlete.')
     } finally {
       setAddBusy(false)
     }
@@ -103,7 +104,7 @@ export default function AthleteAllocationEditor({
     try {
       await removeAthleteFromCoach({ coachId, athleteId: athleteId as any })
     } catch (err: any) {
-      alert(err?.message ?? 'Could not remove athlete.')
+      alert(getErrorMessage(err) ?? 'Could not remove athlete.')
     }
   }
 

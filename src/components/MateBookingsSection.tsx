@@ -1,6 +1,7 @@
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
+import { getErrorMessage } from '../lib/errors'
 import { LANES, formatTime } from '../lib/booking-data'
 import { formatAccessCode } from '../lib/access-code'
 
@@ -23,7 +24,7 @@ export default function MateBookingsSection() {
     try {
       await leaveBooking({ bookingId: id as Id<'bookings'> })
     } catch (err: any) {
-      alert(err?.message ?? 'Failed to leave booking')
+      alert(getErrorMessage(err) ?? 'Failed to leave booking')
     }
   }
 

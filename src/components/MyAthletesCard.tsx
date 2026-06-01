@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
+import { getErrorMessage } from '../lib/errors'
 
 /**
  * "My Athletes" — account-holder self-management of their child-athletes
@@ -39,7 +40,7 @@ export default function MyAthletesCard() {
       setNewName('')
       flash('success', `Added ${name}`)
     } catch (err: any) {
-      flash('error', err?.message ?? 'Failed to add athlete')
+      flash('error', getErrorMessage(err) ?? 'Failed to add athlete')
     } finally {
       setAdding(false)
     }
@@ -54,7 +55,7 @@ export default function MyAthletesCard() {
       setEditingId(null)
       flash('success', 'Name updated')
     } catch (err: any) {
-      flash('error', err?.message ?? 'Failed to rename')
+      flash('error', getErrorMessage(err) ?? 'Failed to rename')
     } finally {
       setBusyId(null)
     }
@@ -67,7 +68,7 @@ export default function MyAthletesCard() {
       await removeAthlete({ athleteId: athleteId as Id<'athletes'> })
       flash('success', `Removed ${name}`)
     } catch (err: any) {
-      flash('error', err?.message ?? 'Failed to remove')
+      flash('error', getErrorMessage(err) ?? 'Failed to remove')
     } finally {
       setBusyId(null)
     }
@@ -82,7 +83,7 @@ export default function MyAthletesCard() {
     try {
       await setAthleteCoaches({ athleteId: athlete._id as Id<'athletes'>, coachIds: next })
     } catch (err: any) {
-      flash('error', err?.message ?? 'Failed to update coaches')
+      flash('error', getErrorMessage(err) ?? 'Failed to update coaches')
     } finally {
       setBusyId(null)
     }

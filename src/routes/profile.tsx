@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useMutation } from 'convex/react'
 import { useState, useEffect } from 'react'
 import { api } from '../../convex/_generated/api'
+import { getErrorMessage } from '../lib/errors'
 import { useAuth } from '../hooks/useAuth'
 import EmailNotificationsCard from '../components/EmailNotificationsCard'
 import MyAthletesCard from '../components/MyAthletesCard'
@@ -55,7 +56,7 @@ function ProfilePage() {
       setMessage({ type: 'success', text: 'Profile updated successfully' })
       setIsEditing(false)
     } catch (err: any) {
-      setMessage({ type: 'error', text: err?.message || 'Failed to update profile' })
+      setMessage({ type: 'error', text: getErrorMessage(err) || 'Failed to update profile' })
     } finally {
       setSaving(false)
     }

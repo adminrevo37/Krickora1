@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { createFileRoute, useNavigate, Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { useAuth } from '../hooks/useAuth'
 import { getAWSTNow } from '../lib/booking-data'
+import { getErrorMessage } from '../lib/errors'
 import { useImpersonation } from '../hooks/useImpersonation'
 import AdminBookingCalendar from '../components/AdminBookingCalendar'
 import ClosureManager from '../components/ClosureManager'
@@ -294,7 +295,7 @@ function AdminUnlock({ onUnlocked }: { onUnlocked: () => void }) {
       if (res?.success) { setPw(''); onUnlocked() }
       else setErr(res?.error ?? 'Incorrect password')
     } catch (e: any) {
-      setErr(e?.message ?? 'Verification failed')
+      setErr(getErrorMessage(e) ?? 'Verification failed')
     } finally {
       setBusy(false)
     }
@@ -372,7 +373,7 @@ function StatementsTab() {
         createdBy: (user as any)?._id ?? (user as any)?.id ?? 'admin',
       } as any)
       setForm({ amount: '', dateReceived: today, method: 'bank_transfer', description: '' })
-    } catch (err: any) { alert(err?.message ?? 'Failed') }
+    } catch (err: any) { alert(getErrorMessage(err) ?? 'Failed') }
     finally { setBusy(false) }
   }
 
@@ -491,7 +492,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
       if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color; args.defaultSessionDuration = defaultSessionDuration; args.athleteCapacity = athleteCapacity }
       await updateProfile(args)
       onClose()
-    } catch (err: any) { alert(err?.message ?? 'Failed') }
+    } catch (err: any) { alert(getErrorMessage(err) ?? 'Failed') }
     finally { setBusy(false) }
   }
 
@@ -499,7 +500,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
     if (!confirm(`Permanently delete ${user.email}? This cannot be undone.`)) return
     setBusy(true)
     try { await deleteUser({ email: user.email }); onClose() }
-    catch (err: any) { alert(err?.message ?? 'Failed') }
+    catch (err: any) { alert(getErrorMessage(err) ?? 'Failed') }
     finally { setBusy(false) }
   }
 
@@ -652,10 +653,10 @@ function CustomersTab() {
     try {
       await createCustomerMut({ name: custForm.name.trim(), email, phone: custForm.phone || undefined })
       try { await setPassword({ email, password: custForm.password }) }
-      catch (err: any) { alert('Customer record created, but failed to set password: ' + (err?.message ?? 'unknown')) }
+      catch (err: any) { alert('Customer record created, but failed to set password: ' + (getErrorMessage(err) ?? 'unknown')) }
       setCustForm({ name: '', email: '', phone: '', password: '' })
       setShowAddForm(false)
-    } catch (err: any) { alert(err?.message ?? 'Failed to create customer') }
+    } catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to create customer') }
     finally { setBusyAdd(false) }
   }
 
@@ -969,7 +970,7 @@ function CoachesTab() {
       setQpSuccess(true)
       setTimeout(() => setQpSuccess(false), 3000)
     } catch (err: any) {
-      alert(err?.message ?? 'Failed to record payment')
+      alert(getErrorMessage(err) ?? 'Failed to record payment')
     } finally {
       setQpBusy(false)
     }
@@ -1010,9 +1011,9 @@ function CoachesTab() {
       }
       await createCoach({ name: coachForm.name.trim(), email, phone: coachForm.phone, coachTier: coachForm.coachTier })
       try { await setPassword({ email, password: coachForm.password }) }
-      catch (err: any) { alert('Coach created, but failed to set password: ' + (err?.message ?? 'unknown')) }
+      catch (err: any) { alert('Coach created, but failed to set password: ' + (getErrorMessage(err) ?? 'unknown')) }
       setCoachForm({ name: '', email: '', phone: '', coachTier: 'L1', password: '' })
-    } catch (err: any) { alert(err?.message ?? 'Failed') }
+    } catch (err: any) { alert(getErrorMessage(err) ?? 'Failed') }
     finally { setBusyAdd(false) }
   }
 
@@ -1032,7 +1033,7 @@ function CoachesTab() {
         createdBy: (user as any)?._id ?? (user as any)?.id ?? 'admin',
       })
       setForm({ name: '', email: '', phone: '' })
-    } catch (err: any) { alert(err?.message ?? 'Failed') }
+    } catch (err: any) { alert(getErrorMessage(err) ?? 'Failed') }
     finally { setBusy(false) }
   }
 
@@ -1373,7 +1374,7 @@ function CoachesTab() {
                           const result = await mergeBookings({})
                           setMergeResult(result as any)
                         } catch (err: any) {
-                          alert(err?.message ?? 'Merge failed')
+                          alert(getErrorMessage(err) ?? 'Merge failed')
                         } finally {
                           setMergeBusy(false)
                         }
