@@ -380,16 +380,21 @@ export const updateCalendarEvent = internalAction({
       additionalLanes, athleteSlots: args.athleteSlots,
     });
 
-    // Update per-lane events if available
+    // Update per-lane events if available — customise the summary per lane so a
+    // secondary lane's event shows ITS lane name (mirrors createCalendarEvent).
     if (args.laneCalendarEventIds && args.laneCalendarEventIds.length > 0) {
       for (const entry of args.laneCalendarEventIds) {
+        const lName = LANE_NAMES[entry.laneId] || entry.laneId;
+        const perLaneBody = entry.laneId === args.laneId
+          ? eventBody
+          : { ...eventBody, summary: eventBody.summary.replace(laneName, lName) };
         try {
           await fetch(
             `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(entry.calendarId)}/events/${encodeURIComponent(entry.eventId)}`,
             {
               method: "PUT",
               headers: { Authorization: `Bearer ${tokenInfo.accessToken}`, "Content-Type": "application/json" },
-              body: JSON.stringify(eventBody),
+              body: JSON.stringify(perLaneBody),
             }
           );
         } catch (e) {

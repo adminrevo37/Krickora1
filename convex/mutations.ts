@@ -432,9 +432,15 @@ export async function applyBookingChange(
     adjustedAthleteSlots = keptSlots.length > 0 ? keptSlots : undefined;
   }
 
-  // Capture old calendar event ids BEFORE patching (for deletion).
+  // Capture old calendar event ids BEFORE patching.
   const oldCalEventId = booking.googleCalendarEventId;
   const oldCalEventIds = booking.googleCalendarEventIds;
+  // Did the LANE SET change? Same lanes → update the existing event(s) in place
+  // (time/duration/details). Changed lanes → MOVE the event to the new lane's
+  // (different) Google Calendar: delete the old event(s), create fresh ones.
+  const oldLaneKey = [booking.laneId, ...((booking.additionalLaneIds ?? []) as string[])].slice().sort().join(",");
+  const newLaneKey = [change.newLaneId, ...((change.newAdditionalLaneIds ?? booking.additionalLaneIds ?? []) as string[])].slice().sort().join(",");
+  const laneSetChanged = oldLaneKey !== newLaneKey;
 
   await ctx.db.patch(booking._id, {
     date: change.newDate,
@@ -447,9 +453,9 @@ export async function applyBookingChange(
     ...(change.newPriceInCents !== undefined ? { priceInCents: change.newPriceInCents } : {}),
     athleteSlots: adjustedAthleteSlots,
     accessCode,
-    // Calendar always re-syncs (time/lane may have changed); clear the old ids.
-    googleCalendarEventId: undefined,
-    googleCalendarEventIds: undefined,
+    // On a lane MOVE we recreate the events (new ids) so clear the old ones; on an
+    // in-place update we keep the existing event ids and PUT the new details.
+    ...(laneSetChanged ? { googleCalendarEventId: undefined, googleCalendarEventIds: undefined } : {}),
     ...(change.regenCode ? { lockSyncStatus: "pending" } : {}),
     reminderSent: false,
   });
@@ -485,29 +491,62 @@ export async function applyBookingChange(
     });
   }
 
-  // Delete old calendar events, then create fresh ones at the new slot.
-  if (oldCalEventId) {
-    await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-      googleCalendarEventId: oldCalEventId,
+  // ── Google Calendar sync ────────────────────────────────────────────────
+  // Same lane(s): UPDATE the existing event(s) in place with the new time /
+  // duration / details. Lane change: MOVE — delete the old event(s) from the old
+  // lane's calendar and create fresh ones on the new lane's (different) calendar.
+  const calStatus = booking.status === "pending_edit_payment" ? "confirmed" : booking.status;
+  const calAthleteSlots = (adjustedAthleteSlots ?? []).map((s: any) => ({
+    athleteName: s.athleteName,
+    startHour: s.startHour,
+    durationMinutes: s.durationMinutes,
+  }));
+  const hadEvents = !!oldCalEventId || (Array.isArray(oldCalEventIds) && oldCalEventIds.length > 0);
+
+  if (!laneSetChanged && hadEvents) {
+    // In-place update — keeps the same event ids on the same calendars.
+    await ctx.scheduler.runAfter(0, internal.googleCalendar.updateCalendarEvent, {
+      googleCalendarEventId: oldCalEventId ?? "",
+      laneId: change.newLaneId,
+      variantId: change.newVariantId ?? booking.variantId,
+      date: change.newDate,
+      startHour: change.newStartHour,
+      duration: change.newDuration,
+      customerName: booking.customerName,
+      customerEmail: booking.customerEmail,
+      customerPhone: booking.customerPhone,
+      status: calStatus,
+      isCoachBooking: booking.isCoachBooking,
+      accessCode,
+      additionalLaneIds: change.newAdditionalLaneIds ?? booking.additionalLaneIds,
+      athleteSlots: calAthleteSlots,
       laneCalendarEventIds: oldCalEventIds,
     });
+  } else {
+    // Lane move (or no prior events): delete old, create fresh on the new lane(s).
+    if (hadEvents) {
+      await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
+        googleCalendarEventId: oldCalEventId ?? "",
+        laneCalendarEventIds: oldCalEventIds,
+      });
+    }
+    await ctx.scheduler.runAfter(500, internal.googleCalendar.createCalendarEvent, {
+      bookingId: booking._id.toString(),
+      laneId: change.newLaneId,
+      variantId: change.newVariantId ?? booking.variantId,
+      date: change.newDate,
+      startHour: change.newStartHour,
+      duration: change.newDuration,
+      customerName: booking.customerName,
+      customerEmail: booking.customerEmail,
+      customerPhone: booking.customerPhone,
+      status: calStatus,
+      isCoachBooking: booking.isCoachBooking,
+      accessCode,
+      additionalLaneIds: change.newAdditionalLaneIds ?? booking.additionalLaneIds,
+      athleteSlots: calAthleteSlots,
+    });
   }
-  await ctx.scheduler.runAfter(500, internal.googleCalendar.createCalendarEvent, {
-    bookingId: booking._id.toString(),
-    laneId: change.newLaneId,
-    variantId: change.newVariantId ?? booking.variantId,
-    date: change.newDate,
-    startHour: change.newStartHour,
-    duration: change.newDuration,
-    customerName: booking.customerName,
-    customerEmail: booking.customerEmail,
-    customerPhone: booking.customerPhone,
-    status: booking.status === "pending_edit_payment" ? "confirmed" : booking.status,
-    isCoachBooking: booking.isCoachBooking,
-    accessCode,
-    additionalLaneIds: change.newAdditionalLaneIds ?? booking.additionalLaneIds,
-    athleteSlots: adjustedAthleteSlots,
-  });
 
   // Owner "booking modified" email (reuses the rescheduled template).
   if (booking.customerEmail) {
@@ -1690,6 +1729,34 @@ export const editBookingDuration = mutation({
       });
     }
 
+    // Google Calendar — duration (and possibly athlete slots) changed; the lane,
+    // date and start are unchanged, so UPDATE the existing event(s) in place.
+    const finalDurSlots = (isShortening && prevDurSlots.length > 0 ? (durAdjustedSlots ?? []) : (booking.athleteSlots ?? [])) as any[];
+    const durHadEvents = !!booking.googleCalendarEventId || (Array.isArray(booking.googleCalendarEventIds) && booking.googleCalendarEventIds.length > 0);
+    if (durHadEvents) {
+      await ctx.scheduler.runAfter(0, internal.googleCalendar.updateCalendarEvent, {
+        googleCalendarEventId: booking.googleCalendarEventId ?? "",
+        laneId: booking.laneId,
+        variantId: booking.variantId,
+        date: booking.date,
+        startHour: booking.startHour,
+        duration: args.newDuration,
+        customerName: booking.customerName,
+        customerEmail: booking.customerEmail,
+        customerPhone: booking.customerPhone,
+        status: booking.status,
+        isCoachBooking: booking.isCoachBooking,
+        accessCode: booking.accessCode,
+        additionalLaneIds: booking.additionalLaneIds,
+        athleteSlots: finalDurSlots.map((s: any) => ({
+          athleteName: s.athleteName,
+          startHour: s.startHour,
+          durationMinutes: s.durationMinutes,
+        })),
+        laneCalendarEventIds: booking.googleCalendarEventIds,
+      });
+    }
+
     return { id: args.id, droppedAthletes: durDroppedSlots.map((s: any) => s.athleteName) };
   },
 });
@@ -1907,6 +1974,19 @@ export const rescheduleBooking = mutation({
       adjustedAthleteSlots = keptSlots.length > 0 ? keptSlots : undefined;
     }
 
+    // Lane set change → MOVE the calendar event to the new lane's calendar;
+    // same lane(s) → update the existing event(s) in place.
+    const rOldCalEventId = booking.googleCalendarEventId;
+    const rOldCalEventIds = booking.googleCalendarEventIds;
+    const rOldLaneKey = [booking.laneId, ...((booking.additionalLaneIds ?? []) as string[])].slice().sort().join(",");
+    const rNewLaneKey = [newLaneId, ...((args.newAdditionalLaneIds ?? booking.additionalLaneIds ?? []) as string[])].slice().sort().join(",");
+    const rLaneSetChanged = rOldLaneKey !== rNewLaneKey;
+    const rHadEvents = !!rOldCalEventId || (Array.isArray(rOldCalEventIds) && rOldCalEventIds.length > 0);
+    const rAccessCode = args.newAccessCode ?? booking.accessCode;
+    const rCalAthleteSlots = (adjustedAthleteSlots ?? []).map((s: any) => ({
+      athleteName: s.athleteName, startHour: s.startHour, durationMinutes: s.durationMinutes,
+    }));
+
     // Apply the reschedule
     await ctx.db.patch(args.id, {
       date: args.newDate,
@@ -1917,35 +1997,56 @@ export const rescheduleBooking = mutation({
       additionalLaneIds: args.newAdditionalLaneIds ?? booking.additionalLaneIds,
       coachPrice: newCoachPrice,
       athleteSlots: adjustedAthleteSlots,
-      accessCode: args.newAccessCode ?? booking.accessCode,
-      googleCalendarEventId: undefined,
-      googleCalendarEventIds: undefined,
+      accessCode: rAccessCode,
+      // Keep the existing event ids for an in-place update; clear them on a move.
+      ...(rLaneSetChanged ? { googleCalendarEventId: undefined, googleCalendarEventIds: undefined } : {}),
       lockSyncStatus: args.newAccessCode ? "pending" : booking.lockSyncStatus,
     });
 
-    // Delete old calendar events and create new ones
-    if (booking.googleCalendarEventId) {
-      await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-        googleCalendarEventId: booking.googleCalendarEventId,
-        laneCalendarEventIds: booking.googleCalendarEventIds,
+    if (!rLaneSetChanged && rHadEvents) {
+      // Same lane(s) — update the event(s) in place with the new time/details.
+      await ctx.scheduler.runAfter(0, internal.googleCalendar.updateCalendarEvent, {
+        googleCalendarEventId: rOldCalEventId ?? "",
+        laneId: newLaneId,
+        variantId: args.newVariantId ?? booking.variantId,
+        date: args.newDate,
+        startHour: args.newStartHour,
+        duration: args.newDuration,
+        customerName: booking.customerName,
+        customerEmail: booking.customerEmail,
+        customerPhone: booking.customerPhone,
+        status: booking.status,
+        isCoachBooking: booking.isCoachBooking,
+        accessCode: rAccessCode,
+        additionalLaneIds: args.newAdditionalLaneIds ?? booking.additionalLaneIds,
+        athleteSlots: rCalAthleteSlots,
+        laneCalendarEventIds: rOldCalEventIds,
+      });
+    } else {
+      // Lane move (or no prior events): delete old, create fresh on the new lane(s).
+      if (rHadEvents) {
+        await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
+          googleCalendarEventId: rOldCalEventId ?? "",
+          laneCalendarEventIds: rOldCalEventIds,
+        });
+      }
+      await ctx.scheduler.runAfter(500, internal.googleCalendar.createCalendarEvent, {
+        bookingId: args.id.toString(),
+        laneId: newLaneId,
+        variantId: args.newVariantId ?? booking.variantId,
+        date: args.newDate,
+        startHour: args.newStartHour,
+        duration: args.newDuration,
+        customerName: booking.customerName,
+        customerEmail: booking.customerEmail,
+        customerPhone: booking.customerPhone,
+        status: booking.status,
+        isCoachBooking: booking.isCoachBooking,
+        accessCode: rAccessCode,
+        additionalLaneIds: args.newAdditionalLaneIds ?? booking.additionalLaneIds,
+        athleteSlots: rCalAthleteSlots,
       });
     }
-    await ctx.scheduler.runAfter(500, internal.googleCalendar.createCalendarEvent, {
-      bookingId: args.id.toString(),
-      laneId: newLaneId,
-      variantId: args.newVariantId ?? booking.variantId,
-      date: args.newDate,
-      startHour: args.newStartHour,
-      duration: args.newDuration,
-      customerName: booking.customerName,
-      customerEmail: booking.customerEmail,
-      customerPhone: booking.customerPhone,
-      status: booking.status,
-      isCoachBooking: booking.isCoachBooking,
-      accessCode: args.newAccessCode ?? booking.accessCode,
-      additionalLaneIds: args.newAdditionalLaneIds ?? booking.additionalLaneIds,
-      athleteSlots: adjustedAthleteSlots,
-    });
 
     // Send reschedule confirmation email
     if (booking.customerEmail) {
