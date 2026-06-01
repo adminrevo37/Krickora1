@@ -22,6 +22,7 @@ import {
   type WindowTier,
 } from "./lib/bookingWindow";
 import { computeCustomerPriceCents } from "./lib/pricing";
+import { PRICE_DEFAULTS } from "./lib/priceDefaults";
 import { notifyMatesOnCancel, notifyMatesOnModify } from "./mates";
 
 // ============================================================================
@@ -328,6 +329,25 @@ async function detectAthleteConflicts(
 
   const warnings: string[] = [];
   const seen = new Set<string>();
+
+  // A-2: same athlete placed on two OVERLAPPING slots within THIS submission
+  // (e.g. one child put on two lanes at the same time in one coach booking) —
+  // the cross-booking loop below can't catch this, so check the candidates
+  // against each other first.
+  for (const [aid, list] of candidateById) {
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        if (list[i].start < list[j].end && list[j].start < list[i].end) {
+          const key = `self:${aid}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            warnings.push(`${list[i].name} is allocated to two overlapping slots in this session.`);
+          }
+        }
+      }
+    }
+  }
+
   for (const other of sameDay) {
     if (other._id === opts.excludeBookingId) continue;
     if (other.status === "cancelled" || !other.isCoachBooking) continue;
@@ -1414,7 +1434,7 @@ export const confirmTentativeBooking = mutation({
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
       .first();
-    const coachPer30Min = confSettings?.coachPer30Min ?? 15;
+    const coachPer30Min = confSettings?.coachPer30Min ?? PRICE_DEFAULTS.coachPer30Min;
     const halfHours = booking.duration / 30;
     const coachPrice = halfHours * coachPer30Min;
 
@@ -1616,7 +1636,7 @@ export const editBookingDuration = mutation({
 
     // Recalculate coach price based on new duration (DI-6: use settings rate)
     const halfHours = args.newDuration / 30;
-    const coachPer30MinEdit = editDurSettings?.coachPer30Min ?? 15;
+    const coachPer30MinEdit = editDurSettings?.coachPer30Min ?? PRICE_DEFAULTS.coachPer30Min;
     const newCoachPrice = halfHours * coachPer30MinEdit;
 
     // Bug #7: keep-what-fits when shortening a coach booking. Start time is
@@ -1850,7 +1870,7 @@ export const rescheduleBooking = mutation({
     let newCoachPrice = booking.coachPrice;
     if (isCoach) {
       const halfHours = args.newDuration / 30;
-      const coachRatePer30 = settings?.coachPer30Min ?? 15;
+      const coachRatePer30 = settings?.coachPer30Min ?? PRICE_DEFAULTS.coachPer30Min;
       newCoachPrice = halfHours * coachRatePer30;
     }
 
@@ -2175,7 +2195,7 @@ export const modifyBooking = mutation({
     let newPriceInCents: number | undefined;
     let priceDiffCents = 0;
     if (isCoach) {
-      const per30 = settings?.coachPer30Min ?? 15;
+      const per30 = settings?.coachPer30Min ?? PRICE_DEFAULTS.coachPer30Min;
       newCoachPrice = (effDuration / 30) * per30;
     } else {
       const laneCents = (variantId: string | null) =>
@@ -2593,7 +2613,7 @@ export const copyCoachWeek = mutation({
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
       .first();
-    const coachPer30 = (settings as any)?.coachPer30Min ?? 15;
+    const coachPer30 = (settings as any)?.coachPer30Min ?? PRICE_DEFAULTS.coachPer30Min;
     const dailyHours: any = (settings as any)?.dailyHours;
 
     // Source = the coach's own non-cancelled coach bookings in the source week.

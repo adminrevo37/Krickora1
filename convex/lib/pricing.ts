@@ -6,6 +6,8 @@
 // with the Truman variant on its own rate. Truman is detected from the variantId
 // string (variant ids contain "truman"), matching the client check.
 
+import { PRICE_DEFAULTS } from "./priceDefaults";
+
 export interface PricingSettings {
   customerPricePerHour?: number | null;
   trumanPricePerHour?: number | null;
@@ -18,7 +20,7 @@ export function computeCustomerPriceCents(
   durationMinutes: number
 ): number {
   const hours = durationMinutes / 60;
-  let perHour = settings?.customerPricePerHour ?? 40;
+  let perHour = settings?.customerPricePerHour ?? PRICE_DEFAULTS.customerPerHour;
   if (variantId && /truman/i.test(variantId)) {
     perHour = settings?.trumanPricePerHour ?? perHour;
   }

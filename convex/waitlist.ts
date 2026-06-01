@@ -171,8 +171,11 @@ export const advanceWaitlistOffer = internalMutation({
       const bEnd = b.startHour + b.duration / 60;
       return slotStart < bEnd && slotEnd > b.startHour;
     };
+    // B-2: only a CONFIRMED booking destroys the queue. A tentative can still be
+    // abandoned (reopening the slot), so it's treated as in-flight below — the
+    // queue is preserved until the booking actually confirms.
     const filled = bookings.some(
-      (b: any) => overlaps(b) && (b.status === "confirmed" || b.status === "tentative")
+      (b: any) => overlaps(b) && b.status === "confirmed"
     );
     if (filled) {
       // Slot taken — clear the queue for this exact slot (decision #6) and drop
@@ -191,7 +194,8 @@ export const advanceWaitlistOffer = internalMutation({
         overlaps(b) &&
         (b.status === "pending_payment" ||
           b.status === "pending" ||
-          b.status === "pending_edit_payment")
+          b.status === "pending_edit_payment" ||
+          b.status === "tentative") // B-2: tentative is non-destructive in-flight
     );
     if (inFlight) {
       // Someone (often the offeree) is mid-checkout — don't roll. Their checkout

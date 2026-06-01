@@ -1,4 +1,5 @@
 // Site settings store - editable from admin panel
+import { PRICE_DEFAULTS } from './priceDefaults'
 
 export type DayKey = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday'
 
@@ -67,12 +68,12 @@ const DEFAULT_DAILY_HOURS: Record<DayKey, DailyHours> = {
 }
 
 const DEFAULT_SETTINGS: SiteSettings = {
-  customerPricePerHour: 40,
+  customerPricePerHour: PRICE_DEFAULTS.customerPerHour,
   customerPrice90Min: 55,
-  trumanPricePerHour: 50,
+  trumanPricePerHour: PRICE_DEFAULTS.trumanPerHour,
   trumanPrice90Min: 70,
-  coachPerHour: 25,
-  coachPer30Min: 15,
+  coachPerHour: PRICE_DEFAULTS.coachPerHour,
+  coachPer30Min: PRICE_DEFAULTS.coachPer30Min,
   cancellationHoursBefore: 2,
   openingHour: 7,
   closingHour: 21,

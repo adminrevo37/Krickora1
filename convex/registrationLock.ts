@@ -1,6 +1,7 @@
 import { query, mutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { requireAdmin } from "./lib/adminGuard";
+import { PRICE_DEFAULTS } from "./lib/priceDefaults";
 
 export const isRegistrationLocked = query({
   args: {},
@@ -37,12 +38,12 @@ export const setRegistrationLocked = mutation({
     }
     return await ctx.db.insert("siteSettings", {
       key: "global",
-      customerPricePerHour: 40,
+      customerPricePerHour: PRICE_DEFAULTS.customerPerHour,
       customerPrice90Min: 55,
-      trumanPricePerHour: 50,
+      trumanPricePerHour: PRICE_DEFAULTS.trumanPerHour,
       trumanPrice90Min: 70,
-      coachPer30Min: 15,
-      coachPerHour: 25,
+      coachPer30Min: PRICE_DEFAULTS.coachPer30Min,
+      coachPerHour: PRICE_DEFAULTS.coachPerHour,
       cancellationHoursBefore: 2,
       openingHour: 7,
       closingHour: 21,

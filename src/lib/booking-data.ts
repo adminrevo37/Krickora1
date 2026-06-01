@@ -37,10 +37,11 @@ export const LANES: Lane[] = [
 // Coach pricing (1-hour minimum; per-hour rate only)
 // Rate is sourced from admin panel settings (siteSettings.coachPerHour)
 import { getSettingsStore, getHoursForDate, DAY_KEYS } from './settings-store'
+import { PRICE_DEFAULTS } from './priceDefaults'
 
 export const COACH_PRICING = {
   get perHour(): number {
-    try { return getSettingsStore().get().coachPerHour ?? 25 } catch { return 25 }
+    try { return getSettingsStore().get().coachPerHour ?? PRICE_DEFAULTS.coachPerHour } catch { return PRICE_DEFAULTS.coachPerHour }
   },
 } as const
 
@@ -58,7 +59,7 @@ export function getCustomerPrice(lane: Lane, variantId: string | null, durationM
   let perHour = 40
   try {
     const s = getSettingsStore().get()
-    perHour = s.customerPricePerHour ?? 40
+    perHour = s.customerPricePerHour ?? PRICE_DEFAULTS.customerPerHour
     // Truman variant uses Truman hourly rate from settings
     if (lane.variants && variantId) {
       const variant = lane.variants.find(v => v.id === variantId)

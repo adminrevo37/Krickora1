@@ -358,6 +358,9 @@ export const removeMateFromBooking = mutation({
   },
   handler: async (ctx, args) => {
     const { booking } = await authorizeMateManagement(ctx, args.bookingId);
+    // A-3: a cancelled booking already notified its mates (M4 on cancel); don't
+    // re-remove / re-email here.
+    if (booking.status === "cancelled") throw new Error("This booking has been cancelled.");
     const current = booking.mates ?? [];
     if (!current.some((m: any) => m.customerId === args.mateCustomerId)) {
       throw new Error("That mate isn't on this booking.");
@@ -373,7 +376,10 @@ export const removeMateFromBooking = mutation({
           .withIndex("by_email", (q: any) => q.eq("email", booking.customerEmail.toLowerCase()))
           .first()
       : null;
-    if (mate?.email) {
+    // A-3: only send the "you were removed" email for an upcoming session — a
+    // finished/in-progress session has nothing to notify about.
+    const notStarted = bookingStartMs(booking.date, booking.startHour) > awstNowMs();
+    if (mate?.email && notStarted) {
       await ctx.scheduler.runAfter(0, internal.emails.sendMateRemoved, {
         to: mate.email,
         ownerName: shortName(ownerCustomer?.name ?? booking.customerName ?? "The booking owner"),
@@ -394,6 +400,8 @@ export const leaveBooking = mutation({
     if (!caller) throw new Error("Authentication required.");
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) throw new Error("Booking not found.");
+    // A-3: don't leave/notify on a cancelled booking (mates already notified on cancel).
+    if (booking.status === "cancelled") throw new Error("This booking has been cancelled.");
     const current = booking.mates ?? [];
     if (!current.some((m: any) => m.customerId === caller._id)) {
       throw new Error("You're not on this booking.");
@@ -401,7 +409,9 @@ export const leaveBooking = mutation({
     await ctx.db.patch(args.bookingId, {
       mates: current.filter((m: any) => m.customerId !== caller._id),
     });
-    if (booking.customerEmail) {
+    // A-3: only notify the owner for an upcoming session.
+    const notStarted = bookingStartMs(booking.date, booking.startHour) > awstNowMs();
+    if (booking.customerEmail && notStarted) {
       await ctx.scheduler.runAfter(0, internal.emails.sendMateLeft, {
         to: booking.customerEmail,
         mateName: shortName(caller.name ?? "A mate"),
