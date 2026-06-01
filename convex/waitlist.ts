@@ -135,51 +135,66 @@ export async function consumeWaitlistHoldForBooking(
 
 export const advanceWaitlistOffer = internalMutation({
   args: { laneId: v.string(), date: v.string(), hour: v.number() },
-  handler: async (ctx, { laneId, date, hour }) => {
+  handler: async (ctx, { laneId: preferLaneId, date, hour }) => {
     const slotStart = hour;
     const slotEnd = hour + 1;
     const now = Date.now();
+    const ALL_LANES = Object.keys(LANE_NAME_MAP);
 
-    // Entries for this exact slot. by_slot fully specifies the key, so remaining
-    // order is _creationTime ascending → oldest waitlisted member first.
+    // FIX — the waitlist auto-offer was dead in production. Customers join the
+    // waitlist for an HOUR (any lane): BookingCalendar stores `laneId: '*'`. But
+    // every trigger (cancel/reschedule/abandon) passed the freed booking's SPECIFIC
+    // lane, so the old `by_slot(laneId)` lookup queried e.g. 'bm3' and never matched
+    // the '*' entries → no offer ever fired. The engine is now hour-based: entries
+    // are read with '*', occupancy is computed across ALL lanes (primary AND
+    // additionalLaneIds), and the exclusive offer + hold land on a currently-free lane.
     const entries = await ctx.db
       .query("waitlist")
       .withIndex("by_slot", (q: any) =>
-        q.eq("laneId", laneId).eq("date", date).eq("hour", hour)
+        q.eq("laneId", "*").eq("date", date).eq("hour", hour)
       )
       .collect();
 
-    // Delete every 'waitlist' hold overlapping this slot.
-    const deleteWaitlistHolds = async () => {
-      const holds = await ctx.db
-        .query("slotHolds")
-        .withIndex("by_laneId_date", (q: any) => q.eq("laneId", laneId).eq("date", date))
-        .collect();
-      for (const h of holds) {
-        if (h.holdType !== "waitlist") continue;
-        const hEnd = h.startHour + h.duration / 60;
-        if (slotStart < hEnd && slotEnd > h.startHour) await ctx.db.delete(h._id);
-      }
-    };
-
-    // 1. Is the slot actually filled / in-flight?
-    const bookings = await ctx.db
-      .query("bookings")
-      .withIndex("by_laneId_date", (q: any) => q.eq("laneId", laneId).eq("date", date))
-      .collect();
     const overlaps = (b: any) => {
       const bEnd = b.startHour + b.duration / 60;
       return slotStart < bEnd && slotEnd > b.startHour;
     };
-    // B-2: only a CONFIRMED booking destroys the queue. A tentative can still be
-    // abandoned (reopening the slot), so it's treated as in-flight below — the
-    // queue is preserved until the booking actually confirms.
-    const filled = bookings.some(
-      (b: any) => overlaps(b) && b.status === "confirmed"
-    );
+    const occupiesLane = (b: any, lid: string) =>
+      b.laneId === lid ||
+      (Array.isArray(b.additionalLaneIds) && b.additionalLaneIds.includes(lid));
+
+    // All non-cancelled bookings overlapping this hour (any lane).
+    const dayBookings = (
+      await ctx.db
+        .query("bookings")
+        .withIndex("by_date", (q: any) => q.eq("date", date))
+        .collect()
+    ).filter((b: any) => b.status !== "cancelled" && overlaps(b));
+    const IN_FLIGHT = ["pending_payment", "pending", "pending_edit_payment", "tentative"];
+    const laneConfirmed = (lid: string) =>
+      dayBookings.some((b: any) => b.status === "confirmed" && occupiesLane(b, lid));
+    const laneInFlight = (lid: string) =>
+      dayBookings.some((b: any) => IN_FLIGHT.includes(b.status) && occupiesLane(b, lid));
+
+    // Delete every 'waitlist' hold overlapping this hour, on ANY lane.
+    const deleteWaitlistHolds = async () => {
+      for (const lid of ALL_LANES) {
+        const holds = await ctx.db
+          .query("slotHolds")
+          .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", date))
+          .collect();
+        for (const h of holds) {
+          if (h.holdType !== "waitlist") continue;
+          const hEnd = h.startHour + h.duration / 60;
+          if (slotStart < hEnd && slotEnd > h.startHour) await ctx.db.delete(h._id);
+        }
+      }
+    };
+
+    // 1. Hour fully booked (every lane has a CONFIRMED booking) → queue dies
+    // (decision #6). B-2: only a confirmed booking destroys the queue.
+    const filled = ALL_LANES.every((lid) => laneConfirmed(lid));
     if (filled) {
-      // Slot taken — clear the queue for this exact slot (decision #6) and drop
-      // any leftover hold. Members can re-add if it reopens.
       await deleteWaitlistHolds();
       for (const e of entries) {
         const st = statusOf(e);
@@ -188,19 +203,6 @@ export const advanceWaitlistOffer = internalMutation({
         }
       }
       return { result: "filled_cleared" };
-    }
-    const inFlight = bookings.some(
-      (b: any) =>
-        overlaps(b) &&
-        (b.status === "pending_payment" ||
-          b.status === "pending" ||
-          b.status === "pending_edit_payment" ||
-          b.status === "tentative") // B-2: tentative is non-destructive in-flight
-    );
-    if (inFlight) {
-      // Someone (often the offeree) is mid-checkout — don't roll. Their checkout
-      // hold protects the slot; we revisit on confirm / abandonment.
-      return { result: "in_flight" };
     }
 
     // 2. Is there a live offer outstanding?
@@ -213,14 +215,28 @@ export const advanceWaitlistOffer = internalMutation({
       await deleteWaitlistHolds();
     }
 
-    // 3. Next waiting member (oldest first).
+    // 3. Choose the lane to offer: prefer the freed lane, else any lane free this
+    // hour. A lane is offerable if it has no confirmed booking and nothing
+    // mid-checkout (a checkout hold corresponds to a pending booking = inFlight).
+    const isFree = (lid: string) => !laneConfirmed(lid) && !laneInFlight(lid);
+    const offerLane =
+      preferLaneId !== "*" && isFree(preferLaneId)
+        ? preferLaneId
+        : ALL_LANES.find((lid) => isFree(lid));
+    if (!offerLane) {
+      // No free lane right now (e.g. the only openings are mid-checkout) — the
+      // checkout hold protects the slot; revisit on confirm / abandonment.
+      return { result: "in_flight" };
+    }
+
+    // 4. Next waiting member (oldest first).
     const next = entries.find((e: any) => statusOf(e) === "waiting");
     if (!next) {
       await deleteWaitlistHolds();
       return { result: "no_waiting" };
     }
 
-    // 4. Make the exclusive offer.
+    // 5. Make the exclusive offer (hold + email + roll-on) on the free lane.
     const settings = await ctx.db
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
@@ -234,7 +250,7 @@ export const advanceWaitlistOffer = internalMutation({
       offerExpiresAt: new Date(expiresAtMs).toISOString(),
     });
     await ctx.db.insert("slotHolds", {
-      laneId,
+      laneId: offerLane,
       date,
       startHour: hour,
       duration: 60,
@@ -245,22 +261,22 @@ export const advanceWaitlistOffer = internalMutation({
       createdAt: new Date().toISOString(),
     });
 
-    // 5. Email the exclusive offer with the AWST deadline.
-    const laneName = LANE_NAME_MAP[laneId] ?? laneId;
+    // 6. Email the exclusive offer with the AWST deadline.
+    const laneName = LANE_NAME_MAP[offerLane] ?? offerLane;
     await ctx.scheduler.runAfter(0, internal.emails.sendWaitlistVacancy, {
       to: next.userEmail,
       customerName: next.userName,
       laneName,
       date: fmtAwstDateLabel(date),
       timeSlot: `${fmtHour12(hour)} - ${fmtHour12(hour + 1)}`,
-      bookingUrl: `https://krickora.com/?book=${laneId}&date=${date}&hour=${hour}`,
+      bookingUrl: `https://krickora.com/?book=${offerLane}&date=${date}&hour=${hour}`,
       otherWaitlistCount: "0",
       offerDeadline: `${fmtAwstTime(expiresAtMs)} AWST`,
     });
 
-    // 6. Roll on at expiry if they don't book.
+    // 7. Roll on at expiry if they don't book.
     await ctx.scheduler.runAfter(holdMs, internal.waitlist.advanceWaitlistOffer, {
-      laneId,
+      laneId: preferLaneId,
       date,
       hour,
     });
