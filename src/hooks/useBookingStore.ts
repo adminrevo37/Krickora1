@@ -45,6 +45,7 @@ export function useBookings() {
   // isAdmin is derived from customerRecord.role (real auth, not impersonated role) — correct under impersonation
   // betterAuthUser.id is always the real session user ID (correct under impersonation too)
   const currentUserId = user?.id
+  const currentUserEmail = user?.email?.toLowerCase()
   const createBookingMut = useMutation(api.mutations.createBooking)
   const updateBookingMut = useMutation(api.mutations.updateBooking)
   const cancelBookingMut = useMutation(api.mutations.cancelBooking)
@@ -64,7 +65,15 @@ export function useBookings() {
       // bookings are stripped to scheduling fields only (lane/time/status)
       // so the calendar can still show occupancy without exposing customer data.
       if (isAdmin) return b
-      if (currentUserId && b.userId === currentUserId) return b
+      // A booking is "mine" if the auth subject matches OR the email matches.
+      // N-9: admin-created manual bookings store userId = customers._id (not the
+      // auth subject), so a userId-only check stripped the owner's own booking to
+      // "Booked"/'' and it then failed My Bookings' email filter — invisible to the
+      // customer. The email match mirrors the backend's own ownership logic.
+      const mine =
+        (currentUserId && b.userId === currentUserId) ||
+        (currentUserEmail && b.customerEmail?.toLowerCase() === currentUserEmail)
+      if (mine) return b
       return {
         ...b,
         customerName: 'Booked',
@@ -72,7 +81,7 @@ export function useBookings() {
         customerPhone: undefined,
       }
     })
-  }, [rawBookings, isAdmin, currentUserId])
+  }, [rawBookings, isAdmin, currentUserId, currentUserEmail])
 
   const addBooking = useCallback(
     async (booking: Booking) => {
