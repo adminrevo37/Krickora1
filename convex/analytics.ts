@@ -194,7 +194,17 @@ export const getAdminAnalytics = query({
 
       if (b.status === "cancelled") {
         cancelledCount++;
-        continue; // cancelled bookings don't count toward revenue/utilisation
+        // C-3: a coach late-cancel is still charged in full and kept on the coach
+        // statement — so it must count toward coach revenue in management reports too
+        // (previously the blanket cancelled-skip hid it). coachCharge = coachPrice here.
+        if (b.coachLateCancelCharged) {
+          const mBucket = byMonthMap.get(monthKey);
+          periodCoachCharges += coachCharge;
+          if (mBucket) mBucket.coachCharges += coachCharge;
+          if (monthKey === curMonthKey) currentMonthRevenue += coachCharge;
+          else if (monthKey === prevMonthKey) prevMonthRevenue += coachCharge;
+        }
+        continue; // other cancelled bookings don't count toward revenue/utilisation
       }
       confirmedCount++;
 

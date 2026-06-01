@@ -467,15 +467,15 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={step !== 'processing' && step !== 'success' ? onClose : undefined} />
       <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-md overflow-hidden max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className={`p-5 text-white transition-all duration-500 ${step === 'success' ? 'bg-gradient-to-r from-green-500 to-emerald-500' : step === 'processing' ? (isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500' : appliedDiscount?.bypassStripe && totalPrice === 0 ? 'bg-gradient-to-r from-purple-500 to-indigo-500' : 'bg-gradient-to-r from-blue-500 to-indigo-500') : isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500' : 'bg-gradient-to-r from-emerald-500 to-green-500'}`}>
+        <div className={`p-5 text-white transition-all duration-500 ${step === 'success' ? 'bg-gradient-to-r from-green-500 to-emerald-500' : step === 'processing' ? (isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500' : totalPrice === 0 ? 'bg-gradient-to-r from-purple-500 to-indigo-500' : 'bg-gradient-to-r from-blue-500 to-indigo-500') : isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500' : 'bg-gradient-to-r from-emerald-500 to-green-500'}`}>
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-bold">{step === 'success' ? 'Booking Confirmed!' : step === 'processing' ? (appliedDiscount?.bypassStripe && totalPrice === 0 ? 'Confirming Booking...' : 'Redirecting to Payment...') : 'Book a Session'}</h3>
+              <h3 className="text-lg font-bold">{step === 'success' ? 'Booking Confirmed!' : step === 'processing' ? (totalPrice === 0 ? 'Confirming Booking...' : 'Redirecting to Payment...') : 'Book a Session'}</h3>
               <p className="text-white/80 text-sm mt-0.5">{step === 'success' ? 'Your session is booked' : step === 'processing' ? 'Please wait...' : date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
               {isCoach && step === 'details' && <span className="inline-block mt-1 text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-semibold">🏅 Coach Rate &middot; Rolling 8-Day Window</span>}
             </div>
             {step !== 'processing' && step !== 'success' && (
-              <button onClick={onClose} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors">✕</button>
+              <button onClick={onClose} aria-label="Close" className="w-10 h-10 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors">✕</button>
             )}
           </div>
         </div>
@@ -483,9 +483,9 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
         {/* Processing */}
         {step === 'processing' && (
           <div className="p-8 flex flex-col items-center justify-center space-y-4">
-            <div className="relative"><div className={`w-16 h-16 border-4 ${isCoach ? 'border-orange-200' : appliedDiscount?.bypassStripe ? 'border-purple-200' : 'border-blue-200'} rounded-full`} /><div className={`absolute inset-0 w-16 h-16 border-4 border-transparent ${isCoach ? 'border-t-orange-500' : appliedDiscount?.bypassStripe ? 'border-t-purple-500' : 'border-t-blue-500'} rounded-full animate-spin`} /></div>
-            <p className="font-semibold text-gray-800 dark:text-gray-200">{isCoach ? 'Confirming booking...' : appliedDiscount?.bypassStripe && totalPrice === 0 ? 'Confirming complimentary booking...' : 'Redirecting to Stripe...'}</p>
-            {!isCoach && !appliedDiscount?.bypassStripe && <p className="text-xs text-gray-500 dark:text-gray-400">You will be redirected to Stripe to complete your payment securely.</p>}
+            <div className="relative"><div className={`w-16 h-16 border-4 ${isCoach ? 'border-orange-200' : totalPrice === 0 ? 'border-purple-200' : 'border-blue-200'} rounded-full`} /><div className={`absolute inset-0 w-16 h-16 border-4 border-transparent ${isCoach ? 'border-t-orange-500' : totalPrice === 0 ? 'border-t-purple-500' : 'border-t-blue-500'} rounded-full animate-spin`} /></div>
+            <p className="font-semibold text-gray-800 dark:text-gray-200">{isCoach ? 'Confirming booking...' : totalPrice === 0 ? 'Confirming booking...' : 'Redirecting to Stripe...'}</p>
+            {!isCoach && totalPrice !== 0 && <p className="text-xs text-gray-500 dark:text-gray-400">You will be redirected to Stripe to complete your payment securely.</p>}
           </div>
         )}
 
@@ -831,8 +831,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
             )}
 
             <button onClick={handleContinueToPayment} disabled={availableDurations.length === 0 || (isCoach && !isValidCoachStart)}
-              className={`w-full py-3 font-semibold rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600' : appliedDiscount?.bypassStripe && totalPrice === 0 ? 'bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600' : 'bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600'}`}>
-              {!user ? 'Sign In to Book →' : isCoach ? `Confirm — $${totalPrice} →` : appliedDiscount?.bypassStripe && totalPrice === 0 ? 'Confirm Free Booking →' : `Continue to Payment — $${totalPrice} →`}
+              className={`w-full py-3 font-semibold rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600' : totalPrice === 0 ? 'bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600' : 'bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600'}`}>
+              {!user ? 'Sign In to Book →' : isCoach ? `Confirm — $${totalPrice} →` : totalPrice === 0 ? 'Confirm Free Booking →' : `Continue to Payment — $${totalPrice} →`}
             </button>
           </div>
         )}

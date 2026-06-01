@@ -2192,6 +2192,16 @@ export const modifyBooking = mutation({
     const effVariant = args.newVariantId !== undefined ? args.newVariantId : booking.variantId;
     const effAddl = args.newAdditionalLaneIds ?? booking.additionalLaneIds ?? [];
 
+    // B-3: enforce the customer lane cap on modify too (createBooking enforces it
+    // at creation, but the modify path let a customer exceed it by adding lanes).
+    // Coaches are uncapped; admin is exempt.
+    if (!booking.isCoachBooking && !isAdmin) {
+      const maxLanes = (settings as any)?.customerMaxLanesPerBooking ?? 3;
+      if (1 + effAddl.length > maxLanes) {
+        throw new ConvexError(`You can book at most ${maxLanes} lane${maxLanes === 1 ? "" : "s"} per booking.`);
+      }
+    }
+
     const dateChanged = effDate !== booking.date;
     const startChanged = effStart !== booking.startHour;
     const durationChanged = effDuration !== booking.duration;

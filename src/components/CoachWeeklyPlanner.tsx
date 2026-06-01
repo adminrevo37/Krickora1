@@ -266,11 +266,11 @@ export default function CoachWeeklyPlanner() {
 
       {/* Week nav */}
       <div className="flex items-center justify-center gap-3">
-        <button onClick={() => setWeekOffset(o => o - 1)} className="px-3 py-1 rounded-lg border border-gray-200 dark:border-gray-700 text-sm hover:bg-gray-100 dark:hover:bg-gray-800">←</button>
+        <button onClick={() => setWeekOffset(o => o - 1)} className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm hover:bg-gray-100 dark:hover:bg-gray-800">←</button>
         <button onClick={() => setWeekOffset(0)} className="text-sm font-semibold text-gray-700 dark:text-gray-300 min-w-[10rem] text-center">
           {weekOffset === 0 ? 'This week' : weekLabel}
         </button>
-        <button onClick={() => setWeekOffset(o => o + 1)} className="px-3 py-1 rounded-lg border border-gray-200 dark:border-gray-700 text-sm hover:bg-gray-100 dark:hover:bg-gray-800">→</button>
+        <button onClick={() => setWeekOffset(o => o + 1)} className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm hover:bg-gray-100 dark:hover:bg-gray-800">→</button>
       </div>
 
       {banner && (

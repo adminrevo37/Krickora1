@@ -271,7 +271,7 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
               <button onClick={cancelWaitlistMode} className="text-xs px-3 py-1.5 bg-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-300 transition-all">Cancel</button>
             </div>
           ) : (
-            <button onClick={startWaitlistMode} className="text-xs px-3 py-1.5 bg-amber-100 text-amber-700 font-semibold rounded-lg hover:bg-amber-200 transition-all flex items-center gap-1.5">🔔 Join Waitlist</button>
+            <button onClick={startWaitlistMode} className="text-xs px-3 py-2.5 bg-amber-100 text-amber-700 font-semibold rounded-lg hover:bg-amber-200 transition-all flex items-center gap-1.5">🔔 Join Waitlist</button>
           )}
         </div>
       </div>

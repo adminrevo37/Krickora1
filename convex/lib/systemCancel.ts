@@ -45,6 +45,15 @@ export async function systemCancelBooking(
 ): Promise<SystemCancelSummary | null> {
   if (!booking || booking.status === "cancelled") return null;
 
+  // B-4: a closure/block must not disturb a session that has already ended —
+  // leave past bookings entirely untouched (no cancel, no credit, no email).
+  // It already happened; cancelling + crediting it would mint value and corrupt
+  // history. AWST is UTC+8 with no DST, so an explicit offset is exact.
+  const sessionEndMs =
+    Date.parse(`${booking.date}T00:00:00+08:00`) +
+    (booking.startHour * 60 + (booking.duration ?? 0)) * 60000;
+  if (sessionEndMs <= Date.now()) return null;
+
   await ctx.db.patch(booking._id, {
     status: "cancelled",
     cancelledAt: new Date().toISOString(),
