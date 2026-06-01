@@ -84,7 +84,8 @@ function AddMatePage() {
     setInviteLink(null)
     setSearching(true)
     try {
-      const res = await convex.query(api.mates.searchCustomerByMobile, { phone })
+      // searchCustomerByMobile is a mutation (rate-limited server-side, A-1).
+      const res = await convex.mutation(api.mates.searchCustomerByMobile, { phone })
       setMatch(res ? (res as any) : 'none')
     } catch (err: any) {
       flash('error', err?.message ?? 'Search failed')

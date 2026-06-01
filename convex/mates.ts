@@ -2,6 +2,7 @@ import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { getCallerContext } from "./lib/adminGuard";
+import { enforceRateLimit } from "./lib/rateLimit";
 
 // ============================================================================
 // SPEC_ADD_A_MATE — friends added to a customer booking for shared front-door
@@ -88,11 +89,23 @@ function isMateOnBooking(booking: any, customerId: string): boolean {
 // Search the customer directory by mobile number for the Add-a-Mate flow.
 // Returns ONLY a minimal projection (id + short name) — never full PII — so the
 // owner can confirm a match without harvesting identities. Auth required.
-export const searchCustomerByMobile = query({
+// A-1/S-1: this is a MUTATION (not a query) purely so it can rate-limit — the
+// table limiter writes a counter. The add-a-mate UI calls it on demand (form
+// submit), so a mutation is a drop-in. Without a throttle a logged-in user could
+// script-probe arbitrary mobile numbers to learn which have accounts (the result
+// leaks a short name + the customer _id usable as mateCustomerId).
+export const searchCustomerByMobile = mutation({
   args: { phone: v.string() },
   handler: async (ctx, args) => {
     const caller = await getCallerCustomer(ctx);
     if (!caller) return null;
+    // 20 lookups per rolling minute per caller — ample for the real flow, but
+    // stops scripted enumeration of the directory.
+    await enforceRateLimit(
+      ctx,
+      { action: "mate-search", identifier: caller._id, max: 20, windowMs: 60_000 },
+      "Too many searches — please wait a minute and try again."
+    );
     const target = normalizePhone(args.phone);
     if (target.length < 8) return null; // too short to be a real mobile
     // Small directory at this facility — scan + match on normalised suffix.
