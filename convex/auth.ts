@@ -114,6 +114,13 @@ export function createAuthOptions(ctx?: GenericCtx<DataModel>): BetterAuthOption
     database: ctx ? authComponent.adapter(ctx) : (undefined as any),
     emailAndPassword: {
       enabled: true,
+      // Sign-in is NOT blocked on verification (users can browse straight away);
+      // the verified-email requirement is enforced only at the FIRST booking
+      // (mutations.createBooking, SEC decision #4). The verification email itself
+      // is configured under the top-level `emailVerification` key below — Better
+      // Auth only sends on sign-up / honours the send-verification endpoint when
+      // that block exists. Without it, NO verification email is ever sent and the
+      // booking gate becomes unsatisfiable for real customers.
       requireEmailVerification: false,
       // SEC decision #7: NIST-aligned — length over forced complexity.
       minPasswordLength: 10,
@@ -130,6 +137,15 @@ export function createAuthOptions(ctx?: GenericCtx<DataModel>): BetterAuthOption
           console.error("Failed to send password reset email:", e);
         }
       },
+    },
+    // Enables the verification feature: auto-send on sign-up AND the
+    // /api/auth/send-verification-email endpoint (resend). Previously
+    // sendVerificationEmail lived under emailAndPassword, which Better Auth does
+    // not treat as "verification enabled" — so sign-up sent nothing and the
+    // resend endpoint returned VERIFICATION_EMAIL_NOT_ENABLED.
+    emailVerification: {
+      sendOnSignUp: true,
+      autoSignInAfterVerification: true,
       sendVerificationEmail: async ({ user, url }: { user: any; url: string }) => {
         try {
           const result = await sendTemplateEmail("email-verification", user.email, {
