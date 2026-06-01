@@ -23,6 +23,8 @@ import {
   type TimeSlot,
 } from '../lib/booking-data'
 import { getHoursForDate } from '../lib/settings-store'
+import { useQuery } from 'convex/react'
+import { api } from '../../convex/_generated/api'
 import { useBookings } from '../hooks/useBookingStore'
 import { useLaneBlocks } from '../hooks/useLaneBlocks'
 import { useAuth } from '../hooks/useAuth'
@@ -87,6 +89,17 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
   const [waitlistModalOpen, setWaitlistModalOpen] = useState(false)
 
   const dateKey = formatDateKey(selectedDay)
+  // N-11: surface admin facility closures in the customer calendar (server also
+  // rejects in createBooking, but the calendar should grey closed dates, not only
+  // fail at confirm).
+  const closures = (useQuery(api.closures.listUpcoming) ?? []) as Array<{ date: string; reason?: string }>
+  const closedDates = useMemo(() => {
+    const m = new Map<string, string | undefined>()
+    for (const c of closures) m.set(c.date, c.reason)
+    return m
+  }, [closures])
+  const isSelectedDayClosed = closedDates.has(dateKey)
+  const selectedClosureReason = closedDates.get(dateKey)
 
   const laneActiveHalfHours = useMemo(() => {
     const map = new Map<string, Set<number>>()
@@ -120,6 +133,7 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
 
   const handleSlotClick = (lane: Lane, slot: TimeSlot) => {
     if (isPast(selectedDay, slot.hour)) return
+    if (isSelectedDayClosed && !waitlistMode) return // facility closed — booking blocked (server also rejects)
     const booked = isSlotBooked(bookings, lane.id, dateKey, slot.hour)
     if (waitlistMode) { toggleWaitlistSelection(lane.id, dateKey, slot.hour); return }
     if (booked) return
@@ -295,7 +309,14 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
           ))}
         </div>
 
-        <div className="max-h-[600px] overflow-y-auto">
+        {isSelectedDayClosed && (
+          <div className="m-3 rounded-xl border border-red-200 dark:border-red-800/40 bg-red-50 dark:bg-red-900/20 px-4 py-3 text-center">
+            <div className="text-sm font-semibold text-red-700 dark:text-red-400">🚫 Facility closed on this day</div>
+            {selectedClosureReason && <div className="text-xs text-red-600 dark:text-red-400 mt-0.5">{selectedClosureReason}</div>}
+            <div className="text-[11px] text-red-500/80 mt-1">Bookings are unavailable — please choose another day.</div>
+          </div>
+        )}
+        <div className={`max-h-[600px] overflow-y-auto ${isSelectedDayClosed ? 'opacity-40 pointer-events-none' : ''}`}>
           {visibleTimeSlots.map((slot, slotIdx) => {
             const isHalfHour = slot.hour !== Math.floor(slot.hour)
             return (
@@ -315,8 +336,8 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
                   const isMiddleOfBooking = booked && !isStartOfBooking
                   const validStarts = laneStartTimes.get(lane.id) ?? []
                   const isValidStart = validStarts.includes(slot.hour) || (userIsCoach && validCoachStartsForDay.includes(slot.hour)) || isAdmin
-                  const canBook = !past && !booked && !blocked && isValidStart && canBookSlot(bookings, lane.id, dateKey, slot.hour, 60)
-                  const hasDurations = !past && !booked && isValidStart ? getCustomerDurations(bookings, lane.id, dateKey, slot.hour).length > 0 || (userIsCoach && validCoachStartsForDay.includes(slot.hour)) || isAdmin : false
+                  const canBook = !isSelectedDayClosed && !past && !booked && !blocked && isValidStart && canBookSlot(bookings, lane.id, dateKey, slot.hour, 60)
+                  const hasDurations = !isSelectedDayClosed && !past && !booked && isValidStart ? getCustomerDurations(bookings, lane.id, dateKey, slot.hour).length > 0 || (userIsCoach && validCoachStartsForDay.includes(slot.hour)) || isAdmin : false
                   const waitlistCount = getWaitlistCount(lane.id, dateKey, slot.hour)
                   const userOnWaitlist = user ? isOnWaitlist(user.id, lane.id, dateKey, slot.hour) : false
                   const isSelected = isWaitlistSelected(lane.id, dateKey, slot.hour)
