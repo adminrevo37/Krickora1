@@ -73,7 +73,7 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
     for (let h = open; h < close; h += 0.5) slots.push({ hour: h, label: formatTime(h) })
     return slots
   }, [selectedDay, settings])
-  const { bookings, addBooking, canBookTime } = useBookings()
+  const { bookings, canBookTime } = useBookings()
   const { isLaneBlocked } = useLaneBlocks()
   const { isOnWaitlist, getWaitlistCount } = useWaitlist(user?.id)
 
@@ -172,8 +172,12 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
     setPendingAction(null)
   }
 
-  const handleBookingConfirm = async (booking: Booking) => {
-    try { await addBooking(booking) } catch {}
+  const handleBookingConfirm = async (_booking: Booking) => {
+    // Bug N-8: BookingModal now persists the booking itself (awaited, with errors
+    // surfaced) before showing its success screen — so this no longer writes.
+    // It just closes the modal; the reactive listBookings query refreshes the
+    // calendar and My Bookings. Previously this swallowed write errors (`catch {}`),
+    // masking failed bookings as confirmed.
     setModalOpen(false)
     setSelectedSlot(null)
   }

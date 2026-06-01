@@ -290,31 +290,58 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
 
   const handleDiscountBooking = async () => {
     if (!user) return
-    setIsSubmitting(true); setStep('processing')
-    await new Promise(r => setTimeout(r, 600))
+    setIsSubmitting(true); setError(null); setStep('processing')
 
     const accessCode = generateAccessCode()
-    const booking: Booking = {
-      id: crypto.randomUUID(), laneId: lane.id, variantId: selectedVariant?.id ?? null,
-      date: dateKey, startHour, duration, customerName, customerEmail, customerPhone: user.phone,
-      userId: user.id, status: 'confirmed', isCoachBooking: false,
-      additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
-      accessCode,
-      discountCode: appliedDiscount?.code,
-      creditApplied: creditToApply > 0 ? creditToApply : undefined,
+    try {
+      // Bug N-8: persist FIRST (awaited) and only show the success screen + door
+      // code once the server confirms the write. Previously this path showed
+      // success immediately and deferred the insert to the parent's onConfirm
+      // (4s later, error swallowed by `catch {}`), so any server rejection —
+      // email-verify gate, lead-time, horizon — produced a phantom "Booking
+      // Confirmed" that never saved. Mirrors the Stripe path's persist-first flow.
+      const id = await createBookingForStripe({
+        laneId: lane.id,
+        variantId: selectedVariant?.id ?? undefined,
+        date: dateKey,
+        startHour,
+        duration,
+        customerName,
+        customerEmail,
+        customerPhone: user.phone,
+        userId: user.id,
+        status: 'confirmed',
+        isCoachBooking: false,
+        additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
+        accessCode,
+        discountCode: appliedDiscount?.code,
+        // Credit is deducted server-side at confirmation (createBooking) via the
+        // credit ledger — do NOT deduct client-side (avoids double-spend).
+        creditApplied: creditToApply > 0 ? creditToApply : undefined,
+      })
+      const booking: Booking = {
+        id: id as string, laneId: lane.id, variantId: selectedVariant?.id ?? null,
+        date: dateKey, startHour, duration, customerName, customerEmail, customerPhone: user.phone,
+        userId: user.id, status: 'confirmed', isCoachBooking: false,
+        additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
+        accessCode,
+        discountCode: appliedDiscount?.code,
+        creditApplied: creditToApply > 0 ? creditToApply : undefined,
+      }
+      setConfirmedBooking(booking); setStep('success')
+      setTimeout(() => onConfirm(booking), 4000)
+      // Email is sent by createBooking mutation — no client-side duplicate
+    } catch (err: any) {
+      setError(err?.message ?? 'Could not confirm your booking. Please try again.')
+      setStep('details')
+    } finally {
+      setIsSubmitting(false)
     }
-    // Credit is deducted server-side at confirmation (createBooking) via the
-    // credit ledger — do NOT deduct client-side (avoids double-spend).
-    setConfirmedBooking(booking); setStep('success')
-    setTimeout(() => onConfirm(booking), 4000)
-
-    // Email is sent by createBooking mutation — no client-side duplicate
   }
 
   const handleCoachBooking = async () => {
     if (!user) return
-    setIsSubmitting(true); setStep('processing')
-    await new Promise(r => setTimeout(r, 600))
+    setIsSubmitting(true); setError(null); setStep('processing')
 
     let finalDuration = duration
     if (athleteSlots.length > 0) {
@@ -332,18 +359,42 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       codeGeneratedAt: new Date().toISOString(),
     }))
 
-    const booking: Booking = {
-      id: crypto.randomUUID(), laneId: lane.id, variantId: selectedVariant?.id ?? null,
-      date: dateKey, startHour, duration: finalDuration, customerName, customerEmail, customerPhone: user.phone,
-      userId: user.id, status: 'confirmed', isCoachBooking: true, coachPrice: getCoachPrice(finalDuration),
-      additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
-      athleteSlots: slotsWithCodes.length > 0 ? slotsWithCodes : undefined,
-      accessCode,
+    try {
+      // Bug N-8: persist FIRST (awaited); show success only after the write lands.
+      const id = await createBookingForStripe({
+        laneId: lane.id,
+        variantId: selectedVariant?.id ?? undefined,
+        date: dateKey,
+        startHour,
+        duration: finalDuration,
+        customerName,
+        customerEmail,
+        customerPhone: user.phone,
+        userId: user.id,
+        status: 'confirmed',
+        isCoachBooking: true,
+        coachPrice: getCoachPrice(finalDuration),
+        additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
+        athleteSlots: (slotsWithCodes.length > 0 ? slotsWithCodes : undefined) as any,
+        accessCode,
+      })
+      const booking: Booking = {
+        id: id as string, laneId: lane.id, variantId: selectedVariant?.id ?? null,
+        date: dateKey, startHour, duration: finalDuration, customerName, customerEmail, customerPhone: user.phone,
+        userId: user.id, status: 'confirmed', isCoachBooking: true, coachPrice: getCoachPrice(finalDuration),
+        additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
+        athleteSlots: slotsWithCodes.length > 0 ? slotsWithCodes : undefined,
+        accessCode,
+      }
+      setConfirmedBooking(booking); setStep('success')
+      setTimeout(() => onConfirm(booking), 4000)
+      // Email is sent by createBooking mutation — no client-side duplicate
+    } catch (err: any) {
+      setError(err?.message ?? 'Could not confirm your booking. Please try again.')
+      setStep('details')
+    } finally {
+      setIsSubmitting(false)
     }
-    setConfirmedBooking(booking); setStep('success')
-    setTimeout(() => onConfirm(booking), 4000)
-
-    // Email is sent by createBooking mutation — no client-side duplicate
   }
 
   const handleStripeCheckout = async () => {
@@ -485,6 +536,13 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
         {/* Details Step */}
         {step === 'details' && (
           <div className="p-5 space-y-4">
+            {/* Bug N-8: surface a failed booking write (e.g. email-verify gate,
+                lead-time, slot taken) instead of the old silent swallow. */}
+            {error && (
+              <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-200 dark:border-red-800/50">
+                <p className="text-sm text-red-700 dark:text-red-400">⚠️ {error}</p>
+              </div>
+            )}
             {isCoach && (
               <div className="flex items-center gap-3 bg-orange-50 dark:bg-orange-900/20 rounded-xl p-3 border border-orange-200 dark:border-orange-800/50">
                 <div className="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center text-white text-sm font-bold">🏅</div>
