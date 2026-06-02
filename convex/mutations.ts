@@ -23,6 +23,7 @@ import {
 } from "./lib/bookingWindow";
 import { computeCustomerPriceCents } from "./lib/pricing";
 import { PRICE_DEFAULTS } from "./lib/priceDefaults";
+import { composeName, splitName } from "./lib/names";
 import { notifyMatesOnCancel, notifyMatesOnModify } from "./mates";
 
 // ============================================================================
@@ -3024,6 +3025,8 @@ export const updateCustomerByEmail = mutation({
   args: {
     email: v.string(),
     name: v.optional(v.string()),
+    firstName: v.optional(v.string()),
+    lastName: v.optional(v.string()),
     phone: v.optional(v.string()),
     role: v.optional(v.string()),
     coachTier: v.optional(v.string()),
@@ -3067,6 +3070,14 @@ export const updateCustomerByEmail = mutation({
 
     if (existing) {
       const { email, ...updates } = args;
+      // SPEC_NAME_SPLIT: first/last are the source fields — recompose the derived
+      // `name` whenever either is supplied (so all legacy reads stay correct).
+      if (args.firstName !== undefined || args.lastName !== undefined) {
+        const newFirst = (args.firstName ?? (existing as any).firstName ?? "").trim();
+        const newLast = (args.lastName ?? (existing as any).lastName ?? "").trim();
+        const composed = composeName(newFirst, newLast);
+        if (composed) (updates as any).name = composed;
+      }
       // SEC: a non-admin may only edit profile fields on their OWN record. Strip
       // privilege/financial fields (role, coachTier, assignedCoachIds,
       // creditBalance, defaultSessionDuration, athleteCapacity) so a customer
@@ -3088,8 +3099,20 @@ export const updateCustomerByEmail = mutation({
       // SEC: only an admin may seed a privileged role / starting credit on a new
       // record. A non-admin self-creating their own record is always a customer
       // with zero credit.
+      // SPEC_NAME_SPLIT: derive first/last (explicit, else split the name).
+      const seedFirst = (args.firstName ?? "").trim();
+      const seedLast = (args.lastName ?? "").trim();
+      const split = (seedFirst || seedLast)
+        ? { firstName: seedFirst, lastName: seedLast }
+        : splitName(args.name);
+      const displayName =
+        composeName(split.firstName, split.lastName) ||
+        args.name?.trim() ||
+        normalizedEmail.split("@")[0];
       const id = await ctx.db.insert("customers", {
-        name: args.name?.trim() || normalizedEmail.split("@")[0],
+        name: displayName,
+        firstName: split.firstName,
+        lastName: split.lastName,
         email: normalizedEmail,
         phone: args.phone?.trim() || undefined,
         role: updIsAdminCaller ? (args.role || "customer") : "customer",
@@ -3683,6 +3706,32 @@ export const migrateCoachTiers = mutation({
       }
     }
     return { migrated };
+  },
+});
+
+// SPEC_NAME_SPLIT — one-off backfill. Splits each customers.name into
+// firstName/lastName on the LAST space for any row that doesn't yet have a
+// firstName. Idempotent (skips already-split rows). Best-effort on multi-word
+// surnames — admins correct via the edit forms. Run once post-deploy, like
+// migrateCoachTiers / migrateToAthletes.
+export const migrateNameSplit = mutation({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+    const customers = await ctx.db.query("customers").collect();
+    let migrated = 0;
+    let multiWordSurnames = 0;
+    for (const c of customers) {
+      if (typeof (c as any).firstName === "string" && (c as any).firstName.trim()) {
+        continue; // already split
+      }
+      const { firstName, lastName } = splitName((c as any).name);
+      if (!firstName && !lastName) continue;
+      await ctx.db.patch(c._id, { firstName, lastName });
+      migrated++;
+      if (lastName.includes(" ") || firstName.includes(" ")) multiWordSurnames++;
+    }
+    return { migrated, multiWordSurnames, total: customers.length };
   },
 });
 

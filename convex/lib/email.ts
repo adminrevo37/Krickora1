@@ -96,6 +96,19 @@ function muted(text: string): string {
 }
 
 /**
+ * First-name greeting (SPEC_NAME_SPLIT). Prefers the threaded `firstName` (the
+ * real stored field, resolved by the recipient's account); falls back to the
+ * first word of the supplied full-name field so pre-migration accounts (no
+ * firstName yet) still get a friendly greeting. Returns an escaped value.
+ */
+function greetFirst(d: Data, fullField: string): string {
+  const fn = String(d.firstName ?? "").trim();
+  if (fn) return esc(fn);
+  const full = String(d[fullField] ?? "").trim();
+  return esc(full.split(/\s+/)[0] || full);
+}
+
+/**
  * Full email document. `bodyHtml` is the inner content (already HTML).
  * `preheader` is the hidden inbox-preview line.
  */
@@ -149,7 +162,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           title: "Reset your password",
           preheader: "Reset your Krickora password.",
           bodyHtml:
-            p(`Hi ${esc(d.name)},`) +
+            p(`Hi ${greetFirst(d, "name")},`) +
             p(`We received a request to reset your Krickora password. Click below to choose a new one — this link expires shortly.`) +
             button("Reset password", d.resetUrl) +
             muted(`If you didn't request this, you can safely ignore this email — your password won't change.`),
@@ -162,7 +175,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           title: "Verify your email",
           preheader: "Confirm your email to finish setting up Krickora.",
           bodyHtml:
-            p(`Hi ${esc(d.name)},`) +
+            p(`Hi ${greetFirst(d, "name")},`) +
             p(`Welcome to Krickora. Please confirm your email address to activate your account.`) +
             button("Verify email", d.verificationUrl) +
             muted(`If you didn't create a Krickora account, you can ignore this email.`),
@@ -177,7 +190,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           title: "Payment received",
           preheader: `Payment of ${esc(d.amount)} received.`,
           bodyHtml:
-            p(`Hi ${esc(d.customerName)},`) +
+            p(`Hi ${greetFirst(d, "customerName")},`) +
             p(`Thanks — your payment has been received.`) +
             detailRows([
               ["Amount", d.amount],
@@ -197,7 +210,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           preheader: `${esc(d.laneName)} on ${esc(d.date)} at ${esc(d.timeSlot)}.`,
           bodyHtml:
             facilityBanner() +
-            p(`Hi ${esc(d.customerName)}, your session is confirmed.`) +
+            p(`Hi ${greetFirst(d, "customerName")}, your session is confirmed.`) +
             detailRows([
               ["Lane", d.laneName],
               ["Date", d.date],
@@ -216,7 +229,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           title: "Booking cancelled",
           preheader: `Your ${esc(d.laneName)} session on ${esc(d.date)} was cancelled.`,
           bodyHtml:
-            p(`Hi ${esc(d.customerName)}, your session has been cancelled.`) +
+            p(`Hi ${greetFirst(d, "customerName")}, your session has been cancelled.`) +
             detailRows([
               ["Lane", d.laneName],
               ["Date", d.date],
@@ -236,7 +249,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           preheader: `Your session is now ${esc(d.newLaneName)} on ${esc(d.newDate)} at ${esc(d.newTimeSlot)}.`,
           bodyHtml:
             facilityBanner() +
-            p(`Hi ${esc(d.customerName)}, your booking has been updated.`) +
+            p(`Hi ${greetFirst(d, "customerName")}, your booking has been updated.`) +
             muted(`Previously: ${esc(d.oldLaneName)} &middot; ${esc(d.oldDate)} &middot; ${esc(d.oldTimeSlot)}`) +
             detailRows([
               ["Lane", d.newLaneName],
@@ -256,7 +269,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           preheader: `${esc(d.laneName)} at ${esc(d.timeSlot)}.`,
           bodyHtml:
             facilityBanner() +
-            p(`Hi ${esc(d.customerName)}, this is a reminder of your upcoming session.`) +
+            p(`Hi ${greetFirst(d, "customerName")}, this is a reminder of your upcoming session.`) +
             detailRows([
               ["Lane", d.laneName],
               ["Date", d.date],
@@ -276,7 +289,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           title: "You're on the waitlist",
           preheader: `We'll email you if a spot opens for your ${esc(d.slotCount)} requested time(s).`,
           bodyHtml:
-            p(`Hi ${esc(d.customerName)}, you're on the waitlist for the following time(s). If a spot opens, we'll email you an exclusive offer to book.`) +
+            p(`Hi ${greetFirst(d, "customerName")}, you're on the waitlist for the following time(s). If a spot opens, we'll email you an exclusive offer to book.`) +
             // slotsHtml is pre-rendered HTML (raw, not escaped)
             (d.slotsHtml || "") +
             muted(`You'll only be charged if you choose to book a slot that's offered to you.`),
@@ -289,7 +302,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           title: "A spot opened up",
           preheader: `${esc(d.laneName)} on ${esc(d.date)} at ${esc(d.timeSlot)} — reserved for you.`,
           bodyHtml:
-            p(`Hi ${esc(d.customerName)}, good news — a spot you were waiting for is now available, and it's reserved for <strong>you</strong> first.`) +
+            p(`Hi ${greetFirst(d, "customerName")}, good news — a spot you were waiting for is now available, and it's reserved for <strong>you</strong> first.`) +
             detailRows([
               ["Lane", d.laneName],
               ["Date", d.date],
@@ -334,7 +347,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           title: "Added to a coach's roster",
           preheader: `${esc(d.coachName)} can now allocate sessions for ${esc(d.childName)}.`,
           bodyHtml:
-            p(`Hi ${esc(d.parentName)},`) +
+            p(`Hi ${greetFirst(d, "parentName")},`) +
             p(`<strong>${esc(d.coachName)}</strong> has added <strong>${esc(d.childName)}</strong> to their athlete roster. They can now book and allocate coaching sessions for ${esc(d.childName)}, and you'll be notified each time.`) +
             button("Manage athletes", `${SITE}`),
         }),
@@ -506,7 +519,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           title: "Your week ahead",
           preheader: `You have ${esc(d.bookingCount)} session(s) booked this week.`,
           bodyHtml:
-            p(`Hi ${esc(d.customerName)}, here's your week ahead — <strong>${esc(d.bookingCount)}</strong> session(s) booked for ${esc(d.weekRange)}.`) +
+            p(`Hi ${greetFirst(d, "customerName")}, here's your week ahead — <strong>${esc(d.bookingCount)}</strong> session(s) booked for ${esc(d.weekRange)}.`) +
             // bookingsHtml is pre-rendered HTML (raw, not escaped)
             (d.bookingsHtml || "") +
             button("Manage bookings", d.bookingUrl || SITE),

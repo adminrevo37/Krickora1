@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { signInWithEmail, signUpWithEmail, refreshSession, sendPasswordReset } from '../lib/auth-client'
-import { useQuery } from 'convex/react'
+import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import SnakeAlert from './SnakeAlert'
 
@@ -27,7 +27,10 @@ type Mode = 'signin' | 'signup' | 'forgot'
 export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', prefillEmail }: AuthModalProps) {
   const [mode, setMode] = useState<Mode>(initialMode)
   const registrationLocked = useQuery(api.registrationLock.isRegistrationLocked)
-  const [name, setName] = useState('')
+  const ensureCustomer = useMutation(api.auth.ensureCustomerExists)
+  // SPEC_NAME_SPLIT: capture first + last separately for clean surname data.
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
   const [email, setEmail] = useState(prefillEmail ?? '')
   const [phone, setPhone] = useState('')
   const [password, setPassword] = useState('')
@@ -67,12 +70,14 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
           setIsLoading(false)
           return
         }
-        const fullName = name.trim()
-        if (!fullName) {
-          setError('Please enter your full name.')
+        const trimmedFirst = firstName.trim()
+        const trimmedLast = lastName.trim()
+        if (!trimmedFirst) {
+          setError('Please enter your first name.')
           setIsLoading(false)
           return
         }
+        const fullName = [trimmedFirst, trimmedLast].filter(Boolean).join(' ')
         result = await signUpWithEmail(email, password, fullName)
       } else {
         result = await signInWithEmail(email, password)
@@ -109,6 +114,23 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
       }
 
       await new Promise(resolve => setTimeout(resolve, 200))
+
+      // SPEC_NAME_SPLIT: the signup databaseHook created the row from the composed
+      // name (best-effort split). Now persist the PRECISE first/last the user
+      // typed (correct for multi-word surnames). Non-fatal — the row already
+      // exists and the user can edit it in their profile.
+      if (mode === 'signup') {
+        try {
+          await ensureCustomer({
+            email: email.trim().toLowerCase(),
+            name: [firstName.trim(), lastName.trim()].filter(Boolean).join(' '),
+            firstName: firstName.trim(),
+            lastName: lastName.trim(),
+          })
+        } catch (nameErr) {
+          console.warn('[Auth] name sync after signup failed (non-fatal):', nameErr)
+        }
+      }
 
       onSuccess()
       onClose()
@@ -164,16 +186,28 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
           )}
 
           {mode === 'signup' && (
-            <div>
-              <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5 block">Full Name</label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => { setName(e.target.value); setError(null) }}
-                placeholder="John Smith"
-                required
-                className="w-full px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5 block">First Name</label>
+                <input
+                  type="text"
+                  value={firstName}
+                  onChange={(e) => { setFirstName(e.target.value); setError(null) }}
+                  placeholder="John"
+                  required
+                  className="w-full px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5 block">Last Name</label>
+                <input
+                  type="text"
+                  value={lastName}
+                  onChange={(e) => { setLastName(e.target.value); setError(null) }}
+                  placeholder="Smith"
+                  className="w-full px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                />
+              </div>
             </div>
           )}
 

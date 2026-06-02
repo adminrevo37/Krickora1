@@ -110,6 +110,8 @@ export const sendWeeklyBookingSummaries = internalAction({
       const result = await ctx.runAction(internal.weeklySummary.sendOne, {
         to: email,
         customerName: customer.name || "there",
+        // SPEC_NAME_SPLIT: thread the real stored firstName for the greeting.
+        firstName: (customer as any).firstName ?? "",
         bookingCount: String(bookings.length),
         weekRange,
         bookingsHtml: rowsHtml,
@@ -129,6 +131,7 @@ export const sendOne = internalAction({
   args: {
     to: v.string(),
     customerName: v.string(),
+    firstName: v.optional(v.string()),
     bookingCount: v.string(),
     weekRange: v.string(),
     bookingsHtml: v.string(),
@@ -136,6 +139,7 @@ export const sendOne = internalAction({
   handler: async (_ctx, args): Promise<{ success: boolean; reason?: string }> => {
     const result = await sendTemplateEmail("weekly-booking-summary", args.to, {
       customerName: args.customerName,
+      firstName: args.firstName ?? "",
       bookingCount: args.bookingCount,
       weekRange: args.weekRange,
       bookingsHtml: args.bookingsHtml,

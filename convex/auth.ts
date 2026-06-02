@@ -16,6 +16,7 @@ import type { BetterAuthOptions } from "better-auth";
 import authSchema from "./betterAuth/schema";
 import authConfig from "./auth.config";
 import { sendTemplateEmail } from "./lib/email";
+import { composeName, splitName } from "./lib/names";
 import { requireAdmin, requireAdminUnlocked, getCallerContext, writeRoleAudit } from "./lib/adminGuard";
 
 const siteUrl = process.env.SITE_URL || "";
@@ -547,21 +548,47 @@ export const deleteUser = mutation({
 // Shared creation logic (no auth — callers must enforce their own guard).
 async function ensureCustomerImpl(
   ctx: any,
-  args: { email: string; name?: string }
+  args: { email: string; name?: string; firstName?: string; lastName?: string }
 ): Promise<any | null> {
   const normalizedEmail = args.email.toLowerCase().trim();
   if (!normalizedEmail) return null;
+
+  // SPEC_NAME_SPLIT — explicit first/last passed by the signup follow-up call.
+  const givenFirst = (args.firstName ?? "").trim();
+  const givenLast = (args.lastName ?? "").trim();
+  const hasExplicitName = Boolean(givenFirst || givenLast);
 
   const existing = await ctx.db
     .query("customers")
     .withIndex("by_email", (q: any) => q.eq("email", normalizedEmail))
     .first();
 
-  if (existing) return existing._id;
+  if (existing) {
+    // The databaseHook creates the row first (name only, best-effort split). The
+    // frontend then re-calls with the PRECISE two fields — patch them in so a
+    // multi-word surname is captured exactly (last writer wins for own record).
+    if (hasExplicitName) {
+      await ctx.db.patch(existing._id, {
+        firstName: givenFirst,
+        lastName: givenLast,
+        name: composeName(givenFirst, givenLast) || existing.name,
+      });
+    }
+    return existing._id;
+  }
 
   const now = new Date().toISOString();
+  // Derive first/last: prefer the explicit fields, else best-effort split of the
+  // composed name (the databaseHook path only has `name`).
+  const fallbackName = args.name || normalizedEmail.split("@")[0] || "New User";
+  const split = hasExplicitName
+    ? { firstName: givenFirst, lastName: givenLast }
+    : splitName(fallbackName);
+  const displayName = composeName(split.firstName, split.lastName) || fallbackName;
   const customerId = await ctx.db.insert("customers", {
-    name: args.name || normalizedEmail.split("@")[0] || "New User",
+    name: displayName,
+    firstName: split.firstName,
+    lastName: split.lastName,
     email: normalizedEmail,
     role: "customer",
     creditBalance: 0,
@@ -573,7 +600,7 @@ async function ensureCustomerImpl(
   // invisible to coaches unless a coach is assigned.
   await ctx.db.insert("athletes", {
     accountCustomerId: customerId,
-    name: args.name || normalizedEmail.split("@")[0] || "New User",
+    name: displayName,
     assignedCoachIds: [],
     isSelf: true,
     createdAt: now,
@@ -608,7 +635,12 @@ async function ensureCustomerImpl(
  * identity available at that point). NOT client-callable.
  */
 export const ensureCustomerExistsInternal = internalMutation({
-  args: { email: v.string(), name: v.optional(v.string()) },
+  args: {
+    email: v.string(),
+    name: v.optional(v.string()),
+    firstName: v.optional(v.string()),
+    lastName: v.optional(v.string()),
+  },
   handler: async (ctx, args) => ensureCustomerImpl(ctx, args),
 });
 
@@ -621,6 +653,8 @@ export const ensureCustomerExists = mutation({
   args: {
     email: v.string(),
     name: v.optional(v.string()),
+    firstName: v.optional(v.string()),
+    lastName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const caller = await getCallerContext(ctx);

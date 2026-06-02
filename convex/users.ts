@@ -5,6 +5,7 @@ import { mutation, query } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { components } from "./_generated/api";
 import { requireAdmin, requireAdminUnlocked, writeRoleAudit } from "./lib/adminGuard";
+import { composeName } from "./lib/names";
 
 // Recent role / permission / tier changes — admin only (SPEC_SECURITY_HARDENING
 // #3 audit trail; surfaced in the admin role-management UI).
@@ -75,10 +76,22 @@ export const adminChangeEmail = mutation({
 });
 
 export const adminUpdateUserProfile = mutation({
-  args: { email: v.string(), name: v.optional(v.string()), phone: v.optional(v.string()), role: v.optional(v.string()), coachTier: v.optional(v.string()), color: v.optional(v.string()), defaultSessionDuration: v.optional(v.number()), athleteCapacity: v.optional(v.number()) },
-  handler: async (ctx, { email, name, phone, role, coachTier, color, defaultSessionDuration, athleteCapacity }) => {
+  args: { email: v.string(), name: v.optional(v.string()), firstName: v.optional(v.string()), lastName: v.optional(v.string()), phone: v.optional(v.string()), role: v.optional(v.string()), coachTier: v.optional(v.string()), color: v.optional(v.string()), defaultSessionDuration: v.optional(v.number()), athleteCapacity: v.optional(v.number()) },
+  handler: async (ctx, { email, name, firstName, lastName, phone, role, coachTier, color, defaultSessionDuration, athleteCapacity }) => {
     const adminUser = await requireAdmin(ctx);
     const normalizedEmail = email.toLowerCase().trim();
+    // SPEC_NAME_SPLIT: when the admin edits first/last (customers), recompose the
+    // derived display name and let it drive both the Better-Auth sync + the
+    // customers.name patch below. firstName/lastName fall back to the stored row.
+    let effFirst = firstName;
+    let effLast = lastName;
+    if (firstName !== undefined || lastName !== undefined) {
+      const existingForName = await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", normalizedEmail)).first();
+      effFirst = (firstName ?? (existingForName as any)?.firstName ?? "").trim();
+      effLast = (lastName ?? (existingForName as any)?.lastName ?? "").trim();
+      const composed = composeName(effFirst, effLast);
+      if (composed) name = composed;
+    }
     // Sync name to Better Auth user record — wrapped in try/catch so an adapter
     // failure doesn't prevent the customer record from being updated.
     if (name !== undefined) {
@@ -99,6 +112,8 @@ export const adminUpdateUserProfile = mutation({
     if (customer) {
       const updates: Record<string, any> = {};
       if (name !== undefined) updates.name = name.trim();
+      if (effFirst !== undefined) updates.firstName = effFirst;
+      if (effLast !== undefined) updates.lastName = effLast;
       if (phone !== undefined) updates.phone = phone.trim() || undefined;
       if (role !== undefined) updates.role = role;
       if (coachTier !== undefined) updates.coachTier = coachTier || undefined;

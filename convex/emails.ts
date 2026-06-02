@@ -1,5 +1,6 @@
-import { internalAction, action } from "./_generated/server";
+import { internalAction, action, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import { sendTemplateEmail } from "./lib/email";
 
 // Templates that users CANNOT opt out of (transactional/auth + all athlete
@@ -75,6 +76,42 @@ async function sendEmail(
 }
 
 // ============================================================================
+// SPEC_NAME_SPLIT — first-name greeting resolution
+// These send-actions run as Convex ACTIONS (no ctx.db). To greet "Hi John" with
+// the recipient's REAL stored firstName, we read it by email via this internal
+// query and thread it into the template data. A first-word-of-name fallback in
+// the template covers accounts created before the name-split migration.
+// ============================================================================
+
+export const getGreetingFirstNameInternal = internalQuery({
+  args: { email: v.string() },
+  handler: async (ctx, args): Promise<string | null> => {
+    const normalized = args.email.toLowerCase().trim();
+    if (!normalized) return null;
+    const customer = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", normalized))
+      .first();
+    const fn = (customer?.firstName ?? "").trim();
+    return fn || null;
+  },
+});
+
+// Resolve the recipient's stored firstName (real field) for greeting. Never
+// throws — returns "" on any failure so the template's own fallback applies.
+async function resolveFirstName(ctx: any, email: string): Promise<string> {
+  try {
+    const fn: string | null = await ctx.runQuery(
+      internal.emails.getGreetingFirstNameInternal,
+      { email }
+    );
+    return (fn ?? "").trim();
+  } catch {
+    return "";
+  }
+}
+
+// ============================================================================
 // PASSWORD RESET EMAIL (called from auth.ts via Better Auth callback)
 // ============================================================================
 
@@ -84,9 +121,10 @@ export const sendPasswordResetEmail = internalAction({
     name: v.string(),
     resetUrl: v.string(),
   },
-  handler: async (_ctx, args) => {
+  handler: async (ctx, args) => {
     return await sendEmail("password-reset", args.to, {
       name: args.name,
+      firstName: await resolveFirstName(ctx, args.to),
       appName: "Krickora",
       resetUrl: args.resetUrl,
     });
@@ -103,9 +141,10 @@ export const sendVerificationEmail = internalAction({
     name: v.string(),
     verificationUrl: v.string(),
   },
-  handler: async (_ctx, args) => {
+  handler: async (ctx, args) => {
     return await sendEmail("email-verification", args.to, {
       name: args.name,
+      firstName: await resolveFirstName(ctx, args.to),
       appName: "Krickora",
       verificationUrl: args.verificationUrl,
     });
@@ -132,6 +171,7 @@ export const sendPaymentConfirmation = internalAction({
     }
     return await sendEmail("payment-confirmation", args.to, {
       customerName: args.customerName,
+      firstName: await resolveFirstName(ctx, args.to),
       amount: args.amount,
       description: args.description,
       reference: args.reference,
@@ -163,6 +203,7 @@ export const sendBookingConfirmation = internalAction({
     }
     return await sendEmail("booking-confirmation", args.to, {
       customerName: args.customerName,
+      firstName: await resolveFirstName(ctx, args.to),
       laneName: args.laneName,
       date: args.date,
       timeSlot: args.timeSlot,
@@ -198,6 +239,7 @@ export const sendBookingCancellation = internalAction({
     }
     return await sendEmail("booking-cancellation", args.to, {
       customerName: args.customerName,
+      firstName: await resolveFirstName(ctx, args.to),
       laneName: args.laneName,
       date: args.date,
       timeSlot: args.timeSlot,
@@ -234,6 +276,7 @@ export const sendBookingRescheduled = internalAction({
     }
     return await sendEmail("booking-rescheduled", args.to, {
       customerName: args.customerName,
+      firstName: await resolveFirstName(ctx, args.to),
       oldLaneName: args.oldLaneName,
       oldDate: args.oldDate,
       oldTimeSlot: args.oldTimeSlot,
@@ -269,6 +312,7 @@ export const sendBookingReminder = internalAction({
     }
     return await sendEmail("booking-reminder", args.to, {
       customerName: args.customerName,
+      firstName: await resolveFirstName(ctx, args.to),
       laneName: args.laneName,
       date: args.date,
       timeSlot: args.timeSlot,
@@ -324,6 +368,7 @@ export const sendWaitlistConfirmation = internalAction({
     const cleanedHtml = slotsHtml.replace(/border-bottom:1px solid #fde68a;(?=[^<]*$)/, "");
     const result = await sendEmail("waitlist-confirmation", recipient, {
       customerName: args.customerName,
+      firstName: await resolveFirstName(ctx, recipient),
       slotCount: String(args.slots.length),
       slotsHtml: cleanedHtml,
     });
@@ -358,6 +403,7 @@ export const sendWaitlistVacancy = internalAction({
     console.log(`[waitlist-vacancy] Sending to ${args.to} for ${args.laneName} ${args.date} ${args.timeSlot} (held until ${args.offerDeadline ?? "n/a"})`);
     const result = await sendEmail("waitlist-vacancy", args.to, {
       customerName: args.customerName,
+      firstName: await resolveFirstName(ctx, args.to),
       laneName: args.laneName,
       date: args.date,
       timeSlot: args.timeSlot,
@@ -414,9 +460,10 @@ export const sendAthleteAdded = internalAction({
     childName: v.string(),
     coachName: v.string(),
   },
-  handler: async (_ctx, args) => {
+  handler: async (ctx, args) => {
     return await sendEmail("athlete-added", args.to, {
       parentName: args.parentName,
+      firstName: await resolveFirstName(ctx, args.to),
       childName: args.childName,
       coachName: args.coachName,
     });

@@ -28,6 +28,7 @@ import type * as lib_bookingWindow from "../lib/bookingWindow.js";
 import type * as lib_credit from "../lib/credit.js";
 import type * as lib_discounts from "../lib/discounts.js";
 import type * as lib_email from "../lib/email.js";
+import type * as lib_names from "../lib/names.js";
 import type * as lib_priceDefaults from "../lib/priceDefaults.js";
 import type * as lib_pricing from "../lib/pricing.js";
 import type * as lib_rateLimit from "../lib/rateLimit.js";
@@ -78,6 +79,7 @@ declare const fullApi: ApiFromModules<{
   "lib/credit": typeof lib_credit;
   "lib/discounts": typeof lib_discounts;
   "lib/email": typeof lib_email;
+  "lib/names": typeof lib_names;
   "lib/priceDefaults": typeof lib_priceDefaults;
   "lib/pricing": typeof lib_pricing;
   "lib/rateLimit": typeof lib_rateLimit;

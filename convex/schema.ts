@@ -27,7 +27,11 @@ export default defineSchema({
 
   // Application tables
   customers: defineTable({
-    name: v.string(),
+    name: v.string(), // DERIVED display string = "firstName lastName" (SPEC_NAME_SPLIT)
+    // SPEC_NAME_SPLIT: source fields for surname sort + formal addressing.
+    // Optional → no forced migration; `name` stays authoritative for all reads.
+    firstName: v.optional(v.string()),
+    lastName: v.optional(v.string()),
     email: v.string(),
     phone: v.optional(v.string()),
     role: v.string(), // 'customer' | 'coach' | 'admin' | 'user' (default: 'user' for new signups)

@@ -17,17 +17,37 @@ function ProfilePage() {
   const updateCustomerByEmail = useMutation(api.mutations.updateCustomerByEmail)
 
   const [isEditing, setIsEditing] = useState(false)
-  const [name, setName] = useState('')
+  // SPEC_NAME_SPLIT: edit first/last as the source fields; `name` is derived.
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
   const [phone, setPhone] = useState('')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
+  // Seed from stored first/last; fall back to splitting the display name on the
+  // last space for accounts created before the name-split migration.
+  const seedNames = () => {
+    const cr = customerRecord as any
+    const storedFirst = (cr?.firstName ?? '').trim()
+    const storedLast = (cr?.lastName ?? '').trim()
+    if (storedFirst || storedLast) {
+      setFirstName(storedFirst)
+      setLastName(storedLast)
+      return
+    }
+    const full = (user?.name ?? '').trim().replace(/\s+/g, ' ')
+    const idx = full.lastIndexOf(' ')
+    setFirstName(idx === -1 ? full : full.slice(0, idx))
+    setLastName(idx === -1 ? '' : full.slice(idx + 1))
+  }
+
   useEffect(() => {
     if (user) {
-      setName(user.name || '')
+      seedNames()
       setPhone(user.phone || '')
     }
-  }, [user])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, customerRecord])
 
   if (!isAuthenticated || !user) {
     return (
@@ -41,16 +61,18 @@ function ProfilePage() {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
     setMessage(null)
-    const trimmedName = name.trim()
-    if (!trimmedName) {
-      setMessage({ type: 'error', text: 'Name cannot be empty' })
+    const trimmedFirst = firstName.trim()
+    const trimmedLast = lastName.trim()
+    if (!trimmedFirst) {
+      setMessage({ type: 'error', text: 'First name cannot be empty' })
       return
     }
     setSaving(true)
     try {
       await updateCustomerByEmail({
         email: user.email,
-        name: trimmedName,
+        firstName: trimmedFirst,
+        lastName: trimmedLast,
         phone: phone.trim() || undefined,
       })
       setMessage({ type: 'success', text: 'Profile updated successfully' })
@@ -63,7 +85,7 @@ function ProfilePage() {
   }
 
   const handleCancel = () => {
-    setName(user.name || '')
+    seedNames()
     setPhone(user.phone || '')
     setIsEditing(false)
     setMessage(null)
@@ -110,15 +132,26 @@ function ProfilePage() {
           </div>
         ) : (
           <form onSubmit={handleSave} className="p-6 space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                required
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">First Name</label>
+                <input
+                  type="text"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Last Name</label>
+                <input
+                  type="text"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>

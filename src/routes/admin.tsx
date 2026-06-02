@@ -516,6 +516,17 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
   const logReset = useMutation((api.users as any).adminLogPasswordReset)
   const ledger = useQuery((api.queries as any).listCreditLedger, { email: user.email }) as any[] | undefined
   const [name, setName] = useState(user.name || '')
+  // SPEC_NAME_SPLIT: customers edit first/last (coaches keep the single name).
+  const seedSplit = (() => {
+    const sf = (user.firstName ?? '').trim()
+    const sl = (user.lastName ?? '').trim()
+    if (sf || sl) return { f: sf, l: sl }
+    const full = (user.name ?? '').trim().replace(/\s+/g, ' ')
+    const i = full.lastIndexOf(' ')
+    return i === -1 ? { f: full, l: '' } : { f: full.slice(0, i), l: full.slice(i + 1) }
+  })()
+  const [firstName, setFirstName] = useState(seedSplit.f)
+  const [lastName, setLastName] = useState(seedSplit.l)
   const [phone, setPhone] = useState(user.phone || '')
   const [coachTier, setCoachTier] = useState(normaliseCoachTier(user.coachTier))
   const [color, setColor] = useState(user.color || '')
@@ -568,7 +579,8 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
     e.preventDefault()
     setBusy(true)
     try {
-      const args: any = { email: user.email, name, phone, role }
+      const args: any = { email: user.email, phone, role }
+      if (isCoach) { args.name = name } else { args.firstName = firstName.trim(); args.lastName = lastName.trim() }
       if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color; args.defaultSessionDuration = defaultSessionDuration; args.athleteCapacity = athleteCapacity }
       await updateProfile(args)
       onClose()
@@ -592,10 +604,23 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
           <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
         </div>
         <p className="text-xs text-gray-400">{user.email}</p>
-        <label className="block text-sm">
-          <span className="font-medium text-gray-700">Full name</span>
-          <input value={name} onChange={e => setName(e.target.value)} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-        </label>
+        {isCoach ? (
+          <label className="block text-sm">
+            <span className="font-medium text-gray-700">Full name</span>
+            <input value={name} onChange={e => setName(e.target.value)} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+          </label>
+        ) : (
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block text-sm">
+              <span className="font-medium text-gray-700">First name</span>
+              <input value={firstName} onChange={e => setFirstName(e.target.value)} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+            </label>
+            <label className="block text-sm">
+              <span className="font-medium text-gray-700">Last name</span>
+              <input value={lastName} onChange={e => setLastName(e.target.value)} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+            </label>
+          </div>
+        )}
         <label className="block text-sm">
           <span className="font-medium text-gray-700">Phone</span>
           <input value={phone} onChange={e => setPhone(e.target.value)} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" />
@@ -761,6 +786,8 @@ function CustomersTab() {
   const list = (customers as any[]).filter(c => c.role !== 'admin' && c.role !== 'coach')
   const [editing, setEditing] = useState<any | null>(null)
   const [search, setSearch] = useState('')
+  // SPEC_NAME_SPLIT: choose surname-first or given-name-first ordering.
+  const [sortBy, setSortBy] = useState<'first' | 'last'>('first')
   const [showAddForm, setShowAddForm] = useState(false)
   const [custForm, setCustForm] = useState({ name: '', email: '', phone: '', password: '' })
   const [busyAdd, setBusyAdd] = useState(false)
@@ -776,11 +803,23 @@ function CustomersTab() {
         const qDigits = search.replace(/\D/g, '')
         return (
           (c.name || '').toLowerCase().includes(q) ||
+          (c.firstName || '').toLowerCase().includes(q) ||
+          (c.lastName || '').toLowerCase().includes(q) ||
           (c.email || '').toLowerCase().includes(q) ||
           (qDigits.length >= 3 && phoneDigits.includes(qDigits))
         )
       })
     : list
+
+  // SPEC_NAME_SPLIT: sort by first or last name (fall back to the display name
+  // when a row has no split fields yet — pre-migration accounts).
+  const sortKey = (c: any) => {
+    const f = (c.firstName || '').toLowerCase().trim()
+    const l = (c.lastName || '').toLowerCase().trim()
+    const composed = sortBy === 'last' ? `${l} ${f}`.trim() : `${f} ${l}`.trim()
+    return composed || (c.name || c.email || '').toLowerCase()
+  }
+  const sorted = [...filtered].sort((a, b) => sortKey(a).localeCompare(sortKey(b)))
 
   const submitAdd = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -815,6 +854,15 @@ function CustomersTab() {
               onChange={e => setSearch(e.target.value)}
               className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm w-56"
             />
+            <select
+              value={sortBy}
+              onChange={e => setSortBy(e.target.value as 'first' | 'last')}
+              className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white"
+              title="Sort order"
+            >
+              <option value="first">Sort: First name</option>
+              <option value="last">Sort: Last name</option>
+            </select>
             <button
               onClick={() => setShowAddForm(f => !f)}
               className={`text-sm px-3 py-1.5 rounded-lg font-semibold transition-colors ${showAddForm ? 'bg-gray-100 text-gray-600 hover:bg-gray-200' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}
@@ -824,10 +872,10 @@ function CustomersTab() {
           </div>
         </div>
         <div className="divide-y divide-gray-100">
-          {filtered.length === 0 && (
+          {sorted.length === 0 && (
             <div className="p-6 text-sm text-gray-400 italic">{search ? 'No results.' : 'No customers yet.'}</div>
           )}
-          {filtered.map((c: any) => (
+          {sorted.map((c: any) => (
             <div key={c._id} className="px-6 py-3 flex items-center justify-between gap-3 hover:bg-gray-50 transition-colors">
               <div className="min-w-0">
                 <div className="font-medium text-gray-900 truncate">{c.name || c.email}</div>
