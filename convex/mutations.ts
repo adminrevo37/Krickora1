@@ -894,6 +894,25 @@ export const createBooking = mutation({
       serverPriceCents = discountedCents;
     }
 
+    // C1 (SECURITY — server-owned status): NEVER trust the client `status`. The
+    // server decides confirmed-vs-pending from the amount actually due, so a
+    // customer cannot submit a priced booking as "confirmed" and skip payment
+    // (the prior hole: free confirmed bookings + a credit-mint chain via cancel).
+    // Coach + admin-manual bookings keep their passed status (amount set
+    // deliberately / billed separately). The applied credit is server-clamped to
+    // the booker's real balance so an inflated `creditApplied` can't fake $0 due.
+    let effectiveStatus = args.status;
+    if (!args.isCoachBooking && !isAdminManual && args.status === "confirmed") {
+      const realBalCents = Math.max(0, Math.round(((callerCustomer as any)?.creditBalance ?? 0) * 100));
+      const wantCreditCents = Math.max(0, Math.round((args.creditApplied ?? 0) * 100));
+      const clampedCreditCents = Math.min(wantCreditCents, realBalCents);
+      const netDueCents = Math.max(0, (serverPriceCents ?? 0) - clampedCreditCents);
+      // A$0.50 floor mirrors createCheckoutSession's minimum charge.
+      if (netDueCents >= 50) {
+        effectiveStatus = "pending_payment";
+      }
+    }
+
     // For coach bookings, all assigned athletes share the coach's access code
     const normalizedAthleteSlots = args.athleteSlots && args.isCoachBooking && args.accessCode
       ? args.athleteSlots.map((s) => ({
@@ -935,7 +954,7 @@ export const createBooking = mutation({
       customerEmail: args.customerEmail,
       customerPhone: args.customerPhone,
       userId: args.userId,
-      status: args.status,
+      status: effectiveStatus,
       stripeSessionId: args.stripeSessionId,
       isCoachBooking: args.isCoachBooking,
       coachPrice: args.coachPrice,
@@ -977,7 +996,7 @@ export const createBooking = mutation({
     // SPEC_PAYMENTS_AND_CREDIT #3: a pending_payment booking holds its slot via a
     // checkout slotHold; if the customer abandons Stripe it's released by the
     // sweep / expired webhook. Confirmation deletes the hold.
-    if (args.status === "pending_payment") {
+    if (effectiveStatus === "pending_payment") {
       await createCheckoutHold(ctx, {
         bookingId: id.toString(),
         laneId: args.laneId,
@@ -994,7 +1013,7 @@ export const createBooking = mutation({
     // If a confirmed booking redeems account credit, deduct it now (atomic at
     // confirmation — never on the pending/abandoned path). Stripe-paid bookings
     // are deducted later in confirmBookingPayment.
-    if (args.status === "confirmed" && (args.creditApplied ?? 0) > 0 && args.customerEmail) {
+    if (effectiveStatus === "confirmed" && (args.creditApplied ?? 0) > 0 && args.customerEmail) {
       await redeemCredit(ctx, {
         email: args.customerEmail,
         amount: args.creditApplied as number,
@@ -1004,7 +1023,7 @@ export const createBooking = mutation({
 
     // Record discount redemption for directly-confirmed bookings (free/comp/
     // bypassStripe). Stripe-paid bookings are recorded in confirmBookingPayment.
-    if (args.status === "confirmed" && args.discountCode) {
+    if (effectiveStatus === "confirmed" && args.discountCode) {
       await recordDiscountRedemption(ctx, {
         code: args.discountCode,
         customerEmail: args.customerEmail,
@@ -1013,7 +1032,7 @@ export const createBooking = mutation({
     }
 
     // Send booking confirmation email for confirmed bookings
-    if (args.status === "confirmed" && args.customerEmail) {
+    if (effectiveStatus === "confirmed" && args.customerEmail) {
       await ctx.scheduler.runAfter(
         0,
         internal.emails.sendBookingConfirmation,
@@ -1034,7 +1053,7 @@ export const createBooking = mutation({
     // Send athlete allocation emails for coach bookings with initial athlete
     // slots — resolved to the parent account email + child name, grouped per
     // account (SPEC_PARENT_ATHLETE_MODEL).
-    if (args.isCoachBooking && normalizedAthleteSlots && normalizedAthleteSlots.length > 0 && (args.status === "confirmed" || args.status === "tentative")) {
+    if (args.isCoachBooking && normalizedAthleteSlots && normalizedAthleteSlots.length > 0 && (effectiveStatus === "confirmed" || effectiveStatus === "tentative")) {
       await scheduleAllocationEmails(ctx, {
         slots: normalizedAthleteSlots,
         laneId: args.laneId,
@@ -1045,7 +1064,7 @@ export const createBooking = mutation({
     }
 
     // Trigger Google Calendar sync for confirmed/tentative bookings
-    if (args.status === "confirmed" || args.status === "tentative") {
+    if (effectiveStatus === "confirmed" || effectiveStatus === "tentative") {
       await ctx.scheduler.runAfter(0, internal.googleCalendar.createCalendarEvent, {
         bookingId: id.toString(),
         laneId: args.laneId,
@@ -1056,7 +1075,7 @@ export const createBooking = mutation({
         customerName: args.customerName,
         customerEmail: args.customerEmail,
         customerPhone: args.customerPhone,
-        status: args.status,
+        status: effectiveStatus,
         isCoachBooking: args.isCoachBooking,
         accessCode: args.accessCode,
         additionalLaneIds: args.additionalLaneIds,
@@ -1370,7 +1389,13 @@ export const cancelBooking = mutation({
       booking.status === "confirmed" &&
       booking.customerEmail
     ) {
-      const cashPaid = (booking as any).priceInCents != null ? (booking as any).priceInCents / 100 : 0;
+      // C2 (SECURITY): only return CASH as credit when the booking was actually
+      // paid (Stripe webhook or admin paid-offline → paymentStatus "paid"). A
+      // never-paid "confirmed" booking (priceInCents set but no payment) must NOT
+      // mint credit. Redeemed account credit (creditApplied) is always returned —
+      // it was real value the customer spent (covers credit-only cancellations).
+      const wasPaid = (booking as any).paymentStatus === "paid";
+      const cashPaid = wasPaid && (booking as any).priceInCents != null ? (booking as any).priceInCents / 100 : 0;
       const creditToIssue = cashPaid + ((booking as any).creditApplied ?? 0);
       if (creditToIssue > 0) {
         await issueCredit(ctx, {
@@ -1461,7 +1486,9 @@ export const deleteBooking = mutation({
       // credited — only customer-paid value (cash charged + credit previously
       // applied) is returned as credit.
       if (delBooking.status !== "cancelled" && !delBooking.isCoachBooking) {
-        const cashPaid = (delBooking as any).priceInCents != null ? (delBooking as any).priceInCents / 100 : 0;
+        // C2 (SECURITY): cash credited only if actually paid; redeemed credit always returned.
+        const wasPaid = (delBooking as any).paymentStatus === "paid";
+        const cashPaid = wasPaid && (delBooking as any).priceInCents != null ? (delBooking as any).priceInCents / 100 : 0;
         const creditAmt = cashPaid + ((delBooking as any).creditApplied ?? 0);
         if (creditAmt > 0 && delBooking.customerEmail) {
           await issueCredit(ctx, {
