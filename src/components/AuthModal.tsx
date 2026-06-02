@@ -3,6 +3,7 @@ import { signInWithEmail, signUpWithEmail, refreshSession, sendPasswordReset } f
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import SnakeAlert from './SnakeAlert'
+import PostcodeSuburbFields, { isLocationComplete } from './PostcodeSuburbFields'
 
 const BLACKLIST_PHONES = ['0438952540', '+61438952540', '61438952540']
 const BLACKLIST_EMAILS = ['jallenby@hotmail.com', 'jim.allenby@playerschoice.com.au', 'snake@test.com']
@@ -31,6 +32,8 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
   // SPEC_NAME_SPLIT: capture first + last separately for clean surname data.
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
+  // SPEC_PROFILE_POSTCODE_SUBURB: required at signup.
+  const [location, setLocation] = useState({ postcode: '', suburb: '' })
   const [email, setEmail] = useState(prefillEmail ?? '')
   const [phone, setPhone] = useState('')
   const [password, setPassword] = useState('')
@@ -74,6 +77,11 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
         const trimmedLast = lastName.trim()
         if (!trimmedFirst) {
           setError('Please enter your first name.')
+          setIsLoading(false)
+          return
+        }
+        if (!isLocationComplete(location)) {
+          setError('Please enter a valid WA postcode and select your suburb.')
           setIsLoading(false)
           return
         }
@@ -126,6 +134,8 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
             name: [firstName.trim(), lastName.trim()].filter(Boolean).join(' '),
             firstName: firstName.trim(),
             lastName: lastName.trim(),
+            postcode: location.postcode.trim(),
+            suburb: location.suburb.trim(),
           })
         } catch (nameErr) {
           console.warn('[Auth] name sync after signup failed (non-fatal):', nameErr)
@@ -236,6 +246,10 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
                 className="w-full px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
               />
             </div>
+          )}
+
+          {mode === 'signup' && (
+            <PostcodeSuburbFields value={location} onChange={setLocation} idPrefix="signup" />
           )}
 
           {mode !== 'forgot' && (

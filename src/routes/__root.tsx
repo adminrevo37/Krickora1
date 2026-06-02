@@ -3,6 +3,7 @@ import { createRootRoute, Outlet, Link, useNavigate } from '@tanstack/react-rout
 import { useAuth } from '../hooks/useAuth'
 import { signOutUser } from '../lib/auth-client'
 import AuthModal from '../components/AuthModal'
+import PostcodeRequiredModal from '../components/PostcodeRequiredModal'
 import { useImpersonation } from '../hooks/useImpersonation'
 
 function RootComponent() {
@@ -153,6 +154,13 @@ function RootComponent() {
       </footer>
 
       {showAuth && <AuthModal onClose={() => setShowAuth(false)} onSuccess={() => setShowAuth(false)} />}
+
+      {/* SPEC_PROFILE_POSTCODE_SUBURB — hard-block gate: signed-in non-admin users (and
+          not while impersonating) must supply postcode + suburb before using the app. */}
+      {isAuthenticated && user && user.role !== 'admin' && !isImpersonating &&
+        (!user.postcode || !user.suburb) && (
+          <PostcodeRequiredModal email={user.email} />
+        )}
     </div>
   )
 }

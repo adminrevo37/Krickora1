@@ -387,11 +387,126 @@ export default function AdminAnalyticsDashboard() {
           </div>
         </div>
       )}
+
+      {/* ── Catchment: sessions by suburb (SPEC_PROFILE_POSTCODE_SUBURB Addendum A) ── */}
+      <CatchmentReport />
     </div>
   )
 }
 
 // ── Sub-components ───────────────────────────────────────────────────────────
+
+// Session COUNT per suburb/postcode (confirmed, non-coach bookings; one per booking).
+// Own date range + CSV export, independent of the months selector above.
+function CatchmentReport() {
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const data = useQuery(api.analytics.getCatchmentReport, {
+    from: from || undefined,
+    to: to || undefined,
+  })
+
+  const rows = data?.bySuburb ?? []
+  const counted = (data?.total ?? 0) - (data?.unknown ?? 0)
+
+  const exportCsv = () => {
+    if (!data) return
+    const lines = [['Suburb', 'Postcode', 'Sessions']]
+    for (const r of rows) lines.push([r.suburb, r.postcode, String(r.bookings)])
+    if (data.unknown > 0) lines.push(['Unknown', '', String(data.unknown)])
+    const csv = lines
+      .map((cols) => cols.map((c) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(','))
+      .join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `catchment-by-suburb${from ? `_${from}` : ''}${to ? `_${to}` : ''}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h3 className="text-base font-semibold text-gray-800">Catchment — Sessions by Suburb</h3>
+          <p className="text-xs text-gray-400 mt-0.5">
+            Where customers travel from. Confirmed bookings only (excludes coach &amp; cancelled), one count per booking.
+          </p>
+        </div>
+        <div className="flex items-end gap-2 flex-wrap">
+          <label className="text-xs text-gray-500">
+            From
+            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+              className="block mt-0.5 px-2 py-1.5 border border-gray-200 rounded-lg text-sm" />
+          </label>
+          <label className="text-xs text-gray-500">
+            To
+            <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+              className="block mt-0.5 px-2 py-1.5 border border-gray-200 rounded-lg text-sm" />
+          </label>
+          {(from || to) && (
+            <button onClick={() => { setFrom(''); setTo('') }}
+              className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-800 underline">Clear</button>
+          )}
+          <button onClick={exportCsv} disabled={!data || rows.length === 0}
+            className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+            Export CSV
+          </button>
+        </div>
+      </div>
+      {!data ? (
+        <div className="p-6 text-sm text-gray-400">Loading…</div>
+      ) : rows.length === 0 && (data.unknown ?? 0) === 0 ? (
+        <div className="p-6 text-sm text-gray-400 italic">No confirmed bookings in this range.</div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 border-b border-gray-200">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide w-8">#</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Suburb</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Postcode</th>
+                <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Sessions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {rows.map((r, i) => (
+                <tr key={`${r.suburb}|${r.postcode}`} className="hover:bg-gray-50 transition-colors">
+                  <td className="px-4 py-3 text-gray-400 font-medium">{i + 1}</td>
+                  <td className="px-4 py-3 font-medium text-gray-900">{r.suburb}</td>
+                  <td className="px-4 py-3 text-gray-500">{r.postcode || '—'}</td>
+                  <td className="px-4 py-3 text-right">
+                    <span className="inline-flex items-center justify-center bg-emerald-100 text-emerald-700 text-xs font-bold rounded-full min-w-8 h-8 px-2">
+                      {r.bookings}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              {data.unknown > 0 && (
+                <tr className="bg-amber-50/50">
+                  <td className="px-4 py-3 text-gray-400 font-medium">—</td>
+                  <td className="px-4 py-3 font-medium text-amber-700" colSpan={2}>
+                    Unknown <span className="text-xs font-normal text-amber-600">(no postcode captured yet)</span>
+                  </td>
+                  <td className="px-4 py-3 text-right text-amber-700 font-bold">{data.unknown}</td>
+                </tr>
+              )}
+            </tbody>
+            <tfoot className="bg-gray-50 border-t border-gray-200">
+              <tr>
+                <td className="px-4 py-3" />
+                <td className="px-4 py-3 font-semibold text-gray-700" colSpan={2}>Total confirmed sessions</td>
+                <td className="px-4 py-3 text-right font-bold text-gray-900">{data.total}{data.unknown > 0 ? ` (${counted} mapped)` : ''}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
 
 function KpiCard({
   icon,

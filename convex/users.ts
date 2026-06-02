@@ -6,6 +6,7 @@ import { v, ConvexError } from "convex/values";
 import { components } from "./_generated/api";
 import { requireAdmin, requireAdminUnlocked, writeRoleAudit } from "./lib/adminGuard";
 import { composeName } from "./lib/names";
+import { validateLocationIfProvided, normalizePostcode, normalizeSuburb } from "./lib/locations";
 
 // Recent role / permission / tier changes — admin only (SPEC_SECURITY_HARDENING
 // #3 audit trail; surfaced in the admin role-management UI).
@@ -76,10 +77,12 @@ export const adminChangeEmail = mutation({
 });
 
 export const adminUpdateUserProfile = mutation({
-  args: { email: v.string(), name: v.optional(v.string()), firstName: v.optional(v.string()), lastName: v.optional(v.string()), phone: v.optional(v.string()), role: v.optional(v.string()), coachTier: v.optional(v.string()), color: v.optional(v.string()), defaultSessionDuration: v.optional(v.number()), athleteCapacity: v.optional(v.number()) },
-  handler: async (ctx, { email, name, firstName, lastName, phone, role, coachTier, color, defaultSessionDuration, athleteCapacity }) => {
+  args: { email: v.string(), name: v.optional(v.string()), firstName: v.optional(v.string()), lastName: v.optional(v.string()), phone: v.optional(v.string()), role: v.optional(v.string()), coachTier: v.optional(v.string()), color: v.optional(v.string()), defaultSessionDuration: v.optional(v.number()), athleteCapacity: v.optional(v.number()), postcode: v.optional(v.string()), suburb: v.optional(v.string()) },
+  handler: async (ctx, { email, name, firstName, lastName, phone, role, coachTier, color, defaultSessionDuration, athleteCapacity, postcode, suburb }) => {
     const adminUser = await requireAdmin(ctx);
     const normalizedEmail = email.toLowerCase().trim();
+    // SPEC_PROFILE_POSTCODE_SUBURB: validate if either location field supplied.
+    validateLocationIfProvided(postcode, suburb);
     // SPEC_NAME_SPLIT: when the admin edits first/last (customers), recompose the
     // derived display name and let it drive both the Better-Auth sync + the
     // customers.name patch below. firstName/lastName fall back to the stored row.
@@ -120,6 +123,8 @@ export const adminUpdateUserProfile = mutation({
       if (color !== undefined) updates.color = color || undefined;
       if (defaultSessionDuration !== undefined) updates.defaultSessionDuration = defaultSessionDuration || undefined;
       if (athleteCapacity !== undefined) updates.athleteCapacity = Math.max(1, Math.min(athleteCapacity || 1, 4));
+      if (postcode !== undefined) updates.postcode = normalizePostcode(postcode);
+      if (suburb !== undefined) updates.suburb = normalizeSuburb(suburb);
       if (Object.keys(updates).length > 0) await ctx.db.patch(customer._id, updates);
       // SEC #3: audit privilege-relevant changes
       if (role !== undefined && role !== customer.role) {

@@ -18,6 +18,7 @@ import authConfig from "./auth.config";
 import { sendTemplateEmail } from "./lib/email";
 import { checkRateLimit } from "./lib/rateLimit";
 import { composeName, splitName } from "./lib/names";
+import { validateLocationIfProvided, normalizePostcode, normalizeSuburb } from "./lib/locations";
 import { requireAdmin, requireAdminUnlocked, getCallerContext, writeRoleAudit } from "./lib/adminGuard";
 
 const siteUrl = process.env.SITE_URL || "";
@@ -591,7 +592,7 @@ export const deleteUser = mutation({
 // Shared creation logic (no auth — callers must enforce their own guard).
 async function ensureCustomerImpl(
   ctx: any,
-  args: { email: string; name?: string; firstName?: string; lastName?: string }
+  args: { email: string; name?: string; firstName?: string; lastName?: string; postcode?: string; suburb?: string }
 ): Promise<any | null> {
   const normalizedEmail = args.email.toLowerCase().trim();
   if (!normalizedEmail) return null;
@@ -600,6 +601,14 @@ async function ensureCustomerImpl(
   const givenFirst = (args.firstName ?? "").trim();
   const givenLast = (args.lastName ?? "").trim();
   const hasExplicitName = Boolean(givenFirst || givenLast);
+
+  // SPEC_PROFILE_POSTCODE_SUBURB — postcode/suburb arrive on the signup follow-up call
+  // (the databaseHook path has none). Validate only when supplied (throws ConvexError
+  // on an invalid WA pair); the login hard-block gate backstops any account left blank.
+  validateLocationIfProvided(args.postcode, args.suburb);
+  const givenPostcode = normalizePostcode(args.postcode);
+  const givenSuburb = normalizeSuburb(args.suburb);
+  const hasLocation = Boolean(givenPostcode && givenSuburb);
 
   const existing = await ctx.db
     .query("customers")
@@ -610,11 +619,16 @@ async function ensureCustomerImpl(
     // The databaseHook creates the row first (name only, best-effort split). The
     // frontend then re-calls with the PRECISE two fields — patch them in so a
     // multi-word surname is captured exactly (last writer wins for own record).
-    if (hasExplicitName) {
+    if (hasExplicitName || hasLocation) {
       await ctx.db.patch(existing._id, {
-        firstName: givenFirst,
-        lastName: givenLast,
-        name: composeName(givenFirst, givenLast) || existing.name,
+        ...(hasExplicitName
+          ? {
+              firstName: givenFirst,
+              lastName: givenLast,
+              name: composeName(givenFirst, givenLast) || existing.name,
+            }
+          : {}),
+        ...(hasLocation ? { postcode: givenPostcode, suburb: givenSuburb } : {}),
       });
     }
     return existing._id;
@@ -632,6 +646,7 @@ async function ensureCustomerImpl(
     name: displayName,
     firstName: split.firstName,
     lastName: split.lastName,
+    ...(hasLocation ? { postcode: givenPostcode, suburb: givenSuburb } : {}),
     email: normalizedEmail,
     role: "customer",
     creditBalance: 0,
@@ -683,6 +698,8 @@ export const ensureCustomerExistsInternal = internalMutation({
     name: v.optional(v.string()),
     firstName: v.optional(v.string()),
     lastName: v.optional(v.string()),
+    postcode: v.optional(v.string()),
+    suburb: v.optional(v.string()),
   },
   handler: async (ctx, args) => ensureCustomerImpl(ctx, args),
 });
@@ -724,6 +741,8 @@ export const ensureCustomerExists = mutation({
     name: v.optional(v.string()),
     firstName: v.optional(v.string()),
     lastName: v.optional(v.string()),
+    postcode: v.optional(v.string()),
+    suburb: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const caller = await getCallerContext(ctx);

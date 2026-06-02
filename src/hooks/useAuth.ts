@@ -168,6 +168,9 @@ export function useAuth() {
       phone: customerRecord?.phone as string | undefined,
       role: customerRole as 'customer' | 'coach' | 'admin',
       color: (customerRecord as any)?.color as string | undefined,
+      // SPEC_PROFILE_POSTCODE_SUBURB — drives the hard-block login gate + profile.
+      postcode: (customerRecord as any)?.postcode as string | undefined,
+      suburb: (customerRecord as any)?.suburb as string | undefined,
     }
     // When impersonating, override email/name/role so every page that reads
     // user.email (Statements, Profile, Bookings) loads the impersonated user's

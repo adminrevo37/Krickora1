@@ -24,6 +24,7 @@ import {
 import { computeCustomerPriceCents, decreaseCreditCents } from "./lib/pricing";
 import { PRICE_DEFAULTS } from "./lib/priceDefaults";
 import { composeName, splitName } from "./lib/names";
+import { assertValidLocation, validateLocationIfProvided, normalizePostcode, normalizeSuburb } from "./lib/locations";
 import { notifyMatesOnCancel, notifyMatesOnModify } from "./mates";
 
 // ============================================================================
@@ -902,6 +903,28 @@ export const createBooking = mutation({
         }))
       : args.athleteSlots;
 
+    // SPEC_PROFILE_POSTCODE_SUBURB Addendum A: snapshot the booker's postcode/suburb
+    // onto the booking for the catchment report. Customer + admin-manual bookings only
+    // (coach own-bookings excluded — they don't count). For self-bookings the booker is
+    // callerCustomer; for admin-manual the booking is for a different customer, so resolve
+    // by customerEmail. Stored as a snapshot so a later move doesn't rewrite history.
+    let bookingPostcode: string | undefined;
+    let bookingSuburb: string | undefined;
+    if (!args.isCoachBooking) {
+      const targetEmail = args.customerEmail.toLowerCase().trim();
+      const targetCustomer =
+        callerCustomer && (callerCustomer as any).email === targetEmail
+          ? callerCustomer
+          : await ctx.db
+              .query("customers")
+              .withIndex("by_email", (q: any) => q.eq("email", targetEmail))
+              .first();
+      if ((targetCustomer as any)?.postcode && (targetCustomer as any)?.suburb) {
+        bookingPostcode = (targetCustomer as any).postcode;
+        bookingSuburb = (targetCustomer as any).suburb;
+      }
+    }
+
     const id = await ctx.db.insert("bookings", {
       laneId: args.laneId,
       variantId: args.variantId,
@@ -926,6 +949,8 @@ export const createBooking = mutation({
       notes: args.notes,
       paymentStatus: args.paymentStatus,
       priceInCents: serverPriceCents,
+      bookingPostcode,
+      bookingSuburb,
     });
 
     // SPEC_WAITLIST_OFFER_REDESIGN: if this booking is the waitlisted member
@@ -3021,11 +3046,15 @@ export const updateCustomer = mutation({
     creditBalance: v.optional(v.number()),
     color: v.optional(v.string()),
     coachTier: v.optional(v.string()),
+    postcode: v.optional(v.string()),
+    suburb: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Allow self-update of own color without admin requirement
     const onlyColorUpdate = Object.keys(args).every((k) => k === "id" || k === "color" || args[k as keyof typeof args] === undefined);
     if (!onlyColorUpdate) await requireAdmin(ctx);
+    // SPEC_PROFILE_POSTCODE_SUBURB: validate if either location field is supplied.
+    validateLocationIfProvided(args.postcode, args.suburb);
     const { id, ...updates } = args;
     const cleanUpdates = Object.fromEntries(
       Object.entries(updates).filter(([_, v]) => v !== undefined)
@@ -3052,11 +3081,16 @@ export const updateCustomerByEmail = mutation({
     athleteCapacity: v.optional(v.number()),
     bookingEmailsEnabled: v.optional(v.boolean()),
     emailPrefs: v.optional(v.array(v.object({ slug: v.string(), enabled: v.boolean() }))),
+    postcode: v.optional(v.string()),
+    suburb: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // SEC-3: Must be authenticated; can update own profile or be admin
     const updByEmailIdentity = await ctx.auth.getUserIdentity();
     if (!updByEmailIdentity) throw new ConvexError("Authentication required.");
+    // SPEC_PROFILE_POSTCODE_SUBURB: postcode/suburb are self-editable profile fields
+    // (NOT stripped under the non-admin guard below). Validate when supplied.
+    validateLocationIfProvided(args.postcode, args.suburb);
     const updCallerEmail = updByEmailIdentity.email?.toLowerCase().trim() ?? "";
     const normalizedEmail = args.email.toLowerCase().trim();
     let updIsAdminCaller = false;
@@ -3124,10 +3158,13 @@ export const updateCustomerByEmail = mutation({
         composeName(split.firstName, split.lastName) ||
         args.name?.trim() ||
         normalizedEmail.split("@")[0];
+      const seedPostcode = normalizePostcode(args.postcode);
+      const seedSuburb = normalizeSuburb(args.suburb);
       const id = await ctx.db.insert("customers", {
         name: displayName,
         firstName: split.firstName,
         lastName: split.lastName,
+        ...(seedPostcode && seedSuburb ? { postcode: seedPostcode, suburb: seedSuburb } : {}),
         email: normalizedEmail,
         phone: args.phone?.trim() || undefined,
         role: updIsAdminCaller ? (args.role || "customer") : "customer",
@@ -3202,6 +3239,9 @@ export const createCustomer = mutation({
     name: v.string(),
     email: v.string(),
     phone: v.optional(v.string()),
+    // SPEC_PROFILE_POSTCODE_SUBURB decision #8: required for admin-created customers.
+    postcode: v.optional(v.string()),
+    suburb: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
@@ -3209,6 +3249,10 @@ export const createCustomer = mutation({
     if (!normalizedEmail || !args.name.trim()) {
       throw new ConvexError("Name and email are required.");
     }
+    // Required + validated for admin-created customers (throws ConvexError if missing/invalid).
+    assertValidLocation(args.postcode, args.suburb);
+    const newPostcode = normalizePostcode(args.postcode);
+    const newSuburb = normalizeSuburb(args.suburb);
 
     const existing = await ctx.db
       .query("customers")
@@ -3220,6 +3264,8 @@ export const createCustomer = mutation({
       await ctx.db.patch(existing._id, {
         name: args.name.trim() || existing.name,
         ...(args.phone?.trim() ? { phone: args.phone.trim() } : {}),
+        postcode: newPostcode,
+        suburb: newSuburb,
       });
       return existing._id;
     }
@@ -3228,11 +3274,50 @@ export const createCustomer = mutation({
       name: args.name.trim(),
       email: normalizedEmail,
       phone: args.phone?.trim(),
+      postcode: newPostcode,
+      suburb: newSuburb,
       role: "customer",
       creditBalance: 0,
       createdAt: new Date().toISOString(),
     });
     return id;
+  },
+});
+
+// SPEC_PROFILE_POSTCODE_SUBURB Addendum A — one-time backfill: copy each customer's
+// CURRENT postcode/suburb onto their past bookings that lack a snapshot, so the catchment
+// report isn't empty on launch. Idempotent + re-runnable (only fills blanks). Skips coach
+// bookings (excluded from the report). Run via deploy key:
+//   npx convex run mutations:backfillBookingSuburbs
+export const backfillBookingSuburbs = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const bookings = await ctx.db.query("bookings").collect();
+    // Cache customer lookups by email to avoid repeated index reads.
+    const byEmail = new Map<string, any>();
+    let patched = 0;
+    let skippedNoCustomerLocation = 0;
+    for (const b of bookings) {
+      if ((b as any).isCoachBooking) continue;
+      if ((b as any).bookingPostcode) continue; // already has a snapshot
+      const email = ((b as any).customerEmail || "").toLowerCase().trim();
+      if (!email) continue;
+      let cust = byEmail.get(email);
+      if (cust === undefined) {
+        cust = await ctx.db
+          .query("customers")
+          .withIndex("by_email", (q: any) => q.eq("email", email))
+          .first();
+        byEmail.set(email, cust);
+      }
+      if (cust?.postcode && cust?.suburb) {
+        await ctx.db.patch(b._id, { bookingPostcode: cust.postcode, bookingSuburb: cust.suburb });
+        patched++;
+      } else {
+        skippedNoCustomerLocation++;
+      }
+    }
+    return { totalBookings: bookings.length, patched, skippedNoCustomerLocation };
   },
 });
 

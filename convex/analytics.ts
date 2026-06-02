@@ -306,3 +306,44 @@ export const getAdminAnalytics = query({
     };
   },
 });
+
+// ============================================================================
+// CATCHMENT REPORT — SPEC_PROFILE_POSTCODE_SUBURB Addendum A
+// Session COUNT per suburb/postcode (NOT revenue). Counts confirmed, non-coach
+// bookings (customer + admin-manual), one count per booking (mates ignored),
+// excluding cancelled. Uses the per-booking SNAPSHOT (bookingSuburb/bookingPostcode)
+// so a customer moving doesn't rewrite history. Optional inclusive date range.
+// ============================================================================
+export const getCatchmentReport = query({
+  args: { from: v.optional(v.string()), to: v.optional(v.string()) }, // YYYY-MM-DD inclusive
+  handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.isAdmin) return null;
+
+    const from = args.from?.trim() || undefined;
+    const to = args.to?.trim() || undefined;
+    const all = await ctx.db.query("bookings").collect();
+
+    const agg = new Map<string, { suburb: string; postcode: string; bookings: number }>();
+    let unknown = 0; // confirmed non-coach booking with no snapshot (backfill gap)
+    let total = 0;
+    for (const b of all) {
+      if ((b as any).isCoachBooking) continue;     // A2: coach own-bookings excluded
+      if (b.status !== "confirmed") continue;        // A4: cancelled/pending/tentative excluded
+      if (from && b.date < from) continue;
+      if (to && b.date > to) continue;
+      total++;
+      const suburb = ((b as any).bookingSuburb || "").trim();
+      const postcode = ((b as any).bookingPostcode || "").trim();
+      if (!suburb) { unknown++; continue; }
+      const key = `${suburb}|${postcode}`;
+      const row = agg.get(key) ?? { suburb, postcode, bookings: 0 };
+      row.bookings++;
+      agg.set(key, row);
+    }
+    const bySuburb = Array.from(agg.values()).sort(
+      (a, b) => b.bookings - a.bookings || a.suburb.localeCompare(b.suburb)
+    );
+    return { bySuburb, unknown, total, from: from ?? null, to: to ?? null };
+  },
+});

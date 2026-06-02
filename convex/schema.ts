@@ -32,6 +32,11 @@ export default defineSchema({
     // Optional → no forced migration; `name` stays authoritative for all reads.
     firstName: v.optional(v.string()),
     lastName: v.optional(v.string()),
+    // SPEC_PROFILE_POSTCODE_SUBURB: required location fields (WA only). Optional in
+    // the schema → no forced migration; enforced at signup + the login hard-block gate.
+    // postcode = 4 digits (6xxx); suburb = a locality of that postcode.
+    postcode: v.optional(v.string()),
+    suburb: v.optional(v.string()),
     email: v.string(),
     phone: v.optional(v.string()),
     role: v.string(), // 'customer' | 'coach' | 'admin' | 'user' (default: 'user' for new signups)
@@ -203,6 +208,11 @@ export default defineSchema({
     tentativeForDate: v.optional(v.string()),
     accessCode: v.optional(v.string()),
     discountCode: v.optional(v.string()),
+    // SPEC_PROFILE_POSTCODE_SUBURB Addendum A: snapshot of the booker's postcode/suburb
+    // at booking time (NOT a live join — preserves catchment history if a customer moves).
+    // Set for customer + admin-manual bookings; left blank on coach own-bookings.
+    bookingPostcode: v.optional(v.string()),
+    bookingSuburb: v.optional(v.string()),
     googleCalendarEventId: v.optional(v.string()),
     // Per-lane calendar event IDs (for multi-calendar sync)
     googleCalendarEventIds: v.optional(

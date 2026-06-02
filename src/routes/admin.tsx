@@ -13,6 +13,7 @@ import StatementAdjustmentsManager from '../components/StatementAdjustmentsManag
 import AdminDiscountCodesTab from '../components/AdminDiscountCodesTab'
 import AdminFaultInbox from '../components/AdminFaultInbox'
 import WaitlistAdmin from '../components/WaitlistAdmin'
+import PostcodeSuburbFields, { isLocationComplete } from '../components/PostcodeSuburbFields'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 
@@ -528,6 +529,8 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
   const [firstName, setFirstName] = useState(seedSplit.f)
   const [lastName, setLastName] = useState(seedSplit.l)
   const [phone, setPhone] = useState(user.phone || '')
+  // SPEC_PROFILE_POSTCODE_SUBURB: editable for all roles.
+  const [location, setLocation] = useState({ postcode: (user.postcode ?? '').trim(), suburb: (user.suburb ?? '').trim() })
   const [coachTier, setCoachTier] = useState(normaliseCoachTier(user.coachTier))
   const [color, setColor] = useState(user.color || '')
   const [role, setRole] = useState(user.role || 'user')
@@ -582,6 +585,8 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
       const args: any = { email: user.email, phone, role }
       if (isCoach) { args.name = name } else { args.firstName = firstName.trim(); args.lastName = lastName.trim() }
       if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color; args.defaultSessionDuration = defaultSessionDuration; args.athleteCapacity = athleteCapacity }
+      // SPEC_PROFILE_POSTCODE_SUBURB: only send when both present (avoids clobbering to blank).
+      if (location.postcode.trim() && location.suburb.trim()) { args.postcode = location.postcode.trim(); args.suburb = location.suburb.trim() }
       await updateProfile(args)
       onClose()
     } catch (err: any) { alert(getErrorMessage(err) ?? 'Failed') }
@@ -625,6 +630,10 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
           <span className="font-medium text-gray-700">Phone</span>
           <input value={phone} onChange={e => setPhone(e.target.value)} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" />
         </label>
+        <div>
+          <span className="block text-sm font-medium text-gray-700 mb-1">Location (WA)</span>
+          <PostcodeSuburbFields value={location} onChange={setLocation} idPrefix={`edit-${user._id ?? 'u'}`} showConsentNote={false} />
+        </div>
         <label className="block text-sm">
           <span className="font-medium text-gray-700">Role</span>
           <select value={role} onChange={e => setRole(e.target.value)} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
@@ -921,10 +930,12 @@ function CustomersTab() {
   const [editing, setEditing] = useState<any | null>(null)
   const [search, setSearch] = useState('')
   // SPEC_NAME_SPLIT: choose surname-first or given-name-first ordering.
-  const [sortBy, setSortBy] = useState<'first' | 'last'>('first')
+  const [sortBy, setSortBy] = useState<'first' | 'last' | 'suburb'>('first')
   const [showAddForm, setShowAddForm] = useState(false)
   const [merging, setMerging] = useState(false)
   const [custForm, setCustForm] = useState({ name: '', email: '', phone: '', password: '' })
+  // SPEC_PROFILE_POSTCODE_SUBURB: required location for admin-created customers.
+  const [custLocation, setCustLocation] = useState({ postcode: '', suburb: '' })
   const [busyAdd, setBusyAdd] = useState(false)
   const { impersonate } = useImpersonation()
   const navigate = useNavigate()
@@ -941,6 +952,8 @@ function CustomersTab() {
           (c.firstName || '').toLowerCase().includes(q) ||
           (c.lastName || '').toLowerCase().includes(q) ||
           (c.email || '').toLowerCase().includes(q) ||
+          (c.suburb || '').toLowerCase().includes(q) ||
+          (c.postcode || '').includes(search.trim()) ||
           (qDigits.length >= 3 && phoneDigits.includes(qDigits))
         )
       })
@@ -949,6 +962,7 @@ function CustomersTab() {
   // SPEC_NAME_SPLIT: sort by first or last name (fall back to the display name
   // when a row has no split fields yet — pre-migration accounts).
   const sortKey = (c: any) => {
+    if (sortBy === 'suburb') return (c.suburb || '~').toLowerCase() // blanks sort last
     const f = (c.firstName || '').toLowerCase().trim()
     const l = (c.lastName || '').toLowerCase().trim()
     const composed = sortBy === 'last' ? `${l} ${f}`.trim() : `${f} ${l}`.trim()
@@ -961,12 +975,14 @@ function CustomersTab() {
     const email = custForm.email.toLowerCase().trim()
     if (!custForm.name.trim() || !email) { alert('Name and email are required'); return }
     if (!custForm.password || custForm.password.length < 8) { alert('Password must be at least 8 characters'); return }
+    if (!isLocationComplete(custLocation)) { alert('Enter a valid WA postcode and select a suburb'); return }
     setBusyAdd(true)
     try {
-      await createCustomerMut({ name: custForm.name.trim(), email, phone: custForm.phone || undefined })
+      await createCustomerMut({ name: custForm.name.trim(), email, phone: custForm.phone || undefined, postcode: custLocation.postcode.trim(), suburb: custLocation.suburb.trim() })
       try { await setPassword({ email, password: custForm.password }) }
       catch (err: any) { alert('Customer record created, but failed to set password: ' + (getErrorMessage(err) ?? 'unknown')) }
       setCustForm({ name: '', email: '', phone: '', password: '' })
+      setCustLocation({ postcode: '', suburb: '' })
       setShowAddForm(false)
     } catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to create customer') }
     finally { setBusyAdd(false) }
@@ -991,12 +1007,13 @@ function CustomersTab() {
             />
             <select
               value={sortBy}
-              onChange={e => setSortBy(e.target.value as 'first' | 'last')}
+              onChange={e => setSortBy(e.target.value as 'first' | 'last' | 'suburb')}
               className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm bg-white"
               title="Sort order"
             >
               <option value="first">Sort: First name</option>
               <option value="last">Sort: Last name</option>
+              <option value="suburb">Sort: Suburb</option>
             </select>
             <button
               onClick={() => setMerging(true)}
@@ -1024,6 +1041,7 @@ function CustomersTab() {
                 <div className="text-sm text-gray-500 truncate">
                   {c.name ? c.email : ''}
                   {c.phone ? ` · ${c.phone}` : ''}
+                  {c.suburb ? ` · ${c.suburb}${c.postcode ? ` ${c.postcode}` : ''}` : ''}
                 </div>
               </div>
               <div className="flex items-center gap-3 shrink-0">
@@ -1077,6 +1095,9 @@ function CustomersTab() {
               onChange={e => setCustForm({ ...custForm, phone: e.target.value })}
               className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm"
             />
+            <div className="sm:col-span-6">
+              <PostcodeSuburbFields value={custLocation} onChange={setCustLocation} idPrefix="add-cust" showConsentNote={false} />
+            </div>
             <input
               required type="text" placeholder="Password (min 10 characters)"
               value={custForm.password} minLength={10}

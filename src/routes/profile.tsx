@@ -7,6 +7,7 @@ import { useAuth } from '../hooks/useAuth'
 import EmailNotificationsCard from '../components/EmailNotificationsCard'
 import MyAthletesCard from '../components/MyAthletesCard'
 import MyMatesCard from '../components/MyMatesCard'
+import PostcodeSuburbFields, { isLocationComplete } from '../components/PostcodeSuburbFields'
 
 export const Route = createFileRoute('/profile')({
   component: ProfilePage,
@@ -21,6 +22,8 @@ function ProfilePage() {
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [phone, setPhone] = useState('')
+  // SPEC_PROFILE_POSTCODE_SUBURB: editable location (all roles).
+  const [location, setLocation] = useState({ postcode: '', suburb: '' })
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
@@ -45,6 +48,8 @@ function ProfilePage() {
     if (user) {
       seedNames()
       setPhone(user.phone || '')
+      const cr = customerRecord as any
+      setLocation({ postcode: (cr?.postcode ?? '').trim(), suburb: (cr?.suburb ?? '').trim() })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, customerRecord])
@@ -67,6 +72,10 @@ function ProfilePage() {
       setMessage({ type: 'error', text: 'First name cannot be empty' })
       return
     }
+    if (!isLocationComplete(location)) {
+      setMessage({ type: 'error', text: 'Please enter a valid WA postcode and select your suburb.' })
+      return
+    }
     setSaving(true)
     try {
       await updateCustomerByEmail({
@@ -74,6 +83,8 @@ function ProfilePage() {
         firstName: trimmedFirst,
         lastName: trimmedLast,
         phone: phone.trim() || undefined,
+        postcode: location.postcode.trim(),
+        suburb: location.suburb.trim(),
       })
       setMessage({ type: 'success', text: 'Profile updated successfully' })
       setIsEditing(false)
@@ -87,6 +98,8 @@ function ProfilePage() {
   const handleCancel = () => {
     seedNames()
     setPhone(user.phone || '')
+    const cr = customerRecord as any
+    setLocation({ postcode: (cr?.postcode ?? '').trim(), suburb: (cr?.suburb ?? '').trim() })
     setIsEditing(false)
     setMessage(null)
   }
@@ -122,6 +135,8 @@ function ProfilePage() {
               <div className="flex justify-between"><span className="text-gray-500">Name</span><span className="font-medium text-gray-800">{user.name}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Email</span><span className="font-medium text-gray-800">{user.email}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Phone</span><span className="font-medium text-gray-800">{user.phone || '—'}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Suburb</span><span className="font-medium text-gray-800">{location.suburb || '—'}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Postcode</span><span className="font-medium text-gray-800">{location.postcode || '—'}</span></div>
             </div>
             <button
               onClick={() => setIsEditing(true)}
@@ -173,6 +188,7 @@ function ProfilePage() {
                 className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
+            <PostcodeSuburbFields value={location} onChange={setLocation} idPrefix="profile" />
             <div className="flex gap-2 pt-2">
               <button
                 type="submit"
