@@ -2,18 +2,11 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from 'convex/react'
 import { useAuth } from '../hooks/useAuth'
 import { api } from '../../convex/_generated/api'
+import { buildCoachLedger, todayAndMonthStart } from '../lib/statementLedger'
 
 export const Route = createFileRoute('/statements')({
   component: StatementsPage,
 })
-
-function formatHour(h: number) {
-  const hh = Math.floor(h)
-  const mm = Math.round((h - hh) * 60)
-  const ampm = hh >= 12 ? 'PM' : 'AM'
-  const display = hh % 12 === 0 ? 12 : hh % 12
-  return `${display}:${String(mm).padStart(2, '0')} ${ampm}`
-}
 
 function StatementsPage() {
   const { user, isCoach, isAdmin, isLoading } = useAuth()
@@ -28,10 +21,13 @@ function StatementsPage() {
     api.queries.listPaymentsByCoach,
     coachId ? { coachId } : 'skip'
   )
-
   const bookings = useQuery(
     api.queries.listBookingsByEmail,
     user?.email ? { email: user.email } : 'skip'
+  )
+  const adjustments = useQuery(
+    (api as any).statements.listStatementAdjustments,
+    coachId ? ({ subjectType: 'coach', subjectId: coachId } as any) : 'skip'
   )
 
   if (isLoading) {
@@ -48,99 +44,16 @@ function StatementsPage() {
     )
   }
 
-  const paymentsList = payments ?? []
-  const sortedPayments = [...paymentsList].sort((a: any, b: any) =>
-    (b.dateReceived || '').localeCompare(a.dateReceived || '')
-  )
-  const totalPaid = sortedPayments.reduce((s: number, p: any) => s + (p.amount || 0), 0)
-
-  const now = new Date()
-  const y = now.getFullYear()
-  const m = now.getMonth()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const todayStr = `${y}-${pad(m + 1)}-${pad(now.getDate())}`
-  const monthStart = `${y}-${pad(m + 1)}-01`
-
-  // Include ALL non-cancelled bookings for this coach email.
-  // Catches both explicit coach bookings AND legacy bookings that may not
-  // have the isCoachBooking flag set but still belong to this coach.
-  const allCoachBookings = (bookings ?? []).filter(
-    (b: any) =>
-      // Late-cancelled coach bookings are charged in full and stay on the
-      // statement (SPEC_PAYMENTS_AND_CREDIT #4).
-      (b.status !== 'cancelled' || b.coachLateCancelCharged === true) &&
-      (b.isCoachBooking === true || (typeof b.coachPrice === 'number' && b.coachPrice > 0))
-  )
-  // Past/today: included in totals and running balance
-  const coachBookings = allCoachBookings.filter((b: any) => (b.date || '') <= todayStr)
-  // Future: shown greyed out/upcoming, excluded from all totals
-  const futureBookings = allCoachBookings.filter((b: any) => (b.date || '') > todayStr)
-
-  // Compute cost per booking. Prefer stored coachPrice; fall back to 0.
-  const bookingCost = (b: any) => Number(b.coachPrice || 0)
-  const totalBooked = coachBookings.reduce((s: number, b: any) => s + bookingCost(b), 0)
-  const balance = totalBooked - totalPaid
-
-  const monthPaid = sortedPayments
-    .filter((p: any) => (p.dateReceived || '') >= monthStart && (p.dateReceived || '') <= todayStr)
-    .reduce((s: number, p: any) => s + (p.amount || 0), 0)
-  const monthBooked = coachBookings
-    .filter((b: any) => (b.date || '') >= monthStart)
-    .reduce((s: number, b: any) => s + bookingCost(b), 0)
-
-  // Merge past rows into unified activity ledger with running balance
-  type Row =
-    | { kind: 'booking'; date: string; sortKey: string; label: string; lane: string; amount: number; raw: any; future?: boolean }
-    | { kind: 'payment'; date: string; sortKey: string; label: string; method: string; amount: number; raw: any }
-
-  const rows: Row[] = []
-  for (const b of coachBookings) {
-    rows.push({
-      kind: 'booking',
-      date: b.date,
-      sortKey: `${b.date}T${String(b.startHour ?? 0).padStart(5, '0')}`,
-      label: `${formatHour(b.startHour)} • ${b.duration} min${b.coachLateCancelCharged ? ' • Late cancel' : ''}`,
-      lane: b.laneId || '—',
-      amount: bookingCost(b),
-      raw: b,
-    })
-  }
-  for (const p of sortedPayments) {
-    rows.push({
-      kind: 'payment',
-      date: p.dateReceived,
-      sortKey: `${p.dateReceived}T99999`,
-      label: p.description || p.note || 'Payment received',
-      method: p.method || '—',
-      amount: p.amount || 0,
-      raw: p,
-    })
-  }
-  // Sort ascending for running balance, then reverse for display
-  rows.sort((a, b) => a.sortKey.localeCompare(b.sortKey))
-  let running = 0
-  const rowsWithBalance = rows.map((r) => {
-    running += r.kind === 'booking' ? r.amount : -r.amount
-    return { ...r, balance: running }
+  const { todayStr, monthStart } = todayAndMonthStart()
+  const ledger = buildCoachLedger({
+    bookings: bookings ?? [],
+    payments: payments ?? [],
+    adjustments: adjustments ?? [],
+    todayStr,
+    monthStart,
   })
 
-  // Future rows: sorted ascending, flagged, excluded from balance
-  const futureRows = [...futureBookings]
-    .sort((a: any, b: any) => (a.date || '').localeCompare(b.date || '') || (a.startHour ?? 0) - (b.startHour ?? 0))
-    .map((b: any) => ({
-      kind: 'booking' as const,
-      date: b.date,
-      sortKey: `${b.date}T${String(b.startHour ?? 0).padStart(5, '0')}`,
-      label: `${formatHour(b.startHour)} • ${b.duration} min`,
-      lane: b.laneId || '—',
-      amount: bookingCost(b),
-      raw: b,
-      future: true,
-      balance: 0,
-    }))
-
-  // Future at top, then past newest-first
-  const displayRows = [...futureRows, ...[...rowsWithBalance].reverse()]
+  const loading = bookings === undefined || payments === undefined || adjustments === undefined
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -150,23 +63,27 @@ function StatementsPage() {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
         <div className="bg-white border border-gray-200 rounded-xl p-5">
           <div className="text-xs uppercase font-semibold text-gray-500 mb-1">Booked (Month)</div>
-          <div className="text-2xl font-bold text-gray-900">${monthBooked.toFixed(2)}</div>
+          <div className="text-2xl font-bold text-gray-900">${ledger.monthBooked.toFixed(2)}</div>
         </div>
         <div className="bg-white border border-gray-200 rounded-xl p-5">
           <div className="text-xs uppercase font-semibold text-gray-500 mb-1">Paid (Month)</div>
-          <div className="text-2xl font-bold text-gray-900">${monthPaid.toFixed(2)}</div>
+          <div className="text-2xl font-bold text-gray-900">${ledger.monthPaid.toFixed(2)}</div>
         </div>
         <div className="bg-white border border-gray-200 rounded-xl p-5">
           <div className="text-xs uppercase font-semibold text-gray-500 mb-1">Lifetime Booked</div>
-          <div className="text-2xl font-bold text-gray-900">${totalBooked.toFixed(2)}</div>
+          <div className="text-2xl font-bold text-gray-900">${ledger.totalBooked.toFixed(2)}</div>
         </div>
-        <div className={`border rounded-xl p-5 ${balance > 0 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
+        <div className={`border rounded-xl p-5 ${ledger.balance > 0 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
           <div className="text-xs uppercase font-semibold text-gray-600 mb-1">Outstanding Balance</div>
-          <div className={`text-2xl font-bold ${balance > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
-            ${balance.toFixed(2)}
+          <div className={`text-2xl font-bold ${ledger.balance > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+            ${ledger.balance.toFixed(2)}
           </div>
           <div className="text-xs text-gray-500 mt-1">
-            ${totalBooked.toFixed(2)} booked − ${totalPaid.toFixed(2)} paid
+            ${ledger.totalBooked.toFixed(2)}
+            {ledger.totalAdjust !== 0 && (
+              <> {ledger.totalAdjust >= 0 ? '+' : '−'} ${Math.abs(ledger.totalAdjust).toFixed(2)} adj</>
+            )}
+            {' '}booked − ${ledger.totalPaid.toFixed(2)} paid
           </div>
         </div>
       </div>
@@ -175,12 +92,12 @@ function StatementsPage() {
         <div className="px-5 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
           <h2 className="font-semibold text-gray-800">Activity Ledger</h2>
           <span className="text-xs text-gray-500">
-            {rowsWithBalance.length} entries{futureRows.length > 0 ? ` + ${futureRows.length} upcoming` : ''}
+            {ledger.pastCount} entries{ledger.futureCount > 0 ? ` + ${ledger.futureCount} upcoming` : ''}
           </span>
         </div>
-        {bookings === undefined || payments === undefined ? (
+        {loading ? (
           <div className="p-8 text-center text-gray-500">Loading...</div>
-        ) : displayRows.length === 0 ? (
+        ) : ledger.displayRows.length === 0 ? (
           <div className="p-8 text-center text-gray-500">No activity yet.</div>
         ) : (
           <div className="overflow-x-auto">
@@ -196,35 +113,26 @@ function StatementsPage() {
                 </tr>
               </thead>
               <tbody>
-                {displayRows.map((r, i) => {
-                  const isFuture = (r as any).future === true
+                {ledger.displayRows.map((r, i) => {
+                  const isFuture = r.future === true
+                  const typeBadge =
+                    r.kind === 'payment' ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium">Payment</span>
+                    : r.kind === 'adjustment' ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-xs font-medium">{r.isNote ? 'Note' : 'Adjustment'}</span>
+                    : isFuture ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-xs font-medium">Upcoming</span>
+                    : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">Booking</span>
+                  const desc =
+                    r.kind === 'booking' ? `${r.lane} • ${r.label}`
+                    : r.kind === 'payment' ? `${r.label} (${r.method})`
+                    : r.raw?.note ? `${r.label} — ${r.raw.note}` : r.label
                   return (
                     <tr key={i} className={`border-t border-gray-100 ${isFuture ? 'opacity-50' : ''}`}>
                       <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{r.date || '—'}</td>
-                      <td className="px-5 py-3">
-                        {r.kind === 'booking' ? (
-                          isFuture ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-xs font-medium">Upcoming</span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">Booking</span>
-                          )
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium">Payment</span>
-                        )}
-                      </td>
-                      <td className="px-5 py-3 text-gray-700">
-                        {r.kind === 'booking'
-                          ? `${(r as any).lane} • ${r.label}`
-                          : `${r.label} (${(r as any).method})`}
-                      </td>
-                      <td className="px-5 py-3 text-right text-gray-900">
-                        {r.kind === 'booking' ? `$${r.amount.toFixed(2)}` : ''}
-                      </td>
-                      <td className="px-5 py-3 text-right text-emerald-700">
-                        {r.kind === 'payment' ? `−$${r.amount.toFixed(2)}` : ''}
-                      </td>
-                      <td className={`px-5 py-3 text-right font-semibold ${isFuture ? 'text-gray-400' : (r as any).balance > 0 ? 'text-amber-700' : 'text-gray-900'}`}>
-                        {isFuture ? '—' : `$${(r as any).balance.toFixed(2)}`}
+                      <td className="px-5 py-3">{typeBadge}</td>
+                      <td className="px-5 py-3 text-gray-700">{desc}</td>
+                      <td className="px-5 py-3 text-right text-gray-900">{r.charge > 0 ? `$${r.charge.toFixed(2)}` : ''}</td>
+                      <td className="px-5 py-3 text-right text-emerald-700">{r.payment > 0 ? `−$${r.payment.toFixed(2)}` : ''}</td>
+                      <td className={`px-5 py-3 text-right font-semibold ${isFuture ? 'text-gray-400' : r.balance > 0 ? 'text-amber-700' : 'text-gray-900'}`}>
+                        {isFuture ? '—' : `$${r.balance.toFixed(2)}`}
                       </td>
                     </tr>
                   )
@@ -236,7 +144,7 @@ function StatementsPage() {
       </div>
 
       <p className="mt-4 text-xs text-gray-400">
-        Bookings are recorded automatically based on coach session prices. Payments are entered by admin. Contact admin for corrections.
+        Bookings are recorded automatically based on coach session prices. Payments and adjustments are entered by admin. Contact admin for corrections.
       </p>
     </div>
   )

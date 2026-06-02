@@ -9,6 +9,7 @@ import AdminBookingCalendar from '../components/AdminBookingCalendar'
 import ClosureManager from '../components/ClosureManager'
 import SettingsPanel from '../components/SettingsPanel'
 import CoachStatementTable from '../components/CoachStatementTable'
+import StatementAdjustmentsManager from '../components/StatementAdjustmentsManager'
 import AdminDiscountCodesTab from '../components/AdminDiscountCodesTab'
 import AdminFaultInbox from '../components/AdminFaultInbox'
 import WaitlistAdmin from '../components/WaitlistAdmin'
@@ -441,7 +442,7 @@ function StatementsTab() {
           </form>
         </div>
 
-        <CoachStatementTable coachId={viewCoach._id} coachEmail={viewCoach.email} coachName={viewCoach.name} />
+        <CoachStatementTable coachId={viewCoach._id} coachEmail={viewCoach.email} coachName={viewCoach.name} editable />
       </div>
     )
   }
@@ -675,6 +676,11 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
             </div>
             <p className="text-[11px] text-gray-400">Positive adds credit, negative deducts. Logged to the credit ledger.</p>
           </div>
+
+          {/* Statement adjustment lines — customers manage here; coaches use the Statements tab */}
+          {!isCoach && role !== 'coach' && user._id && (
+            <StatementAdjustmentsManager subjectType="customer" subjectId={user._id} />
+          )}
 
           {/* Email verify + password reset */}
           <div className="flex gap-2">

@@ -42,6 +42,7 @@ import type * as registrationLock from "../registrationLock.js";
 import type * as reminderAction from "../reminderAction.js";
 import type * as reminderQueries from "../reminderQueries.js";
 import type * as slotHolds from "../slotHolds.js";
+import type * as statements from "../statements.js";
 import type * as stripe from "../stripe.js";
 import type * as stripeWebhook from "../stripeWebhook.js";
 import type * as users from "../users.js";
@@ -91,6 +92,7 @@ declare const fullApi: ApiFromModules<{
   reminderAction: typeof reminderAction;
   reminderQueries: typeof reminderQueries;
   slotHolds: typeof slotHolds;
+  statements: typeof statements;
   stripe: typeof stripe;
   stripeWebhook: typeof stripeWebhook;
   users: typeof users;

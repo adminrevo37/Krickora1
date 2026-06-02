@@ -577,6 +577,24 @@ export default defineSchema({
     .index("by_coachId", ["coachId"])
     .index("by_dateReceived", ["dateReceived"]),
 
+  // SPEC_STATEMENTS_EDITING (A/D): manual statement lines an admin adds to a
+  // coach OR customer statement. delta is signed dollars: + = a charge/amount
+  // owed on the statement, − = a credit/discount on the statement. A zero-delta
+  // line is a pure note (D). Coach statements fold these into the running
+  // balance; customer statements (transaction-history only) show them as
+  // informational entries (no owed-balance concept — Inspector decision 2026-06-02).
+  statementAdjustments: defineTable({
+    subjectType: v.string(), // 'coach' | 'customer'
+    subjectId: v.id("customers"), // the coach or customer the line belongs to
+    delta: v.number(), // signed dollars (0 = note)
+    label: v.string(), // shown in the ledger
+    note: v.optional(v.string()),
+    date: v.string(), // YYYY-MM-DD — drives ledger position
+    createdBy: v.string(),
+    createdAt: v.string(),
+    updatedAt: v.optional(v.string()),
+  }).index("by_subject", ["subjectType", "subjectId"]),
+
   // Smart lock provider settings (singleton)
   lockSettings: defineTable({
     key: v.string(), // always "global"

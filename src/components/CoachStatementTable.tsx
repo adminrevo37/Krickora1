@@ -1,111 +1,79 @@
-import { useQuery } from 'convex/react'
+import { useState } from 'react'
+import { useMutation, useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
-
-function formatHour(h: number) {
-  const hh = Math.floor(h)
-  const mm = Math.round((h - hh) * 60)
-  const ampm = hh >= 12 ? 'PM' : 'AM'
-  const display = hh % 12 === 0 ? 12 : hh % 12
-  return `${display}:${String(mm).padStart(2, '0')} ${ampm}`
-}
+import { getErrorMessage } from '../lib/errors'
+import { buildCoachLedger, todayAndMonthStart, type LedgerRow } from '../lib/statementLedger'
 
 type Props = {
   coachId: string
   coachEmail?: string
   coachName?: string
+  /** Admin context → show edit/delete controls + add-adjustment form. */
+  editable?: boolean
 }
 
-export default function CoachStatementTable({ coachId, coachEmail, coachName }: Props) {
-  const payments = useQuery(api.queries.listPaymentsByCoach, coachId ? { coachId } : 'skip') ?? []
+export default function CoachStatementTable({ coachId, coachEmail, coachName, editable = false }: Props) {
+  const payments = useQuery(api.queries.listPaymentsByCoach, coachId ? { coachId } : 'skip')
   const bookings = useQuery(
     api.queries.listBookingsByEmail,
     coachEmail ? { email: coachEmail } : 'skip'
-  ) ?? []
-
-  const sortedPayments = [...(payments as any[])].sort((a, b) =>
-    (b.dateReceived || '').localeCompare(a.dateReceived || '')
   )
-  const totalPaid = sortedPayments.reduce((s, p) => s + (p.amount || 0), 0)
-
-  const now = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
-  const monthStart = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`
-
-  const allCoachBookings = (bookings as any[]).filter(
-    (b) =>
-      // Late-cancelled coach bookings are charged in full and stay on the
-      // statement (SPEC_PAYMENTS_AND_CREDIT #4).
-      (b.status !== 'cancelled' || b.coachLateCancelCharged === true) &&
-      (b.isCoachBooking === true || (typeof b.coachPrice === 'number' && b.coachPrice > 0))
+  const adjustments = useQuery(
+    (api as any).statements.listStatementAdjustments,
+    coachId ? ({ subjectType: 'coach', subjectId: coachId } as any) : 'skip'
   )
-  // Past/today: count in totals and running balance
-  const coachBookings = allCoachBookings.filter((b) => (b.date || '') <= todayStr)
-  // Future: shown greyed out, excluded from all totals
-  const futureBookings = allCoachBookings.filter((b) => (b.date || '') > todayStr)
 
-  const bookingCost = (b: any) => Number(b.coachPrice || 0)
-  const totalBooked = coachBookings.reduce((s: number, b: any) => s + bookingCost(b), 0)
-  const balance = totalBooked - totalPaid
+  const updatePayment = useMutation((api.mutations as any).updatePayment)
+  const deletePayment = useMutation((api.mutations as any).deletePayment)
+  const addAdjustment = useMutation((api as any).statements.addStatementAdjustment)
+  const updateAdjustment = useMutation((api as any).statements.updateStatementAdjustment)
+  const deleteAdjustment = useMutation((api as any).statements.deleteStatementAdjustment)
 
-  const monthPaid = sortedPayments
-    .filter((p) => (p.dateReceived || '') >= monthStart && (p.dateReceived || '') <= todayStr)
-    .reduce((s, p) => s + (p.amount || 0), 0)
-  const monthBooked = coachBookings
-    .filter((b) => (b.date || '') >= monthStart)
-    .reduce((s: number, b: any) => s + bookingCost(b), 0)
-
-  type Row =
-    | { kind: 'booking'; date: string; sortKey: string; label: string; lane: string; amount: number; balance: number; future?: boolean }
-    | { kind: 'payment'; date: string; sortKey: string; label: string; method: string; amount: number; balance: number }
-
-  // Build past rows with running balance
-  const rows: any[] = []
-  for (const b of coachBookings) {
-    rows.push({
-      kind: 'booking',
-      date: b.date,
-      sortKey: `${b.date}T${String(b.startHour ?? 0).padStart(5, '0')}`,
-      label: `${formatHour(b.startHour)} • ${b.duration} min${b.coachLateCancelCharged ? ' • Late cancel' : ''}`,
-      lane: b.laneId || '—',
-      amount: bookingCost(b),
-    })
-  }
-  for (const p of sortedPayments) {
-    rows.push({
-      kind: 'payment',
-      date: p.dateReceived,
-      sortKey: `${p.dateReceived}T99999`,
-      label: p.description || p.note || 'Payment received',
-      method: p.method || '—',
-      amount: p.amount || 0,
-    })
-  }
-  rows.sort((a, b) => a.sortKey.localeCompare(b.sortKey))
-  let running = 0
-  const rowsWithBalance: Row[] = rows.map((r) => {
-    running += r.kind === 'booking' ? r.amount : -r.amount
-    return { ...r, balance: running } as Row
+  const { todayStr, monthStart } = todayAndMonthStart()
+  const ledger = buildCoachLedger({
+    bookings: bookings ?? [],
+    payments: payments ?? [],
+    adjustments: adjustments ?? [],
+    todayStr,
+    monthStart,
   })
 
-  // Future rows: sorted ascending, no balance change, flagged future
-  const futureRows: Row[] = [...futureBookings]
-    .sort((a: any, b: any) => (a.date || '').localeCompare(b.date || '') || (a.startHour ?? 0) - (b.startHour ?? 0))
-    .map((b: any) => ({
-      kind: 'booking' as const,
-      date: b.date,
-      sortKey: `${b.date}T${String(b.startHour ?? 0).padStart(5, '0')}`,
-      label: `${formatHour(b.startHour)} • ${b.duration} min`,
-      lane: b.laneId || '—',
-      amount: bookingCost(b),
-      balance: 0,
-      future: true,
-    }))
+  const loading = payments === undefined || bookings === undefined || adjustments === undefined
 
-  // Future rows at top (upcoming), then past newest-first
-  const displayRows = [...futureRows, ...[...rowsWithBalance].reverse()]
+  // ── Row edit state ──────────────────────────────────────────────────────
+  const [editKey, setEditKey] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
 
-  const loading = payments === undefined || bookings === undefined
+  const savePaymentEdit = async (id: string, amount: number, dateReceived: string, method: string, description: string) => {
+    setBusy(true)
+    try {
+      await updatePayment({ id, amount, dateReceived, method, description } as any)
+      setEditKey(null)
+    } catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to update payment') }
+    finally { setBusy(false) }
+  }
+  const removePayment = async (id: string) => {
+    if (!confirm('Delete this payment? This cannot be undone.')) return
+    setBusy(true)
+    try { await deletePayment({ id } as any) }
+    catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to delete payment') }
+    finally { setBusy(false) }
+  }
+  const saveAdjustEdit = async (id: string, delta: number, label: string, note: string, date: string) => {
+    setBusy(true)
+    try {
+      await updateAdjustment({ id, delta, label, note, date } as any)
+      setEditKey(null)
+    } catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to update adjustment') }
+    finally { setBusy(false) }
+  }
+  const removeAdjust = async (id: string) => {
+    if (!confirm('Delete this adjustment line? This cannot be undone.')) return
+    setBusy(true)
+    try { await deleteAdjustment({ id } as any) }
+    catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to delete adjustment') }
+    finally { setBusy(false) }
+  }
 
   return (
     <div className="space-y-6">
@@ -119,37 +87,55 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName }: 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="bg-white border border-gray-200 rounded-xl p-5">
           <div className="text-xs uppercase font-semibold text-gray-500 mb-1">Booked (Month)</div>
-          <div className="text-2xl font-bold text-gray-900">${monthBooked.toFixed(2)}</div>
+          <div className="text-2xl font-bold text-gray-900">${ledger.monthBooked.toFixed(2)}</div>
         </div>
         <div className="bg-white border border-gray-200 rounded-xl p-5">
           <div className="text-xs uppercase font-semibold text-gray-500 mb-1">Paid (Month)</div>
-          <div className="text-2xl font-bold text-gray-900">${monthPaid.toFixed(2)}</div>
+          <div className="text-2xl font-bold text-gray-900">${ledger.monthPaid.toFixed(2)}</div>
         </div>
         <div className="bg-white border border-gray-200 rounded-xl p-5">
           <div className="text-xs uppercase font-semibold text-gray-500 mb-1">Lifetime Booked</div>
-          <div className="text-2xl font-bold text-gray-900">${totalBooked.toFixed(2)}</div>
+          <div className="text-2xl font-bold text-gray-900">${ledger.totalBooked.toFixed(2)}</div>
         </div>
-        <div className={`border rounded-xl p-5 ${balance > 0 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
+        <div className={`border rounded-xl p-5 ${ledger.balance > 0 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
           <div className="text-xs uppercase font-semibold text-gray-600 mb-1">Outstanding</div>
-          <div className={`text-2xl font-bold ${balance > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
-            ${balance.toFixed(2)}
+          <div className={`text-2xl font-bold ${ledger.balance > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+            ${ledger.balance.toFixed(2)}
           </div>
           <div className="text-xs text-gray-500 mt-1">
-            ${totalBooked.toFixed(2)} − ${totalPaid.toFixed(2)}
+            ${ledger.totalBooked.toFixed(2)}
+            {ledger.totalAdjust !== 0 && (
+              <> {ledger.totalAdjust >= 0 ? '+' : '−'} ${Math.abs(ledger.totalAdjust).toFixed(2)} adj</>
+            )}
+            {' '}− ${ledger.totalPaid.toFixed(2)}
           </div>
         </div>
       </div>
+
+      {editable && (
+        <AddAdjustmentForm
+          today={todayStr}
+          busy={busy}
+          onAdd={async (delta, label, note, date) => {
+            setBusy(true)
+            try {
+              await addAdjustment({ subjectType: 'coach', subjectId: coachId, delta, label, note, date } as any)
+            } catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to add adjustment') }
+            finally { setBusy(false) }
+          }}
+        />
+      )}
 
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
         <div className="px-5 py-3 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
           <h4 className="font-semibold text-gray-800">Activity Ledger</h4>
           <span className="text-xs text-gray-500">
-            {rowsWithBalance.length} entries{futureRows.length > 0 ? ` + ${futureRows.length} upcoming` : ''}
+            {ledger.pastCount} entries{ledger.futureCount > 0 ? ` + ${ledger.futureCount} upcoming` : ''}
           </span>
         </div>
         {loading ? (
           <div className="p-8 text-center text-gray-500">Loading...</div>
-        ) : displayRows.length === 0 ? (
+        ) : ledger.displayRows.length === 0 ? (
           <div className="p-8 text-center text-gray-500">No activity yet.</div>
         ) : (
           <div className="overflow-x-auto">
@@ -162,47 +148,237 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName }: 
                   <th className="text-right px-5 py-2 font-semibold">Charge</th>
                   <th className="text-right px-5 py-2 font-semibold">Payment</th>
                   <th className="text-right px-5 py-2 font-semibold">Balance</th>
+                  {editable && <th className="px-5 py-2" />}
                 </tr>
               </thead>
               <tbody>
-                {displayRows.map((r, i) => {
-                  const isFuture = (r as any).future === true
-                  return (
-                    <tr key={i} className={`border-t border-gray-100 ${isFuture ? 'opacity-50' : ''}`}>
-                      <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{r.date || '—'}</td>
-                      <td className="px-5 py-3">
-                        {r.kind === 'booking' ? (
-                          isFuture ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-xs font-medium">Upcoming</span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">Booking</span>
-                          )
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium">Payment</span>
-                        )}
-                      </td>
-                      <td className="px-5 py-3 text-gray-700">
-                        {r.kind === 'booking'
-                          ? `${(r as any).lane} • ${r.label}`
-                          : `${r.label} (${(r as any).method})`}
-                      </td>
-                      <td className="px-5 py-3 text-right text-gray-900">
-                        {r.kind === 'booking' ? `$${r.amount.toFixed(2)}` : ''}
-                      </td>
-                      <td className="px-5 py-3 text-right text-emerald-700">
-                        {r.kind === 'payment' ? `−$${r.amount.toFixed(2)}` : ''}
-                      </td>
-                      <td className={`px-5 py-3 text-right font-semibold ${isFuture ? 'text-gray-400' : r.balance > 0 ? 'text-amber-700' : 'text-gray-900'}`}>
-                        {isFuture ? '—' : `$${r.balance.toFixed(2)}`}
-                      </td>
-                    </tr>
-                  )
-                })}
+                {ledger.displayRows.map((r, i) => (
+                  <LedgerTableRow
+                    key={(r.raw?._id ?? i) + ':' + r.kind}
+                    r={r}
+                    editable={editable}
+                    busy={busy}
+                    isEditing={editKey === (r.raw?._id ?? '')}
+                    onEdit={() => setEditKey(r.raw?._id ?? null)}
+                    onCancelEdit={() => setEditKey(null)}
+                    onSavePayment={savePaymentEdit}
+                    onDeletePayment={removePayment}
+                    onSaveAdjust={saveAdjustEdit}
+                    onDeleteAdjust={removeAdjust}
+                  />
+                ))}
               </tbody>
             </table>
           </div>
         )}
       </div>
     </div>
+  )
+}
+
+// ── Add-adjustment form (admin) ────────────────────────────────────────────
+function AddAdjustmentForm({
+  today, busy, onAdd,
+}: {
+  today: string
+  busy: boolean
+  onAdd: (delta: number, label: string, note: string, date: string) => Promise<void>
+}) {
+  const [open, setOpen] = useState(false)
+  const [sign, setSign] = useState<'charge' | 'credit' | 'note'>('charge')
+  const [amount, setAmount] = useState('')
+  const [label, setLabel] = useState('')
+  const [note, setNote] = useState('')
+  const [date, setDate] = useState(today)
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!label.trim()) { alert('Enter a label'); return }
+    let delta = 0
+    if (sign !== 'note') {
+      const amt = parseFloat(amount)
+      if (!amt || amt <= 0) { alert('Enter a valid amount'); return }
+      delta = sign === 'charge' ? amt : -amt
+    }
+    await onAdd(delta, label.trim(), note.trim(), date)
+    setAmount(''); setLabel(''); setNote(''); setSign('charge'); setDate(today); setOpen(false)
+  }
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="text-sm font-semibold text-emerald-600 hover:underline">
+        + Add adjustment line
+      </button>
+    )
+  }
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+        <div>
+          <h3 className="text-base font-bold text-gray-800">Add Adjustment Line</h3>
+          <p className="text-sm text-gray-500 mt-0.5">A charge owed, a credit/discount, or a note on this statement</p>
+        </div>
+        <button onClick={() => setOpen(false)} className="text-sm text-gray-400 hover:text-gray-600">Cancel</button>
+      </div>
+      <form onSubmit={submit} className="p-6 grid grid-cols-1 sm:grid-cols-5 gap-3">
+        <select value={sign} onChange={e => setSign(e.target.value as any)} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
+          <option value="charge">Charge (+)</option>
+          <option value="credit">Credit (−)</option>
+          <option value="note">Note (no $)</option>
+        </select>
+        <input type="number" step="0.01" min="0" placeholder="Amount ($)" value={amount} disabled={sign === 'note'} onChange={e => setAmount(e.target.value)} className="px-3 py-2 border border-gray-200 rounded-lg text-sm disabled:bg-gray-100" />
+        <input type="date" value={date} onChange={e => setDate(e.target.value)} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+        <input required placeholder="Label" value={label} onChange={e => setLabel(e.target.value)} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+        <input placeholder="Note (optional)" value={note} onChange={e => setNote(e.target.value)} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
+        <button disabled={busy} className="sm:col-span-5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors">
+          {busy ? 'Saving…' : 'Add Line'}
+        </button>
+      </form>
+    </div>
+  )
+}
+
+// ── One ledger row (with optional inline editor) ───────────────────────────
+function LedgerTableRow({
+  r, editable, busy, isEditing, onEdit, onCancelEdit,
+  onSavePayment, onDeletePayment, onSaveAdjust, onDeleteAdjust,
+}: {
+  r: LedgerRow
+  editable: boolean
+  busy: boolean
+  isEditing: boolean
+  onEdit: () => void
+  onCancelEdit: () => void
+  onSavePayment: (id: string, amount: number, dateReceived: string, method: string, description: string) => Promise<void>
+  onDeletePayment: (id: string) => Promise<void>
+  onSaveAdjust: (id: string, delta: number, label: string, note: string, date: string) => Promise<void>
+  onDeleteAdjust: (id: string) => Promise<void>
+}) {
+  const isFuture = r.future === true
+  const canEdit = editable && (r.kind === 'payment' || r.kind === 'adjustment')
+
+  if (isEditing && r.kind === 'payment') {
+    return <PaymentEditRow r={r} busy={busy} onCancel={onCancelEdit} onSave={onSavePayment} />
+  }
+  if (isEditing && r.kind === 'adjustment') {
+    return <AdjustmentEditRow r={r} busy={busy} onCancel={onCancelEdit} onSave={onSaveAdjust} />
+  }
+
+  const typeBadge =
+    r.kind === 'payment' ? <span className="inline-flex px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium">Payment</span>
+    : r.kind === 'adjustment' ? <span className="inline-flex px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-xs font-medium">{r.isNote ? 'Note' : 'Adjustment'}</span>
+    : isFuture ? <span className="inline-flex px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-xs font-medium">Upcoming</span>
+    : <span className="inline-flex px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">Booking</span>
+
+  const desc =
+    r.kind === 'booking' ? `${r.lane} • ${r.label}`
+    : r.kind === 'payment' ? `${r.label} (${r.method})`
+    : r.raw?.note ? `${r.label} — ${r.raw.note}` : r.label
+
+  return (
+    <tr className={`border-t border-gray-100 ${isFuture ? 'opacity-50' : ''}`}>
+      <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{r.date || '—'}</td>
+      <td className="px-5 py-3">{typeBadge}</td>
+      <td className="px-5 py-3 text-gray-700">{desc}</td>
+      <td className="px-5 py-3 text-right text-gray-900">{r.charge > 0 ? `$${r.charge.toFixed(2)}` : ''}</td>
+      <td className="px-5 py-3 text-right text-emerald-700">{r.payment > 0 ? `−$${r.payment.toFixed(2)}` : ''}</td>
+      <td className={`px-5 py-3 text-right font-semibold ${isFuture ? 'text-gray-400' : r.balance > 0 ? 'text-amber-700' : 'text-gray-900'}`}>
+        {isFuture ? '—' : `$${r.balance.toFixed(2)}`}
+      </td>
+      {editable && (
+        <td className="px-5 py-3 text-right whitespace-nowrap">
+          {canEdit && (
+            <span className="inline-flex gap-3">
+              <button disabled={busy} onClick={onEdit} className="text-xs text-blue-600 hover:underline disabled:opacity-50">Edit</button>
+              <button disabled={busy} onClick={() => r.kind === 'payment' ? onDeletePayment(r.raw._id) : onDeleteAdjust(r.raw._id)} className="text-xs text-red-600 hover:underline disabled:opacity-50">Delete</button>
+            </span>
+          )}
+        </td>
+      )}
+    </tr>
+  )
+}
+
+function PaymentEditRow({
+  r, busy, onCancel, onSave,
+}: {
+  r: LedgerRow
+  busy: boolean
+  onCancel: () => void
+  onSave: (id: string, amount: number, dateReceived: string, method: string, description: string) => Promise<void>
+}) {
+  const [amount, setAmount] = useState(String(r.raw.amount ?? ''))
+  const [date, setDate] = useState(r.raw.dateReceived ?? '')
+  const [method, setMethod] = useState(r.raw.method ?? 'bank_transfer')
+  const [description, setDescription] = useState(r.raw.description ?? r.raw.note ?? '')
+  return (
+    <tr className="border-t border-gray-100 bg-blue-50/40">
+      <td className="px-5 py-2"><input type="date" value={date} onChange={e => setDate(e.target.value)} className="px-2 py-1 border border-gray-200 rounded text-xs w-full" /></td>
+      <td className="px-5 py-2">
+        <select value={method} onChange={e => setMethod(e.target.value)} className="px-2 py-1 border border-gray-200 rounded text-xs bg-white">
+          <option value="bank_transfer">Bank Transfer</option>
+          <option value="cash">Cash</option>
+          <option value="stripe">Stripe</option>
+          <option value="other">Other</option>
+        </select>
+      </td>
+      <td className="px-5 py-2"><input value={description} onChange={e => setDescription(e.target.value)} placeholder="Notes" className="px-2 py-1 border border-gray-200 rounded text-xs w-full" /></td>
+      <td className="px-5 py-2" />
+      <td className="px-5 py-2 text-right"><input type="number" step="0.01" min="0" value={amount} onChange={e => setAmount(e.target.value)} className="px-2 py-1 border border-gray-200 rounded text-xs w-24 text-right" /></td>
+      <td className="px-5 py-2" />
+      <td className="px-5 py-2 text-right whitespace-nowrap">
+        <span className="inline-flex gap-3">
+          <button disabled={busy} onClick={() => { const amt = parseFloat(amount); if (!amt || amt <= 0) { alert('Enter a valid amount'); return } onSave(r.raw._id, amt, date, method, description) }} className="text-xs text-emerald-600 font-semibold hover:underline disabled:opacity-50">Save</button>
+          <button disabled={busy} onClick={onCancel} className="text-xs text-gray-500 hover:underline disabled:opacity-50">Cancel</button>
+        </span>
+      </td>
+    </tr>
+  )
+}
+
+function AdjustmentEditRow({
+  r, busy, onCancel, onSave,
+}: {
+  r: LedgerRow
+  busy: boolean
+  onCancel: () => void
+  onSave: (id: string, delta: number, label: string, note: string, date: string) => Promise<void>
+}) {
+  const initSign = (r.raw.delta ?? 0) > 0 ? 'charge' : (r.raw.delta ?? 0) < 0 ? 'credit' : 'note'
+  const [sign, setSign] = useState<'charge' | 'credit' | 'note'>(initSign)
+  const [amount, setAmount] = useState(String(Math.abs(r.raw.delta ?? 0) || ''))
+  const [label, setLabel] = useState(r.raw.label ?? '')
+  const [note, setNote] = useState(r.raw.note ?? '')
+  const [date, setDate] = useState(r.raw.date ?? '')
+  return (
+    <tr className="border-t border-gray-100 bg-purple-50/40">
+      <td className="px-5 py-2"><input type="date" value={date} onChange={e => setDate(e.target.value)} className="px-2 py-1 border border-gray-200 rounded text-xs w-full" /></td>
+      <td className="px-5 py-2">
+        <select value={sign} onChange={e => setSign(e.target.value as any)} className="px-2 py-1 border border-gray-200 rounded text-xs bg-white">
+          <option value="charge">Charge (+)</option>
+          <option value="credit">Credit (−)</option>
+          <option value="note">Note</option>
+        </select>
+      </td>
+      <td className="px-5 py-2">
+        <input value={label} onChange={e => setLabel(e.target.value)} placeholder="Label" className="px-2 py-1 border border-gray-200 rounded text-xs w-full mb-1" />
+        <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)" className="px-2 py-1 border border-gray-200 rounded text-xs w-full" />
+      </td>
+      <td className="px-5 py-2" />
+      <td className="px-5 py-2 text-right"><input type="number" step="0.01" min="0" value={amount} disabled={sign === 'note'} onChange={e => setAmount(e.target.value)} className="px-2 py-1 border border-gray-200 rounded text-xs w-24 text-right disabled:bg-gray-100" /></td>
+      <td className="px-5 py-2" />
+      <td className="px-5 py-2 text-right whitespace-nowrap">
+        <span className="inline-flex gap-3">
+          <button disabled={busy} onClick={() => {
+            if (!label.trim()) { alert('Enter a label'); return }
+            let delta = 0
+            if (sign !== 'note') { const amt = parseFloat(amount); if (!amt || amt <= 0) { alert('Enter a valid amount'); return } delta = sign === 'charge' ? amt : -amt }
+            onSave(r.raw._id, delta, label.trim(), note.trim(), date)
+          }} className="text-xs text-emerald-600 font-semibold hover:underline disabled:opacity-50">Save</button>
+          <button disabled={busy} onClick={onCancel} className="text-xs text-gray-500 hover:underline disabled:opacity-50">Cancel</button>
+        </span>
+      </td>
+    </tr>
   )
 }

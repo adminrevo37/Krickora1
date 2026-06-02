@@ -48,6 +48,10 @@ function PaymentsPage() {
     api.queries.listCreditLedger,
     user?.email ? { email: user.email } : 'skip'
   )
+  const adjustments = useQuery(
+    (api as any).statements.listStatementAdjustments,
+    customer?._id ? ({ subjectType: 'customer', subjectId: customer._id } as any) : 'skip'
+  ) as any[] | undefined
 
   if (isLoading) {
     return <div className="max-w-5xl mx-auto px-4 py-16 text-center text-gray-500">Loading...</div>
@@ -74,6 +78,11 @@ function PaymentsPage() {
   // Ledger newest-first
   const sortedLedger = [...(ledger ?? [])].sort((a: any, b: any) =>
     (b.at || '').localeCompare(a.at || '')
+  )
+
+  // Statement adjustments newest-first (transaction history — no running balance)
+  const sortedAdjustments = [...(adjustments ?? [])].sort((a: any, b: any) =>
+    (b.date || '').localeCompare(a.date || '')
   )
 
   const fmtDate = (iso: string) => {
@@ -198,6 +207,46 @@ function PaymentsPage() {
           </div>
         )}
       </div>
+
+      {/* Account adjustments (admin-entered statement lines) — shown only if any exist */}
+      {sortedAdjustments.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mt-8">
+          <div className="px-5 py-3 border-b border-gray-200 bg-gray-50">
+            <h2 className="font-semibold text-gray-800">Account Adjustments</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-gray-600">
+                <tr>
+                  <th className="text-left px-5 py-2 font-semibold">Date</th>
+                  <th className="text-left px-5 py-2 font-semibold">Description</th>
+                  <th className="text-right px-5 py-2 font-semibold">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedAdjustments.map((a: any) => {
+                  const delta = a.delta ?? 0
+                  return (
+                    <tr key={a._id} className="border-t border-gray-100">
+                      <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{a.date}</td>
+                      <td className="px-5 py-3 text-gray-700">
+                        {a.label}
+                        {a.note ? <span className="text-gray-400"> — {a.note}</span> : null}
+                      </td>
+                      <td className={`px-5 py-3 text-right font-semibold ${delta > 0 ? 'text-amber-700' : delta < 0 ? 'text-emerald-700' : 'text-gray-400'}`}>
+                        {delta === 0 ? '—' : `${delta > 0 ? '+' : '−'}$${Math.abs(delta).toFixed(2)}`}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-5 py-3 border-t border-gray-100 text-xs text-gray-400">
+            Charges or credits applied to your account by Cricket Revolution. Contact us with any questions.
+          </div>
+        </div>
+      )}
 
       <p className="mt-4 text-xs text-gray-400">
         <Link to="/bookings" className="text-blue-600 hover:underline">View my bookings</Link>

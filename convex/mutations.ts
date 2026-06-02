@@ -3725,6 +3725,40 @@ export const deletePayment = mutation({
   },
 });
 
+// SPEC_STATEMENTS_EDITING (B): edit a previously-recorded coach payment. Admin
+// only. Only the fields passed are changed; note mirrors description when the
+// caller updates description without a separate note (matches createPayment).
+export const updatePayment = mutation({
+  args: {
+    id: v.id("payments"),
+    amount: v.optional(v.number()),
+    dateReceived: v.optional(v.string()),
+    note: v.optional(v.string()),
+    method: v.optional(v.string()),
+    description: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const existing = await ctx.db.get(args.id);
+    if (!existing) throw new ConvexError("Payment not found");
+    const patch: Record<string, any> = {};
+    if (args.amount !== undefined) {
+      if (args.amount <= 0) throw new ConvexError("Enter a valid amount");
+      patch.amount = args.amount;
+    }
+    if (args.dateReceived !== undefined) patch.dateReceived = args.dateReceived;
+    if (args.method !== undefined) patch.method = args.method;
+    if (args.description !== undefined) {
+      patch.description = args.description;
+      // Keep note aligned to description unless the caller sets note explicitly.
+      if (args.note === undefined) patch.note = args.description;
+    }
+    if (args.note !== undefined) patch.note = args.note;
+    await ctx.db.patch(args.id, patch);
+    return args.id;
+  },
+});
+
 // ============================================================================
 // CUSTOMER CREDIT MUTATIONS — ADMIN ONLY
 // ============================================================================
