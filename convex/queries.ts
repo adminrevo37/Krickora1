@@ -201,7 +201,10 @@ export const listCustomers = query({
   args: {},
   handler: async (ctx) => {
     await requireAdmin(ctx);
-    return await ctx.db.query("customers").collect();
+    // Hide deactivated / merged-away accounts (SPEC_MERGE_DUPLICATE_ACCOUNTS) —
+    // a soft-deleted loser row should not appear in any admin customer list.
+    const rows = await ctx.db.query("customers").collect();
+    return rows.filter((c: any) => !c.deactivatedAt);
   },
 });
 

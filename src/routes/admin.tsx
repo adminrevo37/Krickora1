@@ -781,6 +781,140 @@ function RoleAuditLogPanel() {
   )
 }
 
+// SPEC_MERGE_DUPLICATE_ACCOUNTS — combine two customer accounts into one.
+// Admin picks the SURVIVOR (kept) + the LOSER (folded in + retired), reviews a
+// dry-run preview (counts + blockers + warnings), then confirms. Destructive:
+// the loser's login is permanently removed and its row is soft-deleted.
+function MergeAccountsModal({ customers, onClose }: { customers: any[]; onClose: () => void }) {
+  const mergeAccounts = useMutation((api as any).accountMerge.mergeAccounts)
+  const [survivorEmail, setSurvivorEmail] = useState('')
+  const [loserEmail, setLoserEmail] = useState('')
+  const [ack, setAck] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+
+  const ready = !!survivorEmail && !!loserEmail && survivorEmail !== loserEmail
+  // Preview only runs once two DISTINCT accounts are picked (the query throws on
+  // self / empty, which we prevent here), so it never errors the component.
+  const preview = useQuery(
+    (api as any).accountMerge.previewAccountMerge,
+    ready ? { loserEmail, survivorEmail } : 'skip'
+  ) as any
+
+  const sorted = [...customers].sort((a, b) =>
+    (a.name || a.email || '').localeCompare(b.name || b.email || ''))
+  const optLabel = (c: any) => `${c.name || c.email}${c.name ? ` · ${c.email}` : ''}`
+
+  const doMerge = async () => {
+    if (!ready || !preview?.ok || !ack) return
+    setBusy(true); setMsg(null)
+    try {
+      const r: any = await mergeAccounts({ loserEmail, survivorEmail, confirm: true })
+      const c = r?.moved ?? {}
+      setMsg(`Merged ${loserEmail} into ${survivorEmail}. Moved ${c.bookings ?? 0} bookings, ${c.athletes ?? 0} athletes, $${(r?.mergedCredit ?? 0).toFixed(2)} credit. The losing login was removed.`)
+      setLoserEmail(''); setSurvivorEmail(''); setAck(false)
+    } catch (err: any) {
+      setMsg(getErrorMessage(err) ?? 'Merge failed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const Count = ({ label, n }: { label: string; n: number }) => (
+    <div className="flex items-center justify-between px-3 py-1.5 bg-gray-50 rounded-lg text-sm">
+      <span className="text-gray-600">{label}</span>
+      <span className="font-semibold text-gray-900">{n ?? 0}</span>
+    </div>
+  )
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-bold text-gray-900">Merge duplicate accounts</h3>
+          <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
+        </div>
+        <p className="text-xs text-gray-500">
+          Fold the losing account into the surviving one. All bookings, athletes, credit and
+          history move to the survivor. The losing login is permanently removed — the person
+          logs in with the survivor's email afterwards. Customer accounts only.
+        </p>
+
+        <label className="block text-sm">
+          <span className="font-medium text-gray-700">Survivor (kept)</span>
+          <select value={survivorEmail} onChange={e => setSurvivorEmail(e.target.value)}
+            className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
+            <option value="">Select the account to keep…</option>
+            {sorted.map((c: any) => <option key={c._id} value={c.email}>{optLabel(c)}</option>)}
+          </select>
+        </label>
+        <label className="block text-sm">
+          <span className="font-medium text-gray-700">Loser (folded in &amp; retired)</span>
+          <select value={loserEmail} onChange={e => setLoserEmail(e.target.value)}
+            className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
+            <option value="">Select the duplicate to merge in…</option>
+            {sorted.filter((c: any) => c.email !== survivorEmail).map((c: any) =>
+              <option key={c._id} value={c.email}>{optLabel(c)}</option>)}
+          </select>
+        </label>
+
+        {ready && !preview && <p className="text-sm text-gray-400 italic">Loading preview…</p>}
+
+        {ready && preview && (
+          <div className="space-y-3 border-t border-gray-100 pt-3">
+            {preview.blockers?.length > 0 && (
+              <div className="rounded-lg bg-red-50 border border-red-200 p-3 space-y-1">
+                {preview.blockers.map((b: string, i: number) => (
+                  <p key={i} className="text-sm text-red-700">⛔ {b}</p>
+                ))}
+              </div>
+            )}
+            {preview.warnings?.length > 0 && (
+              <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 space-y-1">
+                {preview.warnings.map((w: string, i: number) => (
+                  <p key={i} className="text-sm text-amber-700">⚠️ {w}</p>
+                ))}
+              </div>
+            )}
+            <div className="text-sm text-gray-700">
+              Credit: ${preview.survivor?.creditBalance?.toFixed(2)} + ${preview.loser?.creditBalance?.toFixed(2)}
+              {' '}= <span className="font-semibold">${preview.mergedCreditBalance?.toFixed(2)}</span> on survivor
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <Count label="Bookings" n={preview.counts?.bookings} />
+              <Count label="As a mate on" n={preview.counts?.bookingMateLinks} />
+              <Count label="Athletes" n={preview.counts?.athletes} />
+              <Count label="Credit history" n={preview.counts?.creditLedger} />
+              <Count label="Saved mates" n={preview.counts?.friendships} />
+              <Count label="Invites" n={preview.counts?.bookingInvites} />
+              <Count label="Stripe payments" n={preview.counts?.stripePayments} />
+              <Count label="Waitlist" n={preview.counts?.waitlist} />
+              <Count label="Discount uses" n={preview.counts?.discountRedemptions} />
+              <Count label="Statement lines" n={preview.counts?.statementAdjustments} />
+            </div>
+
+            {preview.ok && (
+              <label className="flex items-start gap-2 text-sm text-gray-700">
+                <input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} className="mt-0.5" />
+                <span>I understand this permanently removes the <strong>{loserEmail}</strong> login and cannot be undone.</span>
+              </label>
+            )}
+            <button
+              onClick={doMerge}
+              disabled={!preview.ok || !ack || busy}
+              className="w-full px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors"
+            >
+              {busy ? 'Merging…' : `Merge ${loserEmail || 'loser'} → ${survivorEmail || 'survivor'}`}
+            </button>
+          </div>
+        )}
+
+        {msg && <p className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3">{msg}</p>}
+      </div>
+    </div>
+  )
+}
+
 function CustomersTab() {
   const customers = useQuery(api.queries.listCustomers) ?? []
   const list = (customers as any[]).filter(c => c.role !== 'admin' && c.role !== 'coach')
@@ -789,6 +923,7 @@ function CustomersTab() {
   // SPEC_NAME_SPLIT: choose surname-first or given-name-first ordering.
   const [sortBy, setSortBy] = useState<'first' | 'last'>('first')
   const [showAddForm, setShowAddForm] = useState(false)
+  const [merging, setMerging] = useState(false)
   const [custForm, setCustForm] = useState({ name: '', email: '', phone: '', password: '' })
   const [busyAdd, setBusyAdd] = useState(false)
   const { impersonate } = useImpersonation()
@@ -864,6 +999,13 @@ function CustomersTab() {
               <option value="last">Sort: Last name</option>
             </select>
             <button
+              onClick={() => setMerging(true)}
+              className="text-sm px-3 py-1.5 rounded-lg font-semibold transition-colors border border-gray-200 text-gray-700 hover:bg-gray-50"
+              title="Merge two duplicate customer accounts"
+            >
+              Merge…
+            </button>
+            <button
               onClick={() => setShowAddForm(f => !f)}
               className={`text-sm px-3 py-1.5 rounded-lg font-semibold transition-colors ${showAddForm ? 'bg-gray-100 text-gray-600 hover:bg-gray-200' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}
             >
@@ -910,6 +1052,7 @@ function CustomersTab() {
           ))}
         </div>
         {editing && <EditUserModal user={editing} onClose={() => setEditing(null)} />}
+        {merging && <MergeAccountsModal customers={list} onClose={() => setMerging(false)} />}
       </div>
 
       {showAddForm && (

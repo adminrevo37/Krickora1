@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as accountMerge from "../accountMerge.js";
 import type * as adminGate from "../adminGate.js";
 import type * as adminGateActions from "../adminGateActions.js";
 import type * as adminPassword from "../adminPassword.js";
@@ -59,6 +60,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  accountMerge: typeof accountMerge;
   adminGate: typeof adminGate;
   adminGateActions: typeof adminGateActions;
   adminPassword: typeof adminPassword;

@@ -54,6 +54,12 @@ export default defineSchema({
     // deactivated; booking + payment history is retained but PII is anonymised.
     deactivatedAt: v.optional(v.string()),
     anonymizedAt: v.optional(v.string()),
+    // SPEC_MERGE_DUPLICATE_ACCOUNTS: set on the LOSER row when it is merged into
+    // another account. The row is soft-deleted (deactivatedAt set, email
+    // tombstoned, credit zeroed) and all its references are repointed to the
+    // survivor; this marker records which account it folded into (audit + the
+    // never-delete rule). Survivor rows never carry it.
+    mergedIntoCustomerId: v.optional(v.id("customers")),
     createdAt: v.string(),
   })
     .index("by_email", ["email"])
