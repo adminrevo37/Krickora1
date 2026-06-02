@@ -284,7 +284,11 @@ export default function RescheduleModal({ booking, allBookings, onClose, onResch
                           : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
                       }`}>
                       <div className="text-sm font-bold text-gray-800 dark:text-gray-200">{variant.name}</div>
-                      <div className="text-xs text-gray-500 mt-0.5">${selectedLane ? getCustomerPrice(selectedLane, variant.id, 60) : variant.pricePerHour}/hr</div>
+                      {/* C-2: always price via getCustomerPrice (reads admin Settings SSOT).
+                          This is inside the selectedLane?.variants guard, so selectedLane is
+                          always defined — the old `: variant.pricePerHour` fallback (stale LANES
+                          constant) was unreachable dead code. */}
+                      <div className="text-xs text-gray-500 mt-0.5">${getCustomerPrice(selectedLane, variant.id, 60)}/hr</div>
                     </button>
                   ))}
                 </div>

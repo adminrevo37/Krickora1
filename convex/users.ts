@@ -108,6 +108,20 @@ export const adminUpdateUserProfile = mutation({
       if (Object.keys(updates).length > 0) await ctx.db.patch(customer._id, updates);
       // SEC #3: audit privilege-relevant changes
       if (role !== undefined && role !== customer.role) {
+        // M-1/S-2: keep Better-Auth user.role in step with customers.role so the
+        // two stores don't drift (the admin panel is the main promote/demote UI).
+        try {
+          const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+            model: "user", where: [{ field: "email", value: normalizedEmail }],
+          });
+          if (authUser) {
+            await ctx.runMutation(components.betterAuth.adapter.updateOne, {
+              input: { model: "user", where: [{ field: "_id", value: authUser._id }], update: { role } as any },
+            });
+          }
+        } catch (e) {
+          console.error("adminUpdateUserProfile: failed to sync role to auth user:", e);
+        }
         await writeRoleAudit(ctx, { targetEmail: normalizedEmail, field: "role", oldValue: customer.role, newValue: role, changedByEmail: (adminUser as any).email ?? "" });
       }
       if (coachTier !== undefined && coachTier !== customer.coachTier) {

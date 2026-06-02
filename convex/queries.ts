@@ -372,10 +372,20 @@ export const listCoachInvites = query({
 export const getCoachInviteByToken = query({
   args: { token: v.string() },
   handler: async (ctx, args) => {
-    return await ctx.db
+    // S-3: anyone holding (or guessing) a token could read the FULL invite doc —
+    // including createdBy (the admin's identity), the invitee's phone, and the
+    // raw token. Return only the non-sensitive fields a /join-equivalent UI needs.
+    const invite = await ctx.db
       .query("coachInvites")
       .withIndex("by_token", (q: any) => q.eq("token", args.token))
       .first();
+    if (!invite || invite.used) return { valid: false as const };
+    return {
+      valid: true as const,
+      kind: invite.kind ?? "coach",
+      name: invite.name,
+      childName: invite.childName,
+    };
   },
 });
 

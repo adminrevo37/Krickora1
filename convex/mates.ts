@@ -470,7 +470,13 @@ export const createBookingInvite = mutation({
   handler: async (ctx, args) => {
     const { callerCustomer, booking } = await authorizeMateManagement(ctx, args.bookingId);
     if (booking.status === "cancelled") throw new ConvexError("This booking has been cancelled.");
-    const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
+    // A-4: this token grants door-code access via /join, so it must be unguessable.
+    // Use the Web Crypto CSPRNG (available in the Convex runtime) — 24 bytes = 192
+    // bits of entropy — instead of the old Math.random()+Date.now() (low-entropy,
+    // predictable).
+    const tokenBytes = new Uint8Array(24);
+    crypto.getRandomValues(tokenBytes);
+    const token = Array.from(tokenBytes, (b) => b.toString(16).padStart(2, "0")).join("");
     await ctx.db.insert("bookingInvites", {
       token,
       bookingId: args.bookingId,

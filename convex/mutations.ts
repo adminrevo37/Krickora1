@@ -1,6 +1,6 @@
 import { mutation, internalMutation } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
-import { internal } from "./_generated/api";
+import { internal, components } from "./_generated/api";
 import { requireAdmin, requireAdminUnlocked, getAuthUserSafe } from "./lib/adminGuard";
 import { issueCredit, redeemCredit, recordCreditMovement } from "./lib/credit";
 import { recordDiscountRedemption, validateDiscount, discountAmountCents } from "./lib/discounts";
@@ -97,14 +97,12 @@ async function groupSlotsByAccount(
         to = account?.email ?? "";
       }
     }
-    if (!to) {
-      // Legacy fallback: match the denormalised name to a customer record.
-      const cust = await ctx.db
-        .query("customers")
-        .filter((q: any) => q.eq(q.field("name"), slot.athleteName))
-        .first();
-      to = cust?.email ?? "";
-    }
+    // A-5: do NOT fall back to a name match. A legacy slot with no athleteId
+    // could otherwise resolve to a SAME-NAMED stranger's account and email them
+    // the door access code. This resolver backs every athlete email (allocation
+    // /cancellation/removed/reschedule), so the mis-resolution would affect all
+    // of them. New allocations always carry athleteId; legacy rows without one
+    // simply get no athlete email (owner/booking emails are unaffected).
     if (!to) continue;
     const list = groups.get(to) ?? [];
     list.push({
@@ -3907,6 +3905,22 @@ export const upgradeToAdmin = mutation({
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
     const normalizedEmail = args.email.toLowerCase().trim();
+    // M-1/S-2: keep the Better-Auth user.role in step with customers.role so the
+    // two stores don't drift (mirrors users.ts makeAdmin). customers.role is the
+    // authoritative gate, but Better-Auth's own admin() plugin reads user.role.
+    try {
+      const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+        model: "user",
+        where: [{ field: "email", value: normalizedEmail }],
+      });
+      if (authUser) {
+        await ctx.runMutation(components.betterAuth.adapter.updateOne, {
+          input: { model: "user", where: [{ field: "_id", value: authUser._id }], update: { role: "admin" } as any },
+        });
+      }
+    } catch (e) {
+      console.error("upgradeToAdmin: failed to sync role to auth user:", e);
+    }
     const customer = await ctx.db
       .query("customers")
       .withIndex("by_email", (q: any) => q.eq("email", normalizedEmail))

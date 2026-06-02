@@ -16,6 +16,39 @@ export async function getAuthUserSafe(ctx: any): Promise<any | null> {
   }
 }
 
+/**
+ * Single source of truth for admin resolution (M-1/S-2). `customers.role` is
+ * authoritative whenever the caller has a customers row; the Better-Auth
+ * `user.role` is honoured ONLY as a bootstrap fallback when no customers row
+ * exists yet (the first admin set via the Convex dashboard). Both `requireAdmin`
+ * and `getCallerContext` route through this, so the two resolvers can never
+ * disagree (the old drift: requireAdmin trusted user.role first, getCallerContext
+ * read customers.role only).
+ *
+ * `knownAuthRole` lets a caller that already loaded the Better-Auth user skip a
+ * second lookup; omit it and the resolver fetches the role itself only when it
+ * actually needs the bootstrap fallback (no customers row) — so the common
+ * logged-in-customer path adds zero extra reads.
+ */
+export async function resolveIsAdmin(
+  ctx: any,
+  email: string | null | undefined,
+  knownAuthRole?: string
+): Promise<boolean> {
+  const e = email?.toLowerCase?.().trim?.() ?? "";
+  if (e && ctx.db) {
+    const customer = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", e))
+      .first();
+    if (customer) return customer.role === "admin";
+  }
+  // No customers row → bootstrap fallback to the Better-Auth user role.
+  if (knownAuthRole !== undefined) return knownAuthRole === "admin";
+  const authUser = await getAuthUserSafe(ctx);
+  return (authUser as any)?.role === "admin";
+}
+
 export async function requireAdmin(ctx: any): Promise<{
   _id: string;
   email: string;
@@ -26,19 +59,8 @@ export async function requireAdmin(ctx: any): Promise<{
   if (!user) {
     throw new ConvexError("Not authorized");
   }
-  if ((user as any).role === "admin") {
+  if (await resolveIsAdmin(ctx, (user as any).email, (user as any).role)) {
     return user as any;
-  }
-  // Fallback: check customers table by email
-  const email = (user as any).email?.toLowerCase?.().trim?.();
-  if (email) {
-    const customer = await ctx.db
-      .query("customers")
-      .withIndex("by_email", (q: any) => q.eq("email", email))
-      .first();
-    if (customer && customer.role === "admin") {
-      return user as any;
-    }
   }
   throw new ConvexError("Not authorized");
 }
@@ -113,14 +135,9 @@ export async function getCallerContext(ctx: any): Promise<{
   }
   if (!identity) return { identity: null, email: "", isAdmin: false };
   const email = identity.email?.toLowerCase?.().trim?.() ?? "";
-  let isAdmin = false;
-  if (email && ctx.db) {
-    const customer = await ctx.db
-      .query("customers")
-      .withIndex("by_email", (q: any) => q.eq("email", email))
-      .first();
-    isAdmin = customer?.role === "admin";
-  }
+  // M-1/S-2: same resolver as requireAdmin — customers.role authoritative, with
+  // the Better-Auth user.role as a bootstrap fallback only when no customers row.
+  const isAdmin = await resolveIsAdmin(ctx, email);
   return { identity, email, isAdmin };
 }
 
