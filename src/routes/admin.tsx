@@ -538,7 +538,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
     try {
       await addCredit({ email: user.email, amount: amt, note: creditNote.trim() || undefined })
       setCreditAmount(''); setCreditNote('')
-      setActionMsg(`Credit ${amt >= 0 ? 'added' : 'deducted'}: ${amt >= 0 ? '+' : ''}$${amt.toFixed(2)}`)
+      setActionMsg(`Credit ${amt >= 0 ? 'added' : 'deducted'}: ${amt >= 0 ? '+$' : '-$'}${Math.abs(amt).toFixed(2)}`)
     } catch (err: any) { setActionMsg(getErrorMessage(err) ?? 'Failed to adjust credit') }
     finally { setBusy(false) }
   }
