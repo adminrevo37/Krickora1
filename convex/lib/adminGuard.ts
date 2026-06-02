@@ -151,9 +151,14 @@ export function stripBookingPII<T extends Record<string, any>>(booking: T): T {
     customerName: "Booked",
     customerEmail: "",
     customerPhone: undefined,
-    // never leak access codes or athlete names to non-owners
+    // never leak access codes, athlete names, the booker's home location, private
+    // notes or their discount code to non-owners (H1: listBookings was leaking these)
     accessCode: undefined,
     athleteSlots: undefined,
+    bookingPostcode: undefined,
+    bookingSuburb: undefined,
+    notes: undefined,
+    discountCode: undefined,
   };
 }
 

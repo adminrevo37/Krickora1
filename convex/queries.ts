@@ -35,13 +35,10 @@ export const listBookings = query({
     const identity = await ctx.auth.getUserIdentity();
 
     if (!identity) {
-      // Unauthenticated — strip all PII for calendar display only
-      return bookings.map((b: any) => ({
-        ...b,
-        customerName: 'Booked',
-        customerEmail: '',
-        customerPhone: undefined,
-      }));
+      // Unauthenticated — strip ALL PII (name/email/phone + access code, athlete
+      // names, home postcode/suburb, notes, discount) via the shared stripper.
+      // H1: the old inline strip left access codes + child names + postcode exposed.
+      return bookings.map((b: any) => stripBookingPII(b));
     }
 
     const callerEmail = identity.email?.toLowerCase().trim() ?? "";
@@ -54,18 +51,12 @@ export const listBookings = query({
       return bookings; // Admins see full PII for all bookings
     }
 
-    // Authenticated non-admin: full PII for own bookings, stripped for others
+    // Authenticated non-admin: full PII for own bookings, stripped for others.
     return bookings.map((b: any) => {
       const isOwner =
         (b.userId != null && b.userId === identity.subject) ||
         b.customerEmail.toLowerCase() === callerEmail;
-      if (isOwner) return b;
-      return {
-        ...b,
-        customerName: 'Booked',
-        customerEmail: '',
-        customerPhone: undefined,
-      };
+      return isOwner ? b : stripBookingPII(b);
     });
   },
 });

@@ -3,6 +3,7 @@
 import { action, internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
+import { requireAdminAction } from "./lib/adminGuard";
 
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3";
@@ -27,6 +28,7 @@ export const exchangeAuthCode = action({
     calendarId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    await requireAdminAction(ctx); // H2: admin-only (was unauthenticated)
     const { clientId, clientSecret } = getGoogleCredentials();
 
     const body = new URLSearchParams({
@@ -452,6 +454,7 @@ export const deleteCalendarEvent = internalAction({
 export const disconnectCalendar = action({
   args: {},
   handler: async (ctx) => {
+    await requireAdminAction(ctx); // H2: admin-only (was unauthenticated)
     await ctx.runMutation(internal.googleCalendarMutations.deleteTokens, {});
     return { success: true };
   },
@@ -460,6 +463,7 @@ export const disconnectCalendar = action({
 export const getConnectionStatus = action({
   args: {},
   handler: async (ctx): Promise<{ connected: boolean; email?: string; calendarId?: string; connectedAt?: number }> => {
+    await requireAdminAction(ctx); // H2: admin-only (was unauthenticated)
     const tokens: any = await ctx.runQuery(internal.googleCalendarMutations.getTokens, {});
     if (!tokens) return { connected: false };
     return {
@@ -474,6 +478,7 @@ export const getConnectionStatus = action({
 export const updateCalendarId = action({
   args: { calendarId: v.string() },
   handler: async (ctx, args) => {
+    await requireAdminAction(ctx); // H2: admin-only (was unauthenticated)
     await ctx.runMutation(internal.googleCalendarMutations.setCalendarId, { calendarId: args.calendarId });
     return { success: true };
   },
@@ -482,6 +487,7 @@ export const updateCalendarId = action({
 export const listCalendars = action({
   args: {},
   handler: async (ctx) => {
+    await requireAdminAction(ctx); // H2: admin-only (was unauthenticated)
     const tokenInfo = await getValidToken(ctx);
     if (!tokenInfo) throw new Error("Google Calendar not connected");
     const response = await fetch(`${GOOGLE_CALENDAR_API}/users/me/calendarList`, {
@@ -504,6 +510,7 @@ export const listCalendars = action({
 export const bulkSyncBookings = action({
   args: {},
   handler: async (ctx): Promise<{ synced: number; skipped: number; failed: number }> => {
+    await requireAdminAction(ctx); // H2: admin-only (was unauthenticated)
     const tokenInfo = await getValidToken(ctx);
     if (!tokenInfo) throw new Error("Google Calendar not connected");
 
