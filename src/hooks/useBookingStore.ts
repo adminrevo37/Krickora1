@@ -50,9 +50,6 @@ export function useBookings() {
   const createBookingMut = useMutation(api.mutations.createBooking)
   const updateBookingMut = useMutation(api.mutations.updateBooking)
   const cancelBookingMut = useMutation(api.mutations.cancelBooking)
-  const confirmTentativeMut = useMutation(api.mutations.confirmTentativeBooking)
-  const createTentativeMut = useMutation(api.mutations.createTentativeNextWeek)
-  const deleteBookingMut = useMutation(api.mutations.deleteBooking)
   const editDurationMut = useMutation(api.mutations.editBookingDuration)
   const rescheduleMut = useMutation(api.mutations.rescheduleBooking)
   const modifyMut = useMutation(api.mutations.modifyBooking)
@@ -242,58 +239,6 @@ export function useBookings() {
     [updateBookingMut, bookings]
   )
 
-  const createTentativeNextWeek = useCallback(
-    async (sourceBookingId: string, adjustedStartHour?: number) => {
-      try {
-        const id = await createTentativeMut({
-          sourceBookingId: sourceBookingId as Id<"bookings">,
-          adjustedStartHour,
-        })
-        return id
-      } catch {
-        return null
-      }
-    },
-    [createTentativeMut]
-  )
-
-  const confirmTentative = useCallback(
-    async (bookingId: string) => {
-      try {
-        await confirmTentativeMut({
-          id: bookingId as Id<"bookings">,
-        })
-        return true
-      } catch {
-        return false
-      }
-    },
-    [confirmTentativeMut]
-  )
-
-  const cancelTentative = useCallback(
-    async (bookingId: string) => {
-      try {
-        await deleteBookingMut({
-          id: bookingId as Id<"bookings">,
-        })
-        return true
-      } catch {
-        return false
-      }
-    },
-    [deleteBookingMut]
-  )
-
-  const getTentativeBookings = useCallback(
-    (userId: string) => {
-      return bookings.filter(
-        (b) => b.userId === userId && b.status === 'tentative'
-      )
-    },
-    [bookings]
-  )
-
   const editBookingDuration = useCallback(
     async (bookingId: string, newDuration: number, userId: string) => {
       try {
@@ -416,10 +361,6 @@ export function useBookings() {
     editBookingDuration,
     rescheduleBooking,
     modifyBooking,
-    createTentativeNextWeek,
-    confirmTentative,
-    cancelTentative,
-    getTentativeBookings,
     updateAthleteSlots,
   }
 }

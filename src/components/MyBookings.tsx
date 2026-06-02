@@ -76,7 +76,6 @@ function formatDate(dateStr: string): string {
 export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: string } = {}) {
   const {
     bookings, cancelBooking, canCancel,
-    createTentativeNextWeek, confirmTentative, cancelTentative, getTentativeBookings,
     modifyBooking, updateAthleteSlots,
   } = useBookings()
   const { user, isCoach, isCustomer, getAllCoaches, assignCoach, removeCoach, customerRecord, getCreditBalance } = useAuth()
@@ -142,8 +141,6 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   [bookings, user, athleteNameCandidates, myAthleteIds, effectiveEmail, impersonatedEmail])
 
-  const tentativeBookings = user ? getTentativeBookings(user.id) : []
-
   const isUpcoming = (b: Booking) => {
     if (b.status === 'cancelled') return false
     if (b.date > todayKey) return true
@@ -151,13 +148,12 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     return false
   }
 
-  // Upcoming = confirmed + tentative merged, sorted by date+time
-  const scheduleBookings = useMemo(() => [
-    ...userBookings.filter(isUpcoming),
-    ...tentativeBookings,
-  ].sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour),
+  // Upcoming = confirmed bookings, sorted by date+time
+  const scheduleBookings = useMemo(() =>
+    userBookings.filter(isUpcoming)
+      .sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour),
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  [userBookings, tentativeBookings])
+  [userBookings])
 
   const pastBookings = useMemo(() =>
     userBookings.filter(b => !isUpcoming(b) && b.status !== 'cancelled')
@@ -182,9 +178,8 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       const hasUnallocated = dayBookings.some(
         b => b.isCoachBooking && (!b.athleteSlots || b.athleteSlots.length === 0),
       )
-      const hasTentative = dayBookings.some(b => b.status === 'tentative')
       const hasBookings = dayBookings.length > 0
-      return { date: d, key, label: DAY_LABELS[i], hasBookings, hasUnallocated, hasTentative }
+      return { date: d, key, label: DAY_LABELS[i], hasBookings, hasUnallocated }
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekOffset, scheduleBookings])
@@ -286,15 +281,12 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     const lane = getLane(booking.laneId)
     const variantName = getVariantName(booking)
     const cancelCheck = canCancel(booking.id)
-    const isTentative = booking.status === 'tentative'
     const hasAthletes = (booking.athleteSlots ?? []).length > 0
     const needsAthletes = booking.isCoachBooking && !hasAthletes
 
-    const cardBg = isTentative
-      ? 'bg-blue-50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-800/50'
-      : needsAthletes
-        ? 'bg-orange-50 dark:bg-orange-900/10 border-orange-300 dark:border-orange-700/60'
-        : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800'
+    const cardBg = needsAthletes
+      ? 'bg-orange-50 dark:bg-orange-900/10 border-orange-300 dark:border-orange-700/60'
+      : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800'
 
     return (
       <div
@@ -309,9 +301,6 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
               <span className="text-base font-bold text-gray-900 dark:text-white">
                 {formatTime(booking.startHour)} – {formatTime(booking.startHour + booking.duration / 60)}
               </span>
-              {isTentative && (
-                <span className="text-[10px] font-semibold bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded-full uppercase tracking-wide">Tentative</span>
-              )}
               {needsAthletes && (
                 <span className="text-[10px] font-semibold bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 px-1.5 py-0.5 rounded-full uppercase tracking-wide">No athletes</span>
               )}
@@ -349,33 +338,9 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           </div>
         )}
 
-        {/* Tentative inline actions */}
-        {isTentative && (
-          <div className="mt-2.5 flex gap-2" onClick={e => e.stopPropagation()}>
-            <button
-              onClick={() => confirmTentative(booking.id)}
-              className="flex-1 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold rounded-lg transition-colors"
-            >
-              ✓ Confirm
-            </button>
-            <button
-              onClick={() => cancelTentative(booking.id)}
-              className="flex-1 py-1.5 border border-red-200 dark:border-red-700 text-red-600 dark:text-red-400 text-xs font-semibold rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-            >
-              Remove
-            </button>
-          </div>
-        )}
-
-        {/* Confirmed booking actions */}
-        {!isTentative && (
+        {/* Booking actions */}
+        {(
           <div className="mt-2.5 flex gap-1.5 flex-wrap" onClick={e => e.stopPropagation()}>
-            <button
-              onClick={() => createTentativeNextWeek(booking.id, undefined)}
-              className="text-[11px] px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
-            >
-              ⏳ Repeat
-            </button>
             {cancelCheck.allowed && (
               <button
                 onClick={(e) => { e.stopPropagation(); setModifyBookingData(booking) }}
@@ -762,7 +727,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             </div>
             {/* 7-day grid */}
             <div className="grid grid-cols-7 gap-0">
-              {weekDays.map(({ date, key, label, hasBookings, hasUnallocated, hasTentative }) => {
+              {weekDays.map(({ date, key, label, hasBookings, hasUnallocated }) => {
                 const isToday = key === todayKey
                 const isSelected = key === selectedDateKey
                 return (
@@ -785,10 +750,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                         {hasUnallocated && (
                           <div className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white/80' : 'bg-orange-400'}`} />
                         )}
-                        {hasTentative && (
-                          <div className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white/60' : 'bg-blue-400'}`} />
-                        )}
-                        {!hasUnallocated && !hasTentative && (
+                        {!hasUnallocated && (
                           <div className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white/80' : 'bg-emerald-400'}`} />
                         )}
                       </div>
