@@ -41,10 +41,17 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
   const { updateBooking, bookings } = useBookings()
   const { user } = useAuth()
   const cancelMut = useMutation(api.mutations.cancelBooking)
+  const resendMut = useMutation((api.mutations as any).resendBookingConfirmation)
+  const voidMut = useMutation((api.mutations as any).voidBookingCharge)
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  // SPEC_ADMIN_MANUAL_POWERS — resend + in-app void
+  const [actionNote, setActionNote] = useState<string | null>(null)
+  const [showVoid, setShowVoid] = useState(false)
+  const [voidMode, setVoidMode] = useState<'credit' | 'waive'>('credit')
+  const [voidAmount, setVoidAmount] = useState('')
 
   // UX-1: Use local state for ALL displayed fields so view mode reflects saved changes
   const [date, setDate] = useState(booking.date)
@@ -159,6 +166,49 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
       setError(getErrorMessage(e) ?? 'Failed to cancel booking.')
       setSaving(false)
     }
+  }
+
+  // SPEC_ADMIN_MANUAL_POWERS — suggested refund for the void panel = money the
+  // customer actually paid (stored gross price minus any credit applied).
+  const suggestedRefund = useMemo(() => {
+    const cents = (booking as any).priceInCents
+    const credit = (booking as any).creditApplied ?? 0
+    if (typeof cents === 'number') return Math.max(0, Math.round((cents / 100 - credit) * 100) / 100)
+    return calculatedCustomerPrice ?? 0
+  }, [booking, calculatedCustomerPrice])
+
+  const isRefunded = (booking as any).refunded === true
+
+  const handleResend = async () => {
+    setSaving(true); setError(null); setActionNote(null)
+    try {
+      const r: any = await resendMut({ bookingId: booking.id as any })
+      setActionNote(r?.kind === 'allocation' ? 'Allocation email(s) resent to athletes.' : 'Confirmation + door code email resent.')
+    } catch (e: any) {
+      setError(getErrorMessage(e) ?? 'Failed to resend the confirmation.')
+    } finally { setSaving(false) }
+  }
+
+  const handleVoid = async () => {
+    setSaving(true); setError(null); setActionNote(null)
+    try {
+      let amt: number | undefined
+      if (voidMode === 'credit') {
+        amt = Math.round(parseFloat(voidAmount) * 100) / 100
+        if (!amt || isNaN(amt) || amt <= 0) {
+          setError('Enter a credit amount greater than $0.')
+          setSaving(false)
+          return
+        }
+      }
+      const r: any = await voidMut({ bookingId: booking.id as any, mode: voidMode, amount: amt })
+      setActionNote(voidMode === 'credit'
+        ? `Charge voided — $${Number(r?.amountCredited ?? 0).toFixed(2)} account credit issued.`
+        : 'Charge waived (written off). No credit issued.')
+      setShowVoid(false)
+    } catch (e: any) {
+      setError(getErrorMessage(e) ?? 'Failed to void the charge.')
+    } finally { setSaving(false) }
   }
 
   return (
@@ -368,6 +418,65 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                   </div>
                 ) : null}
               </div>
+
+              {/* SPEC_ADMIN_MANUAL_POWERS — resend confirmation + in-app void */}
+              {actionNote && (
+                <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/50 rounded-lg px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+                  {actionNote}
+                </div>
+              )}
+              {isRefunded && (
+                <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40 rounded-lg px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                  💸 This charge has been voided/refunded{(booking as any).refundedAt ? ` · ${new Date((booking as any).refundedAt).toLocaleDateString()}` : ''}.
+                </div>
+              )}
+              <div className="flex gap-2">
+                <button
+                  onClick={handleResend}
+                  disabled={saving || status === 'cancelled'}
+                  className="flex-1 px-3 py-2 rounded-lg border border-blue-200 dark:border-blue-800/50 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 text-sm font-semibold hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors disabled:opacity-50"
+                >
+                  📧 Resend confirmation
+                </button>
+                {!booking.isCoachBooking && !isRefunded && (
+                  <button
+                    onClick={() => { setShowVoid(v => !v); setVoidMode('credit'); setVoidAmount(String(suggestedRefund)); setError(null) }}
+                    disabled={saving}
+                    className="flex-1 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-800/50 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 text-sm font-semibold hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors disabled:opacity-50"
+                  >
+                    💸 Void charge
+                  </button>
+                )}
+              </div>
+
+              {showVoid && !isRefunded && (
+                <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 rounded-lg p-4 space-y-3">
+                  <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Void this charge</p>
+                  <p className="text-[11px] text-amber-700 dark:text-amber-400">In-app only — no real Stripe money moves. Does not cancel the booking.</p>
+                  <div className="flex gap-2">
+                    <button onClick={() => setVoidMode('credit')} className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${voidMode === 'credit' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-700'}`}>Refund as credit</button>
+                    <button onClick={() => setVoidMode('waive')} className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${voidMode === 'waive' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-700'}`}>Waive (write off)</button>
+                  </div>
+                  {voidMode === 'credit' && (
+                    <label className="block">
+                      <span className="text-[10px] uppercase font-semibold text-amber-700 dark:text-amber-400 tracking-wide">Credit amount ($)</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={voidAmount}
+                        onChange={e => setVoidAmount(e.target.value)}
+                        className="mt-1 w-full px-2.5 py-1.5 text-sm bg-white dark:bg-gray-800 border border-amber-200 dark:border-amber-800 rounded-lg outline-none text-gray-800 dark:text-gray-200"
+                      />
+                    </label>
+                  )}
+                  <div className="flex gap-2">
+                    <button onClick={() => setShowVoid(false)} disabled={saving} className="flex-1 px-3 py-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 text-sm font-semibold hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors disabled:opacity-50">Cancel</button>
+                    <button onClick={handleVoid} disabled={saving} className="flex-1 px-3 py-2 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600 transition-colors disabled:opacity-50">
+                      {saving ? 'Working…' : voidMode === 'credit' ? 'Issue credit' : 'Waive charge'}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* MF-3: Inline cancel confirmation — no window.confirm (IMPR-4 fix) */}
               {showCancelConfirm && status !== 'cancelled' ? (

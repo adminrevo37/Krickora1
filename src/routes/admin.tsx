@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate, Link, Outlet, useRouterState } from '@tan
 import { useAuth } from '../hooks/useAuth'
 import { getAWSTNow } from '../lib/booking-data'
 import { getErrorMessage } from '../lib/errors'
+import { sendPasswordReset } from '../lib/auth-client'
 import { useImpersonation } from '../hooks/useImpersonation'
 import AdminBookingCalendar from '../components/AdminBookingCalendar'
 import ClosureManager from '../components/ClosureManager'
@@ -509,6 +510,10 @@ function StatementsTab() {
 function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => void; isCoach?: boolean }) {
   const updateProfile = useMutation((api.users as any).adminUpdateUserProfile)
   const deleteUser = useMutation((api.users as any).adminDeleteUser)
+  const addCredit = useMutation((api.mutations as any).addCustomerCredit)
+  const verifyEmail = useMutation((api.users as any).adminVerifyEmail)
+  const logReset = useMutation((api.users as any).adminLogPasswordReset)
+  const ledger = useQuery((api.queries as any).listCreditLedger, { email: user.email }) as any[] | undefined
   const [name, setName] = useState(user.name || '')
   const [phone, setPhone] = useState(user.phone || '')
   const [coachTier, setCoachTier] = useState(normaliseCoachTier(user.coachTier))
@@ -517,6 +522,46 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
   const [defaultSessionDuration, setDefaultSessionDuration] = useState<number>(user.defaultSessionDuration || 60)
   const [athleteCapacity, setAthleteCapacity] = useState<number>(user.athleteCapacity || 1)
   const [busy, setBusy] = useState(false)
+  // SPEC_ADMIN_MANUAL_POWERS — manual support actions
+  const [creditAmount, setCreditAmount] = useState('')
+  const [creditNote, setCreditNote] = useState('')
+  const [actionMsg, setActionMsg] = useState<string | null>(null)
+  // Current balance: prefer the latest ledger row (reactive), else the snapshot.
+  const currentBalance = ledger && ledger.length > 0
+    ? ledger[ledger.length - 1].balanceAfter
+    : (user.creditBalance ?? 0)
+
+  const adjustCredit = async () => {
+    const amt = Math.round(parseFloat(creditAmount) * 100) / 100
+    if (!amt || isNaN(amt)) { setActionMsg('Enter a non-zero amount (use a minus sign to deduct).'); return }
+    setBusy(true); setActionMsg(null)
+    try {
+      await addCredit({ email: user.email, amount: amt, note: creditNote.trim() || undefined })
+      setCreditAmount(''); setCreditNote('')
+      setActionMsg(`Credit ${amt >= 0 ? 'added' : 'deducted'}: ${amt >= 0 ? '+' : ''}$${amt.toFixed(2)}`)
+    } catch (err: any) { setActionMsg(getErrorMessage(err) ?? 'Failed to adjust credit') }
+    finally { setBusy(false) }
+  }
+
+  const doVerifyEmail = async () => {
+    setBusy(true); setActionMsg(null)
+    try {
+      const r = await verifyEmail({ email: user.email })
+      setActionMsg(r?.alreadyVerified ? 'Email was already verified.' : 'Email marked as verified.')
+    } catch (err: any) { setActionMsg(getErrorMessage(err) ?? 'Failed to verify email') }
+    finally { setBusy(false) }
+  }
+
+  const doPasswordReset = async () => {
+    setBusy(true); setActionMsg(null)
+    try {
+      const r = await sendPasswordReset(user.email)
+      if (!r.success) { setActionMsg(r.error?.message ?? 'Failed to send reset email'); return }
+      try { await logReset({ email: user.email }) } catch { /* audit best-effort */ }
+      setActionMsg('Password-reset email sent.')
+    } catch (err: any) { setActionMsg(getErrorMessage(err) ?? 'Failed to send reset email') }
+    finally { setBusy(false) }
+  }
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -599,6 +644,53 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
             </label>
           </>
         )}
+        {/* SPEC_ADMIN_MANUAL_POWERS — manual support actions */}
+        <div className="border-t border-gray-100 pt-4 space-y-3">
+          <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide">Account actions</h4>
+
+          {/* Adjust account credit */}
+          <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium text-gray-700">Account credit</span>
+              <span className="text-sm font-bold text-emerald-600">${Number(currentBalance).toFixed(2)}</span>
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                step="0.01"
+                value={creditAmount}
+                onChange={e => setCreditAmount(e.target.value)}
+                placeholder="±amount"
+                className="w-28 px-3 py-2 border border-gray-200 rounded-lg text-sm"
+              />
+              <input
+                value={creditNote}
+                onChange={e => setCreditNote(e.target.value)}
+                placeholder="Note (optional)"
+                className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm"
+              />
+              <button type="button" onClick={adjustCredit} disabled={busy} className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold disabled:opacity-50 shrink-0">
+                Apply
+              </button>
+            </div>
+            <p className="text-[11px] text-gray-400">Positive adds credit, negative deducts. Logged to the credit ledger.</p>
+          </div>
+
+          {/* Email verify + password reset */}
+          <div className="flex gap-2">
+            <button type="button" onClick={doVerifyEmail} disabled={busy} className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+              ✓ Mark email verified
+            </button>
+            <button type="button" onClick={doPasswordReset} disabled={busy} className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+              ✉ Send password reset
+            </button>
+          </div>
+
+          {actionMsg && (
+            <p className="text-xs text-gray-600 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">{actionMsg}</p>
+          )}
+        </div>
+
         <div className="flex items-center justify-between gap-2 pt-2">
           <button type="button" onClick={remove} disabled={busy} className="text-sm text-red-500 hover:text-red-700 hover:underline disabled:opacity-50">
             Delete account

@@ -201,6 +201,60 @@ export const adminDeleteUser = mutation({
   },
 });
 
+// SPEC_ADMIN_MANUAL_POWERS #3 — force-mark a user's email verified. For a stuck
+// customer who can't receive/click the verification link (the verified-email
+// gate blocks their first booking). Patches the Better Auth user record.
+export const adminVerifyEmail = mutation({
+  args: { email: v.string() },
+  handler: async (ctx, { email }) => {
+    const admin = await requireAdmin(ctx);
+    const normalizedEmail = email.toLowerCase().trim();
+    const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+      model: "user",
+      where: [{ field: "email", value: normalizedEmail }],
+    });
+    if (!authUser) throw new ConvexError(`No account found with email "${normalizedEmail}".`);
+    if ((authUser as any).emailVerified === true) {
+      return { success: true, alreadyVerified: true };
+    }
+    await ctx.runMutation(components.betterAuth.adapter.updateOne, {
+      input: {
+        model: "user",
+        where: [{ field: "_id", value: (authUser as any)._id }],
+        update: { emailVerified: true } as any,
+      },
+    });
+    await writeRoleAudit(ctx, {
+      targetEmail: normalizedEmail,
+      field: "emailVerified",
+      oldValue: "false",
+      newValue: "true",
+      changedByEmail: (admin as any).email ?? "",
+    });
+    return { success: true, alreadyVerified: false };
+  },
+});
+
+// SPEC_ADMIN_MANUAL_POWERS #3 — record that an admin triggered a password reset
+// for a user. The reset email itself is sent via the Better Auth client
+// (authClient forget-password) from the admin UI; this mutation only writes the
+// audit trail (admin-gated; confirms the target exists).
+export const adminLogPasswordReset = mutation({
+  args: { email: v.string() },
+  handler: async (ctx, { email }) => {
+    const admin = await requireAdmin(ctx);
+    const normalizedEmail = email.toLowerCase().trim();
+    await writeRoleAudit(ctx, {
+      targetEmail: normalizedEmail,
+      field: "passwordReset",
+      oldValue: undefined,
+      newValue: "reset email sent",
+      changedByEmail: (admin as any).email ?? "",
+    });
+    return { success: true };
+  },
+});
+
 export const setCoachColor = mutation({
   args: { email: v.string(), color: v.string() },
   handler: async (ctx, { email, color }) => {

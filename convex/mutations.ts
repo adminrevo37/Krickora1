@@ -62,6 +62,40 @@ function fmtAwstDateLabel(dateStr: string): string {
   });
 }
 
+// Build the booking-confirmation email payload from a booking-like object.
+// Shared by createBooking and the admin resend (resendBookingConfirmation) so the
+// email content + door code stay in sync across both call sites.
+function buildConfirmationEmailArgs(b: {
+  customerEmail: string;
+  customerName: string;
+  laneId: string;
+  date: string;
+  startHour: number;
+  duration: number;
+  accessCode?: string | null;
+  coachPrice?: number | null;
+  creditApplied?: number | null;
+}) {
+  const laneName = LANE_NAME_MAP[b.laneId] ?? b.laneId.toUpperCase();
+  const endHour = b.startHour + b.duration / 60;
+  const amount =
+    b.coachPrice != null
+      ? `$${b.coachPrice.toFixed(2)}`
+      : b.creditApplied != null
+        ? `$${b.creditApplied.toFixed(2)} (credit applied)`
+        : "Paid";
+  return {
+    to: b.customerEmail,
+    customerName: b.customerName,
+    laneName,
+    date: fmtAwstDateLabel(b.date),
+    timeSlot: `${fmtHour12(b.startHour)} - ${fmtHour12(endHour)}`,
+    duration: durationLabel(b.duration),
+    amount,
+    accessCode: b.accessCode ?? "N/A",
+  };
+}
+
 // Resolve athlete slots to their owning ACCOUNT (parent) email + child name and
 // group them per account (sibling consolidation) — SPEC_PARENT_ATHLETE_MODEL.
 // Recipient = the account email; addressed with the child's name. Falls back to
@@ -954,42 +988,21 @@ export const createBooking = mutation({
 
     // Send booking confirmation email for confirmed bookings
     if (args.status === "confirmed" && args.customerEmail) {
-      const laneNameMap: Record<string, string> = {
-        bm1: "Bowling Machine Lane 1",
-        bm2: "Bowling Machine Lane 2",
-        bm3: "Bowling Machine Lane 3",
-        ru1: "Run-Up Lane 1",
-        ru2: "Run-Up Lane 2",
-      };
-      const laneName = laneNameMap[args.laneId] ?? args.laneId.toUpperCase();
-      const formattedDate = new Date(args.date + "T00:00:00").toLocaleDateString("en-US", {
-        weekday: "long", year: "numeric", month: "long", day: "numeric",
-      });
-      const fmtHour = (h: number) => {
-        const hr = Math.floor(h);
-        const min = Math.round((h - hr) * 60);
-        const period = hr >= 12 ? "PM" : "AM";
-        const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
-        return `${display}:${min.toString().padStart(2, "0")} ${period}`;
-      };
-      const endHour = args.startHour + args.duration / 60;
-      const timeSlot = `${fmtHour(args.startHour)} - ${fmtHour(endHour)}`;
-      const durationStr = args.duration === 60 ? "1 hour" : args.duration === 90 ? "1.5 hours" : args.duration === 120 ? "2 hours" : `${args.duration} minutes`;
-      const amount = args.coachPrice != null
-        ? `$${args.coachPrice.toFixed(2)}`
-        : args.creditApplied != null
-          ? `$${args.creditApplied.toFixed(2)} (credit applied)`
-          : "Paid";
-      await ctx.scheduler.runAfter(0, internal.emails.sendBookingConfirmation, {
-        to: args.customerEmail,
-        customerName: args.customerName,
-        laneName,
-        date: formattedDate,
-        timeSlot,
-        duration: durationStr,
-        amount,
-        accessCode: args.accessCode ?? "N/A",
-      });
+      await ctx.scheduler.runAfter(
+        0,
+        internal.emails.sendBookingConfirmation,
+        buildConfirmationEmailArgs({
+          customerEmail: args.customerEmail,
+          customerName: args.customerName,
+          laneId: args.laneId,
+          date: args.date,
+          startHour: args.startHour,
+          duration: args.duration,
+          accessCode: args.accessCode,
+          coachPrice: args.coachPrice,
+          creditApplied: args.creditApplied,
+        }),
+      );
     }
 
     // Send athlete allocation emails for coach bookings with initial athlete
@@ -3767,6 +3780,115 @@ export const useCustomerCredit = mutation({
     // confirmation (createBooking / confirmBookingPayment) via redeemCredit —
     // this mutation remains for any direct/admin adjustment use and is logged.
     return await redeemCredit(ctx, { email: targetEmail, amount: args.amount });
+  },
+});
+
+// ============================================================================
+// ADMIN MANUAL POWERS (SPEC_ADMIN_MANUAL_POWERS)
+// ============================================================================
+
+// Resend the booking confirmation + door-code email for a booking — ADMIN ONLY.
+// Coach bookings WITH athlete allocations resend the per-athlete allocation
+// emails instead (those carry each athlete's parent + access code). Cancelled
+// bookings are rejected (nothing valid to resend).
+export const resendBookingConfirmation = mutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new ConvexError("Booking not found.");
+    if (booking.status === "cancelled") {
+      throw new ConvexError("This booking is cancelled — there is nothing to resend.");
+    }
+    if (booking.isCoachBooking && (booking.athleteSlots ?? []).length > 0) {
+      await scheduleAllocationEmails(ctx, {
+        slots: booking.athleteSlots!,
+        laneId: booking.laneId,
+        date: booking.date,
+        bookingAccessCode: booking.accessCode,
+        coachName: booking.customerName,
+      });
+      return { success: true, kind: "allocation" as const };
+    }
+    if (!booking.customerEmail) {
+      throw new ConvexError("This booking has no customer email on file.");
+    }
+    await ctx.scheduler.runAfter(
+      0,
+      internal.emails.sendBookingConfirmation,
+      buildConfirmationEmailArgs(booking as any),
+    );
+    return { success: true, kind: "confirmation" as const };
+  },
+});
+
+// Void / refund a booking charge IN-APP — ADMIN ONLY. No real Stripe money
+// moves (deferred to a sign-off-gated step once live keys are in — OPS-1).
+//   mode "credit" → issue `amount` of account credit to the customer (reason
+//                   "refund", logged to creditLedger). Use for "give it back".
+//   mode "waive"  → write the charge off; no credit issued.
+// Either way the booking is flagged refunded and the action recorded in
+// modificationHistory. Does NOT cancel the booking — pair with Cancel if needed.
+export const voidBookingCharge = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    mode: v.union(v.literal("credit"), v.literal("waive")),
+    amount: v.optional(v.number()), // dollars; required (>0) for mode "credit"
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const admin = await requireAdmin(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new ConvexError("Booking not found.");
+    if (booking.refunded) {
+      throw new ConvexError("This booking charge has already been voided.");
+    }
+
+    let amountCredited = 0;
+    if (args.mode === "credit") {
+      const amount = Math.round((args.amount ?? 0) * 100) / 100;
+      if (amount <= 0) {
+        throw new ConvexError("Enter a credit amount greater than $0.");
+      }
+      if (!booking.customerEmail) {
+        throw new ConvexError("This booking has no customer email — cannot issue credit.");
+      }
+      amountCredited = await issueCredit(ctx, {
+        email: booking.customerEmail,
+        amount,
+        reason: "refund",
+        bookingId: args.bookingId.toString(),
+        note: args.note ?? "Booking charge refunded as account credit (admin).",
+      });
+    }
+
+    const now = new Date().toISOString();
+    const prevHistory = (booking as any).modificationHistory ?? [];
+    await ctx.db.patch(args.bookingId, {
+      refunded: true,
+      refundedAt: now,
+      paymentStatus: "refunded",
+      modificationHistory: [
+        ...prevHistory,
+        {
+          modifiedAt: now,
+          modifiedByUserId: (admin as any)._id,
+          modifiedByName: (admin as any).name ?? (admin as any).email,
+          changes: [
+            {
+              field: "charge",
+              oldValue: (booking as any).paymentStatus ?? "paid",
+              newValue:
+                args.mode === "credit"
+                  ? `refunded — $${amountCredited.toFixed(2)} account credit`
+                  : "waived (written off)",
+            },
+          ],
+        },
+      ],
+    } as any);
+
+    return { success: true, mode: args.mode, amountCredited };
   },
 });
 

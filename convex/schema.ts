@@ -216,6 +216,11 @@ export default defineSchema({
     paymentStatus: v.optional(v.string()), // 'paid' | 'pending' | 'failed'
     paymentEmailSent: v.optional(v.boolean()), // Dedup guard — prevents duplicate payment confirmation emails
     stripePaymentIntentId: v.optional(v.string()), // Needed to issue partial refunds
+    // Admin in-app void/refund (SPEC_ADMIN_MANUAL_POWERS #4). In-app only — no
+    // real Stripe money moves yet. `refunded` flags the charge as reversed;
+    // mode/amount captured in modificationHistory + creditLedger (reason "refund").
+    refunded: v.optional(v.boolean()),
+    refundedAt: v.optional(v.string()),
     priceInCents: v.optional(v.number()), // Stored price at booking time (used for edit diff calculation)
     // Admin notes (e.g. "Winter Program", "Trial Session")
     notes: v.optional(v.string()),
