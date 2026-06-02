@@ -128,17 +128,27 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
       // typed (correct for multi-word surnames). Non-fatal — the row already
       // exists and the user can edit it in their profile.
       if (mode === 'signup') {
-        try {
-          await ensureCustomer({
-            email: email.trim().toLowerCase(),
-            name: [firstName.trim(), lastName.trim()].filter(Boolean).join(' '),
-            firstName: firstName.trim(),
-            lastName: lastName.trim(),
-            postcode: location.postcode.trim(),
-            suburb: location.suburb.trim(),
-          })
-        } catch (nameErr) {
-          console.warn('[Auth] name sync after signup failed (non-fatal):', nameErr)
+        // The Convex client's auth token can lag a beat behind the established
+        // session, so this mutation (which requires the caller's identity) may be
+        // rejected on the first try. Retry until it lands — this is what persists
+        // the PRECISE first/last AND the required postcode/suburb (the databaseHook
+        // row has neither). Non-fatal: the postcode login gate backstops a total miss.
+        let synced = false
+        for (let attempt = 0; attempt < 8 && !synced; attempt++) {
+          try {
+            await ensureCustomer({
+              email: email.trim().toLowerCase(),
+              name: [firstName.trim(), lastName.trim()].filter(Boolean).join(' '),
+              firstName: firstName.trim(),
+              lastName: lastName.trim(),
+              postcode: location.postcode.trim(),
+              suburb: location.suburb.trim(),
+            })
+            synced = true
+          } catch (nameErr) {
+            await new Promise(resolve => setTimeout(resolve, 700))
+            if (attempt === 7) console.warn('[Auth] profile sync after signup failed (non-fatal):', nameErr)
+          }
         }
       }
 
