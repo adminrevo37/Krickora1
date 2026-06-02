@@ -26,3 +26,28 @@ export function computeCustomerPriceCents(
   }
   return Math.round(perHour * hours * 100);
 }
+
+/**
+ * Credit (in whole cents) to issue when a customer SHORTENS/downgrades a booking.
+ *
+ * Policy (Inspector 2026-06-02): credit ONLY what was actually PAID, pro-rata to
+ * the value removed — NOT the gross list-price difference. `paidValueCents` is the
+ * stored post-discount price (`bookings.priceInCents` = card + any redeemed credit;
+ * the discounted-away portion is already excluded). We pro-rate that paid value by
+ * the fraction of GROSS removed, so a 50%-off booking shortened by half returns half
+ * of what was paid, and a $0 (100%-off / comp) booking returns nothing — no minting.
+ *
+ * MIRROR: an identical pure function lives in src/lib/booking-data.ts so the
+ * ModifyBookingModal preview matches this charge exactly. Keep the two in sync.
+ */
+export function decreaseCreditCents(
+  paidValueCents: number,
+  oldGrossCents: number,
+  newGrossCents: number
+): number {
+  if (!(paidValueCents > 0) || oldGrossCents <= 0) return 0;
+  const removedCents = Math.max(0, oldGrossCents - newGrossCents);
+  if (removedCents <= 0) return 0;
+  const fraction = Math.min(1, removedCents / oldGrossCents);
+  return Math.min(paidValueCents, Math.round(paidValueCents * fraction));
+}

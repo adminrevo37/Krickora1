@@ -71,6 +71,24 @@ export function getCustomerPrice(lane: Lane, variantId: string | null, durationM
   return Math.round(perHour * hours * 100) / 100
 }
 
+/**
+ * Credit (whole cents) to preview when a customer SHORTENS/downgrades a booking.
+ * MIRROR of convex/lib/pricing.ts decreaseCreditCents — keep in sync. Credits only
+ * what was actually PAID (post-discount price), pro-rata to the gross value removed,
+ * so the ModifyBookingModal preview matches the server charge exactly.
+ */
+export function decreaseCreditCents(
+  paidValueCents: number,
+  oldGrossCents: number,
+  newGrossCents: number
+): number {
+  if (!(paidValueCents > 0) || oldGrossCents <= 0) return 0
+  const removedCents = Math.max(0, oldGrossCents - newGrossCents)
+  if (removedCents <= 0) return 0
+  const fraction = Math.min(1, removedCents / oldGrossCents)
+  return Math.min(paidValueCents, Math.round(paidValueCents * fraction))
+}
+
 export function getLanePrice(lane: Lane, variantId: string | null, durationMinutes: number): number {
   return getCustomerPrice(lane, variantId, durationMinutes)
 }

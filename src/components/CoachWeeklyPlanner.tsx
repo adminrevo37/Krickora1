@@ -54,6 +54,10 @@ export default function CoachWeeklyPlanner() {
   const [selected, setSelected] = useState<Booking | null>(null)
   const [allocating, setAllocating] = useState<Booking | null>(null)
   const [createAt, setCreateAt] = useState<{ dayIndex: number; startHour: number } | null>(null)
+  // MOB-1: mobile single-day view — which day (0=Mon..6=Sun) is shown, and the
+  // mobile "add session" sheet. Defaults to today's weekday within the current week.
+  const [dayIdx, setDayIdx] = useState(() => { const t = getAWSTNow(); t.setHours(0, 0, 0, 0); return (t.getDay() + 6) % 7 })
+  const [mobileCreate, setMobileCreate] = useState(false)
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   const [copyBusy, setCopyBusy] = useState(false)
   const [showRoster, setShowRoster] = useState(false)
@@ -252,7 +256,7 @@ export default function CoachWeeklyPlanner() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-xl font-bold text-gray-800 dark:text-gray-200">📋 Weekly Planner</h1>
-          <p className="text-xs text-gray-500 dark:text-gray-400">Your sessions only · drag to move, drag the bottom edge to resize</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400">Your sessions only · tap a session to edit · drag to move/resize on desktop</p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => setShowRoster(s => !s)} className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800">
@@ -267,7 +271,7 @@ export default function CoachWeeklyPlanner() {
       {/* Week nav */}
       <div className="flex items-center justify-center gap-3">
         <button onClick={() => setWeekOffset(o => o - 1)} className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm hover:bg-gray-100 dark:hover:bg-gray-800">←</button>
-        <button onClick={() => setWeekOffset(0)} className="text-sm font-semibold text-gray-700 dark:text-gray-300 min-w-[10rem] text-center">
+        <button onClick={() => setWeekOffset(0)} className="text-sm font-semibold text-gray-900 dark:text-gray-100 min-w-[10rem] text-center">
           {weekOffset === 0 ? 'This week' : weekLabel}
         </button>
         <button onClick={() => setWeekOffset(o => o + 1)} className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm hover:bg-gray-100 dark:hover:bg-gray-800">→</button>
@@ -288,8 +292,8 @@ export default function CoachWeeklyPlanner() {
         />
       )}
 
-      {/* Calendar */}
-      <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 overflow-x-auto">
+      {/* Calendar — desktop week grid (hidden on phones; mobile uses the single-day view below) */}
+      <div className="hidden sm:block bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 overflow-x-auto">
         <div className="min-w-[700px]">
           {/* Day headers */}
           <div className="grid" style={{ gridTemplateColumns: `3rem repeat(7, 1fr)` }}>
@@ -415,6 +419,113 @@ export default function CoachWeeklyPlanner() {
         </div>
       </div>
 
+      {/* Calendar — mobile single-day view (phones only): pick a day, sessions stacked, tap to edit */}
+      <div className="sm:hidden space-y-3">
+        {/* day pills */}
+        <div className="grid grid-cols-7 gap-1">
+          {visibleDays.map((d, i) => (
+            <button
+              key={i}
+              onClick={() => setDayIdx(i)}
+              className={`py-1.5 rounded-lg border text-center transition-colors ${
+                i === dayIdx
+                  ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20'
+                  : 'border-gray-200 dark:border-gray-700'
+              } ${isToday(d) ? 'ring-1 ring-orange-300' : ''}`}
+            >
+              <div className="text-[10px] font-semibold text-gray-600 dark:text-gray-300">{formatDayLabel(d)}</div>
+              <div className={`text-sm font-bold ${i === dayIdx ? 'text-orange-700 dark:text-orange-300' : 'text-gray-800 dark:text-gray-200'}`}>{d.getDate()}</div>
+            </button>
+          ))}
+        </div>
+
+        {/* selected-day session list */}
+        {(() => {
+          const day = visibleDays[dayIdx]
+          const dateKey = dayKeys[dayIdx]
+          const dayHours = getHoursForDate(settings, day)
+          const list = weekBookings
+            .filter(b => b.date === dateKey)
+            .sort((a, b) => a.startHour - b.startHour)
+          const mineCount = list.filter(isMine).length
+          return (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+                  {day.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'short' })}
+                </span>
+                <button
+                  onClick={() => { if (!dayHours.closed) { setSelected(null); setMobileCreate(true) } }}
+                  disabled={dayHours.closed}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white disabled:opacity-50"
+                >
+                  ＋ Add session
+                </button>
+              </div>
+              {dayHours.closed && <p className="text-xs text-gray-400">Closed this day.</p>}
+              {!dayHours.closed && mineCount === 0 && (
+                <p className="text-xs text-gray-400">No sessions yet — tap “Add session”.</p>
+              )}
+              {list.map(b => {
+                const end = b.startHour + b.duration / 60
+                if (!isMine(b)) {
+                  return (
+                    <div key={b.id} className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
+                      Booked · {laneShort(b.laneId)} · {formatTime(b.startHour)}–{formatTime(end)}
+                    </div>
+                  )
+                }
+                return (
+                  <button
+                    key={b.id}
+                    onClick={() => { setSelected(b); setCreateAt(null) }}
+                    className="w-full text-left rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2.5 flex items-start gap-2.5 active:bg-gray-50 dark:active:bg-gray-800"
+                  >
+                    <span className={`mt-1 w-2.5 h-2.5 rounded-full shrink-0 ${LANE_COLOR[b.laneId] ?? 'bg-gray-500'}`} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-sm text-gray-800 dark:text-gray-200">{laneShort(b.laneId)} · {formatTime(b.startHour)}–{formatTime(end)}</span>
+                        <span className="text-[11px] text-gray-400">{b.duration}min</span>
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {(b.athleteSlots ?? []).length === 0
+                          ? <span className="text-[11px] text-gray-400">No athletes — tap to allocate</span>
+                          : (b.athleteSlots ?? []).map((s, si) => (
+                              <span key={si} className="text-[11px] bg-gray-100 dark:bg-gray-800 rounded-full px-2 py-0.5 text-gray-600 dark:text-gray-300">{s.athleteName.split(' ')[0]}</span>
+                            ))}
+                      </div>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          )
+        })()}
+      </div>
+
+      {/* Mobile "add session" sheet */}
+      {mobileCreate && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-3 sm:hidden" onClick={() => setMobileCreate(false)}>
+          <div className="w-full max-w-sm bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-3 space-y-2" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-bold text-gray-700 dark:text-gray-300">
+                New session · {visibleDays[dayIdx].toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })}
+              </span>
+              <button onClick={() => setMobileCreate(false)} className="text-gray-400">✕</button>
+            </div>
+            <CreatePopover
+              sheet
+              day={visibleDays[dayIdx]}
+              startHour={getHoursForDate(settings, visibleDays[dayIdx]).open}
+              bookings={weekBookings}
+              onClose={() => setMobileCreate(false)}
+              onCreate={(laneId, startHour, duration) => { handleCreate(laneId, dayIdx, startHour, duration); setMobileCreate(false) }}
+              topPx={0}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Selected booking actions */}
       {selected && (
         <BookingActions
@@ -445,11 +556,12 @@ export default function CoachWeeklyPlanner() {
 }
 
 // ── inline create popover ──
-function CreatePopover({ day, startHour, bookings, onClose, onCreate, topPx }: {
+function CreatePopover({ day, startHour, bookings, onClose, onCreate, topPx, sheet }: {
   day: Date; startHour: number; bookings: Booking[]
   onClose: () => void
   onCreate: (laneId: string, startHour: number, duration: number) => void
   topPx: number
+  sheet?: boolean
 }) {
   const dateKey = formatDateKey(day)
   const validStarts = getValidCoachStartTimes(day)
@@ -459,11 +571,19 @@ function CreatePopover({ day, startHour, bookings, onClose, onCreate, topPx }: {
   const [duration, setDuration] = useState(durations[0] ?? 60)
 
   return (
-    <div className="absolute left-1 right-1 z-30 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl p-2 space-y-1.5" style={{ top: Math.max(0, topPx) }} onClick={e => e.stopPropagation()}>
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] font-bold text-gray-600 dark:text-gray-300">New session</span>
-        <button onClick={onClose} className="text-gray-400 text-xs">✕</button>
-      </div>
+    <div
+      className={sheet
+        ? "bg-white dark:bg-gray-900 rounded-lg p-1 space-y-1.5"
+        : "absolute left-1 right-1 z-30 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl p-2 space-y-1.5"}
+      style={sheet ? undefined : { top: Math.max(0, topPx) }}
+      onClick={e => e.stopPropagation()}
+    >
+      {!sheet && (
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-bold text-gray-600 dark:text-gray-300">New session</span>
+          <button onClick={onClose} className="text-gray-400 text-xs">✕</button>
+        </div>
+      )}
       <select value={laneId} onChange={e => setLaneId(e.target.value)} className="w-full text-[11px] px-1.5 py-1 border border-gray-200 dark:border-gray-700 rounded bg-white dark:bg-gray-800">
         {LANES.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
       </select>

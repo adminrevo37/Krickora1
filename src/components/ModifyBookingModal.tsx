@@ -3,7 +3,7 @@ import { getErrorMessage } from '../lib/errors'
 import {
   LANES, formatDateKey, formatTime, canBookSlot, getCustomerPrice, getCoachPrice,
   getCoachDurations, getCustomerDurations, getValidCoachStartTimes, getCoachRolling7Days,
-  getAWSTNow, bookingOccupiesLane,
+  getAWSTNow, bookingOccupiesLane, decreaseCreditCents,
   type Booking,
 } from '../lib/booking-data'
 import { generateAccessCode } from '../lib/access-code'
@@ -17,6 +17,7 @@ export interface ModifyResult {
   topUpAmountCents?: number
   creditAppliedCents?: number
   credited?: boolean
+  creditIssuedCents?: number
   priceDifferenceCents?: number
   droppedAthletes?: string[]
 }
@@ -118,6 +119,16 @@ export default function ModifyBookingModal({ booking, allBookings, creditBalance
   const priceDiff = newPrice - originalPrice
   const creditToApply = !isCoach && priceDiff > 0 ? Math.min(creditBalance, priceDiff) : 0
   const estimatedTopUp = Math.max(0, priceDiff - creditToApply)
+  // NI-3: on a decrease, credit only what was actually PAID (post-discount price),
+  // pro-rata to the value removed — mirrors the server. Falls back to gross only if
+  // the booking has no stored paid amount (legacy rows).
+  const decreaseCredit = !isCoach && priceDiff < 0
+    ? decreaseCreditCents(
+        booking.priceInCents ?? Math.round(originalPrice * 100),
+        Math.round(originalPrice * 100),
+        Math.round(newPrice * 100)
+      ) / 100
+    : 0
 
   const hasChanges = selectedDate !== booking.date ||
     selectedStartHour !== booking.startHour ||
@@ -191,7 +202,7 @@ export default function ModifyBookingModal({ booking, allBookings, creditBalance
     // Applied immediately (coach / decrease / equal / credit-covered).
     const notes: string[] = []
     if ((res.creditAppliedCents ?? 0) > 0) notes.push(`$${((res.creditAppliedCents as number) / 100).toFixed(2)} account credit applied.`)
-    if (res.credited && (res.priceDifferenceCents ?? 0) < 0) notes.push(`$${(Math.abs(res.priceDifferenceCents as number) / 100).toFixed(2)} credit added to your account.`)
+    if (res.credited && (res.creditIssuedCents ?? 0) > 0) notes.push(`$${((res.creditIssuedCents as number) / 100).toFixed(2)} credit added to your account.`)
     if ((res.droppedAthletes ?? []).length > 0) notes.push(`Removed (no longer fit): ${(res.droppedAthletes as string[]).join(', ')}.`)
     setResultNote(notes.join(' ') || null)
     setStep('success')
@@ -411,7 +422,7 @@ export default function ModifyBookingModal({ booking, allBookings, creditBalance
                     {estimatedTopUp > 0 && <p className="text-[10px] text-gray-500 mt-1">You'll be redirected to Stripe to pay the difference.</p>}
                   </>
                 ) : priceDiff < 0 ? (
-                  <div className="flex justify-between border-t border-violet-200 dark:border-violet-700 pt-1"><span className="font-semibold">Account credit added</span><span className="font-bold text-green-600">+${Math.abs(priceDiff).toFixed(2)}</span></div>
+                  <div className="flex justify-between border-t border-violet-200 dark:border-violet-700 pt-1"><span className="font-semibold">Account credit added</span><span className="font-bold text-green-600">+${decreaseCredit.toFixed(2)}</span></div>
                 ) : (
                   <p className="text-[10px] text-gray-500 mt-1">No change in price.</p>
                 )}
@@ -472,7 +483,7 @@ export default function ModifyBookingModal({ booking, allBookings, creditBalance
               {!isCoach && priceDiff < 0 && (
                 <div className="flex justify-between items-center border-t border-gray-200 dark:border-gray-700 pt-2">
                   <span className="font-semibold">Account credit added</span>
-                  <span className="font-bold text-green-600">+${Math.abs(priceDiff).toFixed(2)}</span>
+                  <span className="font-bold text-green-600">+${decreaseCredit.toFixed(2)}</span>
                 </div>
               )}
             </div>

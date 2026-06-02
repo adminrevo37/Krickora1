@@ -348,6 +348,7 @@ export function useBookings() {
       success: boolean; error?: string;
       requiresPayment?: boolean; topUpAmountCents?: number;
       creditAppliedCents?: number; credited?: boolean;
+      creditIssuedCents?: number;
       priceDifferenceCents?: number; droppedAthletes?: string[];
     }> => {
       try {

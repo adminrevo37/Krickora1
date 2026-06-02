@@ -21,7 +21,7 @@ import {
   type WindowRole,
   type WindowTier,
 } from "./lib/bookingWindow";
-import { computeCustomerPriceCents } from "./lib/pricing";
+import { computeCustomerPriceCents, decreaseCreditCents } from "./lib/pricing";
 import { PRICE_DEFAULTS } from "./lib/priceDefaults";
 import { composeName, splitName } from "./lib/names";
 import { notifyMatesOnCancel, notifyMatesOnModify } from "./mates";
@@ -2164,6 +2164,7 @@ export const modifyBooking = mutation({
     topUpAmountCents?: number;
     creditAppliedCents?: number;
     credited?: boolean;
+    creditIssuedCents?: number;
     priceDifferenceCents?: number;
     droppedAthletes?: string[];
   }> => {
@@ -2327,6 +2328,7 @@ export const modifyBooking = mutation({
     let newCoachPrice: number | undefined;
     let newPriceInCents: number | undefined;
     let priceDiffCents = 0;
+    let oldGrossCents = 0;
     if (isCoach) {
       const per30 = settings?.coachPer30Min ?? PRICE_DEFAULTS.coachPer30Min;
       newCoachPrice = (effDuration / 30) * per30;
@@ -2338,7 +2340,7 @@ export const modifyBooking = mutation({
       // Diff against the recomputed GROSS original (server-authoritative, SEC-6):
       // this charges/credits the true incremental lane cost and avoids inheriting
       // any original discount/credit into the difference.
-      const oldGrossCents =
+      oldGrossCents =
         computeCustomerPriceCents(settings, booking.variantId ?? null, booking.duration) +
         (booking.additionalLaneIds ?? []).reduce(
           (sum: number) => sum + computeCustomerPriceCents(settings, null, booking.duration),
@@ -2417,16 +2419,29 @@ export const modifyBooking = mutation({
         actorUserId: args.userId, actorName,
       });
       let credited = false;
+      let creditIssuedCents = 0;
       if (priceDiffCents < 0 && booking.customerEmail) {
-        await issueCredit(ctx, {
-          email: booking.customerEmail,
-          amount: Math.abs(priceDiffCents) / 100,
-          reason: "modify_decrease",
-          bookingId: args.id.toString(),
-        });
-        credited = true;
+        // NI-3 (Inspector 2026-06-02): credit ONLY what was actually PAID, pro-rata
+        // to the value removed — not the gross list-price difference. `priceInCents`
+        // is the original stored post-discount price (card + any redeemed credit);
+        // reading it here is safe because applyBookingChange patches the DB row, not
+        // this in-memory `booking` object. A $0/comp/100%-off booking credits nothing.
+        creditIssuedCents = decreaseCreditCents(
+          booking.priceInCents ?? 0,
+          oldGrossCents,
+          newPriceInCents ?? 0
+        );
+        if (creditIssuedCents > 0) {
+          await issueCredit(ctx, {
+            email: booking.customerEmail,
+            amount: creditIssuedCents / 100,
+            reason: "modify_decrease",
+            bookingId: args.id.toString(),
+          });
+          credited = true;
+        }
       }
-      return { success: true, requiresPayment: false, credited, priceDifferenceCents: priceDiffCents, droppedAthletes };
+      return { success: true, requiresPayment: false, credited, creditIssuedCents, priceDifferenceCents: priceDiffCents, droppedAthletes };
     }
 
     // Customer increase → apply account credit first; Stripe covers the remainder.
