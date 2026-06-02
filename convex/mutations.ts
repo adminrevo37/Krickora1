@@ -3712,12 +3712,12 @@ export const migrateCoachTiers = mutation({
 // SPEC_NAME_SPLIT — one-off backfill. Splits each customers.name into
 // firstName/lastName on the LAST space for any row that doesn't yet have a
 // firstName. Idempotent (skips already-split rows). Best-effort on multi-word
-// surnames — admins correct via the edit forms. Run once post-deploy, like
-// migrateCoachTiers / migrateToAthletes.
-export const migrateNameSplit = mutation({
+// surnames — admins correct via the edit forms. Run once post-deploy via the
+// deploy key: `npx convex run mutations:migrateNameSplit`. internalMutation so
+// it is NOT publicly callable — the deploy-key CLI run is the only entry point.
+export const migrateNameSplit = internalMutation({
   args: {},
   handler: async (ctx) => {
-    await requireAdmin(ctx);
     const customers = await ctx.db.query("customers").collect();
     let migrated = 0;
     let multiWordSurnames = 0;
