@@ -3822,18 +3822,20 @@ export const resendBookingConfirmation = mutation({
   },
 });
 
-// Void / refund a booking charge IN-APP — ADMIN ONLY. No real Stripe money
-// moves (deferred to a sign-off-gated step once live keys are in — OPS-1).
-//   mode "credit" → issue `amount` of account credit to the customer (reason
-//                   "refund", logged to creditLedger). Use for "give it back".
-//   mode "waive"  → write the charge off; no credit issued.
-// Either way the booking is flagged refunded and the action recorded in
-// modificationHistory. Does NOT cancel the booking — pair with Cancel if needed.
+// Record a refund / void against a booking charge — ADMIN ONLY. Real card
+// refunds are processed in the Stripe dashboard directly; this RECORDS the
+// outcome on Krickora (flags the booking + writes modificationHistory).
+//   mode "stripe" → money was refunded to the card via Stripe (record-only;
+//                   no account credit; `amount` optional, captured for the log).
+//   mode "credit" → issue `amount` of account credit instead (reason "refund",
+//                   logged to creditLedger). Use when keeping the money on file.
+//   mode "waive"  → write the charge off; no money returned, no credit.
+// Does NOT cancel the booking — pair with Cancel if the slot should be freed.
 export const voidBookingCharge = mutation({
   args: {
     bookingId: v.id("bookings"),
-    mode: v.union(v.literal("credit"), v.literal("waive")),
-    amount: v.optional(v.number()), // dollars; required (>0) for mode "credit"
+    mode: v.union(v.literal("stripe"), v.literal("credit"), v.literal("waive")),
+    amount: v.optional(v.number()), // dollars; required (>0) for "credit", optional record for "stripe"
     note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -3841,12 +3843,12 @@ export const voidBookingCharge = mutation({
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) throw new ConvexError("Booking not found.");
     if (booking.refunded) {
-      throw new ConvexError("This booking charge has already been voided.");
+      throw new ConvexError("This booking charge has already been marked refunded/voided.");
     }
 
+    const amount = Math.round((args.amount ?? 0) * 100) / 100;
     let amountCredited = 0;
     if (args.mode === "credit") {
-      const amount = Math.round((args.amount ?? 0) * 100) / 100;
       if (amount <= 0) {
         throw new ConvexError("Enter a credit amount greater than $0.");
       }
@@ -3862,12 +3864,19 @@ export const voidBookingCharge = mutation({
       });
     }
 
+    const changeLabel =
+      args.mode === "credit"
+        ? `refunded — $${amountCredited.toFixed(2)} account credit`
+        : args.mode === "stripe"
+          ? `refunded via Stripe${amount > 0 ? ` — $${amount.toFixed(2)}` : ""}`
+          : "waived (written off)";
+
     const now = new Date().toISOString();
     const prevHistory = (booking as any).modificationHistory ?? [];
     await ctx.db.patch(args.bookingId, {
       refunded: true,
       refundedAt: now,
-      paymentStatus: "refunded",
+      paymentStatus: args.mode === "waive" ? "waived" : "refunded",
       modificationHistory: [
         ...prevHistory,
         {
@@ -3878,10 +3887,7 @@ export const voidBookingCharge = mutation({
             {
               field: "charge",
               oldValue: (booking as any).paymentStatus ?? "paid",
-              newValue:
-                args.mode === "credit"
-                  ? `refunded — $${amountCredited.toFixed(2)} account credit`
-                  : "waived (written off)",
+              newValue: changeLabel,
             },
           ],
         },

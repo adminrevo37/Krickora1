@@ -50,7 +50,7 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
   // SPEC_ADMIN_MANUAL_POWERS — resend + in-app void
   const [actionNote, setActionNote] = useState<string | null>(null)
   const [showVoid, setShowVoid] = useState(false)
-  const [voidMode, setVoidMode] = useState<'credit' | 'waive'>('credit')
+  const [voidMode, setVoidMode] = useState<'stripe' | 'credit' | 'waive'>('stripe')
   const [voidAmount, setVoidAmount] = useState('')
 
   // UX-1: Use local state for ALL displayed fields so view mode reflects saved changes
@@ -200,14 +200,19 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
           setSaving(false)
           return
         }
+      } else if (voidMode === 'stripe' && voidAmount.trim()) {
+        const parsed = Math.round(parseFloat(voidAmount) * 100) / 100
+        if (!isNaN(parsed) && parsed > 0) amt = parsed
       }
       const r: any = await voidMut({ bookingId: booking.id as any, mode: voidMode, amount: amt })
       setActionNote(voidMode === 'credit'
         ? `Charge voided — $${Number(r?.amountCredited ?? 0).toFixed(2)} account credit issued.`
-        : 'Charge waived (written off). No credit issued.')
+        : voidMode === 'stripe'
+          ? `Marked refunded via Stripe${amt ? ` — $${amt.toFixed(2)}` : ''}.`
+          : 'Charge waived (written off). No money returned.')
       setShowVoid(false)
     } catch (e: any) {
-      setError(getErrorMessage(e) ?? 'Failed to void the charge.')
+      setError(getErrorMessage(e) ?? 'Failed to record the refund.')
     } finally { setSaving(false) }
   }
 
@@ -440,26 +445,29 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                 </button>
                 {!booking.isCoachBooking && !isRefunded && (
                   <button
-                    onClick={() => { setShowVoid(v => !v); setVoidMode('credit'); setVoidAmount(String(suggestedRefund)); setError(null) }}
+                    onClick={() => { setShowVoid(v => !v); setVoidMode('stripe'); setVoidAmount(String(suggestedRefund)); setError(null) }}
                     disabled={saving}
                     className="flex-1 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-800/50 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 text-sm font-semibold hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors disabled:opacity-50"
                   >
-                    💸 Void charge
+                    💸 Refund / void
                   </button>
                 )}
               </div>
 
               {showVoid && !isRefunded && (
                 <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 rounded-lg p-4 space-y-3">
-                  <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Void this charge</p>
-                  <p className="text-[11px] text-amber-700 dark:text-amber-400">In-app only — no real Stripe money moves. Does not cancel the booking.</p>
-                  <div className="flex gap-2">
-                    <button onClick={() => setVoidMode('credit')} className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${voidMode === 'credit' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-700'}`}>Refund as credit</button>
-                    <button onClick={() => setVoidMode('waive')} className={`flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${voidMode === 'waive' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-700'}`}>Waive (write off)</button>
+                  <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Record a refund / void</p>
+                  <p className="text-[11px] text-amber-700 dark:text-amber-400">Card refunds are processed in Stripe directly — this records the outcome on Krickora. Does not cancel the booking.</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button onClick={() => setVoidMode('stripe')} className={`px-2 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${voidMode === 'stripe' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-700'}`}>Refunded via Stripe</button>
+                    <button onClick={() => setVoidMode('credit')} className={`px-2 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${voidMode === 'credit' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-700'}`}>Account credit</button>
+                    <button onClick={() => setVoidMode('waive')} className={`px-2 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${voidMode === 'waive' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-700'}`}>Waive</button>
                   </div>
-                  {voidMode === 'credit' && (
+                  {voidMode !== 'waive' && (
                     <label className="block">
-                      <span className="text-[10px] uppercase font-semibold text-amber-700 dark:text-amber-400 tracking-wide">Credit amount ($)</span>
+                      <span className="text-[10px] uppercase font-semibold text-amber-700 dark:text-amber-400 tracking-wide">
+                        {voidMode === 'credit' ? 'Credit amount ($)' : 'Amount refunded ($) — optional, for the record'}
+                      </span>
                       <input
                         type="number"
                         step="0.01"
@@ -472,7 +480,7 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                   <div className="flex gap-2">
                     <button onClick={() => setShowVoid(false)} disabled={saving} className="flex-1 px-3 py-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 text-sm font-semibold hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors disabled:opacity-50">Cancel</button>
                     <button onClick={handleVoid} disabled={saving} className="flex-1 px-3 py-2 rounded-lg bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600 transition-colors disabled:opacity-50">
-                      {saving ? 'Working…' : voidMode === 'credit' ? 'Issue credit' : 'Waive charge'}
+                      {saving ? 'Working…' : voidMode === 'credit' ? 'Issue credit' : voidMode === 'stripe' ? 'Mark refunded' : 'Waive charge'}
                     </button>
                   </div>
                 </div>
