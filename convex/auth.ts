@@ -16,6 +16,7 @@ import type { BetterAuthOptions } from "better-auth";
 import authSchema from "./betterAuth/schema";
 import authConfig from "./auth.config";
 import { sendTemplateEmail } from "./lib/email";
+import { checkRateLimit } from "./lib/rateLimit";
 import { composeName, splitName } from "./lib/names";
 import { requireAdmin, requireAdminUnlocked, getCallerContext, writeRoleAudit } from "./lib/adminGuard";
 
@@ -127,6 +128,27 @@ export function createAuthOptions(ctx?: GenericCtx<DataModel>): BetterAuthOption
       minPasswordLength: 10,
       maxPasswordLength: 128,
       sendResetPassword: async ({ user, url }: { user: any; url: string }) => {
+        // NI-5 / S-1: throttle reset emails per address (inbox-bomb protection).
+        // Over-limit → silently skip the send (response to the caller is unchanged,
+        // so this doesn't leak which addresses exist). Fails open on any error.
+        try {
+          const runMutation = (ctx as any)?.runMutation;
+          if (runMutation) {
+            const { internal } = await import("./_generated/api");
+            const allowed = await runMutation(internal.auth.checkAuthRateLimitInternal, {
+              action: "auth-reset",
+              email: user.email,
+              max: 3,
+              windowMs: 15 * 60 * 1000,
+            });
+            if (!allowed) {
+              console.warn("Password-reset throttled for", user.email);
+              return;
+            }
+          }
+        } catch (e) {
+          console.error("Reset rate-limit check failed (allowing send):", e);
+        }
         try {
           const result = await sendTemplateEmail("password-reset", user.email, {
             name: user.name || user.email.split("@")[0],
@@ -233,6 +255,27 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
     user: {
       create: {
         before: async (user: any) => {
+          // NI-5 / S-1: throttle sign-ups per email address. Over-limit → abort
+          // (Better Auth surfaces the thrown message to the client, same as the
+          // registration-lock below). Fails open on any limiter error.
+          try {
+            const runMutation = (ctx as any).runMutation;
+            if (runMutation) {
+              const { internal } = await import("./_generated/api");
+              const allowed = await runMutation((internal as any).auth.checkAuthRateLimitInternal, {
+                action: "auth-signup",
+                email: user.email,
+                max: 5,
+                windowMs: 15 * 60 * 1000,
+              });
+              if (allowed === false) {
+                throw new Error("Too many sign-up attempts. Please try again in a few minutes.");
+              }
+            }
+          } catch (e: any) {
+            if (e?.message?.includes("Too many sign-up attempts")) throw e;
+            console.error("Sign-up rate-limit check failed (allowing):", e);
+          }
           try {
             const runQuery = (ctx as any).runQuery;
             if (!runQuery) {
@@ -642,6 +685,32 @@ export const ensureCustomerExistsInternal = internalMutation({
     lastName: v.optional(v.string()),
   },
   handler: async (ctx, args) => ensureCustomerImpl(ctx, args),
+});
+
+/**
+ * NI-5 / S-1 — auth-path rate limiting (email-keyed). The Better Auth callbacks
+ * (databaseHooks.user.create.before, sendResetPassword) run in an HTTP-action
+ * context with NO ctx.db, so they call THIS internal mutation (which has db) via
+ * ctx.runMutation. Reuses the existing fixed-window table limiter (fails open on
+ * error, so it can never hard-break sign-up / reset). NO Better Auth schema change.
+ * Returns true if the request is allowed (and consumes a slot), false if throttled.
+ */
+export const checkAuthRateLimitInternal = internalMutation({
+  args: {
+    action: v.string(),     // "auth-signup" | "auth-reset"
+    email: v.string(),
+    max: v.number(),
+    windowMs: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const identifier = (args.email || "").toLowerCase().trim() || "unknown";
+    return await checkRateLimit(ctx, {
+      action: args.action,
+      identifier,
+      max: args.max,
+      windowMs: args.windowMs,
+    });
+  },
 });
 
 /**
