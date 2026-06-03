@@ -279,7 +279,7 @@ export const upsertLaneOverride = mutation({
     const admin = await requireAdminUnlocked(ctx);
     validateSegments(args.segments);
     if (args.endDate < args.startDate) throw new ConvexError("End date is before start date.");
-    // Replace any existing override(s) for this lane that overlap the range, then insert.
+    // Replace any existing override(s) for this lane that overlap the range first.
     const all = await ctx.db
       .query("laneOverrides")
       .withIndex("by_laneId", (q: any) => q.eq("laneId", args.laneId))
@@ -289,6 +289,10 @@ export const upsertLaneOverride = mutation({
         await ctx.db.delete(o._id);
       }
     }
+    // If the submitted layout equals the lane DEFAULT, this is a revert-to-standard —
+    // leave no override row (keeps overrides sparse; the date resolves to default).
+    const defSegments = await getDefaultSegmentsForLane(ctx, args.laneId);
+    if (segmentsEqual(args.segments, defSegments)) return true;
     await ctx.db.insert("laneOverrides", {
       laneId: args.laneId,
       startDate: args.startDate,
@@ -327,6 +331,21 @@ export const countBookingsOnDate = query({
     ).length;
   },
 });
+
+type RawSegment = { startHour: number; endHour: number; mode: string; variants: string[] };
+
+/** Deep-equal two segment lists (order-sensitive on segments, set-insensitive on variants). */
+function segmentsEqual(a: RawSegment[], b: RawSegment[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].startHour !== b[i].startHour || a[i].endHour !== b[i].endHour || a[i].mode !== b[i].mode)
+      return false;
+    const av = [...a[i].variants].sort();
+    const bv = [...b[i].variants].sort();
+    if (av.length !== bv.length || av.some((x, j) => x !== bv[j])) return false;
+  }
+  return true;
+}
 
 function validateSegments(
   segments: Array<{ startHour: number; endHour: number; mode: string; variants: string[] }>

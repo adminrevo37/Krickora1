@@ -12,6 +12,7 @@ import { useBookings } from '../hooks/useBookingStore'
 import AdminManualBookingModal, { type AdminCustomerOption, type BookingConfirmResult } from './AdminManualBookingModal'
 import AdminBookingDetailsModal from './AdminBookingDetailsModal'
 import LaneBlockModal from './LaneBlockModal'
+import LaneOverrideModal from './LaneOverrideModal'
 
 // Generate days from N months back to N months ahead (AWST aware)
 function generateAdminDays(monthsBack: number = 12, monthsAhead: number = 12): Date[] {
@@ -229,6 +230,14 @@ export default function AdminBookingCalendar() {
   const laneBlocks = (useQuery(api.laneBlocks.listByDate, { date: dateKey }) ?? []) as any[]
   const isDateClosed = useQuery(api.closures.isClosed, { date: dateKey }) ?? false
   const removeBlockMut = useMutation(api.laneBlocks.removeLaneBlock)
+  // SPEC_RECONFIGURABLE_LANES: per-date layout (for the override badge/strip + headers)
+  const laneLayout = (useQuery(api.lanes.getLaneLayoutForDate, { date: dateKey }) ?? []) as Array<{
+    laneId: string; bayNumber: number; order: number
+    segments: Array<{ startHour: number; endHour: number; mode: string; variants: string[] }>
+    isOverride: boolean; warning: string | null
+  }>
+  const overriddenBays = laneLayout.filter((l) => l.isOverride)
+  const [overrideModalOpen, setOverrideModalOpen] = useState(false)
   const [blockModalOpen, setBlockModalOpen] = useState(false)
   const [blockPrefill, setBlockPrefill] = useState<{ laneId: string; startHour: number } | null>(null)
   const [customerDropdownOpen, setCustomerDropdownOpen] = useState(false)
@@ -462,6 +471,28 @@ export default function AdminBookingCalendar() {
             ⚠️ Select a customer or coach above to enable booking. You can still view existing bookings.
           </div>
         )}
+        {/* SPEC_RECONFIGURABLE_LANES: per-date layout toolbar + override strip */}
+        <div className="mb-3 flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex-1 min-w-[200px]">
+            {overriddenBays.length > 0 && (
+              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/40 rounded-lg p-2.5 text-xs text-amber-800 dark:text-amber-300">
+                ⚙️ <span className="font-semibold">Custom lane layout for this date.</span>{' '}
+                {overriddenBays.map((l) => `Bay ${l.bayNumber}`).join(', ')} differ{overriddenBays.length === 1 ? 's' : ''} from the default.
+                {overriddenBays.find((l) => l.warning)?.warning && (
+                  <span className="block mt-1 text-amber-700 dark:text-amber-300">
+                    {overriddenBays.find((l) => l.warning)!.warning}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={() => setOverrideModalOpen(true)}
+            className="shrink-0 text-xs font-semibold px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+          >
+            ⚙️ Edit layout for this date
+          </button>
+        </div>
         <div className="min-w-[640px]">
           {/* Single CSS grid — bookings use gridRow span so multi-hour blocks render as one cell */}
           <div
@@ -647,6 +678,10 @@ export default function AdminBookingCalendar() {
           prefill={blockPrefill}
           onClose={() => { setBlockModalOpen(false); setBlockPrefill(null) }}
         />
+      )}
+
+      {overrideModalOpen && (
+        <LaneOverrideModal date={selectedDay} onClose={() => setOverrideModalOpen(false)} />
       )}
 
       {modalOpen && selectedSlot && selectedCustomer && (
