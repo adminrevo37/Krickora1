@@ -7,6 +7,8 @@ import {
   getCustomerDurations, getCoachDurations, bookingOccupiesLane, LANES, type Lane, type LaneVariant, type Booking,
 } from '../lib/booking-data'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
+import { useLaneConfigState } from '../hooks/useLaneConfig'
+import { resolveLaneAt } from '../lib/lanes'
 
 type PaymentMode = 'comp' | 'offline' | 'request'
 
@@ -61,12 +63,17 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   const hasVariants = !!(lane.variants && lane.variants.length > 0)
   const [selectedVariant, setSelectedVariant] = useState<LaneVariant | null>(hasVariants ? lane.variants![0] : null)
   const dateKey = formatDateKey(date)
+  useLaneConfigState() // SPEC_RECONFIGURABLE_LANES: react to layout changes
+  // Cap durations so an admin booking can't cross a segment boundary (§2.14) —
+  // createBooking rejects a crossing booking server-side, so mirror the cap here.
+  const segEndHour = resolveLaneAt(lane.id, dateKey, startHour).segment.endHour
 
   const availableDurations = useMemo(() => {
-    return isCoach
+    const base = isCoach
       ? getCoachDurations(existingBookings, lane.id, dateKey, startHour)
       : getCustomerDurations(existingBookings, lane.id, dateKey, startHour)
-  }, [existingBookings, lane.id, dateKey, startHour, isCoach])
+    return base.filter((d) => startHour + d / 60 <= segEndHour + 1e-9)
+  }, [existingBookings, lane.id, dateKey, startHour, isCoach, segEndHour])
 
   const [duration, setDuration] = useState<number>(() => availableDurations[0] ?? 60)
   const [recurrence, setRecurrence] = useState<Recurrence>('none')

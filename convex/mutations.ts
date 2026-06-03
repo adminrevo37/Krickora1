@@ -1958,6 +1958,18 @@ export const rescheduleBooking = mutation({
       newCoachPrice = halfHours * coachRatePer30;
     }
 
+    // SPEC_RECONFIGURABLE_LANES: re-resolve the lane name/variant snapshot at the
+    // NEW (date, startHour) and enforce the no-segment-crossing rule (§2.14). The
+    // variant check is skipped (coach/admin path); crossing is enforced for all.
+    const rSnap = await validateAndSnapshotLane(ctx, {
+      laneId: newLaneId,
+      variantId: args.newVariantId ?? booking.variantId,
+      date: args.newDate,
+      startHour: args.newStartHour,
+      durationMinutes: args.newDuration,
+      skipVariantCheck: true,
+    });
+
     // Bug #7: keep-what-fits. Shift every athlete slot by the time delta and
     // keep those that still fit the new window. Slots that no longer fit are NOT
     // silently dropped — the coach is told (return value), dropped athletes get a
@@ -2010,6 +2022,8 @@ export const rescheduleBooking = mutation({
       coachPrice: newCoachPrice,
       athleteSlots: adjustedAthleteSlots,
       accessCode: rAccessCode,
+      laneNameSnapshot: rSnap.laneNameSnapshot,
+      variantLabelSnapshot: rSnap.variantLabelSnapshot,
       // Keep the existing event ids for an in-place update; clear them on a move.
       ...(rLaneSetChanged ? { googleCalendarEventId: undefined, googleCalendarEventIds: undefined } : {}),
       lockSyncStatus: rRegen ? "pending" : booking.lockSyncStatus,
@@ -2033,6 +2047,8 @@ export const rescheduleBooking = mutation({
         additionalLaneIds: args.newAdditionalLaneIds ?? booking.additionalLaneIds,
         athleteSlots: rCalAthleteSlots,
         laneCalendarEventIds: rOldCalEventIds,
+        laneNameSnapshot: rSnap.laneNameSnapshot,
+        variantLabelSnapshot: rSnap.variantLabelSnapshot,
       });
     } else {
       // Lane move (or no prior events): delete old, create fresh on the new lane(s).
@@ -2057,6 +2073,8 @@ export const rescheduleBooking = mutation({
         accessCode: rAccessCode,
         additionalLaneIds: args.newAdditionalLaneIds ?? booking.additionalLaneIds,
         athleteSlots: rCalAthleteSlots,
+        laneNameSnapshot: rSnap.laneNameSnapshot,
+        variantLabelSnapshot: rSnap.variantLabelSnapshot,
       });
     }
 
