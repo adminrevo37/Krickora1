@@ -242,6 +242,13 @@ export default defineSchema({
     refunded: v.optional(v.boolean()),
     refundedAt: v.optional(v.string()),
     priceInCents: v.optional(v.number()), // Stored price at booking time (used for edit diff calculation)
+    // SPEC_RECONFIGURABLE_LANES: denormalised snapshot of the date-resolved lane
+    // name + variant label, set at create + re-set at modify (resolved at the
+    // booking's (date, startHour)). Emails read these so they stay correct even
+    // after a layout change or a modify across a date boundary. laneId/variantId
+    // stay as the stable keys; calendars resolve live by date+hour.
+    laneNameSnapshot: v.optional(v.string()), // e.g. "BM 1"
+    variantLabelSnapshot: v.optional(v.string()), // e.g. "Truman" / "Machine" / "9m Run Up"
     // Admin notes (e.g. "Winter Program", "Trial Session")
     notes: v.optional(v.string()),
     // Pending booking edit (set when a top-up payment is required).
@@ -533,6 +540,51 @@ export default defineSchema({
     calendarId: v.string(), // Google Calendar ID
     calendarName: v.string(), // Display name for UI
   }).index("by_laneId", ["laneId"]),
+
+  // ============================================================================
+  // RECONFIGURABLE LANES (SPEC_RECONFIGURABLE_LANES)
+  // ============================================================================
+  // Default lane layout — one row per physical lane (bm1..ru2). A day's config
+  // is a list of time SEGMENTS (usually one all-day segment). laneId is STABLE
+  // (the GCal/booking/HA contract); bayNumber is the GLOBAL 1..5 display number.
+  // Derived per segment (NOT stored): name = `${mode} ${bayNumber}`;
+  // icon = mode==="BM" ? 🏏 : 🏃‍♂️. Seeded by migrateSeedLanes (additive →
+  // listLanes falls back to defaults when unseeded, so this is non-breaking).
+  lanes: defineTable({
+    laneId: v.string(), // STABLE: "bm1".."ru2"
+    bayNumber: v.number(), // GLOBAL 1..5
+    order: v.number(), // column order in the matrix
+    segments: v.array(
+      v.object({
+        startHour: v.number(),
+        endHour: v.number(),
+        mode: v.string(), // "BM" | "RU"
+        variants: v.array(v.string()), // BM → subset of ["standard","truman"]; RU → ["run-up"]
+      })
+    ),
+  }).index("by_laneId", ["laneId"]),
+
+  // Per-date overrides — sparse, only for date ranges that differ from default.
+  // segments replace the default day's segments for [startDate, endDate]. No
+  // warningNote field — the warning is auto-derived (fixed wording) whenever a
+  // resolved segment differs from the lane's default at that hour (§2.9).
+  laneOverrides: defineTable({
+    laneId: v.string(),
+    startDate: v.string(), // "YYYY-MM-DD"
+    endDate: v.string(), // inclusive; == startDate for a single day
+    segments: v.array(
+      v.object({
+        startHour: v.number(),
+        endHour: v.number(),
+        mode: v.string(),
+        variants: v.array(v.string()),
+      })
+    ),
+    createdBy: v.optional(v.string()),
+    createdAt: v.string(),
+  })
+    .index("by_laneId", ["laneId"])
+    .index("by_startDate", ["startDate"]),
 
   // ============================================================================
   // SMART LOCK TABLES
