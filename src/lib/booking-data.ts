@@ -38,6 +38,7 @@ export const LANES: Lane[] = [
 // Rate is sourced from admin panel settings (siteSettings.coachPerHour)
 import { getSettingsStore, getHoursForDate, DAY_KEYS } from './settings-store'
 import { PRICE_DEFAULTS } from './priceDefaults'
+import { variantRatePerHour } from './lanes'
 
 export const COACH_PRICING = {
   get perHour(): number {
@@ -54,19 +55,14 @@ export function getCoachPrice(durationMinutes: number): number {
   return Math.round(hours * COACH_PRICING.perHour * 100) / 100
 }
 
-export function getCustomerPrice(lane: Lane, variantId: string | null, durationMinutes: number): number {
+export function getCustomerPrice(_lane: Lane, variantId: string | null, durationMinutes: number): number {
   const hours = durationMinutes / 60
-  let perHour = 40
+  let perHour: number = PRICE_DEFAULTS.customerPerHour
   try {
-    const s = getSettingsStore().get()
-    perHour = s.customerPricePerHour ?? PRICE_DEFAULTS.customerPerHour
-    // Truman variant uses Truman hourly rate from settings
-    if (lane.variants && variantId) {
-      const variant = lane.variants.find(v => v.id === variantId)
-      if (variant && /truman/i.test(variant.name)) {
-        perHour = s.trumanPricePerHour ?? perHour
-      }
-    }
+    // Explicit variant→rate map (SPEC_RECONFIGURABLE_LANES) — mirrors the server
+    // computeCustomerPriceCents so the popup preview == the charge. Handles both
+    // canonical "truman" and legacy "bm3-truman" variant ids via normalizeVariant.
+    perHour = variantRatePerHour(variantId, getSettingsStore().get())
   } catch {}
   return Math.round(perHour * hours * 100) / 100
 }

@@ -3,10 +3,11 @@
 // modifyBooking must compute the new price server-side (never trust the client),
 // so it can charge/credit the correct difference. This mirrors the client helper
 // getCustomerPrice() in src/lib/booking-data.ts: a per-hour rate from settings,
-// with the Truman variant on its own rate. Truman is detected from the variantId
-// string (variant ids contain "truman"), matching the client check.
+// with the Truman variant on its own rate. The variant→rate mapping is the
+// explicit one in ./lanes (SPEC_RECONFIGURABLE_LANES — replaces the old /truman/
+// substring hack; still matches legacy "bm3-truman" ids via normalizeVariant).
 
-import { PRICE_DEFAULTS } from "./priceDefaults";
+import { variantRatePerHour } from "./lanes";
 
 export interface PricingSettings {
   customerPricePerHour?: number | null;
@@ -20,10 +21,7 @@ export function computeCustomerPriceCents(
   durationMinutes: number
 ): number {
   const hours = durationMinutes / 60;
-  let perHour = settings?.customerPricePerHour ?? PRICE_DEFAULTS.customerPerHour;
-  if (variantId && /truman/i.test(variantId)) {
-    perHour = settings?.trumanPricePerHour ?? perHour;
-  }
+  const perHour = variantRatePerHour(variantId, settings);
   return Math.round(perHour * hours * 100);
 }
 
