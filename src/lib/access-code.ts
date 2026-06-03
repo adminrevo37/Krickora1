@@ -33,12 +33,11 @@ export function generateAccessCode(): string {
 }
 
 /**
- * Format access code for display with a dash (e.g., 4-digit "48-21", legacy 6-digit "482-193").
- * Handles both formats for backwards compatibility with existing bookings.
+ * Format access code for display. Codes are shown as clean digits with NO dash
+ * (e.g. "7041") — matching exactly what the customer types at the door keypad and
+ * what is written to the Google Calendar event.
  */
 export function formatAccessCode(code: string): string {
-  if (code.length === 4) return `${code.slice(0, 2)}-${code.slice(2)}`
-  if (code.length === 6) return `${code.slice(0, 3)}-${code.slice(3)}`
   return code
 }
 

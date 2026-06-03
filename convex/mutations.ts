@@ -1559,7 +1559,18 @@ export const editBookingDuration = mutation({
     const booking = await ctx.db.get(args.id);
     if (!booking) throw new ConvexError("Booking not found.");
     if (booking.status === "cancelled") throw new ConvexError("Cannot edit a cancelled booking.");
-    if (booking.userId !== args.userId && booking.customerEmail !== args.userId) throw new ConvexError("You can only edit your own bookings.");
+    // H5 (SECURITY): authorize on the AUTHENTICATED identity, not the client-supplied
+    // args.userId (was unauthenticated + IDOR — no getUserIdentity at all).
+    const editIdentity = await ctx.auth.getUserIdentity();
+    if (!editIdentity) throw new ConvexError("Authentication required.");
+    const editCallerEmail = editIdentity.email?.toLowerCase().trim() ?? "";
+    const editIsOwner =
+      (editIdentity.subject != null && booking.userId === editIdentity.subject) ||
+      (editCallerEmail !== "" && booking.customerEmail.toLowerCase() === editCallerEmail);
+    const editCaller = editCallerEmail
+      ? await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", editCallerEmail)).first()
+      : null;
+    if (!editIsOwner && (editCaller as any)?.role !== "admin") throw new ConvexError("You can only edit your own bookings.");
 
     const editDurSettings = await ctx.db
       .query("siteSettings")
@@ -1746,9 +1757,9 @@ export const rescheduleBooking = mutation({
       .first() : null;
     const isAdminCaller = reschedCaller?.role === "admin";
 
+    // H4 (SECURITY): authorize on the AUTHENTICATED identity only — the client
+    // `args.userId` is NOT trusted (was an IDOR: pass a victim's email as userId).
     const isOwner =
-      booking.userId === args.userId ||
-      booking.customerEmail.toLowerCase() === args.userId.toLowerCase() ||
       (reschedIdentity.subject != null && booking.userId === reschedIdentity.subject) ||
       (reschedCallerEmail !== "" && booking.customerEmail.toLowerCase() === reschedCallerEmail);
 
@@ -2117,13 +2128,13 @@ export const modifyBooking = mutation({
       throw new ConvexError("A payment for a previous change is still pending. Complete or cancel it first.");
     }
 
-    // ── Auth ──────────────────────────────────────────────────────────────────
+    // ── Auth (H3 SECURITY: authorize on the AUTHENTICATED identity only; the
+    // client `args.userId` is NOT trusted — was an IDOR: pass a victim's email) ──
     const identity = await ctx.auth.getUserIdentity();
-    const callerEmail = identity?.email?.toLowerCase().trim() ?? "";
+    if (!identity) throw new ConvexError("Authentication required.");
+    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
     const isOwner =
-      booking.userId === args.userId ||
-      booking.customerEmail.toLowerCase() === args.userId.toLowerCase() ||
-      (identity?.subject != null && booking.userId === identity.subject) ||
+      (identity.subject != null && booking.userId === identity.subject) ||
       (callerEmail !== "" && booking.customerEmail.toLowerCase() === callerEmail);
     const callerCustomer = callerEmail
       ? await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", callerEmail)).first()
@@ -2532,19 +2543,25 @@ export const updateBookingAthleteSlots = mutation({
     // Bug #5: authorize on identity, not name. Allow if: booking owner (by id or
     // email), OR the coach whose email matches the booking's, OR an admin. The
     // name comparison is dropped (two coaches sharing a name could collide).
+    // M8 (SECURITY): authorize on the AUTHENTICATED identity, not the client
+    // args.userId (the old `booking.userId !== args.userId` guard let a caller skip
+    // every check by passing the owner's id).
+    const aIdentity = await ctx.auth.getUserIdentity();
+    if (!aIdentity) throw new ConvexError("Authentication required.");
+    const aCallerEmail = aIdentity.email?.toLowerCase().trim() ?? "";
     let actorName: string | undefined = booking.customerName;
-    if (booking.userId !== args.userId) {
-      const requester = await ctx.db
-        .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", args.userId))
-        .first();
-      const requesterById: any = requester ?? (await ctx.db.get(args.userId as any).catch(() => null));
-      actorName = requesterById?.name ?? actorName;
-      const isAdmin = requesterById?.role === "admin";
+    const aIsOwner =
+      (aIdentity.subject != null && booking.userId === aIdentity.subject) ||
+      (aCallerEmail !== "" && booking.customerEmail.toLowerCase() === aCallerEmail);
+    if (!aIsOwner) {
+      const requester: any = aCallerEmail
+        ? await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", aCallerEmail)).first()
+        : null;
+      actorName = requester?.name ?? actorName;
+      const isAdmin = requester?.role === "admin";
       const isAssignedCoach =
-        requesterById?.role === "coach" &&
-        (requesterById?._id === booking.userId ||
-          requesterById?.email === booking.customerEmail);
+        requester?.role === "coach" &&
+        (requester?._id === booking.userId || requester?.email === booking.customerEmail);
       if (!isAdmin && !isAssignedCoach) {
         throw new ConvexError("You can only edit your own bookings.");
       }
