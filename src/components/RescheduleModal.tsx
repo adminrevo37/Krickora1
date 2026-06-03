@@ -5,7 +5,7 @@ import {
   getAWSTNow, bookingOccupiesLane,
   type Booking, type Lane,
 } from '../lib/booking-data'
-import { generateAccessCode, formatAccessCode } from '../lib/access-code'
+import { formatAccessCode } from '../lib/access-code'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 
 interface RescheduleModalProps {
@@ -149,7 +149,6 @@ export default function RescheduleModal({ booking, allBookings, onClose, onResch
     }
     setStep('processing')
 
-    const newAccessCode = generateAccessCode()
     const result = await onReschedule({
       newDate: selectedDate,
       newStartHour: selectedStartHour,
@@ -157,7 +156,6 @@ export default function RescheduleModal({ booking, allBookings, onClose, onResch
       newLaneId: selectedLaneId !== booking.laneId ? selectedLaneId : undefined,
       newVariantId: selectedVariantId !== booking.variantId ? selectedVariantId : undefined,
       newAdditionalLaneIds: booking.additionalLaneIds,
-      newAccessCode: newAccessCode,
     })
 
     if (result.success) {

@@ -7,7 +7,6 @@ import {
   getCustomerDurations, getCoachDurations, bookingOccupiesLane, LANES, type Lane, type LaneVariant, type Booking,
 } from '../lib/booking-data'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
-import { generateAccessCode } from '../lib/access-code'
 
 type PaymentMode = 'comp' | 'offline' | 'request'
 
@@ -168,7 +167,6 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
           isCoachBooking: isCoach,
           coachPrice: isCoach ? effectivePricePerLane : undefined,
           additionalLaneIds: additionalLaneIds.length > 0 ? additionalLaneIds : undefined,
-          accessCode: generateAccessCode(),
           discountCode: discountCode.trim() || undefined,
           notes: notes.trim() || (isComp ? 'Comp (complimentary)' : undefined),
         })

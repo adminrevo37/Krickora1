@@ -6,7 +6,6 @@ import {
   getAWSTNow, bookingOccupiesLane, decreaseCreditCents,
   type Booking,
 } from '../lib/booking-data'
-import { generateAccessCode } from '../lib/access-code'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 
 // Result shape returned by the unified modifyBooking mutation (via useBookingStore).
@@ -156,7 +155,6 @@ export default function ModifyBookingModal({ booking, allBookings, creditBalance
     setError(null)
     setStep('processing')
 
-    const newAccessCode = generateAccessCode()
     const res = await onModify({
       newDate: selectedDate,
       newStartHour: selectedStartHour,
@@ -164,7 +162,6 @@ export default function ModifyBookingModal({ booking, allBookings, creditBalance
       newLaneId: selectedLaneId !== booking.laneId ? selectedLaneId : undefined,
       newVariantId: (selectedVariantId ?? null) !== (booking.variantId ?? null) ? selectedVariantId : undefined,
       newAdditionalLaneIds: booking.additionalLaneIds,
-      newAccessCode,
     })
 
     if (!res.success) {

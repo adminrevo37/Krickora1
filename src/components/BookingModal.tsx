@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { useQuery } from 'convex/react'
+import { useQuery, useConvex } from 'convex/react'
 import { getErrorMessage } from '../lib/errors'
 import {
   LANES, canBookSlot, formatDateKey, formatTime, getCustomerPrice, getCoachPrice, getCoachPerHourRate,
@@ -11,7 +11,7 @@ import { createCheckoutSession, type CheckoutSessionRequest } from '../lib/strip
 import { getSettingsStore } from '../lib/settings-store'
 import { useAuth } from '../hooks/useAuth'
 import AuthModal from './AuthModal'
-import { formatAccessCode, generateAccessCode } from '../lib/access-code'
+import { formatAccessCode } from '../lib/access-code'
 import { useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 
@@ -94,6 +94,17 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const customerName = user?.name ?? ''
   const customerEmail = user?.email ?? ''
   const createBookingForStripe = useMutation(api.mutations.createBooking)
+  const convex = useConvex()
+  // C3: the door code is generated SERVER-SIDE. After the booking persists, read
+  // the real code back (the booking is inserted synchronously, so it's there).
+  const fetchServerCode = async (id: string): Promise<string | undefined> => {
+    for (let i = 0; i < 6; i++) {
+      const bk: any = await convex.query(api.queries.getBooking, { id: id as any }).catch(() => null)
+      if (bk?.accessCode) return bk.accessCode as string
+      await new Promise(r => setTimeout(r, 250))
+    }
+    return undefined
+  }
 
   const otherLanes = LANES.filter(l => l.id !== lane.id)
   const availableAdditionalLanes = otherLanes.filter(l => canBookSlot(existingBookings, l.id, dateKey, startHour, duration))
@@ -297,7 +308,6 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     if (!user) return
     setIsSubmitting(true); setError(null); setStep('processing')
 
-    const accessCode = generateAccessCode()
     try {
       // Bug N-8: persist FIRST (awaited) and only show the success screen + door
       // code once the server confirms the write. Previously this path showed
@@ -318,18 +328,18 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
         status: 'confirmed',
         isCoachBooking: false,
         additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
-        accessCode,
         discountCode: appliedDiscount?.code,
         // Credit is deducted server-side at confirmation (createBooking) via the
         // credit ledger — do NOT deduct client-side (avoids double-spend).
         creditApplied: creditToApply > 0 ? creditToApply : undefined,
       })
+      const serverCode = await fetchServerCode(id as string)
       const booking: Booking = {
         id: id as string, laneId: lane.id, variantId: selectedVariant?.id ?? null,
         date: dateKey, startHour, duration, customerName, customerEmail, customerPhone: user.phone,
         userId: user.id, status: 'confirmed', isCoachBooking: false,
         additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
-        accessCode,
+        accessCode: serverCode,
         discountCode: appliedDiscount?.code,
         creditApplied: creditToApply > 0 ? creditToApply : undefined,
       }
@@ -356,14 +366,6 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       }
     }
 
-    const accessCode = generateAccessCode()
-    // All athletes share the coach's door code
-    const slotsWithCodes = athleteSlots.map(s => ({
-      ...s,
-      accessCode,
-      codeGeneratedAt: new Date().toISOString(),
-    }))
-
     try {
       // Bug N-8: persist FIRST (awaited); show success only after the write lands.
       const id = await createBookingForStripe({
@@ -380,16 +382,19 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
         isCoachBooking: true,
         coachPrice: getCoachPrice(finalDuration),
         additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
-        athleteSlots: (slotsWithCodes.length > 0 ? slotsWithCodes : undefined) as any,
-        accessCode,
+        athleteSlots: (athleteSlots.length > 0 ? athleteSlots : undefined) as any,
       })
+      const serverCode = await fetchServerCode(id as string)
+      const displaySlots = athleteSlots.length > 0
+        ? athleteSlots.map(s => ({ ...s, accessCode: serverCode, codeGeneratedAt: new Date().toISOString() }))
+        : undefined
       const booking: Booking = {
         id: id as string, laneId: lane.id, variantId: selectedVariant?.id ?? null,
         date: dateKey, startHour, duration: finalDuration, customerName, customerEmail, customerPhone: user.phone,
         userId: user.id, status: 'confirmed', isCoachBooking: true, coachPrice: getCoachPrice(finalDuration),
         additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
-        athleteSlots: slotsWithCodes.length > 0 ? slotsWithCodes : undefined,
-        accessCode,
+        athleteSlots: displaySlots,
+        accessCode: serverCode,
       }
       setConfirmedBooking(booking); setStep('success')
       setTimeout(() => onConfirm(booking), 4000)

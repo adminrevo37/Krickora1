@@ -434,8 +434,10 @@ export async function applyBookingChange(
     actorName: string;
   }
 ): Promise<{ droppedAthletes: string[] }> {
+  // C3 (SECURITY): on a slot-identity change the server mints the new door code —
+  // the client-supplied `change.newAccessCode` is IGNORED.
   const accessCode = change.regenCode
-    ? (change.newAccessCode ?? booking.accessCode)
+    ? generateServerAccessCode(await collectActiveAccessCodes(ctx), await getReservedCodes(ctx))
     : booking.accessCode;
 
   // Bug #7 keep-what-fits: shift every athlete slot by the time delta and keep
@@ -913,11 +915,23 @@ export const createBooking = mutation({
       }
     }
 
+    // C3 (SECURITY): the door code is generated SERVER-SIDE; any client-supplied
+    // `accessCode` is IGNORED for customer + coach bookings (a customer could
+    // otherwise set a known staff code or collide with another active booking).
+    // Admin-manual bookings may pass a code (admin is trusted).
+    let bookingAccessCode: string;
+    if (isAdminManual && args.accessCode) {
+      bookingAccessCode = args.accessCode;
+    } else {
+      const reservedSet = new Set<string>((siteSettings as any)?.reservedAccessCodes ?? DEFAULT_RESERVED_CODES);
+      bookingAccessCode = generateServerAccessCode(await collectActiveAccessCodes(ctx), reservedSet);
+    }
+
     // For coach bookings, all assigned athletes share the coach's access code
-    const normalizedAthleteSlots = args.athleteSlots && args.isCoachBooking && args.accessCode
+    const normalizedAthleteSlots = args.athleteSlots && args.isCoachBooking
       ? args.athleteSlots.map((s) => ({
           ...s,
-          accessCode: args.accessCode,
+          accessCode: bookingAccessCode,
           codeGeneratedAt: s.codeGeneratedAt ?? new Date().toISOString(),
         }))
       : args.athleteSlots;
@@ -961,7 +975,7 @@ export const createBooking = mutation({
       additionalLaneIds: args.additionalLaneIds,
       athleteSlots: normalizedAthleteSlots,
       creditApplied: args.creditApplied,
-      accessCode: args.accessCode,
+      accessCode: bookingAccessCode,
       discountCode: args.discountCode,
       tentativeSourceId: args.tentativeSourceId,
       tentativeForDate: args.tentativeForDate,
@@ -1043,7 +1057,7 @@ export const createBooking = mutation({
           date: args.date,
           startHour: args.startHour,
           duration: args.duration,
-          accessCode: args.accessCode,
+          accessCode: bookingAccessCode,
           coachPrice: args.coachPrice,
           creditApplied: args.creditApplied,
         }),
@@ -1058,7 +1072,7 @@ export const createBooking = mutation({
         slots: normalizedAthleteSlots,
         laneId: args.laneId,
         date: args.date,
-        bookingAccessCode: args.accessCode,
+        bookingAccessCode: bookingAccessCode,
         coachName: args.customerName,
       });
     }
@@ -1077,9 +1091,9 @@ export const createBooking = mutation({
         customerPhone: args.customerPhone,
         status: effectiveStatus,
         isCoachBooking: args.isCoachBooking,
-        accessCode: args.accessCode,
+        accessCode: bookingAccessCode,
         additionalLaneIds: args.additionalLaneIds,
-        athleteSlots: args.athleteSlots,
+        athleteSlots: normalizedAthleteSlots,
       });
     }
 
@@ -1916,7 +1930,12 @@ export const rescheduleBooking = mutation({
     const rNewLaneKey = [newLaneId, ...((args.newAdditionalLaneIds ?? booking.additionalLaneIds ?? []) as string[])].slice().sort().join(",");
     const rLaneSetChanged = rOldLaneKey !== rNewLaneKey;
     const rHadEvents = !!rOldCalEventId || (Array.isArray(rOldCalEventIds) && rOldCalEventIds.length > 0);
-    const rAccessCode = args.newAccessCode ?? booking.accessCode;
+    // C3 (SECURITY): on a real slot change the SERVER mints the new code; the
+    // client-supplied args.newAccessCode is ignored.
+    const rRegen = args.newDate !== booking.date || args.newStartHour !== booking.startHour || newLaneId !== booking.laneId;
+    const rAccessCode = rRegen
+      ? generateServerAccessCode(await collectActiveAccessCodes(ctx), await getReservedCodes(ctx))
+      : booking.accessCode;
     const rCalAthleteSlots = (adjustedAthleteSlots ?? []).map((s: any) => ({
       athleteName: s.athleteName, startHour: s.startHour, durationMinutes: s.durationMinutes,
     }));
@@ -1934,7 +1953,7 @@ export const rescheduleBooking = mutation({
       accessCode: rAccessCode,
       // Keep the existing event ids for an in-place update; clear them on a move.
       ...(rLaneSetChanged ? { googleCalendarEventId: undefined, googleCalendarEventIds: undefined } : {}),
-      lockSyncStatus: args.newAccessCode ? "pending" : booking.lockSyncStatus,
+      lockSyncStatus: rRegen ? "pending" : booking.lockSyncStatus,
     });
 
     if (!rLaneSetChanged && rHadEvents) {
@@ -2004,7 +2023,7 @@ export const rescheduleBooking = mutation({
         newDate: args.newDate,
         newTimeSlot: fmtTime(args.newStartHour),
         newDuration: fmtDur(args.newDuration),
-        accessCode: args.newAccessCode ?? booking.accessCode ?? "",
+        accessCode: rAccessCode ?? "",
       });
     }
 
@@ -2018,7 +2037,7 @@ export const rescheduleBooking = mutation({
           laneId: newLaneId,
           oldDate: booking.date,
           newDate: args.newDate,
-          bookingAccessCode: args.newAccessCode ?? booking.accessCode,
+          bookingAccessCode: rAccessCode,
           coachName: booking.customerName,
         });
       }
@@ -2436,16 +2455,55 @@ export const modifyBooking = mutation({
 // ============================================================================
 
 // Generate a unique 6-digit access code (server-side)
-function generateServerAccessCode(existingCodes: Set<string>): string {
-  let code: string;
+// C3 (SECURITY): the front-door PIN is generated SERVER-SIDE only — never trust a
+// client-supplied code (a customer could otherwise set a known staff code or one
+// colliding with another active booking). CSPRNG (crypto.getRandomValues, not the
+// guessable Math.random), 4-digit, excludes reserved staff codes, and is unique
+// among currently-active bookings (seed via collectActiveAccessCodes).
+const DEFAULT_RESERVED_CODES = ["1234", "3457", "2692", "1652"];
+
+function generateServerAccessCode(existingCodes: Set<string>, reserved?: Set<string>): string {
+  const blocked = reserved ?? new Set(DEFAULT_RESERVED_CODES);
+  let code = "";
   let attempts = 0;
   do {
-    const num = 1000 + Math.floor(Math.random() * 9000); // 4-digit codes (1000-9999)
+    const arr = new Uint32Array(1);
+    crypto.getRandomValues(arr);
+    const num = 1000 + (arr[0] % 9000); // 4-digit codes (1000-9999)
     code = num.toString();
     attempts++;
-  } while (existingCodes.has(code) && attempts < 100);
+    if (attempts > 250) {
+      throw new ConvexError("Could not allocate a unique door code. Please try again.");
+    }
+  } while (existingCodes.has(code) || blocked.has(code));
   existingCodes.add(code);
   return code;
+}
+
+// Seed the in-use set from every upcoming (non-cancelled) booking + athlete-slot
+// code, so a freshly minted code can't collide with a live one. AWST today (UTC+8).
+async function collectActiveAccessCodes(ctx: any): Promise<Set<string>> {
+  const todayKey = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  const all = await ctx.db.query("bookings").collect();
+  const set = new Set<string>();
+  for (const b of all) {
+    if (b.status === "cancelled" || b.date < todayKey) continue;
+    if (b.accessCode) set.add(b.accessCode);
+    for (const s of b.athleteSlots ?? []) {
+      if (s.accessCode) set.add(s.accessCode);
+    }
+  }
+  return set;
+}
+
+// Reserved door codes (staff/permanent) the server must never mint. Admin-editable
+// via siteSettings.reservedAccessCodes; falls back to the built-in defaults.
+async function getReservedCodes(ctx: any): Promise<Set<string>> {
+  const s = await ctx.db
+    .query("siteSettings")
+    .withIndex("by_key", (q: any) => q.eq("key", "global"))
+    .first();
+  return new Set<string>((s as any)?.reservedAccessCodes ?? DEFAULT_RESERVED_CODES);
 }
 
 // Update athlete slots on an existing booking (coach only)
