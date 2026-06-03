@@ -196,10 +196,9 @@ export function buildLaneWarning(
     resolved.variants.length === def.variants.length &&
     resolved.variants.every((v) => def.variants.includes(v));
   if (same) return null;
+  const fullVariant = (v: string) => (normalizeVariant(v) === VARIANT_TRUMAN ? "Truman" : "Standard");
   const describe = (mode: LaneMode, variants: string[]) =>
-    mode === "RU"
-      ? "9m Run-Up"
-      : variants.map((v) => variantLabel(v, variants.length === 1)).join(" / ") + " Bowling Machine";
+    mode === "RU" ? "9m Run-Up" : variants.map(fullVariant).join(" / ") + " Bowling Machine";
   return `⚠️ WARNING: Set up as a ${describe(resolved.mode, resolved.variants)} today — not its usual ${describe(
     def.mode,
     def.variants

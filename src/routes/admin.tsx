@@ -8,6 +8,7 @@ import { useImpersonation } from '../hooks/useImpersonation'
 import AdminBookingCalendar from '../components/AdminBookingCalendar'
 import ClosureManager from '../components/ClosureManager'
 import SettingsPanel from '../components/SettingsPanel'
+import AdminLanesPanel from '../components/AdminLanesPanel'
 import CoachStatementTable from '../components/CoachStatementTable'
 import StatementAdjustmentsManager from '../components/StatementAdjustmentsManager'
 import AdminDiscountCodesTab from '../components/AdminDiscountCodesTab'
@@ -25,11 +26,11 @@ type Section =
   | 'bookings' | 'closures'
   | 'customers' | 'coaches'
   | 'statements' | 'discounts'
-  | 'faults' | 'waitlist' | 'settings'
+  | 'faults' | 'waitlist' | 'lanes' | 'settings'
 
 const VALID_SECTIONS: Section[] = [
   'bookings', 'closures', 'customers', 'coaches',
-  'statements', 'discounts', 'faults', 'waitlist', 'settings',
+  'statements', 'discounts', 'faults', 'waitlist', 'lanes', 'settings',
 ]
 
 export const Route = createFileRoute('/admin')({
@@ -80,6 +81,7 @@ const NAV_GROUPS: Array<{
   {
     label: 'Configure',
     items: [
+      { id: 'lanes',      label: 'Lanes',      icon: '🏟️' },
       { id: 'settings',   label: 'Settings',   icon: '⚙️' },
     ],
   },
@@ -94,6 +96,7 @@ const SECTION_TITLES: Record<Section, string> = {
   discounts:  'Discounts',
   faults:     'Fault Reports',
   waitlist:   'Waitlist',
+  lanes:      'Lanes',
   settings:   'Settings',
 }
 
@@ -271,6 +274,7 @@ function AdminPage() {
             {section === 'discounts'  && <AdminDiscountCodesTab />}
             {section === 'faults'     && <AdminFaultInbox />}
             {section === 'waitlist'   && <WaitlistAdmin />}
+            {section === 'lanes'      && <AdminLanesPanel />}
             {section === 'settings'   && <SettingsPanel />}
           </div>
         )}
