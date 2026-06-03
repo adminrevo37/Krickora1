@@ -40,6 +40,7 @@ export interface SiteSettings {
   l1CoachOpenHour: number
   l2CoachOpenDay: string
   l2CoachOpenHour: number
+  releaseCountdownHours?: number
   customerMaxLanesPerBooking?: number
   customerMaxDurationMinutes?: number
   coachMaxDurationMinutes?: number
@@ -86,6 +87,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   l1CoachOpenHour: 0,
   l2CoachOpenDay: 'sunday',
   l2CoachOpenHour: 17,
+  releaseCountdownHours: 24,
   customerMaxLanesPerBooking: 3,
   customerMaxDurationMinutes: 180,
   coachMaxDurationMinutes: 600,

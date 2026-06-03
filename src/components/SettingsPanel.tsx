@@ -157,6 +157,7 @@ export default function SettingsPanel() {
           <NumberInput label="Max lanes per booking (customer)" value={settings.customerMaxLanesPerBooking ?? 3} onChange={(v) => updateSettings({ customerMaxLanesPerBooking: v })} />
           <NumberInput label="Coach booking window (days)" value={settings.coachBookingWindowDays} onChange={(v) => updateSettings({ coachBookingWindowDays: v })} />
           <NumberInput label="Customer open hour" value={settings.customerOpenHour} onChange={(v) => updateSettings({ customerOpenHour: v })} />
+          <NumberInput label="Show release countdown within (hours)" value={settings.releaseCountdownHours ?? 24} onChange={(v) => updateSettings({ releaseCountdownHours: v })} />
           <label className="block">
             <span className="text-sm font-medium text-gray-700">Customer open day</span>
             <select

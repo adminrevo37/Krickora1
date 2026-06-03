@@ -478,6 +478,10 @@ function ReleaseBanner({ role, tier, settings, nextWeekOpen, lastDay }: {
 
   const release = getNextReleaseDate(role, tier, settings)
   const totalSec = Math.max(0, Math.floor((release.getTime() - getAWSTNow().getTime()) / 1000))
+  // Only surface the countdown within the admin-configured window before release.
+  // When time-to-release exceeds it, hide the banner entirely (admin SSOT).
+  const visibleWithinSec = (settings.releaseCountdownHours ?? 24) * 3600
+  if (totalSec > visibleWithinSec) return null
   const days = Math.floor(totalSec / 86400)
   const hours = Math.floor((totalSec % 86400) / 3600)
   const mins = Math.floor((totalSec % 3600) / 60)

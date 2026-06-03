@@ -420,6 +420,9 @@ export default defineSchema({
     l1CoachOpenHour: v.optional(v.number()),
     l2CoachOpenDay: v.optional(v.string()),
     l2CoachOpenHour: v.optional(v.number()),
+    // Hours before the weekly release to START showing the "next week opens" live
+    // countdown banner. When time-to-release exceeds this, the banner is hidden.
+    releaseCountdownHours: v.optional(v.number()),
     // Max lanes a customer may book in one booking (SPEC_BOOKING_WINDOW #4).
     // Coaches/admin are exempt. Default 3.
     customerMaxLanesPerBooking: v.optional(v.number()),

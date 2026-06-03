@@ -3723,6 +3723,7 @@ export const updateSiteSettings = mutation({
     l1CoachOpenHour: v.optional(v.number()),
     l2CoachOpenDay: v.optional(v.string()),
     l2CoachOpenHour: v.optional(v.number()),
+    releaseCountdownHours: v.optional(v.number()),
     customerMaxLanesPerBooking: v.optional(v.number()),
     registrationLocked: v.optional(v.boolean()),
     coachRescheduleFreezeHours: v.optional(v.number()),
