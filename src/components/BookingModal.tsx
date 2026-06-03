@@ -9,6 +9,8 @@ import {
 } from '../lib/booking-data'
 import { createCheckoutSession, type CheckoutSessionRequest } from '../lib/stripe'
 import { getSettingsStore } from '../lib/settings-store'
+import { useLaneConfigState } from '../hooks/useLaneConfig'
+import { resolveLaneAt, getLaneWarning, variantLabel, variantRatePerHour } from '../lib/lanes'
 import { useAuth } from '../hooks/useAuth'
 import AuthModal from './AuthModal'
 import { formatAccessCode } from '../lib/access-code'
@@ -23,14 +25,40 @@ interface BookingModalProps {
 
 export default function BookingModal({ lane, date, startHour, existingBookings, onClose, onConfirm }: BookingModalProps) {
   const { user, isCoach, getCreditBalance, customerRecord } = useAuth()
-  const hasVariants = !!(lane.variants && lane.variants.length > 0)
-  const [selectedVariant, setSelectedVariant] = useState<LaneVariant | null>(hasVariants ? lane.variants![0] : null)
+  useLaneConfigState() // SPEC_RECONFIGURABLE_LANES: react to layout changes
+  // Resolve the lane's segment for THIS (date, startHour): drives variant options,
+  // the duration cap (a booking may not cross a segment boundary, §2.14), the
+  // date-resolved display name + icon, and the auto warning.
+  const dkForSeg = formatDateKey(date)
+  const resolvedLane = resolveLaneAt(lane.id, dkForSeg, startHour)
+  const seg = resolvedLane.segment
+  const resolvedLaneName = resolvedLane.name
+  const resolvedLaneIcon = resolvedLane.icon
+  const laneWarning = getLaneWarning(lane.id, dkForSeg, startHour)
+  const laneNm = (id: string) => resolveLaneAt(id, dkForSeg, startHour).name
+  const settingsForPrice = getSettingsStore().get()
+  const variantOptions = useMemo<LaneVariant[]>(
+    () => seg.variants.map((vid) => ({
+      id: vid,
+      name: variantLabel(vid, seg.variants.length === 1 && seg.mode === 'BM'),
+      pricePerHour: variantRatePerHour(vid, settingsForPrice),
+      price90Min: 0,
+      description: '',
+    })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [seg.variants.join(','), seg.mode, settingsForPrice.customerPricePerHour, settingsForPrice.trumanPricePerHour]
+  )
+  const hasVariantChoice = !isCoach && variantOptions.length > 1
+  const [selectedVariant, setSelectedVariant] = useState<LaneVariant | null>(variantOptions[0] ?? null)
   const [additionalLanes, setAdditionalLanes] = useState<string[]>([])
 
   const availableDurations = useMemo(() => {
-    if (isCoach) return getCoachDurations(existingBookings, lane.id, formatDateKey(date), startHour)
-    return getCustomerDurations(existingBookings, lane.id, formatDateKey(date), startHour)
-  }, [existingBookings, lane.id, date, startHour, isCoach])
+    const base = isCoach
+      ? getCoachDurations(existingBookings, lane.id, dkForSeg, startHour)
+      : getCustomerDurations(existingBookings, lane.id, dkForSeg, startHour)
+    // Cap so the booking can't cross into the next segment (§2.14).
+    return base.filter((d) => startHour + d / 60 <= seg.endHour + 1e-9)
+  }, [existingBookings, lane.id, dkForSeg, startHour, isCoach, seg.endHour])
 
   const [duration, setDuration] = useState<number>(() => availableDurations.length > 0 ? availableDurations[0] : 60)
   const validCoachStarts = useMemo(() => getValidCoachStartTimes(date), [date])
@@ -165,6 +193,14 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       setDuration(availableDurations[0])
     }
   }, [availableDurations])
+
+  // Keep the selected variant valid for the resolved segment (SPEC_RECONFIGURABLE_LANES)
+  useEffect(() => {
+    if (variantOptions.length && !variantOptions.some((v) => v.id === selectedVariant?.id)) {
+      setSelectedVariant(variantOptions[0])
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [variantOptions])
 
   // Auto-round duration when athlete slots change
   useEffect(() => {
@@ -431,10 +467,10 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       })
 
       const checkoutReq: CheckoutSessionRequest = {
-        laneId: lane.id, laneName: lane.name, variantId: selectedVariant?.id ?? null,
+        laneId: lane.id, laneName: resolvedLaneName, variantId: selectedVariant?.id ?? null,
         variantName: selectedVariant?.name ?? null, date: dateKey, startHour, duration,
         customerName, customerEmail, price: totalPrice,
-        additionalLanes: additionalLanes.map(lid => LANES.find(l => l.id === lid)?.shortName ?? lid),
+        additionalLanes: additionalLanes.map(lid => laneNm(lid)),
         bookingId: bookingId as string,
       }
       const session = await createCheckoutSession(checkoutReq)
@@ -458,10 +494,10 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   }
 
   const googleCalUrl = confirmedBooking ? generateGoogleCalendarUrl({
-    laneName: lane.name, variantName: selectedVariant?.name, date: confirmedBooking.date,
+    laneName: resolvedLaneName, variantName: selectedVariant?.name, date: confirmedBooking.date,
     startHour: confirmedBooking.startHour, duration: confirmedBooking.duration,
     customerName: confirmedBooking.customerName,
-    additionalLanes: additionalLanes.map(lid => LANES.find(l => l.id === lid)?.shortName ?? lid),
+    additionalLanes: additionalLanes.map(lid => laneNm(lid)),
     accessCode: confirmedBooking.accessCode,
   }) : null
 
@@ -530,8 +566,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               </div>
             )}
             <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-4 w-full space-y-2 text-sm">
-              <div className="flex justify-between"><span className="text-gray-500">Lane</span><span className="font-medium text-gray-800 dark:text-gray-200">{lane.name}{selectedVariant ? ` (${selectedVariant.name})` : ''}</span></div>
-              {additionalLanes.length > 0 && <div className="flex justify-between"><span className="text-gray-500">+ Lanes</span><span className="font-medium text-gray-800 dark:text-gray-200">{additionalLanes.map(lid => LANES.find(l => l.id === lid)?.shortName).join(', ')}</span></div>}
+              <div className="flex justify-between"><span className="text-gray-500">Lane</span><span className="font-medium text-gray-800 dark:text-gray-200">{resolvedLaneName}{selectedVariant ? ` (${selectedVariant.name})` : ''}</span></div>
+              {additionalLanes.length > 0 && <div className="flex justify-between"><span className="text-gray-500">+ Lanes</span><span className="font-medium text-gray-800 dark:text-gray-200">{additionalLanes.map(lid => laneNm(lid)).join(', ')}</span></div>}
               <div className="flex justify-between"><span className="text-gray-500">Time</span><span className="font-medium text-gray-800 dark:text-gray-200">{formatTime(startHour)} - {formatTime(startHour + (confirmedBooking?.duration ?? duration) / 60)}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Total</span><span className="font-bold text-emerald-600 dark:text-emerald-400">{confirmedBooking?.isCoachBooking ? `$${getCoachPrice(confirmedBooking.duration)}` : totalPrice === 0 ? 'FREE' : `$${totalPrice}`}</span></div>
             </div>
@@ -553,6 +589,12 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                 <p className="text-sm text-red-700 dark:text-red-400">⚠️ {error}</p>
               </div>
             )}
+            {/* SPEC_RECONFIGURABLE_LANES: lane set up differently than usual today */}
+            {laneWarning && (
+              <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-300 dark:border-red-800/60">
+                <p className="text-sm font-medium text-red-700 dark:text-red-400">{laneWarning}</p>
+              </div>
+            )}
             {isCoach && (
               <div className="flex items-center gap-3 bg-orange-50 dark:bg-orange-900/20 rounded-xl p-3 border border-orange-200 dark:border-orange-800/50">
                 <div className="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center text-white text-sm font-bold">🏅</div>
@@ -572,8 +614,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
             )}
 
             <div className="flex items-center gap-3 bg-gray-50 dark:bg-gray-800 rounded-xl p-3">
-              <div className="w-10 h-10 bg-white dark:bg-gray-700 rounded-lg flex items-center justify-center text-lg shadow-sm">{lane.icon}</div>
-              <div><div className="font-semibold text-gray-800 dark:text-gray-200">{lane.name}</div><div className="text-xs text-gray-500">{formatTime(startHour)} start</div></div>
+              <div className="w-10 h-10 bg-white dark:bg-gray-700 rounded-lg flex items-center justify-center text-lg shadow-sm">{resolvedLaneIcon}</div>
+              <div><div className="font-semibold text-gray-800 dark:text-gray-200">{resolvedLaneName}</div><div className="text-xs text-gray-500">{formatTime(startHour)} start</div></div>
             </div>
 
             {user && (
@@ -584,12 +626,12 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               </div>
             )}
 
-            {/* Variant Selection */}
-            {hasVariants && lane.variants && !isCoach && (
+            {/* Variant Selection (segment-resolved; only when >1 option) */}
+            {hasVariantChoice && (
               <div>
                 <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Machine Type</label>
                 <div className="grid grid-cols-2 gap-3">
-                  {lane.variants.map((variant) => (
+                  {variantOptions.map((variant) => (
                     <button key={variant.id} onClick={() => setSelectedVariant(variant)}
                       className={`p-3 rounded-xl border-2 transition-all text-left ${selectedVariant?.id === variant.id ? variant.id.includes('truman') ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20 shadow-md' : 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 shadow-md' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'}`}>
                       <div className="text-base font-bold text-gray-800 dark:text-gray-200">{variant.name}</div>
@@ -642,7 +684,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                     return (
                       <button key={l.id} onClick={() => toggleAdditionalLane(l.id)} disabled={capReached}
                         className={`text-xs px-3 py-1.5 rounded-lg border transition-all ${selected ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 font-semibold' : capReached ? 'border-gray-200 dark:border-gray-700 text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-300'}`}>
-                        {l.icon} {l.shortName} {selected ? '✓' : '+'}
+                        {laneNm(l.id)} {selected ? '✓' : '+'}
                       </button>
                     )
                   })}
@@ -825,7 +867,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                 {additionalLanes.map(lid => {
                   const l = LANES.find(la => la.id === lid)
                   const lp = isCoach ? getCoachPrice(duration) : getCustomerPrice(l!, null, duration)
-                  return <div key={lid} className="flex justify-between"><span className="text-gray-500">+ {l?.shortName}</span><span className="font-medium">${lp}</span></div>
+                  return <div key={lid} className="flex justify-between"><span className="text-gray-500">+ {laneNm(lid)}</span><span className="font-medium">${lp}</span></div>
                 })}
                 {creditToApply > 0 && <div className="flex justify-between"><span className="text-blue-500">Credit</span><span className="font-medium text-blue-600">-${creditToApply}</span></div>}
                 {appliedDiscount && discountAmount > 0 && (
@@ -848,8 +890,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
             {error && <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-200 dark:border-red-800/50"><p className="text-sm text-red-700 dark:text-red-400">⚠️ {error}</p></div>}
             <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-4 space-y-2 text-sm">
               <h4 className="font-semibold text-gray-800 dark:text-gray-200 text-xs uppercase tracking-wider">Booking Summary</h4>
-              <div className="flex justify-between"><span className="text-gray-500">Lane</span><span className="font-medium text-gray-800 dark:text-gray-200">{lane.name}{selectedVariant ? ` (${selectedVariant.name})` : ''}</span></div>
-              {additionalLanes.length > 0 && <div className="flex justify-between"><span className="text-gray-500">+ Lanes</span><span className="font-medium">{additionalLanes.map(lid => LANES.find(l => l.id === lid)?.shortName).join(', ')}</span></div>}
+              <div className="flex justify-between"><span className="text-gray-500">Lane</span><span className="font-medium text-gray-800 dark:text-gray-200">{resolvedLaneName}{selectedVariant ? ` (${selectedVariant.name})` : ''}</span></div>
+              {additionalLanes.length > 0 && <div className="flex justify-between"><span className="text-gray-500">+ Lanes</span><span className="font-medium">{additionalLanes.map(lid => laneNm(lid)).join(', ')}</span></div>}
               <div className="flex justify-between"><span className="text-gray-500">Time</span><span className="font-medium">{formatTime(startHour)} - {formatTime(endHour)}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Duration</span><span className="font-medium">{duration >= 60 ? `${Math.floor(duration / 60)}hr${duration % 60 > 0 ? ` ${duration % 60}min` : ''}` : `${duration}min`}</span></div>
               {creditToApply > 0 && <div className="flex justify-between"><span className="text-blue-500">Credit Applied</span><span className="font-medium text-blue-600">-${creditToApply}</span></div>}

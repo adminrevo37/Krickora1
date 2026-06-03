@@ -23,6 +23,7 @@ import {
   type WindowTier,
 } from "./lib/bookingWindow";
 import { computeCustomerPriceCents, decreaseCreditCents } from "./lib/pricing";
+import { validateAndSnapshotLane, resolveLaneSnapshot } from "./lanes";
 import { PRICE_DEFAULTS } from "./lib/priceDefaults";
 import { composeName, splitName } from "./lib/names";
 import { assertValidLocation, validateLocationIfProvided, normalizePostcode, normalizeSuburb } from "./lib/locations";
@@ -479,6 +480,17 @@ export async function applyBookingChange(
   const newLaneKey = [change.newLaneId, ...((change.newAdditionalLaneIds ?? booking.additionalLaneIds ?? []) as string[])].slice().sort().join(",");
   const laneSetChanged = oldLaneKey !== newLaneKey;
 
+  // SPEC_RECONFIGURABLE_LANES: re-resolve the lane name + variant snapshot at the
+  // NEW (date, startHour) so emails stay correct after a modify (incl. across a
+  // date boundary with a different layout).
+  const newSnap = await resolveLaneSnapshot(
+    ctx,
+    change.newLaneId,
+    change.newVariantId ?? booking.variantId,
+    change.newDate,
+    change.newStartHour
+  );
+
   await ctx.db.patch(booking._id, {
     date: change.newDate,
     startHour: change.newStartHour,
@@ -488,6 +500,8 @@ export async function applyBookingChange(
     additionalLaneIds: change.newAdditionalLaneIds ?? booking.additionalLaneIds,
     ...(change.newCoachPrice !== undefined ? { coachPrice: change.newCoachPrice } : {}),
     ...(change.newPriceInCents !== undefined ? { priceInCents: change.newPriceInCents } : {}),
+    laneNameSnapshot: newSnap.laneNameSnapshot,
+    variantLabelSnapshot: newSnap.variantLabelSnapshot,
     athleteSlots: adjustedAthleteSlots,
     accessCode,
     // On a lane MOVE we recreate the events (new ids) so clear the old ones; on an
@@ -977,6 +991,19 @@ export const createBooking = mutation({
       }
     }
 
+    // SPEC_RECONFIGURABLE_LANES: validate the lane/variant/duration against the
+    // date-resolved segment (variant must be offered; booking may not cross a
+    // segment boundary, §2.14) and snapshot the resolved name + variant label so
+    // emails stay correct after any later layout change.
+    const laneSnap = await validateAndSnapshotLane(ctx, {
+      laneId: args.laneId,
+      variantId: args.variantId,
+      date: args.date,
+      startHour: args.startHour,
+      durationMinutes: args.duration,
+      skipVariantCheck: !!args.isCoachBooking || isAdminManual,
+    });
+
     const id = await ctx.db.insert("bookings", {
       laneId: args.laneId,
       variantId: args.variantId,
@@ -1003,6 +1030,8 @@ export const createBooking = mutation({
       priceInCents: serverPriceCents,
       bookingPostcode,
       bookingSuburb,
+      laneNameSnapshot: laneSnap.laneNameSnapshot,
+      variantLabelSnapshot: laneSnap.variantLabelSnapshot,
     });
 
     // SPEC_WAITLIST_OFFER_REDESIGN: if this booking is the waitlisted member
@@ -2253,6 +2282,17 @@ export const modifyBooking = mutation({
       if (blocked) throw new ConvexError("That lane is blocked for service/repair during this time.");
     }
 
+    // SPEC_RECONFIGURABLE_LANES: the new slot's variant must be offered by the
+    // resolved segment, and the booking may not cross a segment boundary (§2.14).
+    await validateAndSnapshotLane(ctx, {
+      laneId: effLane,
+      variantId: effVariant,
+      date: effDate,
+      startHour: effStart,
+      durationMinutes: effDuration,
+      skipVariantCheck: isCoach || isAdmin,
+    });
+
     const awstNow = getAWSTNow();
 
     // Active-hold conflict (in-flight checkout / waitlist offer) — exclude self.
@@ -2890,6 +2930,7 @@ export const copyCoachWeek = mutation({
       }
 
       const newCoachPrice = (src.duration / 30) * coachPer30;
+      const copySnap = await resolveLaneSnapshot(ctx, src.laneId, src.variantId, targetDate, src.startHour);
       const newId = await ctx.db.insert("bookings", {
         laneId: src.laneId,
         variantId: src.variantId,
@@ -2906,6 +2947,8 @@ export const copyCoachWeek = mutation({
         additionalLaneIds: src.additionalLaneIds,
         athleteSlots: copiedSlots.length > 0 ? copiedSlots : undefined,
         accessCode: newCode,
+        laneNameSnapshot: copySnap.laneNameSnapshot,
+        variantLabelSnapshot: copySnap.variantLabelSnapshot,
       } as any);
 
       if (copiedSlots.length > 0) {
