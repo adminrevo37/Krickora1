@@ -33,53 +33,48 @@ const SECURITY_HEADERS: Record<string, string> = {
 // SITE_URL is the deployed frontend origin (e.g. https://krickora-prod.vercel.app
 // or, later, https://krickora.com). Including it here keeps the preflight CORS in
 // step with Better Auth's own trustedOrigins (which already honours SITE_URL).
+// SEC Phase 4 (2026-06-03): PINNED credentialed-CORS allowlist. Dropped the
+// stale Shipper origin, the old Shipper Convex deployment, and the
+// *.shipper.now / *.w.modal.host / *.convex.* / *.vercel.app wildcards that
+// previously let ANY such origin make credentialed requests. cricketrevolution.au
+// is pre-listed for the future custom domain (harmless until it goes live).
 const SITE_URL = process.env.SITE_URL || "";
 const ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "http://localhost:3000",
   "http://localhost:4173",
-  "https://krickora.shipper.now",
-  "https://adventurous-chickadee-53.convex.site",
-  "https://adventurous-chickadee-53.convex.cloud",
+  "https://krickora-prod.vercel.app",
+  "https://cricketrevolution.au",
+  "https://www.cricketrevolution.au",
   ...(SITE_URL ? [SITE_URL] : []),
 ];
 
 /**
  * Resolve the correct Access-Control-Allow-Origin for a request.
- * Must be a specific origin (not *) when credentials: true.
- *
- * BUGFIX: the OPTIONS preflight previously fell back to ALLOWED_ORIGINS[0]
- * (localhost:5173) for the Vercel frontend, so the browser blocked the
- * credentialed POST -> "Failed to fetch" on sign-up. Now honours SITE_URL and
- * any *.vercel.app origin (matching Better Auth's POST-path CORS).
+ * Must be a specific origin (not *) when credentials: true. Only echoes back an
+ * origin on the pinned allowlist; otherwise falls back to the deployed frontend.
  */
 function resolveOrigin(request?: Request): string {
   const origin = request?.headers.get("origin") || "";
-  if (
-    ALLOWED_ORIGINS.includes(origin) ||
-    (SITE_URL && origin === SITE_URL) ||
-    origin.endsWith(".shipper.now") ||
-    origin.endsWith(".w.modal.host") ||
-    origin.endsWith(".convex.site") ||
-    origin.endsWith(".convex.cloud") ||
-    origin.endsWith(".vercel.app")
-  ) {
+  if (ALLOWED_ORIGINS.includes(origin) || (SITE_URL && origin === SITE_URL)) {
     return origin;
   }
   // Default to the real deployed frontend origin, NOT localhost.
-  return SITE_URL || ALLOWED_ORIGINS[0];
+  return SITE_URL || "https://krickora-prod.vercel.app";
 }
 
 // ── Register Better Auth routes with credentials-aware CORS ────────────
 authComponent.registerRoutes(http, createAuth, {
   cors: {
+    // SEC Phase 4: pinned to prod + localhost (was Shipper + old Convex deploy).
     allowedOrigins: [
       "http://localhost:5173",
       "http://localhost:3000",
       "http://localhost:4173",
-      "https://krickora.shipper.now",
-      "https://adventurous-chickadee-53.convex.site",
-      "https://adventurous-chickadee-53.convex.cloud",
+      "https://krickora-prod.vercel.app",
+      "https://cricketrevolution.au",
+      "https://www.cricketrevolution.au",
+      ...(SITE_URL ? [SITE_URL] : []),
     ],
     allowedHeaders: [
       "Content-Type", "content-type", "CONTENT-TYPE",

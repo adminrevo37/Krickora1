@@ -173,7 +173,10 @@ export async function sendPasswordReset(email: string) {
       ? `${window.location.origin}/reset-password`
       : "/reset-password";
     const baseURL = convexSiteUrl || "https://adventurous-chickadee-53.convex.site";
-    const response = await credentialFetch(`${baseURL}/api/auth/forget-password`, {
+    // Better Auth 1.5.x exposes the reset-request endpoint at /request-password-reset.
+    // The legacy /forget-password alias is NOT registered (404) — using it silently
+    // broke customer "forgot password". (Pre-existing bug found during SEC Phase 4.)
+    const response = await credentialFetch(`${baseURL}/api/auth/request-password-reset`, {
       method: "POST",
       body: JSON.stringify({ email, redirectTo }),
     });

@@ -15,19 +15,13 @@
     <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin-allow-popups" />
     <meta http-equiv="Cross-Origin-Resource-Policy" content="cross-origin" />
 
-    <!-- 
-      Content Security Policy — Convex-only. Railway fully decommissioned.
+    <!--
+      Content Security Policy is now served as a RESPONSE HEADER from vercel.json
+      (SEC Phase 4, 2026-06-03) — strict, Convex-only, no 'unsafe-inline'/'unsafe-eval'
+      for scripts. The header is authoritative on prod (and can enforce
+      frame-ancestors, which a meta tag cannot). No meta CSP here so local `bun dev`
+      / Vite HMR is unconstrained; prod is covered by the header.
     -->
-    <meta http-equiv="Content-Security-Policy" content="
-      default-src 'self';
-      script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.convex.cloud https://*.convex.site;
-      style-src 'self' 'unsafe-inline';
-      img-src 'self' data: blob: https: http:;
-      font-src 'self' data: https:;
-      connect-src 'self' https://adventurous-chickadee-53.convex.cloud https://adventurous-chickadee-53.convex.site https://*.convex.cloud https://*.convex.site wss://adventurous-chickadee-53.convex.cloud wss://*.convex.cloud https://*.shipper.now https://*.w.modal.host https://accounts.google.com https://*.googleapis.com http://localhost:* ws://localhost:*;
-      frame-src 'self' https://*.convex.site https://adventurous-chickadee-53.convex.site https://accounts.google.com;
-      worker-src 'self' blob:;
-    " />
 
     <meta name="description" content="" />
     <!-- Shipper/Railway telemetry removed: 503'd on the Vercel/self-owned stack

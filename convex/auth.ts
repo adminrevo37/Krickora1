@@ -13,6 +13,7 @@ import { query, mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { betterAuth } from "better-auth";
 import type { BetterAuthOptions } from "better-auth";
+import { createAuthMiddleware, APIError } from "better-auth/api";
 import authSchema from "./betterAuth/schema";
 import authConfig from "./auth.config";
 import { sendTemplateEmail } from "./lib/email";
@@ -33,57 +34,31 @@ export const authComponent = createClient<DataModel, typeof authSchema>(
   }
 );
 
-// Static trusted origins for CORS
+// Static trusted origins for CORS.
+// SEC Phase 4 (2026-06-03): PINNED to the production frontend + localhost dev.
+// Dropped the stale Shipper origin (krickora.shipper.now), the old Shipper Convex
+// deployment (adventurous-chickadee-53), and the blanket *.vercel.app / *.shipper.now
+// / *.w.modal.host wildcards that previously let ANY such deployment make
+// credentialed auth calls. cricketrevolution.au is pre-listed for the future
+// custom domain (harmless until it points at Vercel).
 const staticOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
   "http://localhost:4173",
   "http://localhost:8081",
-  "https://adventurous-chickadee-53.convex.site",
-  "https://adventurous-chickadee-53.convex.cloud",
-  "https://krickora.shipper.now",
+  "https://krickora-prod.vercel.app",
+  "https://cricketrevolution.au",
+  "https://www.cricketrevolution.au",
 ];
 
 /**
- * Get trusted origins array for Better Auth CORS
+ * Get trusted origins array for Better Auth CORS.
+ * PINNED allowlist only — no dynamic per-request origin trust. SITE_URL (the
+ * deployed frontend origin) is included so a domain change needs only an env var.
  */
-function getTrustedOrigins(request?: Request): string[] {
+function getTrustedOrigins(_request?: Request): string[] {
   const origins = [...staticOrigins];
   if (siteUrl) origins.push(siteUrl);
-
-  const addDynamicOrigin = (url: string | null) => {
-    if (!url) return;
-    const isDynamicUrl =
-      url.includes(".w.modal.host") ||
-      url.includes(".shipper.now") ||
-      url.includes(".convex.site") ||
-      // Vercel: trust the stable alias (krickora-prod.vercel.app) AND the
-      // per-deployment preview URLs (krickora-prod-<hash>-<team>.vercel.app),
-      // which Better Auth would otherwise reject as "Invalid origin".
-      url.includes(".vercel.app");
-    if (!isDynamicUrl) return;
-    try {
-      const parsed = new URL(url);
-      origins.push(parsed.origin);
-    } catch {
-      if (url.startsWith("http")) {
-        origins.push(url.split("/").slice(0, 3).join("/"));
-      }
-    }
-  };
-
-  addDynamicOrigin(request?.headers.get("origin") ?? null);
-  addDynamicOrigin(request?.headers.get("referer") ?? null);
-
-  try {
-    if (request?.url) {
-      const url = new URL(request.url);
-      addDynamicOrigin(url.searchParams.get("callbackURL"));
-      addDynamicOrigin(url.searchParams.get("callback"));
-      addDynamicOrigin(url.searchParams.get("redirectTo"));
-    }
-  } catch {}
-
   return [...new Set(origins)];
 }
 
@@ -109,6 +84,13 @@ function buildConvexPlugin() {
  * which the convex() plugin needs to authenticate Convex queries.
  */
 export function createAuthOptions(ctx?: GenericCtx<DataModel>): BetterAuthOptions {
+  // SEC Phase 4 (2026-06-03): a throw-if-unset guard on BETTER_AUTH_SECRET was
+  // attempted but is INFEASIBLE — Better Auth instantiates auth (this options
+  // factory) during Convex push ANALYSIS, where env vars are unavailable, so any
+  // throw on the secret path fails every deploy. BETTER_AUTH_SECRET is therefore
+  // a DEPLOY-TIME INVARIANT: it is confirmed set on prod (artful-boar-748) and
+  // must never be unset (verify with `npx convex env get BETTER_AUTH_SECRET`).
+  // The placeholder below is only ever used by local `bun dev`.
   const options: Record<string, any> = {
     secret: process.env.BETTER_AUTH_SECRET || "dev-secret-placeholder",
     baseURL: process.env.CONVEX_SITE_URL || "http://localhost:3210",
@@ -328,6 +310,81 @@ export const createAuth = (ctx: GenericCtx<DataModel>) => {
         },
       },
     },
+  };
+
+  // ── SEC Phase 4: auth-path rate limiting (sign-in / sign-up / reset) ──
+  // M4/M5: sign-in was completely unthrottled (online password brute force).
+  // A single request `before` hook covers all three sensitive auth endpoints
+  // with email AND IP buckets, reusing the live-proven fixed-window table
+  // limiter (convex/lib/rateLimit.ts, fails open) via an internal mutation —
+  // NO Better Auth schema / native-rateLimit change (avoids the 422-class risk).
+  //
+  // Bucket layout (windows = 15 min):
+  //   /sign-in/email    email 5  + IP 30   (Strict, Inspector 2026-06-03)
+  //   /sign-up/email    IP 10   (email bucket already enforced in databaseHook below)
+  //   /forget-password  IP 10   (email bucket already enforced in sendResetPassword)
+  // Over-limit → APIError 429 (the client already renders error.message). Fails
+  // open on any limiter/hook error so a bug can never lock out legitimate auth.
+  const convexCtx = ctx;
+  (options as any).hooks = {
+    before: createAuthMiddleware(async (mctx: any) => {
+      try {
+        const path: string = mctx?.path ?? "";
+        let cfg:
+          | { action: string; emailMax?: number; ipMax: number; message: string }
+          | null = null;
+        if (path === "/sign-in/email") {
+          cfg = {
+            action: "auth-signin",
+            emailMax: 5,
+            ipMax: 30,
+            message: "Too many sign-in attempts. Please try again in a few minutes.",
+          };
+        } else if (path === "/sign-up/email") {
+          cfg = {
+            action: "auth-signup",
+            ipMax: 10,
+            message: "Too many sign-up attempts. Please try again in a few minutes.",
+          };
+        } else if (path === "/request-password-reset" || path === "/forget-password") {
+          // Better Auth 1.5.x canonical reset path is /request-password-reset;
+          // /forget-password is the legacy alias (404s here) — match both.
+          cfg = {
+            action: "auth-reset",
+            ipMax: 10,
+            message: "Too many password-reset requests. Please try again in a few minutes.",
+          };
+        }
+        if (!cfg) return; // fast no-op for every other endpoint (get-session etc.)
+
+        const runMutation = (convexCtx as any)?.runMutation;
+        if (!runMutation) return; // no db context → fail open
+
+        const email = cfg.emailMax ? String(mctx?.body?.email ?? "") : "";
+        const fwd =
+          mctx?.headers?.get?.("x-forwarded-for") ||
+          mctx?.headers?.get?.("x-real-ip") ||
+          "";
+        const ip = String(fwd).split(",")[0].trim();
+
+        const { internal } = await import("./_generated/api");
+        const allowed = await runMutation(
+          (internal as any).auth.checkAuthRateLimitInternal,
+          {
+            action: cfg.action,
+            ...(cfg.emailMax && email ? { email, max: cfg.emailMax } : {}),
+            ...(ip ? { ip, ipMax: cfg.ipMax } : {}),
+            windowMs: 15 * 60 * 1000,
+          }
+        );
+        if (allowed === false) {
+          throw new APIError("TOO_MANY_REQUESTS", { message: cfg.message });
+        }
+      } catch (e: any) {
+        if (e instanceof APIError) throw e; // the throttle rejection — propagate
+        console.error("Auth throttle hook error (allowing):", e); // fail open
+      }
+    }),
   };
 
   // ── FORCE cookie options at the betterAuth() call level ────────────
@@ -717,19 +774,43 @@ export const ensureCustomerExistsInternal = internalMutation({
  */
 export const checkAuthRateLimitInternal = internalMutation({
   args: {
-    action: v.string(),     // "auth-signup" | "auth-reset"
-    email: v.string(),
-    max: v.number(),
+    action: v.string(),          // "auth-signup" | "auth-reset" | "auth-signin"
+    email: v.optional(v.string()),
+    max: v.optional(v.number()),  // email-bucket limit
+    ip: v.optional(v.string()),
+    ipMax: v.optional(v.number()), // IP-bucket limit (SEC Phase 4 / M5)
     windowMs: v.number(),
   },
   handler: async (ctx, args) => {
-    const identifier = (args.email || "").toLowerCase().trim() || "unknown";
-    return await checkRateLimit(ctx, {
-      action: args.action,
-      identifier,
-      max: args.max,
-      windowMs: args.windowMs,
-    });
+    let allowed = true;
+
+    // Email bucket — key `${action}:${email}` (backward-compatible with the
+    // existing sign-up / reset callers that pass only email + max).
+    const email = (args.email || "").toLowerCase().trim();
+    if (email && args.max) {
+      const ok = await checkRateLimit(ctx, {
+        action: args.action,
+        identifier: email,
+        max: args.max,
+        windowMs: args.windowMs,
+      });
+      if (!ok) allowed = false;
+    }
+
+    // IP bucket — separate key namespace `${action}-ip:${ip}` so it never
+    // collides with the email bucket. Closes the email-rotation bypass (M5).
+    const ip = (args.ip || "").trim();
+    if (ip && args.ipMax) {
+      const ok = await checkRateLimit(ctx, {
+        action: `${args.action}-ip`,
+        identifier: ip,
+        max: args.ipMax,
+        windowMs: args.windowMs,
+      });
+      if (!ok) allowed = false;
+    }
+
+    return allowed;
   },
 });
 
