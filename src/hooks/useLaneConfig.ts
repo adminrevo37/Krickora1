@@ -43,4 +43,17 @@ export function useLaneConfig() {
   return cfg
 }
 
+/**
+ * Lightweight reactive subscription to the lane-config store WITHOUT firing the
+ * Convex queries — for consumer components (calendars, modal) that need to
+ * re-render when the layout changes. Hydration is done once by useLaneConfig()
+ * near the root; this just forces a re-render so the synchronous resolvers in
+ * src/lib/lanes.ts read fresh config.
+ */
+export function useLaneConfigState() {
+  const [cfg, setCfg] = useState<LaneConfig>(() => store.get())
+  useEffect(() => store.subscribe(setCfg), [])
+  return cfg
+}
+
 export default useLaneConfig

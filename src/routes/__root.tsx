@@ -5,10 +5,13 @@ import { signOutUser } from '../lib/auth-client'
 import AuthModal from '../components/AuthModal'
 import PostcodeRequiredModal from '../components/PostcodeRequiredModal'
 import { useImpersonation } from '../hooks/useImpersonation'
+import { useLaneConfig } from '../hooks/useLaneConfig'
 
 function RootComponent() {
   const { user, isAuthenticated, isAdmin, isCoach, isLoading } = useAuth()
   const { impersonatedUser, isImpersonating, exitImpersonation } = useImpersonation()
+  // SPEC_RECONFIGURABLE_LANES: hydrate the lane-config store once for the whole app.
+  useLaneConfig()
   const navigate = useNavigate()
   const [showAuth, setShowAuth] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)

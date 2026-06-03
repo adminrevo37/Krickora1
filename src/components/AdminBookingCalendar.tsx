@@ -13,6 +13,8 @@ import AdminManualBookingModal, { type AdminCustomerOption, type BookingConfirmR
 import AdminBookingDetailsModal from './AdminBookingDetailsModal'
 import LaneBlockModal from './LaneBlockModal'
 import LaneOverrideModal from './LaneOverrideModal'
+import { useLaneConfigState } from '../hooks/useLaneConfig'
+import { LaneHeaderInner, LaneLegend, bandClassForSlot, bandStart, bandTagText } from './laneDisplay'
 
 // Generate days from N months back to N months ahead (AWST aware)
 function generateAdminDays(monthsBack: number = 12, monthsAhead: number = 12): Date[] {
@@ -32,6 +34,7 @@ function generateAdminDays(monthsBack: number = 12, monthsAhead: number = 12): D
 
 export default function AdminBookingCalendar() {
   const { settings } = useSettings()
+  useLaneConfigState() // SPEC_RECONFIGURABLE_LANES: re-render on layout changes
   const { bookings, addBooking } = useBookings()
   const deleteBookingMut = useMutation(api.mutations.deleteBooking)
   const handleDeleteBooking = async (bookingId: string, customerName: string) => {
@@ -493,6 +496,7 @@ export default function AdminBookingCalendar() {
             ⚙️ Edit layout for this date
           </button>
         </div>
+        <div className="mb-2"><LaneLegend /></div>
         <div className="min-w-[640px]">
           {/* Single CSS grid — bookings use gridRow span so multi-hour blocks render as one cell */}
           <div
@@ -506,7 +510,7 @@ export default function AdminBookingCalendar() {
             <div className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 px-2 py-1 sticky left-0 z-20 bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800" style={{ gridRow: 1, gridColumn: 1 }}>Time</div>
             {LANES.map((lane, li) => (
               <div key={lane.id} style={{ gridRow: 1, gridColumn: li + 2 }} className="text-[10px] font-semibold text-gray-700 dark:text-gray-300 px-2 py-1 text-center bg-gray-50 dark:bg-gray-800 rounded">
-                {lane.icon} {lane.shortName}
+                <LaneHeaderInner laneId={lane.id} dateKey={dateKey} />
               </div>
             ))}
 
@@ -625,18 +629,25 @@ export default function AdminBookingCalendar() {
                   return
                 }
 
-                // Empty slot — book button
+                // Empty slot — book button (with per-segment colour band + band-start tag)
+                const band = bandClassForSlot(lane.id, dateKey, slot.hour)
+                const bs = bandStart(lane.id, dateKey, slot.hour)
                 cells.push(
                   <div key={`e-${lane.id}-${slot.hour}`}
                        style={{ gridRow: rowIdx + 2, gridColumn: laneIdx + 2 }}
-                       className="relative group">
+                       className={`relative group rounded ${band}`}>
+                    {bs.isStart && bs.multi && (
+                      <div className="absolute top-0 left-0 z-[5] text-[7px] leading-tight font-semibold text-gray-600 bg-white/70 rounded-br px-1 pointer-events-none max-w-full truncate">
+                        {bandTagText(lane.id, dateKey, bs.seg)}
+                      </div>
+                    )}
                     <button
                       onClick={() => handleSlotClick(lane, slot)}
                       disabled={!selectedCustomer}
                       className={`w-full text-[10px] py-2 px-1 rounded transition-all ${
                         !selectedCustomer
-                          ? 'bg-gray-50 dark:bg-gray-800/50 text-gray-400 dark:text-gray-600 cursor-not-allowed'
-                          : 'bg-emerald-50 dark:bg-emerald-900/10 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 hover:scale-105 cursor-pointer'
+                          ? 'text-gray-400 dark:text-gray-600 cursor-not-allowed'
+                          : 'text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 hover:scale-105 cursor-pointer'
                       }`}
                     >
                       {selectedCustomer ? '+ Book' : '—'}

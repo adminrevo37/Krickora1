@@ -10,6 +10,8 @@ import {
   type Booking, type AthleteSlot,
 } from '../lib/booking-data'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
+import { useLaneConfigState } from '../hooks/useLaneConfig'
+import { resolveLaneAt } from '../lib/lanes'
 import AthleteAllocationEditor from './AthleteAllocationEditor'
 
 const HOUR_PX = 60 // vertical pixels per hour
@@ -21,7 +23,9 @@ const LANE_COLOR: Record<string, string> = {
   bm1: 'bg-orange-500', bm2: 'bg-blue-500', bm3: 'bg-purple-500',
   ru1: 'bg-emerald-500', ru2: 'bg-pink-500',
 }
-const laneShort = (id: string) => LANES.find(l => l.id === id)?.shortName ?? id.toUpperCase()
+// Date-resolved lane label (SPEC_RECONFIGURABLE_LANES) — names reflect the layout
+// for the booking's own (date, startHour), incl. per-date overrides.
+const laneLabel = (id: string, date: string, startHour: number) => resolveLaneAt(id, date, startHour).name
 
 type DragState = {
   bookingId: string
@@ -36,6 +40,7 @@ type DragState = {
 
 export default function CoachWeeklyPlanner() {
   const { user, isCoach, isAdmin, customerRecord } = useAuth()
+  useLaneConfigState() // SPEC_RECONFIGURABLE_LANES: re-render on layout changes
   const {
     bookings, addBooking, rescheduleBooking, editBookingDuration, cancelBooking, updateAthleteSlots,
   } = useBookings()
@@ -196,7 +201,7 @@ export default function CoachWeeklyPlanner() {
     }
     try {
       await addBooking(booking)
-      setBanner({ kind: 'ok', text: `Booked ${laneShort(laneId)} ${formatTime(startHour)}` })
+      setBanner({ kind: 'ok', text: `Booked ${laneLabel(laneId, dateKey, startHour)} ${formatTime(startHour)}` })
       setTimeout(() => setBanner(null), 4000)
     } catch (err: any) {
       setBanner({ kind: 'err', text: getErrorMessage(err) ?? 'Booking failed.' })
@@ -205,7 +210,7 @@ export default function CoachWeeklyPlanner() {
   }
 
   const handleCancel = async (b: Booking) => {
-    if (!confirm(`Cancel this ${laneShort(b.laneId)} session? Allocated athletes will be notified.`)) return
+    if (!confirm(`Cancel this ${laneLabel(b.laneId, b.date, b.startHour)} session? Allocated athletes will be notified.`)) return
     const ok = await cancelBooking(b.id, user?.id)
     flash({ success: ok, error: ok ? undefined : 'Could not cancel (check the cancellation window).' }, 'Session cancelled')
     setSelected(null)
@@ -356,7 +361,7 @@ export default function CoachWeeklyPlanner() {
                       if (!mine) {
                         return (
                           <div key={b.id} className="absolute left-0.5 right-0.5 rounded bg-gray-200/80 dark:bg-gray-700/50 border border-gray-300 dark:border-gray-600 overflow-hidden" style={{ top, height }}>
-                            <div className="text-[8px] text-gray-500 dark:text-gray-400 px-1 pt-0.5 truncate">Booked · {laneShort(b.laneId)}</div>
+                            <div className="text-[8px] text-gray-500 dark:text-gray-400 px-1 pt-0.5 truncate">Booked · {laneLabel(b.laneId, b.date, b.startHour)}</div>
                           </div>
                         )
                       }
@@ -368,7 +373,7 @@ export default function CoachWeeklyPlanner() {
                           className={`absolute left-0.5 right-0.5 rounded-md text-white shadow-sm overflow-hidden cursor-grab active:cursor-grabbing ${LANE_COLOR[b.laneId] ?? 'bg-gray-500'} ${selected?.id === b.id ? 'ring-2 ring-white' : ''}`}
                           style={{ top, height }}
                         >
-                          <div className="px-1 pt-0.5 text-[9px] font-bold leading-tight truncate">{laneShort(b.laneId)} · {formatTime(sh)}</div>
+                          <div className="px-1 pt-0.5 text-[9px] font-bold leading-tight truncate">{laneLabel(b.laneId, b.date, b.startHour)} · {formatTime(sh)}</div>
                           {/* athlete sub-bars */}
                           <div className="relative mx-1 mt-0.5" style={{ height: Math.max(0, height - 18) }}>
                             {(b.athleteSlots ?? []).map((s, si) => {
@@ -471,7 +476,7 @@ export default function CoachWeeklyPlanner() {
                 if (!isMine(b)) {
                   return (
                     <div key={b.id} className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 px-3 py-2 text-xs text-gray-500 dark:text-gray-400">
-                      Booked · {laneShort(b.laneId)} · {formatTime(b.startHour)}–{formatTime(end)}
+                      Booked · {laneLabel(b.laneId, b.date, b.startHour)} · {formatTime(b.startHour)}–{formatTime(end)}
                     </div>
                   )
                 }
@@ -484,7 +489,7 @@ export default function CoachWeeklyPlanner() {
                     <span className={`mt-1 w-2.5 h-2.5 rounded-full shrink-0 ${LANE_COLOR[b.laneId] ?? 'bg-gray-500'}`} />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="font-semibold text-sm text-gray-800 dark:text-gray-200">{laneShort(b.laneId)} · {formatTime(b.startHour)}–{formatTime(end)}</span>
+                        <span className="font-semibold text-sm text-gray-800 dark:text-gray-200">{laneLabel(b.laneId, b.date, b.startHour)} · {formatTime(b.startHour)}–{formatTime(end)}</span>
                         <span className="text-[11px] text-gray-400">{b.duration}min</span>
                       </div>
                       <div className="mt-1 flex flex-wrap gap-1">
@@ -585,7 +590,7 @@ function CreatePopover({ day, startHour, bookings, onClose, onCreate, topPx, she
         </div>
       )}
       <select value={laneId} onChange={e => setLaneId(e.target.value)} className="w-full text-[11px] px-1.5 py-1 border border-gray-200 dark:border-gray-700 rounded bg-white dark:bg-gray-800">
-        {LANES.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+        {LANES.map(l => <option key={l.id} value={l.id}>{resolveLaneAt(l.id, dateKey, start).name}</option>)}
       </select>
       <select value={start} onChange={e => setStart(parseFloat(e.target.value))} className="w-full text-[11px] px-1.5 py-1 border border-gray-200 dark:border-gray-700 rounded bg-white dark:bg-gray-800">
         {validStarts.map(h => <option key={h} value={h}>{formatTime(h)}</option>)}
@@ -614,7 +619,7 @@ function BookingActions({ booking, onClose, onAllocate, onCancel, onChangeDurati
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-3" onClick={onClose}>
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm p-4 space-y-3" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
-          <h3 className="font-bold text-gray-800 dark:text-gray-200">{laneShort(booking.laneId)} · {formatTime(booking.startHour)}</h3>
+          <h3 className="font-bold text-gray-800 dark:text-gray-200">{laneLabel(booking.laneId, booking.date, booking.startHour)} · {formatTime(booking.startHour)}</h3>
           <button onClick={onClose} className="text-gray-400">✕</button>
         </div>
         <p className="text-xs text-gray-500 dark:text-gray-400">

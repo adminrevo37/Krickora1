@@ -23,6 +23,8 @@ import {
   type TimeSlot,
 } from '../lib/booking-data'
 import { getHoursForDate } from '../lib/settings-store'
+import { useLaneConfigState } from '../hooks/useLaneConfig'
+import { LaneHeaderInner, LaneLegend, bandClassForSlot, bandStart, bandTagText } from './laneDisplay'
 import { useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { useBookings } from '../hooks/useBookingStore'
@@ -42,6 +44,8 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
   const isAdmin = impersonatedEmail ? false : realIsAdmin
   const userIsCoach = impersonatedEmail ? false : realIsCoach
   const { settings } = useSettings()
+  // SPEC_RECONFIGURABLE_LANES: re-render when the lane layout changes (live).
+  const laneConfig = useLaneConfigState()
 
   // Wait for customerRecord to load before deciding tier — otherwise L2 coaches
   // see a brief L1 flash while Convex resolves the record. Tiers are L1/L2 only.
@@ -244,9 +248,12 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
             const awstNow = getAWSTNow()
             awstNow.setHours(0, 0, 0, 0)
             const pastDay = day < awstNow && !today
+            const dk = formatDateKey(day)
+            const hasOverride = laneConfig.overrides.some((o) => dk >= o.startDate && dk <= o.endDate)
             return (
               <button key={formatDateKey(day)} onClick={() => setSelectedDay(day)} disabled={pastDay}
                 className={`relative flex flex-col items-center py-2.5 px-1 rounded-xl transition-all duration-200 text-center ${active ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 scale-105' : pastDay ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gray-50 text-gray-700 hover:bg-emerald-50 cursor-pointer'}`}>
+                {hasOverride && <span title="Custom lane layout" className="absolute top-1 right-1 text-[9px] leading-none text-amber-500">⚙</span>}
                 <span className={`text-xs font-medium ${active ? 'text-emerald-100' : 'text-gray-500'}`}>{formatDayLabel(day)}</span>
                 <span className={`text-lg font-bold mt-0.5 ${active ? 'text-white' : ''}`}>{day.getDate()}</span>
                 {today && <div className={`w-1.5 h-1.5 rounded-full mt-1 ${active ? 'bg-white' : 'bg-emerald-500'}`} />}
@@ -285,6 +292,9 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
         <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-gray-200 border border-gray-300" /><span className="text-gray-600">Past</span></div>
       </div>
 
+      {/* Lane variant colour legend (SPEC_RECONFIGURABLE_LANES) */}
+      <LaneLegend />
+
       {/* Calendar Grid */}
       <div className="bg-white rounded-2xl border-2 border-black shadow-sm overflow-x-auto">
         <div className="min-w-[560px]">
@@ -292,19 +302,7 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
           <div className="p-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider flex items-center justify-center">Time</div>
           {LANES.map((lane) => (
             <div key={lane.id} className="p-2 text-center border-l-2 border-black">
-              <div className="text-sm">{lane.icon}</div>
-              <div className="text-[11px] font-semibold text-gray-700 mt-0.5 leading-tight">{lane.shortName}</div>
-              {lane.variants ? (
-                <div className="flex items-center justify-center gap-1 mt-0.5">
-                  <span className="text-[8px] px-1 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium">Truman</span>
-                  <span className="text-[8px] text-gray-400">/</span>
-                  <span className="text-[8px] px-1 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">Std</span>
-                </div>
-              ) : (
-                <div className={`text-[9px] mt-0.5 px-1 py-0.5 rounded-full inline-block ${lane.type === 'bowling-machine' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
-                  {lane.type === 'bowling-machine' ? 'Machine' : '9m Run Up'}
-                </div>
-              )}
+              <LaneHeaderInner laneId={lane.id} dateKey={dateKey} />
             </div>
           ))}
         </div>
@@ -331,6 +329,9 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
                   const past = isPast(selectedDay, slot.hour)
                   const isLaneInactiveAtHalfHour = isHalfHour && !laneActiveSet.has(slot.hour) && !booked && !blocked
                   const isTentative = booked?.status === 'tentative'
+                  // SPEC_RECONFIGURABLE_LANES: per-segment colour band + band-start tag
+                  const band = bandClassForSlot(lane.id, dateKey, slot.hour)
+                  const bs = bandStart(lane.id, dateKey, slot.hour)
 
                   const isStartOfBooking = booked && Math.abs(booked.startHour - slot.hour) < 0.01
                   const isMiddleOfBooking = booked && !isStartOfBooking
@@ -384,12 +385,17 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
 
                   return (
                     <div key={lane.id}
-                      className={`relative border-l-2 border-black min-h-[32px] transition-all duration-150 ${past ? 'bg-gray-100' : waitlistMode ? (isSelected ? 'bg-amber-100 cursor-pointer ring-2 ring-inset ring-amber-400' : 'cursor-pointer hover:bg-amber-50') : booked ? '' : tooLate ? 'bg-gray-100' : canBook && hasDurations ? 'hover:bg-emerald-50/50 cursor-pointer group' : 'bg-white'}`}
+                      className={`relative border-l-2 border-black min-h-[32px] transition-all duration-150 ${past ? 'bg-gray-100' : waitlistMode ? (isSelected ? 'bg-amber-100 cursor-pointer ring-2 ring-inset ring-amber-400' : 'cursor-pointer hover:bg-amber-50') : booked ? '' : tooLate ? 'bg-gray-100' : canBook && hasDurations ? `${band} hover:bg-emerald-50/50 cursor-pointer group` : band}`}
                       onClick={() => {
                         if (past || isLaneInactiveAtHalfHour) return
                         if (waitlistMode) { toggleWaitlistSelection(lane.id, dateKey, slot.hour); return }
                         if (!booked && canBook && hasDurations && timeCheck.allowed) handleSlotClick(lane, slot)
                       }}>
+                      {!booked && !past && bs.isStart && bs.multi && (
+                        <div className="absolute top-0 left-0 z-[5] text-[7px] leading-tight font-semibold text-gray-600 bg-white/70 rounded-br px-1 py-0.5 pointer-events-none max-w-full truncate">
+                          {bandTagText(lane.id, dateKey, bs.seg)}
+                        </div>
+                      )}
                       {isStartOfBooking && booked && (
                         <div className={`absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border ${isTentative ? 'bg-gradient-to-br from-blue-100 to-blue-50 border-blue-200' : 'bg-gradient-to-br from-red-100 to-red-50 border-red-200'}`}
                           style={{ height: `${visualSpan * 32 - 4}px` }}>
