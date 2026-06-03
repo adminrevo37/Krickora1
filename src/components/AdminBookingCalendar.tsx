@@ -472,7 +472,7 @@ export default function AdminBookingCalendar() {
             }}
           >
             {/* ── Header row ── */}
-            <div className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 px-2 py-1" style={{ gridRow: 1, gridColumn: 1 }}>Time</div>
+            <div className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 px-2 py-1 sticky left-0 z-20 bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800" style={{ gridRow: 1, gridColumn: 1 }}>Time</div>
             {LANES.map((lane, li) => (
               <div key={lane.id} style={{ gridRow: 1, gridColumn: li + 2 }} className="text-[10px] font-semibold text-gray-700 dark:text-gray-300 px-2 py-1 text-center bg-gray-50 dark:bg-gray-800 rounded">
                 {lane.icon} {lane.shortName}
@@ -481,7 +481,7 @@ export default function AdminBookingCalendar() {
 
             {/* ── Time labels ── */}
             {visibleTimeSlots.map((slot, rowIdx) => (
-              <div key={`t-${slot.hour}`} style={{ gridRow: rowIdx + 2, gridColumn: 1 }} className="text-[11px] text-gray-500 dark:text-gray-400 px-2 py-2 font-medium">
+              <div key={`t-${slot.hour}`} style={{ gridRow: rowIdx + 2, gridColumn: 1 }} className="text-[11px] text-gray-500 dark:text-gray-400 px-2 py-2 font-medium sticky left-0 z-10 bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800">
                 {slot.label}
               </div>
             ))}
@@ -531,10 +531,7 @@ export default function AdminBookingCalendar() {
                         title={`View / modify booking — ${booked.customerName}`}
                         className="text-left w-full hover:opacity-80 transition-opacity leading-tight flex-1"
                       >
-                        <div className="truncate">{booked.isCoachBooking ? '🏅' : '🔒'} {booked.customerName.split(' ')[0]}</div>
-                        {booked.isCoachBooking && (
-                          <div className="text-[9px] font-medium opacity-90 truncate">Coach: {booked.customerName}</div>
-                        )}
+                        <div className="break-words font-semibold">{booked.isCoachBooking ? '🏅 Coach: ' : '🔒 '}{booked.customerName}</div>
                         <div className="text-[9px] opacity-80 mt-0.5 font-medium flex items-center gap-1">
                           {timeRange}
                           {(booked.modificationHistory?.length ?? 0) > 0 && (
@@ -552,14 +549,14 @@ export default function AdminBookingCalendar() {
                             >📝 {booked.notes}</div>
                           </div>
                         ) : booked.notes ? (
-                          <div className="text-[8px] mt-0.5 opacity-90 truncate font-semibold italic" title={booked.notes}>📝 {booked.notes}</div>
+                          <div className="text-[8px] mt-0.5 opacity-90 font-semibold italic break-words" title={booked.notes}>📝 {booked.notes}</div>
                         ) : null}
                         {booked.isCoachBooking && booked.athleteSlots && booked.athleteSlots.length > 0 && (
                           <div className="mt-1 pt-1 border-t border-white/30 space-y-0.5">
                             <div className="text-[8px] uppercase tracking-wide opacity-80 font-bold">🏏 Athletes ({booked.athleteSlots.length})</div>
                             {booked.athleteSlots.map((a, i) => (
-                              <div key={i} className="text-[9px] truncate leading-tight" title={`${a.athleteName} — ${a.durationMinutes}min`}>
-                                • {a.athleteName.split(' ')[0]} <span className="opacity-70">({a.durationMinutes}m)</span>
+                              <div key={i} className="text-[9px] leading-tight break-words" title={`${a.athleteName} — ${a.durationMinutes}min`}>
+                                • {a.athleteName} <span className="opacity-70">({a.durationMinutes}m)</span>
                               </div>
                             ))}
                           </div>
