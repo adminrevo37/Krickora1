@@ -4,6 +4,7 @@ import { action, internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { requireAdminAction } from "./lib/adminGuard";
+import { defaultLaneName, variantLabel } from "./lib/lanes";
 
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3";
@@ -145,14 +146,6 @@ function formatTime(hour: number): string {
   return mins > 0 ? `${display}:${mins.toString().padStart(2, "0")} ${period}` : `${display}:00 ${period}`;
 }
 
-const LANE_NAMES: Record<string, string> = {
-  bm1: "Bowling Machine 1",
-  bm2: "Bowling Machine 2",
-  bm3: "Bowling Machine 3",
-  ru1: "9m Run Up 1",
-  ru2: "9m Run Up 2",
-};
-
 function buildEventBody(booking: {
   laneId: string;
   laneName: string;
@@ -237,6 +230,10 @@ export const createCalendarEvent = internalAction({
     isCoachBooking: v.optional(v.boolean()),
     accessCode: v.optional(v.string()),
     additionalLaneIds: v.optional(v.array(v.string())),
+    // SPEC_RECONFIGURABLE_LANES: date-resolved snapshot from the booking — used
+    // for the event title; routing stays keyed on the stable laneId (§7a).
+    laneNameSnapshot: v.optional(v.string()),
+    variantLabelSnapshot: v.optional(v.string()),
     athleteSlots: v.optional(
       v.array(v.object({ athleteName: v.string(), startHour: v.number(), durationMinutes: v.number() }))
     ),
@@ -256,11 +253,9 @@ export const createCalendarEvent = internalAction({
     }
 
     const allLaneIds = [args.laneId, ...(args.additionalLaneIds ?? [])];
-    const laneName = LANE_NAMES[args.laneId] || args.laneId;
-    let variantName: string | undefined;
-    if (args.variantId === "bm3-truman") variantName = "Truman";
-    else if (args.variantId === "bm3-standard") variantName = "Standard";
-    const additionalLanes = args.additionalLaneIds?.map(id => LANE_NAMES[id] || id);
+    const laneName = args.laneNameSnapshot || defaultLaneName(args.laneId);
+    const variantName = args.variantLabelSnapshot || (args.variantId ? variantLabel(args.variantId) : undefined);
+    const additionalLanes = args.additionalLaneIds?.map(id => defaultLaneName(id));
 
     const eventBody = buildEventBody({
       laneId: args.laneId, laneName, variantName, date: args.date,
@@ -277,7 +272,7 @@ export const createCalendarEvent = internalAction({
     // Create an event in each lane's calendar (or fallback to default)
     for (const lid of allLaneIds) {
       const calId = mappingByLane[lid] || tokenInfo.calendarId;
-      const lName = LANE_NAMES[lid] || lid;
+      const lName = lid === args.laneId ? laneName : defaultLaneName(lid);
 
       // Customize summary per lane
       const laneEventBody = {
@@ -359,6 +354,8 @@ export const updateCalendarEvent = internalAction({
     laneCalendarEventIds: v.optional(
       v.array(v.object({ laneId: v.string(), calendarId: v.string(), eventId: v.string() }))
     ),
+    laneNameSnapshot: v.optional(v.string()),
+    variantLabelSnapshot: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const tokenInfo = await getValidToken(ctx);
@@ -367,11 +364,9 @@ export const updateCalendarEvent = internalAction({
       return null;
     }
 
-    const laneName = LANE_NAMES[args.laneId] || args.laneId;
-    let variantName: string | undefined;
-    if (args.variantId === "bm3-truman") variantName = "Truman";
-    else if (args.variantId === "bm3-standard") variantName = "Standard";
-    const additionalLanes = args.additionalLaneIds?.map(id => LANE_NAMES[id] || id);
+    const laneName = args.laneNameSnapshot || defaultLaneName(args.laneId);
+    const variantName = args.variantLabelSnapshot || (args.variantId ? variantLabel(args.variantId) : undefined);
+    const additionalLanes = args.additionalLaneIds?.map(id => defaultLaneName(id));
 
     const eventBody = buildEventBody({
       laneId: args.laneId, laneName, variantName, date: args.date,
@@ -386,7 +381,7 @@ export const updateCalendarEvent = internalAction({
     // secondary lane's event shows ITS lane name (mirrors createCalendarEvent).
     if (args.laneCalendarEventIds && args.laneCalendarEventIds.length > 0) {
       for (const entry of args.laneCalendarEventIds) {
-        const lName = LANE_NAMES[entry.laneId] || entry.laneId;
+        const lName = entry.laneId === args.laneId ? laneName : defaultLaneName(entry.laneId);
         const perLaneBody = entry.laneId === args.laneId
           ? eventBody
           : { ...eventBody, summary: eventBody.summary.replace(laneName, lName) };
@@ -534,11 +529,9 @@ export const bulkSyncBookings = action({
       }
 
       const allLaneIds = [booking.laneId, ...(booking.additionalLaneIds ?? [])];
-      const laneName = LANE_NAMES[booking.laneId] || booking.laneId;
-      let variantName: string | undefined;
-      if (booking.variantId === "bm3-truman") variantName = "Truman";
-      else if (booking.variantId === "bm3-standard") variantName = "Standard";
-      const additionalLanes = booking.additionalLaneIds?.map((id: string) => LANE_NAMES[id] || id);
+      const laneName = booking.laneNameSnapshot || defaultLaneName(booking.laneId);
+      const variantName = booking.variantLabelSnapshot || (booking.variantId ? variantLabel(booking.variantId) : undefined);
+      const additionalLanes = booking.additionalLaneIds?.map((id: string) => defaultLaneName(id));
 
       const eventBody = buildEventBody({
         laneId: booking.laneId, laneName, variantName, date: booking.date,

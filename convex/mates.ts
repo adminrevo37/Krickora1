@@ -3,6 +3,7 @@ import { v, ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import { getCallerContext } from "./lib/adminGuard";
 import { enforceRateLimit } from "./lib/rateLimit";
+import { defaultLaneName } from "./lib/lanes";
 
 // ============================================================================
 // SPEC_ADD_A_MATE — friends added to a customer booking for shared front-door
@@ -11,15 +12,10 @@ import { enforceRateLimit } from "./lib/rateLimit";
 // the owner's single accessCode (one front door, no per-mate codes).
 // ============================================================================
 
-const LANE_NAMES: Record<string, string> = {
-  bm1: "Bowling Machine 1",
-  bm2: "Bowling Machine 2",
-  bm3: "Bowling Machine 3",
-  ru1: "9m Run Up 1",
-  ru2: "9m Run Up 2",
-};
-
-const laneName = (id: string) => LANE_NAMES[id] ?? id;
+// SPEC_RECONFIGURABLE_LANES: mate emails read the booking's lane-name snapshot
+// (date-resolved at booking time), falling back to the default name for legacy rows.
+const laneNm = (b: { laneId: string; laneNameSnapshot?: string | null }) =>
+  b.laneNameSnapshot || defaultLaneName(b.laneId);
 
 const fmtTime = (h: number) => {
   const w = Math.floor(h);
@@ -339,7 +335,7 @@ export const addMateToBooking = mutation({
       await ctx.scheduler.runAfter(0, internal.emails.sendMateAdded, {
         to: mate.email,
         ownerName: shortName(ownerCustomer?.name ?? booking.customerName ?? "A friend"),
-        laneName: laneName(booking.laneId),
+        laneName: laneNm(booking),
         date: booking.date,
         timeSlot: fmtTime(booking.startHour),
         duration: fmtDur(booking.duration),
@@ -383,7 +379,7 @@ export const removeMateFromBooking = mutation({
       await ctx.scheduler.runAfter(0, internal.emails.sendMateRemoved, {
         to: mate.email,
         ownerName: shortName(ownerCustomer?.name ?? booking.customerName ?? "The booking owner"),
-        laneName: laneName(booking.laneId),
+        laneName: laneNm(booking),
         date: booking.date,
         timeSlot: fmtTime(booking.startHour),
       });
@@ -415,7 +411,7 @@ export const leaveBooking = mutation({
       await ctx.scheduler.runAfter(0, internal.emails.sendMateLeft, {
         to: booking.customerEmail,
         mateName: shortName(caller.name ?? "A mate"),
-        laneName: laneName(booking.laneId),
+        laneName: laneNm(booking),
         date: booking.date,
         timeSlot: fmtTime(booking.startHour),
       });
@@ -515,7 +511,7 @@ export const getBookingInvite = query({
     return {
       status: "pending",
       ownerName: shortName(owner?.name ?? booking.customerName ?? "A friend"),
-      laneName: laneName(booking.laneId),
+      laneName: laneNm(booking),
       date: booking.date,
       timeSlot: fmtTime(booking.startHour),
       duration: fmtDur(booking.duration),
@@ -582,7 +578,7 @@ export const acceptBookingInvite = mutation({
       await ctx.scheduler.runAfter(0, internal.emails.sendMateAdded, {
         to: caller.email,
         ownerName: shortName(ownerCustomer?.name ?? booking.customerName ?? "A friend"),
-        laneName: laneName(booking.laneId),
+        laneName: laneNm(booking),
         date: booking.date,
         timeSlot: fmtTime(booking.startHour),
         duration: fmtDur(booking.duration),
@@ -616,7 +612,7 @@ export async function notifyMatesOnCancel(ctx: any, booking: any): Promise<void>
     await ctx.scheduler.runAfter(0, internal.emails.sendMateCancelled, {
       to: c.email,
       ownerName,
-      laneName: laneName(booking.laneId),
+      laneName: laneNm(booking),
       date: booking.date,
       timeSlot: fmtTime(booking.startHour),
     });
@@ -656,7 +652,7 @@ export async function notifyMatesOnModify(
     await ctx.scheduler.runAfter(0, internal.emails.sendMateModified, {
       to: c.email,
       ownerName,
-      newLaneName: laneName(change.newLaneId),
+      newLaneName: defaultLaneName(change.newLaneId),
       newDate: change.newDate,
       newTimeSlot: fmtTime(change.newStartHour),
       newDuration: fmtDur(change.newDuration),

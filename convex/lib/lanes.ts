@@ -124,6 +124,22 @@ export function laneIcon(mode: LaneMode): string {
   return mode === "BM" ? "🏏" : "🏃‍♂️";
 }
 
+/**
+ * The DEFAULT display name for a lane id ("BM 1".."RU 5"), from the seeded layout
+ * meta — ignores per-date overrides. Used as the email/calendar/analytics fallback
+ * when a booking has no laneNameSnapshot (legacy rows) and as the single source
+ * that replaces the ~6 duplicated LANE_NAMES maps.
+ */
+export function defaultLaneName(laneId: string): string {
+  const m = DEFAULT_LANE_META.find((x) => x.laneId === laneId);
+  return m ? `${m.mode} ${m.bayNumber}` : laneId.toUpperCase();
+}
+
+/** Snapshot-preferring display name for a booking doc (emails read this). */
+export function laneNameForBooking(b: { laneId: string; laneNameSnapshot?: string | null }): string {
+  return b.laneNameSnapshot || defaultLaneName(b.laneId);
+}
+
 export function laneName(mode: LaneMode, bayNumber: number): string {
   return `${mode} ${bayNumber}`;
 }

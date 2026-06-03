@@ -24,6 +24,7 @@ import {
 } from "./lib/bookingWindow";
 import { computeCustomerPriceCents, decreaseCreditCents } from "./lib/pricing";
 import { validateAndSnapshotLane, resolveLaneSnapshot } from "./lanes";
+import { defaultLaneName } from "./lib/lanes";
 import { PRICE_DEFAULTS } from "./lib/priceDefaults";
 import { composeName, splitName } from "./lib/names";
 import { assertValidLocation, validateLocationIfProvided, normalizePostcode, normalizeSuburb } from "./lib/locations";
@@ -32,14 +33,6 @@ import { notifyMatesOnCancel, notifyMatesOnModify } from "./mates";
 // ============================================================================
 // SHARED HELPERS
 // ============================================================================
-
-const LANE_NAME_MAP: Record<string, string> = {
-  bm1: "Bowling Machine Lane 1",
-  bm2: "Bowling Machine Lane 2",
-  bm3: "Bowling Machine Lane 3",
-  ru1: "Run-Up Lane 1",
-  ru2: "Run-Up Lane 2",
-};
 
 function fmtHour12(h: number): string {
   const hr = Math.floor(h);
@@ -73,6 +66,7 @@ function buildConfirmationEmailArgs(b: {
   customerEmail: string;
   customerName: string;
   laneId: string;
+  laneNameSnapshot?: string | null;
   date: string;
   startHour: number;
   duration: number;
@@ -80,7 +74,9 @@ function buildConfirmationEmailArgs(b: {
   coachPrice?: number | null;
   creditApplied?: number | null;
 }) {
-  const laneName = LANE_NAME_MAP[b.laneId] ?? b.laneId.toUpperCase();
+  // SPEC_RECONFIGURABLE_LANES: emails read the booking snapshot; legacy rows
+  // (no snapshot) fall back to the default name.
+  const laneName = b.laneNameSnapshot || defaultLaneName(b.laneId);
   const endHour = b.startHour + b.duration / 60;
   const amount =
     b.coachPrice != null
@@ -175,7 +171,7 @@ async function scheduleAllocationEmails(
     coachName: string;
   }
 ): Promise<void> {
-  const laneName = LANE_NAME_MAP[opts.laneId] ?? opts.laneId.toUpperCase();
+  const laneName = (opts as any).laneNameSnapshot || defaultLaneName(opts.laneId);
   const formattedDate = fmtAwstDateLabel(opts.date);
   const groups = await groupSlotsByAccount(ctx, opts.slots);
   for (const { to, entries } of groups) {
@@ -223,7 +219,7 @@ async function scheduleAthleteCancellationEmails(
     coachName: string;
   }
 ): Promise<void> {
-  const laneName = LANE_NAME_MAP[opts.laneId] ?? opts.laneId.toUpperCase();
+  const laneName = (opts as any).laneNameSnapshot || defaultLaneName(opts.laneId);
   const formattedDate = fmtAwstDateLabel(opts.date);
   const groups = await groupSlotsByAccount(ctx, opts.slots);
   for (const { to, entries } of groups) {
@@ -252,7 +248,7 @@ async function scheduleAthleteRemovedEmails(
     coachName: string;
   }
 ): Promise<void> {
-  const laneName = LANE_NAME_MAP[opts.laneId] ?? opts.laneId.toUpperCase();
+  const laneName = (opts as any).laneNameSnapshot || defaultLaneName(opts.laneId);
   const formattedDate = fmtAwstDateLabel(opts.date);
   const groups = await groupSlotsByAccount(ctx, opts.slots);
   for (const { to, entries } of groups) {
@@ -284,7 +280,7 @@ async function scheduleAthleteRescheduleEmails(
     coachName: string;
   }
 ): Promise<void> {
-  const laneName = LANE_NAME_MAP[opts.laneId] ?? opts.laneId.toUpperCase();
+  const laneName = (opts as any).laneNameSnapshot || defaultLaneName(opts.laneId);
   const formattedOld = opts.oldDate ? fmtAwstDateLabel(opts.oldDate) : undefined;
   const formattedNew = fmtAwstDateLabel(opts.newDate);
   const code = opts.bookingAccessCode ?? "N/A";
@@ -572,6 +568,8 @@ export async function applyBookingChange(
       additionalLaneIds: change.newAdditionalLaneIds ?? booking.additionalLaneIds,
       athleteSlots: calAthleteSlots,
       laneCalendarEventIds: oldCalEventIds,
+      laneNameSnapshot: newSnap.laneNameSnapshot,
+      variantLabelSnapshot: newSnap.variantLabelSnapshot,
     });
   } else {
     // Lane move (or no prior events): delete old, create fresh on the new lane(s).
@@ -596,6 +594,8 @@ export async function applyBookingChange(
       accessCode,
       additionalLaneIds: change.newAdditionalLaneIds ?? booking.additionalLaneIds,
       athleteSlots: calAthleteSlots,
+      laneNameSnapshot: newSnap.laneNameSnapshot,
+      variantLabelSnapshot: newSnap.variantLabelSnapshot,
     });
   }
 
@@ -604,10 +604,10 @@ export async function applyBookingChange(
     await ctx.scheduler.runAfter(0, internal.emails.sendBookingRescheduled, {
       to: booking.customerEmail,
       customerName: booking.customerName || "Valued Customer",
-      oldLaneName: LANE_NAME_MAP[booking.laneId] ?? booking.laneId,
+      oldLaneName: booking.laneNameSnapshot || defaultLaneName(booking.laneId),
       oldDate: booking.date,
       oldTimeSlot: fmtHour12(booking.startHour),
-      newLaneName: LANE_NAME_MAP[change.newLaneId] ?? change.newLaneId,
+      newLaneName: newSnap.laneNameSnapshot,
       newDate: change.newDate,
       newTimeSlot: fmtHour12(change.newStartHour),
       newDuration: durationLabel(change.newDuration),
@@ -1102,6 +1102,7 @@ export const createBooking = mutation({
           customerEmail: args.customerEmail,
           customerName: args.customerName,
           laneId: args.laneId,
+          laneNameSnapshot: laneSnap.laneNameSnapshot,
           date: args.date,
           startHour: args.startHour,
           duration: args.duration,
@@ -1142,6 +1143,8 @@ export const createBooking = mutation({
         accessCode: bookingAccessCode,
         additionalLaneIds: args.additionalLaneIds,
         athleteSlots: normalizedAthleteSlots,
+        laneNameSnapshot: laneSnap.laneNameSnapshot,
+        variantLabelSnapshot: laneSnap.variantLabelSnapshot,
       });
     }
 
@@ -1312,7 +1315,6 @@ export const updateBooking = mutation({
 
     // DI-2 / MF-2: GCal sync + customer notification when scheduling changes
     if (schedulingChanged && existing && effNewDate && effNewStartHour != null && effNewDuration != null && effNewLaneId) {
-      const LANE_NAMES_UPD: Record<string, string> = { bm1: "Bowling Machine 1", bm2: "Bowling Machine 2", bm3: "Bowling Machine 3", ru1: "9m Run Up 1", ru2: "9m Run Up 2" };
       const fmtTUpd = (h: number) => {
         const w = Math.floor(h); const m = Math.round((h - w) * 60);
         const p = w >= 12 ? "PM" : "AM"; const dh = w > 12 ? w - 12 : w === 0 ? 12 : w;
@@ -1348,10 +1350,10 @@ export const updateBooking = mutation({
         await ctx.scheduler.runAfter(0, internal.emails.sendBookingRescheduled, {
           to: notifyEmail,
           customerName: (cleanUpdates as any).customerName ?? (existing as any).customerName ?? "Valued Customer",
-          oldLaneName: LANE_NAMES_UPD[(existing as any).laneId] ?? (existing as any).laneId,
+          oldLaneName: (existing as any).laneNameSnapshot || defaultLaneName((existing as any).laneId),
           oldDate: (existing as any).date,
           oldTimeSlot: fmtTUpd((existing as any).startHour),
-          newLaneName: LANE_NAMES_UPD[effNewLaneId] ?? effNewLaneId,
+          newLaneName: defaultLaneName(effNewLaneId),
           newDate: effNewDate,
           newTimeSlot: fmtTUpd(effNewStartHour),
           newDuration: fmtDUpd(effNewDuration),
@@ -1495,7 +1497,6 @@ export const cancelBooking = mutation({
 
     // Send cancellation confirmation email
     if (booking.customerEmail) {
-      const LANE_NAMES: Record<string, string> = { bm1: "Bowling Machine 1", bm2: "Bowling Machine 2", bm3: "Bowling Machine 3", ru1: "9m Run Up 1", ru2: "9m Run Up 2" };
       const whole = Math.floor(booking.startHour);
       const mins = Math.round((booking.startHour - whole) * 60);
       const period = whole >= 12 ? "PM" : "AM";
@@ -1506,7 +1507,7 @@ export const cancelBooking = mutation({
       await ctx.scheduler.runAfter(0, internal.emails.sendBookingCancellation, {
         to: booking.customerEmail,
         customerName: booking.customerName || "Valued Customer",
-        laneName: LANE_NAMES[booking.laneId] ?? booking.laneId,
+        laneName: booking.laneNameSnapshot || defaultLaneName(booking.laneId),
         date: booking.date,
         timeSlot,
         duration: durationLabel,
@@ -1573,7 +1574,6 @@ export const deleteBooking = mutation({
 
       // DI-7: Send cancellation email to customer
       if (delBooking.customerEmail && delBooking.status !== "cancelled") {
-        const LANE_NAMES_DEL: Record<string, string> = { bm1: "Bowling Machine 1", bm2: "Bowling Machine 2", bm3: "Bowling Machine 3", ru1: "9m Run Up 1", ru2: "9m Run Up 2" };
         const whole = Math.floor(delBooking.startHour);
         const mins = Math.round((delBooking.startHour - whole) * 60);
         const period = whole >= 12 ? "PM" : "AM";
@@ -1583,7 +1583,7 @@ export const deleteBooking = mutation({
         await ctx.scheduler.runAfter(0, internal.emails.sendBookingCancellation, {
           to: delBooking.customerEmail,
           customerName: delBooking.customerName || "Valued Customer",
-          laneName: LANE_NAMES_DEL[delBooking.laneId] ?? delBooking.laneId,
+          laneName: delBooking.laneNameSnapshot || defaultLaneName(delBooking.laneId),
           date: delBooking.date,
           timeSlot,
           duration: durationLabel,
@@ -2062,7 +2062,6 @@ export const rescheduleBooking = mutation({
 
     // Send reschedule confirmation email
     if (booking.customerEmail) {
-      const LANE_NAMES: Record<string, string> = { bm1: "Bowling Machine 1", bm2: "Bowling Machine 2", bm3: "Bowling Machine 3", ru1: "9m Run Up 1", ru2: "9m Run Up 2" };
       const fmtTime = (h: number) => {
         const w = Math.floor(h);
         const m = Math.round((h - w) * 60);
@@ -2075,10 +2074,10 @@ export const rescheduleBooking = mutation({
       await ctx.scheduler.runAfter(0, internal.emails.sendBookingRescheduled, {
         to: booking.customerEmail,
         customerName: booking.customerName || "Valued Customer",
-        oldLaneName: LANE_NAMES[booking.laneId] ?? booking.laneId,
+        oldLaneName: booking.laneNameSnapshot || defaultLaneName(booking.laneId),
         oldDate: booking.date,
         oldTimeSlot: fmtTime(booking.startHour),
-        newLaneName: LANE_NAMES[newLaneId] ?? newLaneId,
+        newLaneName: defaultLaneName(newLaneId),
         newDate: args.newDate,
         newTimeSlot: fmtTime(args.newStartHour),
         newDuration: fmtDur(args.newDuration),

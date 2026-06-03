@@ -1,6 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { getCallerContext } from "./lib/adminGuard";
+import { defaultLaneName } from "./lib/lanes";
 
 // ============================================================================
 // TRACK EVENT — public mutation for client-side tracker
@@ -118,13 +119,8 @@ export const getEventSummary = query({
 // No-show rate is intentionally omitted (depends on the HA attendance feed).
 // ============================================================================
 
-const LANE_NAMES: Record<string, string> = {
-  bm1: "Bowling Machine 1",
-  bm2: "Bowling Machine 2",
-  bm3: "Bowling Machine 3",
-  ru1: "9m Run Up 1",
-  ru2: "9m Run Up 2",
-};
+// SPEC_RECONFIGURABLE_LANES: lane utilisation is aggregated per physical bay, so
+// the default display name ("BM 1".."RU 5") is the right label here.
 const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function hourLabel(h: number): string {
@@ -248,7 +244,7 @@ export const getAdminAnalytics = query({
       }
 
       // Lane utilisation (primary lane).
-      const lane = laneMap.get(b.laneId) ?? { name: LANE_NAMES[b.laneId] ?? b.laneId, bookings: 0, hours: 0 };
+      const lane = laneMap.get(b.laneId) ?? { name: defaultLaneName(b.laneId), bookings: 0, hours: 0 };
       lane.bookings++;
       lane.hours += hours;
       laneMap.set(b.laneId, lane);
