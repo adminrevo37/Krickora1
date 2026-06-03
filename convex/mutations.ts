@@ -2999,7 +2999,8 @@ export const upsertCustomer = mutation({
         email: normalizedEmail,
         phone: args.phone?.trim() || undefined,
         role: args.role || "customer",
-        creditBalance: args.creditBalance ?? 0,
+        // M1 (SECURITY): a non-admin can't seed their own credit on insert.
+        creditBalance: isAdmin ? (args.creditBalance ?? 0) : 0,
         createdAt: new Date().toISOString(),
       });
       return id;
@@ -3022,9 +3023,22 @@ export const updateCustomer = mutation({
     suburb: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // Allow self-update of own color without admin requirement
+    // Allow self-update of own color without admin requirement — but M9 (SECURITY):
+    // the color path still requires authentication AND that the caller owns the row
+    // (or is admin); previously it was an unauthenticated arbitrary-row write.
     const onlyColorUpdate = Object.keys(args).every((k) => k === "id" || k === "color" || args[k as keyof typeof args] === undefined);
-    if (!onlyColorUpdate) await requireAdmin(ctx);
+    if (onlyColorUpdate) {
+      const colorAuthUser = await getAuthUserSafe(ctx);
+      if (!colorAuthUser) throw new ConvexError("Not authorized");
+      const colorTarget: any = await ctx.db.get(args.id);
+      const colorCallerEmail = ((colorAuthUser as any).email ?? "").toLowerCase().trim();
+      const colorIsAdmin = (colorAuthUser as any).role === "admin";
+      if (!colorIsAdmin && (colorTarget?.email ?? "").toLowerCase() !== colorCallerEmail) {
+        throw new ConvexError("Not authorized");
+      }
+    } else {
+      await requireAdmin(ctx);
+    }
     // SPEC_PROFILE_POSTCODE_SUBURB: validate if either location field is supplied.
     validateLocationIfProvided(args.postcode, args.suburb);
     const { id, ...updates } = args;
