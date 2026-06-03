@@ -742,6 +742,24 @@ export const getCheckoutAmountCents = internalQuery({
   },
 });
 
+// LOW (SEC audit 2026-06-03): owner identifiers for a booking, used by the
+// checkout action to assert the caller owns the booking they're paying for.
+export const getBookingOwner = internalQuery({
+  args: { bookingId: v.string() },
+  handler: async (
+    ctx,
+    args
+  ): Promise<{ userId: string | null; customerEmail: string | null } | null> => {
+    const booking = await ctx.db.get(args.bookingId as Id<"bookings">);
+    if (!booking) return null;
+    const b = booking as any;
+    return {
+      userId: b.userId ?? null,
+      customerEmail: b.customerEmail ? String(b.customerEmail).toLowerCase().trim() : null,
+    };
+  },
+});
+
 // Is the given email an admin (by the customers table)? Internal — used by node
 // actions (createPaymentLink) that can't run requireAdmin's DB fallback directly.
 // Matches getCallerContext's admin resolution, avoiding the user.role-only drift.

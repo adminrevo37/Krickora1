@@ -3,6 +3,7 @@ import { v, ConvexError } from "convex/values";
 import { internal, components } from "./_generated/api";
 import { requireAdmin, requireAdminUnlocked, getAuthUserSafe } from "./lib/adminGuard";
 import { issueCredit, redeemCredit, recordCreditMovement } from "./lib/credit";
+import { enforceRateLimit } from "./lib/rateLimit";
 import { recordDiscountRedemption, validateDiscount, discountAmountCents } from "./lib/discounts";
 import {
   abandonedCheckoutMs,
@@ -705,6 +706,24 @@ export const createBooking = mutation({
       isAdminCaller = callerCustomer?.role === "admin";
       if (!isForSelf && !isAdminCaller) {
         throw new ConvexError("You can only create bookings for yourself.");
+      }
+
+      // M2 (SEC audit 2026-06-03): throttle booking creation per caller. Each
+      // createBooking writes a booking row, may schedule emails, and can place a
+      // slot hold — so an unthrottled loop is a booking/email/slot-hold spam +
+      // denial vector. 15/min is far above any real human pace. Admins are
+      // exempt (bulk manual bookings). Fails open if the limiter errors.
+      if (!isAdminCaller) {
+        await enforceRateLimit(
+          ctx,
+          {
+            action: "create-booking",
+            identifier: createIdentity.subject ?? callerEmail,
+            max: 15,
+            windowMs: 60_000,
+          },
+          "Too many booking attempts — please wait a minute and try again."
+        );
       }
 
       // SEC decision #4: a verified email is required to COMPLETE the FIRST

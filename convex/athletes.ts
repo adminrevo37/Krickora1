@@ -257,7 +257,11 @@ export const addAthleteToCoach = mutation({
       .query("coachInvites")
       .withIndex("by_email", (q: any) => q.eq("email", parentEmail))
       .first();
-    const token = `ath_${Math.abs(hashString(parentEmail + childName + coachIdNorm)).toString(36)}_${Date.now().toString(36)}`;
+    // LOW (SEC audit 2026-06-03): future-proof the invite token with the Web
+    // Crypto CSPRNG instead of a predictable hash(email+name)+timestamp.
+    const tokenBytes = new Uint8Array(16);
+    crypto.getRandomValues(tokenBytes);
+    const token = `ath_${Array.from(tokenBytes, (b) => b.toString(16).padStart(2, "0")).join("")}`;
     if (existingInvite && !existingInvite.used && existingInvite.kind === "athlete") {
       // Refresh the existing pending athlete-invite with the latest details.
       await ctx.db.patch(existingInvite._id, {
@@ -323,15 +327,6 @@ export const removeAthleteFromCoach = mutation({
     return { success: true };
   },
 });
-
-// Small deterministic string hash (no Math.random in Convex determinism rules).
-function hashString(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
-  }
-  return h;
-}
 
 // ── migration (one-off, idempotent) — SPEC_PARENT_ATHLETE_MODEL "Migration" ──
 

@@ -9,6 +9,11 @@
 import { mutation, query } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { requireAdmin } from "./lib/adminGuard";
+import { enforceRateLimit } from "./lib/rateLimit";
+
+// M3 (SEC audit 2026-06-03) limits.
+const MAX_DETAILS_LEN = 2000; // chars — a fault note, not an essay
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024; // 10 MB
 
 // Photo upload — returns a short-lived URL the client POSTs the file to.
 // Any signed-in user may upload (the report mutation validates the rest).
@@ -17,6 +22,12 @@ export const generateUploadUrl = mutation({
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Sign in to attach a photo.");
+    // M3: throttle upload-URL minting — each grants a writable storage slot.
+    await enforceRateLimit(
+      ctx,
+      { action: "fault-upload-url", identifier: identity.subject, max: 10, windowMs: 60_000 },
+      "Too many uploads — please wait a minute and try again."
+    );
     return await ctx.storage.generateUploadUrl();
   },
 });
@@ -30,8 +41,34 @@ export const submitFaultReport = mutation({
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
+    // M3: a fault report lands in the admin inbox and can carry an uploaded
+    // photo — require sign-in (matches the documented "any signed-in user"
+    // intent) so anonymous scripts can't flood it, and rate-limit per caller.
+    if (!identity) throw new ConvexError("Please sign in to report a fault.");
+    await enforceRateLimit(
+      ctx,
+      { action: "fault-submit", identifier: identity.subject, max: 5, windowMs: 60_000 },
+      "Too many reports — please wait a minute and try again."
+    );
+
     const details = args.details.trim();
     if (!details) throw new ConvexError("Please describe the issue.");
+    if (details.length > MAX_DETAILS_LEN) {
+      throw new ConvexError(`Please keep the description under ${MAX_DETAILS_LEN} characters.`);
+    }
+
+    // M3: validate any attached photo is actually an image within the size cap
+    // before it's referenced from a report (the upload URL accepts any bytes).
+    if (args.photoStorageId) {
+      const meta = await ctx.db.system.get(args.photoStorageId);
+      if (!meta) throw new ConvexError("Attached photo not found — please re-upload.");
+      if (meta.size > MAX_PHOTO_BYTES) {
+        throw new ConvexError("Photo is too large (max 10 MB).");
+      }
+      if (!meta.contentType || !meta.contentType.startsWith("image/")) {
+        throw new ConvexError("Attachment must be an image.");
+      }
+    }
 
     let reportedByName: string | undefined;
     const reportedByEmail = identity?.email?.toLowerCase().trim();

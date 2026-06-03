@@ -27,8 +27,13 @@ const MANDATORY_TEMPLATES = new Set([
 
 // Check if recipient has a specific email template enabled (defaults to true).
 // Mandatory transactional templates always send. Otherwise we look up the
-// customer's per-template preferences. Falls back to legacy bookingEmailsEnabled
-// for any booking-* template.
+// customer's per-template preferences via an internalQuery.
+//
+// M7 (SEC audit 2026-06-03): every caller of this helper is an ACTION
+// (internalAction), which has NO `ctx.db`. The old body queried `ctx.db`
+// directly, so it ALWAYS threw, the catch returned `true`, and per-template
+// opt-out was silently bypassed (every email sent regardless of prefs). The fix
+// is to read prefs through `ctx.runQuery` (the only DB access an action has).
 async function emailEnabledForUser(
   ctx: any,
   email: string,
@@ -36,21 +41,12 @@ async function emailEnabledForUser(
 ): Promise<boolean> {
   if (MANDATORY_TEMPLATES.has(templateSlug)) return true;
   try {
-    const normalized = email.toLowerCase().trim();
-    const customer = await ctx.db
-      .query("customers")
-      .withIndex("by_email", (q: any) => q.eq("email", normalized))
-      .first();
-    if (!customer) return true;
-    const prefs: Array<{ slug: string; enabled: boolean }> = customer.emailPrefs ?? [];
-    const pref = prefs.find((p) => p.slug === templateSlug);
-    if (pref) return pref.enabled;
-    // Legacy fallback: bookingEmailsEnabled covered all booking-* emails
-    if (templateSlug.startsWith("booking-") && customer.bookingEmailsEnabled === false) {
-      return false;
-    }
-    return true;
+    return await ctx.runQuery(internal.emails.getEmailPrefInternal, {
+      email,
+      templateSlug,
+    });
   } catch {
+    // Fail open: a prefs-lookup bug must never block a transactional email.
     return true;
   }
 }
@@ -82,6 +78,30 @@ async function sendEmail(
 // query and thread it into the template data. A first-word-of-name fallback in
 // the template covers accounts created before the name-split migration.
 // ============================================================================
+
+// M7: per-template opt-out lookup, runnable from an action via ctx.runQuery.
+// Returns true (send) unless the customer has explicitly disabled this template
+// (or the legacy bookingEmailsEnabled=false covers a booking-* template).
+export const getEmailPrefInternal = internalQuery({
+  args: { email: v.string(), templateSlug: v.string() },
+  handler: async (ctx, args): Promise<boolean> => {
+    const normalized = args.email.toLowerCase().trim();
+    if (!normalized) return true;
+    const customer = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", normalized))
+      .first();
+    if (!customer) return true;
+    const prefs: Array<{ slug: string; enabled: boolean }> = customer.emailPrefs ?? [];
+    const pref = prefs.find((p) => p.slug === args.templateSlug);
+    if (pref) return pref.enabled;
+    // Legacy fallback: bookingEmailsEnabled covered all booking-* emails.
+    if (args.templateSlug.startsWith("booking-") && customer.bookingEmailsEnabled === false) {
+      return false;
+    }
+    return true;
+  },
+});
 
 export const getGreetingFirstNameInternal = internalQuery({
   args: { email: v.string() },

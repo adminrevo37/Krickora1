@@ -41,6 +41,29 @@ export const createCheckoutSession = action({
     if (!args.bookingId) {
       throw new ConvexError("A booking must be created before checkout.");
     }
+
+    // LOW (SEC audit 2026-06-03): assert the caller owns the booking they're
+    // paying for. The amount is already server-authoritative (R1), so this is
+    // defence-in-depth against crafting a checkout for someone else's booking.
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError("Please sign in to check out.");
+    const owner = await ctx.runQuery(internal.queries.getBookingOwner, {
+      bookingId: args.bookingId,
+    });
+    if (owner) {
+      const callerEmail = identity.email?.toLowerCase().trim() ?? "";
+      const isOwner =
+        (owner.userId != null && owner.userId === identity.subject) ||
+        (!!callerEmail && callerEmail === owner.customerEmail);
+      let isAdmin = false;
+      if (!isOwner && callerEmail) {
+        isAdmin = await ctx.runQuery(internal.queries.isAdminEmail, { email: callerEmail });
+      }
+      if (!isOwner && !isAdmin) {
+        throw new ConvexError("You can only pay for your own booking.");
+      }
+    }
+
     const amountToChargeCents: number | null = await ctx.runQuery(
       internal.queries.getCheckoutAmountCents,
       { bookingId: args.bookingId }

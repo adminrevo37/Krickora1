@@ -437,10 +437,13 @@ export const getUserByEmail = query({
 export const listAllUsers = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, { limit = 100 }) => {
-    // Admin gate: return empty for non-admins (queries must not throw)
+    // Admin gate: return empty for non-admins (queries must not throw).
+    // LOW (SEC audit 2026-06-03): use the SSOT admin resolver (getCallerContext
+    // → customers.role authoritative) instead of the raw Better-Auth user.role,
+    // which can drift from the customers table (M-1/S-2).
     try {
-      const caller = await authComponent.getAuthUser(ctx);
-      if (!caller || (caller as any).role !== "admin") return [];
+      const caller = await getCallerContext(ctx);
+      if (!caller.isAdmin) return [];
     } catch { return []; }
     try {
       const result = await ctx.runQuery(

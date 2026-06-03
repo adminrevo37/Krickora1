@@ -18,15 +18,24 @@ export const trackEvent = mutation({
     timestamp: v.number(),
   },
   handler: async (ctx, args) => {
+    // LOW (SEC audit 2026-06-03): never trust the client-supplied `userId` — a
+    // forged value would mis-attribute analytics. Derive it from the
+    // authenticated identity (undefined for anonymous visitors). Cap free-text
+    // fields so this public, unauthenticated insert can't be used to write
+    // oversized rows. (`args.userId` is still accepted for arg-shape compat but
+    // ignored.)
+    const identity = await ctx.auth.getUserIdentity();
+    const cap = (s: string | undefined, n: number) =>
+      s == null ? undefined : s.slice(0, n);
     return await ctx.db.insert("analytics", {
-      type: args.type,
-      name: args.name,
-      url: args.url,
-      referrer: args.referrer,
-      sessionId: args.sessionId,
-      userId: args.userId,
-      metadata: args.metadata,
-      userAgent: args.userAgent,
+      type: args.type.slice(0, 64),
+      name: cap(args.name, 128),
+      url: cap(args.url, 1024),
+      referrer: cap(args.referrer, 1024),
+      sessionId: cap(args.sessionId, 128),
+      userId: identity?.subject ?? undefined,
+      metadata: cap(args.metadata, 4096),
+      userAgent: cap(args.userAgent, 512),
       timestamp: args.timestamp,
     });
   },
