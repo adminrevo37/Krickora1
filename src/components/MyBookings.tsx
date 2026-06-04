@@ -317,13 +317,13 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
               <span className="text-base font-bold text-gray-900 dark:text-white">
                 {formatTime(booking.startHour)} – {formatTime(booking.startHour + booking.duration / 60)}
               </span>
-              {cov.state === 'full' ? (
-                <span className="text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded-full uppercase tracking-wide">Full</span>
-              ) : cov.state === 'empty' ? (
+              {/* No badge when fully allocated — a "Full" tag wrongly implied the coach
+                  couldn't add more. Only flag INCOMPLETE allocation. */}
+              {cov.state === 'empty' ? (
                 <span className="text-[10px] font-semibold bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 px-1.5 py-0.5 rounded-full uppercase tracking-wide">No athletes</span>
-              ) : (
+              ) : cov.state === 'partial' ? (
                 <span className="text-[10px] font-semibold bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 px-1.5 py-0.5 rounded-full uppercase tracking-wide">{formatDuration(cov.unallocatedHours * 60)} free</span>
-              )}
+              ) : null}
             </div>
             <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
               {lane?.icon} {lane?.name ?? booking.laneId}
@@ -510,7 +510,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     const coachColor = (customerRecord as any)?.color as string | undefined
     const covBadge = (b: Booking) => {
       const cov = coverageSummary(b)
-      if (cov.state === 'full') return <span className="text-[9px] font-semibold bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded-full uppercase">Full</span>
+      if (cov.state === 'full') return null // no badge when fully allocated
       if (cov.state === 'empty') return <span className="text-[9px] font-semibold bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 px-1.5 py-0.5 rounded-full uppercase">No athletes</span>
       return <span className="text-[9px] font-semibold bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 px-1.5 py-0.5 rounded-full uppercase">{formatDuration(cov.unallocatedHours * 60)} free</span>
     }
