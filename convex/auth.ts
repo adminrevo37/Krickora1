@@ -152,6 +152,9 @@ export function createAuthOptions(ctx?: GenericCtx<DataModel>): BetterAuthOption
     emailVerification: {
       sendOnSignUp: true,
       autoSignInAfterVerification: true,
+      // Token validity — 24h (better-auth defaults to 1h, which expires before
+      // many users get to their inbox → the link then errors).
+      expiresIn: 60 * 60 * 24,
       sendVerificationEmail: async ({ user, url }: { user: any; url: string }) => {
         try {
           const result = await sendTemplateEmail("email-verification", user.email, {

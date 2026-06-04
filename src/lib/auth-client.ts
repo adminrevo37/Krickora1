@@ -131,10 +131,15 @@ export async function signInWithEmail(email: string, password: string) {
 
 export async function signUpWithEmail(email: string, password: string, name?: string) {
   try {
+    // Absolute frontend callbackURL so the email-verification link redirects back
+    // to the app after verifying (a bare "/" resolves to the convex.site backend
+    // root, which has no page → the user lands on a "not found" screen).
+    const callbackURL = typeof window !== "undefined" ? `${window.location.origin}/` : undefined;
     const result = await authClient.signUp.email({
       email,
       password,
       name: name || email.split("@")[0],
+      callbackURL,
       fetchOptions: fetchOpts(),
     });
     if (result.error) {
