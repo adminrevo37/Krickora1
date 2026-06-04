@@ -819,7 +819,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           {!isL1Coach && (
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 dark:border-gray-800">
               <button
-                onClick={() => setWeekOffset(w => Math.max(0, w - 1))}
+                onClick={() => { setWeekOffset(w => Math.max(0, w - 1)); setSelectedDateKey(k => toDateKey(addDays(new Date(k + 'T00:00:00'), -7))) }}
                 disabled={weekOffset === 0}
                 className={`w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-colors ${weekOffset === 0 ? 'text-gray-300 dark:text-gray-700 cursor-not-allowed' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
               >‹</button>
@@ -833,7 +833,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                 )}
               </div>
               <button
-                onClick={() => setWeekOffset(w => w + 1)}
+                onClick={() => { setWeekOffset(w => w + 1); setSelectedDateKey(k => toDateKey(addDays(new Date(k + 'T00:00:00'), 7))) }}
                 className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm"
               >›</button>
             </div>

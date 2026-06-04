@@ -1,4 +1,4 @@
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalMutation } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { requireAdmin } from "./lib/adminGuard";
 import { systemCancelBooking } from "./lib/systemCancel";
@@ -105,5 +105,21 @@ export const removeClosure = mutation({
     await requireAdmin(ctx);
     await ctx.db.delete(args.id);
     return true;
+  },
+});
+
+// Remove a closure by date — INTERNAL ONLY (run via deploy key, e.g. to clear a
+// test/admin closure that `convex run` can't reach through the admin-gated
+// `removeClosure`). Does NOT touch bookings (removing a closure never re-creates
+// the cancelled bookings; this just lifts the closed flag on the date).
+export const removeClosureByDateInternal = internalMutation({
+  args: { date: v.string() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("closures")
+      .withIndex("by_date", (q: any) => q.eq("date", args.date))
+      .collect();
+    for (const r of rows) await ctx.db.delete(r._id);
+    return { date: args.date, removed: rows.length };
   },
 });

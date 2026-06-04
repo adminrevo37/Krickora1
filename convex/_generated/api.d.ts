@@ -47,6 +47,7 @@ import type * as queries from "../queries.js";
 import type * as registrationLock from "../registrationLock.js";
 import type * as reminderAction from "../reminderAction.js";
 import type * as reminderQueries from "../reminderQueries.js";
+import type * as seedDeanHolder from "../seedDeanHolder.js";
 import type * as slotHolds from "../slotHolds.js";
 import type * as statements from "../statements.js";
 import type * as stripe from "../stripe.js";
@@ -103,6 +104,7 @@ declare const fullApi: ApiFromModules<{
   registrationLock: typeof registrationLock;
   reminderAction: typeof reminderAction;
   reminderQueries: typeof reminderQueries;
+  seedDeanHolder: typeof seedDeanHolder;
   slotHolds: typeof slotHolds;
   statements: typeof statements;
   stripe: typeof stripe;
