@@ -144,7 +144,7 @@ function LandingPage({ onSignIn, onSignUp }: { onSignIn: () => void; onSignUp: (
           {/* Pill badge */}
           <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/15 backdrop-blur-sm border border-white/20 text-white/90 text-sm font-medium mb-6">
             <span>🏏</span>
-            <span>Revolution Sports — Perth Cricket Training</span>
+            <span>Cricket Revolution — Perth Cricket Training</span>
           </div>
 
           <h1 className="text-4xl sm:text-5xl lg:text-6xl font-extrabold text-white tracking-tight leading-[1.1]">

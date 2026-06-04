@@ -26,8 +26,8 @@ function RootComponent() {
                 <span className="text-white text-lg">🏏</span>
               </div>
               <div>
-                <h1 className="text-lg font-bold bg-gradient-to-r from-emerald-600 to-green-600 bg-clip-text text-transparent leading-tight">
-                  Revolution Sports
+                <h1 className="text-lg font-bold bg-gradient-to-r from-red-600 to-red-500 bg-clip-text text-transparent leading-tight">
+                  Cricket Revolution
                 </h1>
                 <p className="text-[10px] font-medium text-gray-500 -mt-0.5 tracking-wider uppercase">Training Nets</p>
               </div>
@@ -144,9 +144,9 @@ function RootComponent() {
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2">
               <span className="text-lg">🏏</span>
-              <span className="font-semibold text-gray-700">Revolution Sports Training Nets</span>
+              <span className="font-semibold text-red-600">Cricket Revolution Training Nets</span>
             </div>
-            <p className="text-sm text-gray-500">&copy; {new Date().getFullYear()} Revolution Sports Training Nets.</p>
+            <p className="text-sm text-gray-500">&copy; {new Date().getFullYear()} Cricket Revolution Training Nets.</p>
           </div>
         </div>
       </footer>
