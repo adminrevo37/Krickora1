@@ -30,7 +30,9 @@ export default function PushNotificationsCard() {
 
   const prefs = (useQuery(api.pushNotifications.getMyPushPreferences, {}) as Record<string, boolean> | undefined) ?? {}
   const devices = (useQuery(api.pushNotifications.listMyPushDevices, {}) as Array<{ endpoint: string; deviceLabel: string; lastSeenAt: number }> | undefined) ?? []
+  const announce = useQuery(api.pushNotifications.getMyAnnouncementPrefs, {}) as { receiveAnnouncements: boolean; receiveMarketing: boolean } | undefined
   const setPref = useMutation(api.pushNotifications.setMyPushPreference)
+  const setAnnouncePref = useMutation(api.pushNotifications.setMyAnnouncementPref)
   const unsubscribe = useMutation(api.pushNotifications.unsubscribePush)
   const sendTest = useAction(api.push.sendTestPush)
 
@@ -116,6 +118,29 @@ export default function PushNotificationsCard() {
                 <Toggle checked={isOn(c.key)} onChange={(v) => setPref({ key: c.key, enabled: v })} />
               </div>
             ))}
+          </div>
+        </div>
+
+        {/* General announcements (apply to push AND email; SPEC_ADMIN_BROADCAST) */}
+        <div className="border-t border-gray-100 dark:border-gray-800 pt-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2">Announcements from Cricket Revolution</p>
+          <div className="space-y-3">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-gray-800 dark:text-gray-200 text-sm">General announcements</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">News and notices. Urgent operational alerts always send.</div>
+              </div>
+              <Toggle checked={announce?.receiveAnnouncements !== false}
+                onChange={(v) => setAnnouncePref({ key: 'receiveAnnouncements', enabled: v })} />
+            </div>
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-gray-800 dark:text-gray-200 text-sm">Offers &amp; promotions</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Deals, referrals and marketing.</div>
+              </div>
+              <Toggle checked={announce?.receiveMarketing !== false}
+                onChange={(v) => setAnnouncePref({ key: 'receiveMarketing', enabled: v })} />
+            </div>
           </div>
         </div>
 

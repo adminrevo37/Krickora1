@@ -128,6 +128,76 @@ export const setMyPushPreference = mutation({
   },
 });
 
+// ── Broadcast opt-outs (SPEC_ADMIN_BROADCAST §5) ──────────────────────────────
+// receiveAnnouncements / receiveMarketing live on the same pushPreferences row.
+// Absent = opted in (true). These affect BOTH push and email broadcast channels.
+
+export const getMyAnnouncementPrefs = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    const email = (identity?.email ?? "").toLowerCase().trim();
+    if (!email) return { receiveAnnouncements: true, receiveMarketing: true };
+    const pref = await ctx.db
+      .query("pushPreferences")
+      .withIndex("by_email", (q: any) => q.eq("email", email))
+      .first();
+    return {
+      receiveAnnouncements: pref?.receiveAnnouncements !== false,
+      receiveMarketing: pref?.receiveMarketing !== false,
+    };
+  },
+});
+
+export const setMyAnnouncementPref = mutation({
+  args: { key: v.string(), enabled: v.boolean() },
+  handler: async (ctx, args) => {
+    const email = await requireEmail(ctx);
+    if (args.key !== "receiveAnnouncements" && args.key !== "receiveMarketing") {
+      throw new ConvexError("Unknown announcement preference.");
+    }
+    const existing = await ctx.db
+      .query("pushPreferences")
+      .withIndex("by_email", (q: any) => q.eq("email", email))
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, { [args.key]: args.enabled });
+    } else {
+      await ctx.db.insert("pushPreferences", {
+        email,
+        categories: {},
+        [args.key]: args.enabled,
+      });
+    }
+    return true;
+  },
+});
+
+// Unsubscribe-from-marketing setter (called by the /unsubscribe HTTP route after
+// it verifies the email's token). Sets receiveMarketing=false by email; creates a
+// prefs row if none exists. Best-effort, never throws.
+export const setReceiveMarketingByEmailInternal = internalMutation({
+  args: { email: v.string(), enabled: v.boolean() },
+  handler: async (ctx, args) => {
+    const email = args.email.toLowerCase().trim();
+    if (!email) return false;
+    const existing = await ctx.db
+      .query("pushPreferences")
+      .withIndex("by_email", (q: any) => q.eq("email", email))
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, { receiveMarketing: args.enabled });
+    } else {
+      await ctx.db.insert("pushPreferences", {
+        email,
+        categories: {},
+        receiveMarketing: args.enabled,
+      });
+    }
+    return true;
+  },
+});
+
 // ── Internal helpers used by the node send action ─────────────────────────────
 
 // Resolve everything the send action needs for one recipient+category in a

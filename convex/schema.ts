@@ -500,7 +500,35 @@ export default defineSchema({
   pushPreferences: defineTable({
     email: v.string(),
     categories: v.record(v.string(), v.boolean()),
+    // SPEC_ADMIN_BROADCAST §5 — broadcast opt-outs (affect BOTH push + email).
+    // Absent = opted in (true). receiveAnnouncements mutes ANNOUNCEMENT-tier
+    // broadcasts (urgent ignores it); receiveMarketing opts out of PROMOTIONAL
+    // broadcasts (set false by the email unsubscribe link).
+    receiveAnnouncements: v.optional(v.boolean()),
+    receiveMarketing: v.optional(v.boolean()),
   }).index("by_email", ["email"]),
+
+  // SPEC_ADMIN_BROADCAST §5 — sent broadcasts (audit + history list). One row per
+  // send; counts updated as the scheduler fans out. Additive, no migration.
+  broadcasts: defineTable({
+    createdBy: v.string(),       // admin userId / email
+    createdByName: v.optional(v.string()),
+    createdAt: v.number(),       // Unix ms
+    title: v.string(),
+    body: v.string(),
+    link: v.optional(v.string()),
+    broadcastType: v.string(),   // 'announcement' | 'urgent'
+    isPromotional: v.boolean(),
+    scope: v.string(),           // 'day'|'week'|'month'|'all'|'range'
+    scopeStart: v.optional(v.string()),  // YYYY-MM-DD (period/range scopes)
+    scopeEnd: v.optional(v.string()),
+    recipientTypes: v.array(v.string()), // ['customer','coach','athlete']
+    alsoEmailAll: v.boolean(),
+    recipientCount: v.number(),
+    pushCount: v.number(),
+    emailCount: v.number(),
+    status: v.string(),          // 'sending' | 'sent' | 'failed'
+  }).index("by_createdAt", ["createdAt"]),
 
   // Admin unlock sessions (SPEC_SECURITY_HARDENING #2). One row per admin email;
   // present + unexpired = that admin re-entered their password recently.

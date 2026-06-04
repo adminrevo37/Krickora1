@@ -14,6 +14,7 @@ import StatementAdjustmentsManager from '../components/StatementAdjustmentsManag
 import AdminDiscountCodesTab from '../components/AdminDiscountCodesTab'
 import AdminFaultInbox from '../components/AdminFaultInbox'
 import WaitlistAdmin from '../components/WaitlistAdmin'
+import AdminBroadcast from '../components/AdminBroadcast'
 import PostcodeSuburbFields, { isLocationComplete } from '../components/PostcodeSuburbFields'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
@@ -26,11 +27,11 @@ type Section =
   | 'bookings' | 'closures'
   | 'customers' | 'coaches'
   | 'statements' | 'discounts'
-  | 'faults' | 'waitlist' | 'lanes' | 'settings'
+  | 'faults' | 'waitlist' | 'broadcast' | 'lanes' | 'settings'
 
 const VALID_SECTIONS: Section[] = [
   'bookings', 'closures', 'customers', 'coaches',
-  'statements', 'discounts', 'faults', 'waitlist', 'lanes', 'settings',
+  'statements', 'discounts', 'faults', 'waitlist', 'broadcast', 'lanes', 'settings',
 ]
 
 export const Route = createFileRoute('/admin')({
@@ -79,6 +80,12 @@ const NAV_GROUPS: Array<{
     ],
   },
   {
+    label: 'Communications',
+    items: [
+      { id: 'broadcast',  label: 'Broadcast',  icon: '📣' },
+    ],
+  },
+  {
     label: 'Configure',
     items: [
       { id: 'lanes',      label: 'Lanes',      icon: '🏟️' },
@@ -96,6 +103,7 @@ const SECTION_TITLES: Record<Section, string> = {
   discounts:  'Discounts',
   faults:     'Fault Reports',
   waitlist:   'Waitlist',
+  broadcast:  'Broadcast',
   lanes:      'Lanes',
   settings:   'Settings',
 }
@@ -274,6 +282,7 @@ function AdminPage() {
             {section === 'discounts'  && <AdminDiscountCodesTab />}
             {section === 'faults'     && <AdminFaultInbox />}
             {section === 'waitlist'   && <WaitlistAdmin />}
+            {section === 'broadcast'  && <AdminBroadcast />}
             {section === 'lanes'      && <AdminLanesPanel />}
             {section === 'settings'   && <SettingsPanel />}
           </div>

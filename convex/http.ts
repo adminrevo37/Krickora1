@@ -2,6 +2,8 @@ import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { authComponent, createAuth } from "./auth";
 import { stripeWebhook } from "./stripeWebhook";
+import { internal } from "./_generated/api";
+import { verifyUnsubscribeToken } from "./lib/unsubscribe";
 
 const http = httpRouter();
 
@@ -142,6 +144,43 @@ for (const path of AUTH_PREFLIGHT_PATHS) {
     }),
   });
 }
+
+// ── Marketing unsubscribe (SPEC_ADMIN_BROADCAST §8, no auth) ─────────
+// One-click unsubscribe link carried in promotional emails. Verifies the HMAC
+// token (issued for that exact email) then sets receiveMarketing=false. Returns
+// a small HTML confirmation page. Idempotent + safe to re-click.
+http.route({
+  path: "/unsubscribe",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const url = new URL(request.url);
+    const email = (url.searchParams.get("e") || "").toLowerCase().trim();
+    const token = url.searchParams.get("t") || "";
+    const ok = email && token && (await verifyUnsubscribeToken(email, token));
+    let message: string;
+    if (ok) {
+      await ctx.runMutation(internal.pushNotifications.setReceiveMarketingByEmailInternal, {
+        email,
+        enabled: false,
+      });
+      message =
+        "You've been unsubscribed from Cricket Revolution promotional emails. You'll still receive booking and account emails.";
+    } else {
+      message =
+        "This unsubscribe link is invalid or has expired. You can manage email preferences in your profile.";
+    }
+    const html = `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Unsubscribe — Cricket Revolution</title></head>
+<body style="margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f1f5f9;">
+<div style="max-width:480px;margin:64px auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:32px;text-align:center;">
+<div style="font-size:22px;font-weight:800;color:#dc2626;margin-bottom:16px;">Cricket Revolution</div>
+<p style="color:#1a1a1a;font-size:15px;line-height:1.6;">${message}</p>
+</div></body></html>`;
+    return new Response(html, {
+      status: ok ? 200 : 400,
+      headers: { "Content-Type": "text/html; charset=utf-8", ...corsHeaders(request) },
+    });
+  }),
+});
 
 // ── Stripe webhook (raw body required, no auth) ──────────────────────
 // Required env vars: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET

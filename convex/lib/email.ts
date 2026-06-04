@@ -95,6 +95,22 @@ function muted(text: string): string {
   return `<p style="margin:0 0 8px;color:${BRAND.sub};font-size:13px;line-height:1.5;">${text}</p>`;
 }
 
+/** Render free-text (admin-typed) into escaped paragraphs, preserving line breaks. */
+function paragraphs(text: string): string {
+  const blocks = String(text ?? "")
+    .replace(/\r\n/g, "\n")
+    .split(/\n{2,}/)
+    .map((b) => b.trim())
+    .filter(Boolean);
+  if (blocks.length === 0) return "";
+  return blocks
+    .map(
+      (b) =>
+        `<p style="margin:0 0 14px;color:${BRAND.ink};font-size:15px;line-height:1.6;">${esc(b).replace(/\n/g, "<br>")}</p>`
+    )
+    .join("");
+}
+
 /**
  * First-name greeting (SPEC_NAME_SPLIT). Prefers the threaded `firstName` (the
  * real stored field, resolved by the recipient's account); falls back to the
@@ -523,6 +539,28 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
             // bookingsHtml is pre-rendered HTML (raw, not escaped)
             (d.bookingsHtml || "") +
             button("Manage bookings", d.bookingUrl || SITE),
+        }),
+      };
+
+    // ── Admin broadcast / announcement (SPEC_ADMIN_BROADCAST) ─────────────────
+    // Generic admin-composed message. `title` = subject + heading, `body` =
+    // free-text (multi-line). Optional `link` becomes a CTA button. `childRef` is
+    // set when the recipient is a parent of allocated athlete(s) ("Re: <names>").
+    // `unsubscribeUrl` is present only for PROMOTIONAL sends (Spam Act).
+    case "announcement":
+      return {
+        subject: d.title || "A message from Cricket Revolution",
+        html: layout({
+          title: d.title || "Cricket Revolution",
+          preheader: (d.body || "").replace(/\s+/g, " ").slice(0, 120),
+          bodyHtml:
+            (d.childRef ? muted(`Re: ${esc(d.childRef)}`) : "") +
+            `<p style="margin:0 0 12px;color:${BRAND.navy};font-size:19px;font-weight:800;line-height:1.3;">${esc(d.title)}</p>` +
+            paragraphs(d.body) +
+            (d.link ? button(d.ctaLabel || "View details", d.link) : "") +
+            (d.unsubscribeUrl
+              ? `<p style="margin:18px 0 0;padding-top:14px;border-top:1px solid ${BRAND.line};color:${BRAND.sub};font-size:12px;line-height:1.5;">You're receiving this because you're a Cricket Revolution customer. <a href="${esc(d.unsubscribeUrl)}" style="color:${BRAND.sub};text-decoration:underline;">Unsubscribe from promotional emails</a>.</p>`
+              : ""),
         }),
       };
 
