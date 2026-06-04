@@ -18,6 +18,20 @@ import { useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 
 
+// SPEC_COACH_SESSION_LENGTH: athlete allocation slot options {30,45,60,75,90} +
+// a 30-min floor (mirrors AthleteAllocationEditor so the create + edit flows match).
+const ALLOC_OPTIONS = [30, 45, 60, 75, 90]
+const fitDurations = (maxMins: number): number[] => {
+  const fit = ALLOC_OPTIONS.filter(m => m <= maxMins + 0.001)
+  return fit.length ? fit : [30]
+}
+// Snap an arbitrary/legacy value to the largest option that fits ≤ value (≥30).
+const snapDuration = (value: number, maxMins: number): number => {
+  const fit = fitDurations(maxMins)
+  const atOrBelow = fit.filter(o => o <= value + 0.001)
+  return atOrBelow.length ? atOrBelow[atOrBelow.length - 1] : fit[0]
+}
+
 interface BookingModalProps {
   lane: Lane; date: Date; startHour: number; existingBookings: Booking[]
   onClose: () => void; onConfirm: (booking: Booking) => void
@@ -101,7 +115,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const [athleteSlots, setAthleteSlots] = useState<AthleteSlot[]>([])
   const [selectedAthleteId, setSelectedAthleteId] = useState('')
   const [newAthleteStart, setNewAthleteStart] = useState(startHour)
-  const [newAthleteDuration, setNewAthleteDuration] = useState(15)
+  // Default the new-athlete slot to the coach's preferred session length (clamped ≤90).
+  const [newAthleteDuration, setNewAthleteDuration] = useState(() => Math.min((customerRecord as any)?.defaultSessionDuration ?? 60, 90))
   const [athleteDropdownOpen, setAthleteDropdownOpen] = useState(false)
   const [athleteSearchQuery, setAthleteSearchQuery] = useState('')
 
@@ -271,7 +286,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       athleteId: athlete._id,
       athleteName: athlete.name.trim(),
       startHour: newAthleteStart,
-      durationMinutes: newAthleteDuration,
+      durationMinutes: effNewAthleteDuration,
     }
     setAthleteSlots(prev => [...prev, newSlot])
     setSelectedAthleteId('')
@@ -287,7 +302,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       if (field === 'startHour') {
         const bookingEnd = startHour + duration / 60
         const maxDur = Math.round((bookingEnd - value) * 60)
-        return { ...s, startHour: value, durationMinutes: Math.max(15, Math.min(s.durationMinutes, maxDur)) }
+        return { ...s, startHour: value, durationMinutes: snapDuration(s.durationMinutes, maxDur) }
       }
       return { ...s, durationMinutes: value }
     }))
@@ -302,9 +317,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
 
   const getSlotDurationOptions = (slotStart: number) => {
     const maxMins = Math.round((startHour + duration / 60 - slotStart) * 60)
-    const opts: number[] = []
-    for (let m = 15; m <= Math.max(maxMins, 15); m += 15) opts.push(m)
-    return opts
+    return fitDurations(maxMins)
   }
 
   const athleteStartOptions = useMemo(() => {
@@ -315,10 +328,16 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
 
   const athleteDurationOptions = useMemo(() => {
     const maxMins = Math.round((startHour + duration / 60 - newAthleteStart) * 60)
-    const opts: number[] = []
-    for (let m = 15; m <= Math.max(maxMins, 15); m += 15) opts.push(m)
-    return opts
+    return fitDurations(maxMins)
   }, [startHour, duration, newAthleteStart])
+
+  // Keep the new-athlete duration valid for the chosen start (snap if it no longer fits).
+  const effNewAthleteDuration = useMemo(
+    () => athleteDurationOptions.includes(newAthleteDuration)
+      ? newAthleteDuration
+      : athleteDurationOptions[athleteDurationOptions.length - 1] ?? 30,
+    [athleteDurationOptions, newAthleteDuration],
+  )
 
   const formatTimeDetailed = (h: number): string => {
     const whole = Math.floor(h)
@@ -695,7 +714,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
             {/* Coach: Athlete Tracking — Dropdown from Convex */}
             {isCoach && (
               <div>
-                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Assign Athletes <span className="text-xs font-normal text-gray-400">(15min increments &middot; auto-rounds booking)</span></label>
+                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Assign Athletes <span className="text-xs font-normal text-gray-400">(min 30min &middot; auto-rounds booking)</span></label>
                 
                 {/* Existing athlete slots */}
                 {athleteSlots.map((slot, idx) => {
@@ -752,7 +771,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                       </div>
                       <div>
                         <label className="text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 block uppercase tracking-wider">Duration</label>
-                        <select value={newAthleteDuration} onChange={e => setNewAthleteDuration(Number(e.target.value))}
+                        <select value={effNewAthleteDuration} onChange={e => setNewAthleteDuration(Number(e.target.value))}
                           className="w-full text-xs px-2 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200">
                           {athleteDurationOptions.map(d => <option key={d} value={d}>{d}min</option>)}
                         </select>
