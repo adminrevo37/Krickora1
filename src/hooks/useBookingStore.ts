@@ -50,8 +50,6 @@ export function useBookings() {
   const createBookingMut = useMutation(api.mutations.createBooking)
   const updateBookingMut = useMutation(api.mutations.updateBooking)
   const cancelBookingMut = useMutation(api.mutations.cancelBooking)
-  const editDurationMut = useMutation(api.mutations.editBookingDuration)
-  const rescheduleMut = useMutation(api.mutations.rescheduleBooking)
   const modifyMut = useMutation(api.mutations.modifyBooking)
   const updateAthleteSlotsMut = useMutation(api.mutations.updateBookingAthleteSlots)
 
@@ -239,48 +237,6 @@ export function useBookings() {
     [updateBookingMut, bookings]
   )
 
-  const editBookingDuration = useCallback(
-    async (bookingId: string, newDuration: number, userId: string) => {
-      try {
-        await editDurationMut({
-          id: bookingId as Id<"bookings">,
-          newDuration,
-          userId,
-        })
-        return { success: true }
-      } catch (err: any) {
-        return { success: false, error: getErrorMessage(err) ?? 'Failed to update duration.' }
-      }
-    },
-    [editDurationMut]
-  )
-
-  const rescheduleBooking = useCallback(
-    async (bookingId: string, opts: {
-      newDate: string; newStartHour: number; newDuration: number;
-      newLaneId?: string; newVariantId?: string;
-      newAdditionalLaneIds?: string[]; userId: string; newAccessCode?: string;
-    }) => {
-      try {
-        await rescheduleMut({
-          id: bookingId as Id<"bookings">,
-          newDate: opts.newDate,
-          newStartHour: opts.newStartHour,
-          newDuration: opts.newDuration,
-          newLaneId: opts.newLaneId,
-          newVariantId: opts.newVariantId,
-          newAdditionalLaneIds: opts.newAdditionalLaneIds,
-          userId: opts.userId,
-          newAccessCode: opts.newAccessCode,
-        })
-        return { success: true }
-      } catch (err: any) {
-        return { success: false, error: getErrorMessage(err) ?? 'Failed to reschedule.' }
-      }
-    },
-    [rescheduleMut]
-  )
-
   // Unified modify (SPEC_MODIFY_BOOKING_UPGRADE) — one path for lane/variant/date/
   // time/duration. Returns requiresPayment + the Stripe top-up amount when a
   // customer price increase needs paying; the modal then redirects to checkout.
@@ -358,8 +314,6 @@ export function useBookings() {
     getBookingsByEmail,
     getAllIncludingCancelled,
     updateBooking,
-    editBookingDuration,
-    rescheduleBooking,
     modifyBooking,
     updateAthleteSlots,
   }
