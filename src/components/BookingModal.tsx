@@ -603,7 +603,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
             )}
             {!isValidCoachStart && isCoach && (
               <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-200 dark:border-red-800/50">
-                <p className="text-xs text-red-700 dark:text-red-400">⚠️ Coach bookings must start on the hour.</p>
+                <p className="text-xs text-red-700 dark:text-red-400">⚠️ Coach bookings must start on the hour (or 3:30pm on weekdays).</p>
               </div>
             )}
 

@@ -17,6 +17,7 @@ import {
   getAvailableStartTimes,
   getCustomerDurations,
   getValidCoachStartTimes,
+  isWeekday,
   type Booking,
   type Lane,
   type TimeSlot,
@@ -121,6 +122,8 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   const visibleTimeSlots = useMemo(() => {
     return allTimeSlots.filter(slot => {
       if (slot.hour === Math.floor(slot.hour)) return true
+      // 3:30pm is an extra coach start time on weekdays — always show its row.
+      if (userIsCoach && slot.hour === 15.5 && isWeekday(selectedDay)) return true
       for (const activeSet of laneActiveHalfHours.values()) {
         if (activeSet.has(slot.hour)) return true
       }
@@ -134,7 +137,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     return map
   }, [bookings, dateKey])
 
-  // Valid start times for coaches on the selected day (every open hour, all days)
+  // Valid start times for coaches on the selected day (every open hour + 3:30pm on weekdays)
   const validCoachStartsForDay = useMemo(
     () => (userIsCoach ? getValidCoachStartTimes(selectedDay) : []),
     [userIsCoach, selectedDay]

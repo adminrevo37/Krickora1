@@ -13,6 +13,11 @@ export interface CoverageSegment {
 }
 
 const EPS = 1e-6
+// The 30-min athlete-session floor. An unallocated gap smaller than this can't hold
+// another session, so it's treated as "fine" — no amber card tint/badge and no amber
+// day dot (a coach can't action it). Used by both coverageSummary + dayDotState so the
+// card colour and the dot always agree.
+const MIN_FILLABLE_GAP_HOURS = 0.5
 
 export function coverageSegments(booking: Booking): CoverageSegment[] {
   const start = booking.startHour
@@ -93,7 +98,10 @@ export function coverageSummary(booking: Booking): { state: CoverageState; unall
   const allocated = segs.filter(s => s.allocated).reduce((a, s) => a + (s.endHour - s.startHour), 0)
   const unalloc = Math.max(0, total - allocated)
   if (allocated <= EPS) return { state: 'empty', unallocatedHours: unalloc }
-  if (unalloc <= EPS) return { state: 'full', unallocatedHours: 0 }
+  // "Full" if every unallocated gap is below the session floor (e.g. a 15-min
+  // remainder) — those can't be filled, so they shouldn't flag the card.
+  const hasFillableGap = segs.some(s => !s.allocated && s.endHour - s.startHour >= MIN_FILLABLE_GAP_HOURS - EPS)
+  if (!hasFillableGap) return { state: 'full', unallocatedHours: 0 }
   return { state: 'partial', unallocatedHours: unalloc }
 }
 
@@ -102,12 +110,11 @@ export function coverageSummary(booking: Booking): { state: CoverageState; unall
 //  - Coaches (worst state over that day's OWN coach bookings):
 //      red   — coach booking(s) exist but NONE has any allocation at all.
 //      amber — some allocation exists AND at least one booking has a contiguous
-//              unallocated gap > 15 min (≥30 min at 15-min granularity).
-//      green — booked and adequately allocated (only ≤15-min gaps).
+//              unallocated gap that could hold a session (≥ the 30-min floor).
+//      green — booked and adequately allocated (only sub-30-min remainders left).
 // A day with only non-coach bookings (rare for a coach) shows green.
-// Threshold: a single 15-min gap never warns; coverageSegments already keeps
-// allocation-separated 15-min gaps distinct (only a merged ≥30 stretch warns).
-const GAP_WARN_HOURS = 0.25 // > 15 min warns
+// A gap below the 30-min session floor can't be filled, so it never warns
+// (same MIN_FILLABLE_GAP_HOURS threshold the card colour uses → they agree).
 
 export function dayDotState(
   dayBookings: Booking[],
@@ -120,7 +127,7 @@ export function dayDotState(
   const anyAllocated = coachBookings.some(b => coverageSummary(b).state !== 'empty')
   if (!anyAllocated) return 'red'
   const hasBigGap = coachBookings.some(b =>
-    coverageSegments(b).some(s => !s.allocated && s.endHour - s.startHour > GAP_WARN_HOURS + EPS),
+    coverageSegments(b).some(s => !s.allocated && s.endHour - s.startHour >= MIN_FILLABLE_GAP_HOURS - EPS),
   )
   return hasBigGap ? 'amber' : 'green'
 }

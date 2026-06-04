@@ -402,13 +402,16 @@ export function getAvailableStartTimes(bookings: Booking[], laneId: string, date
   return times
 }
 
-// Coach start times — every whole hour within the day's opening hours, all days.
-// (Previously weekdays were locked to a 3:30pm start; Inspector opened weekdays up
-// to all opening hours 2026-06-04, same as weekends.)
+// Coach start times — every whole hour within the day's opening hours, all days,
+// PLUS an extra 3:30pm start on weekdays (after-school slot). Inspector 2026-06-04.
 export function getValidCoachStartTimes(date: Date): number[] {
   const { open, close } = getHoursForDate(getSettingsStore().get(), date)
   const times: number[] = []
   for (let h = Math.ceil(open); h < close; h++) times.push(h)
+  if (isWeekday(date) && 15.5 >= open && 15.5 < close && !times.includes(15.5)) {
+    times.push(15.5)
+    times.sort((a, b) => a - b)
+  }
   return times
 }
 
