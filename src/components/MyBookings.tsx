@@ -1136,6 +1136,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           onClose={() => setModifyBookingData(null)}
           onModify={opts => handleModify(modifyBookingData, opts)}
           isCoach={isCoach}
+          onEditAllocation={() => { const b = modifyBookingData; setModifyBookingData(null); if (b) openAthleteEditor(b) }}
         />
       )}
 

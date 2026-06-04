@@ -32,9 +32,12 @@ interface ModifyBookingModalProps {
     newAdditionalLaneIds?: string[]; newAccessCode?: string;
   }) => Promise<ModifyResult>
   isCoach: boolean
+  // Coach bookings only: jump to the athlete allocation editor (closes this modal
+  // and opens AthleteAllocationEditor for the same booking).
+  onEditAllocation?: () => void
 }
 
-export default function ModifyBookingModal({ booking, allBookings, creditBalance, onClose, onModify, isCoach }: ModifyBookingModalProps) {
+export default function ModifyBookingModal({ booking, allBookings, creditBalance, onClose, onModify, isCoach, onEditAllocation }: ModifyBookingModalProps) {
   const originalLane = LANES.find(l => l.id === booking.laneId)
   const settings = getSettingsStore().get()
 
@@ -402,6 +405,17 @@ export default function ModifyBookingModal({ booking, allBookings, creditBalance
                 </div>
               )}
             </div>
+
+            {/* Coach: jump to the athlete allocation editor for this booking. */}
+            {isCoach && booking.isCoachBooking && onEditAllocation && (
+              <button
+                type="button"
+                onClick={onEditAllocation}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border-2 border-emerald-500 text-emerald-700 dark:text-emerald-400 font-semibold hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-all"
+              >
+                🏏 Edit Athlete Allocation
+              </button>
+            )}
 
             {/* Price comparison */}
             {hasChanges && (
