@@ -37,6 +37,8 @@ function toBooking(doc: any): Booking {
     discountCode: doc.discountCode,
     modificationHistory: doc.modificationHistory,
     notes: doc.notes,
+    mates: doc.mates,
+    createdByAdmin: doc.createdByAdmin,
   }
 }
 
@@ -107,6 +109,7 @@ export function useBookings() {
         notes: booking.notes,
         paymentStatus: booking.paymentStatus,
         priceInCents: booking.priceInCents,
+        createdByAdmin: booking.createdByAdmin,
       })
       return id
     },

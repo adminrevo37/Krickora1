@@ -171,6 +171,11 @@ export interface Booking {
   discountCode?: string
   // Admin notes (e.g. "Winter Program", "Trial Session")
   notes?: string
+  // SPEC_ADD_A_MATE: friend accounts sharing this customer booking's door code.
+  mates?: Array<{ customerId: string; addedAt: string }>
+  // SPEC_SCHEDULE_DAY_VIEW §2.13: admin-managed coach booking (view+allocate only
+  // for the coach; Modify/Cancel/Repeat hidden + server-rejected for non-admins).
+  createdByAdmin?: boolean
   // Audit trail of admin modifications
   modificationHistory?: Array<{
     modifiedAt: string

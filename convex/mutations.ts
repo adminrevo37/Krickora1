@@ -694,6 +694,9 @@ export const createBooking = mutation({
     // booking. These let the admin stamp the booking without going through checkout.
     paymentStatus: v.optional(v.string()),
     priceInCents: v.optional(v.number()),
+    // SPEC_SCHEDULE_DAY_VIEW §2.13: admin manual-booking "Managed by admin" flag.
+    // Only honoured for admin-created coach bookings (gated server-side below).
+    createdByAdmin: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     // SEC-1: Auth guard — logged-in users may only book for themselves unless admin.
@@ -1032,6 +1035,9 @@ export const createBooking = mutation({
       bookingSuburb,
       laneNameSnapshot: laneSnap.laneNameSnapshot,
       variantLabelSnapshot: laneSnap.variantLabelSnapshot,
+      // §2.13: only an admin can mark a COACH booking as admin-managed. Ignore the
+      // flag on customer bookings or from non-admin callers.
+      createdByAdmin: isAdminCaller && args.isCoachBooking && args.createdByAdmin ? true : undefined,
     });
 
     // SPEC_WAITLIST_OFFER_REDESIGN: if this booking is the waitlisted member
@@ -1385,14 +1391,20 @@ export const cancelBooking = mutation({
     const isOwner =
       (booking.userId != null && booking.userId === identity.subject) ||
       booking.customerEmail.toLowerCase() === callerEmail;
-    if (!isOwner) {
-      const callerCustomer = await ctx.db
-        .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
-        .first();
-      if (callerCustomer?.role !== "admin") {
-        throw new ConvexError("You can only cancel your own bookings.");
-      }
+    const cancelCallerCustomer = callerEmail
+      ? await ctx.db
+          .query("customers")
+          .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
+          .first()
+      : null;
+    const cancelIsAdmin = cancelCallerCustomer?.role === "admin";
+    if (!isOwner && !cancelIsAdmin) {
+      throw new ConvexError("You can only cancel your own bookings.");
+    }
+    // SPEC_SCHEDULE_DAY_VIEW §2.13: an admin-managed coach booking can't be
+    // cancelled by the coach (or anyone non-admin) — they allocate only.
+    if ((booking as any).createdByAdmin && !cancelIsAdmin) {
+      throw new ConvexError("This booking is managed by admin — please contact admin.");
     }
 
     const cancelSettings = await ctx.db
@@ -1658,6 +1670,11 @@ export const modifyBooking = mutation({
     const isAdmin = callerCustomer?.role === "admin";
     if (!isOwner && !isAdmin) {
       throw new ConvexError("You can only modify your own bookings.");
+    }
+    // SPEC_SCHEDULE_DAY_VIEW §2.13: admin-managed coach bookings are view+allocate
+    // only for the coach — non-admin modify is rejected.
+    if ((booking as any).createdByAdmin && !isAdmin) {
+      throw new ConvexError("This booking is managed by admin — please contact admin.");
     }
 
     const settings = await ctx.db
@@ -2483,6 +2500,11 @@ async function loadCoachBookingForRepeat(
   const isAdmin = callerCustomer?.role === "admin";
   if (!isAdmin && coach.email.toLowerCase() !== callerEmail) {
     throw new ConvexError("You can only repeat your own bookings.");
+  }
+  // SPEC_SCHEDULE_DAY_VIEW §2.13: an admin-managed coach booking can't be repeated
+  // by the coach. (The UI hides Repeat too; this is the server gate.)
+  if (src.createdByAdmin && !isAdmin) {
+    throw new ConvexError("This booking is managed by admin — please contact admin.");
   }
 
   return { src, coach, callerCustomer, targetDate: addDaysKey(src.date, 7) };

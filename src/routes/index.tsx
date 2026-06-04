@@ -10,11 +10,17 @@ import { useImpersonation } from '../hooks/useImpersonation'
 
 export const Route = createFileRoute('/')({
   component: HomePage,
+  // SPEC_SCHEDULE_DAY_VIEW §4: "Book Now → that day" deep-link (?date=YYYY-MM-DD).
+  validateSearch: (search: Record<string, unknown>): { date?: string } => {
+    const d = search.date
+    return typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) ? { date: d } : {}
+  },
 })
 
 function HomePage() {
   const { isAuthenticated, isAdmin, isLoading } = useAuth()
   const { isImpersonating, impersonatedUser } = useImpersonation()
+  const { date: initialDate } = Route.useSearch()
   const [showAuth, setShowAuth] = useState(false)
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signup')
 
@@ -41,7 +47,7 @@ function HomePage() {
               Customer view for <strong>{impersonatedUser.name}</strong> ({impersonatedUser.email})
             </p>
           </div>
-          <BookingCalendar impersonatedEmail={impersonatedUser.email} />
+          <BookingCalendar impersonatedEmail={impersonatedUser.email} initialDate={initialDate} />
         </div>
       )
     }
@@ -62,7 +68,7 @@ function HomePage() {
           <h1 className="text-3xl font-bold text-gray-900">Book a Training Net</h1>
           <p className="text-gray-500 mt-1">Reserve your lane and start training</p>
         </div>
-        <BookingCalendar />
+        <BookingCalendar initialDate={initialDate} />
       </div>
     )
   }

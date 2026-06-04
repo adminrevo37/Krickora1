@@ -94,6 +94,11 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   // Admin notes
   const [notes, setNotes] = useState('')
 
+  // SPEC_SCHEDULE_DAY_VIEW §2.13: coach bookings created by an admin default to
+  // "Managed by admin" (view+allocate only for the coach). Untick to hand a
+  // one-off booking to the coach to modify/cancel/repeat themselves.
+  const [managedByAdmin, setManagedByAdmin] = useState(true)
+
   // Additional lanes (multi-lane booking)
   const [additionalLaneIds, setAdditionalLaneIds] = useState<string[]>([])
   const toggleLane = (id: string) => {
@@ -173,6 +178,7 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
           priceInCents: isCoach ? undefined : perBookingCents,
           isCoachBooking: isCoach,
           coachPrice: isCoach ? effectivePricePerLane : undefined,
+          createdByAdmin: isCoach && managedByAdmin ? true : undefined,
           additionalLaneIds: additionalLaneIds.length > 0 ? additionalLaneIds : undefined,
           discountCode: discountCode.trim() || undefined,
           notes: notes.trim() || (isComp ? 'Comp (complimentary)' : undefined),
@@ -489,6 +495,23 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
               {selectedLaneCount > 1 ? ` ${selectedLaneCount} lanes per session.` : ''}
             </p>
           </div>
+
+          {/* §2.13: admin-managed lock for coach bookings (default ON). */}
+          {isCoach && (
+            <label className="flex items-start gap-2.5 bg-gray-50 dark:bg-gray-800 rounded-xl p-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={managedByAdmin}
+                onChange={(e) => setManagedByAdmin(e.target.checked)}
+                className="mt-0.5 w-4 h-4 accent-orange-500 shrink-0"
+              />
+              <span className="text-xs text-gray-600 dark:text-gray-300">
+                <span className="font-semibold text-gray-800 dark:text-gray-200">Managed by admin</span>
+                {' '}— the coach can allocate athletes but can't modify, cancel or repeat this booking.
+                Untick to hand it over for the coach to manage.
+              </span>
+            </label>
+          )}
 
           {error && (
             <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-200 dark:border-red-800/50 text-xs text-red-700 dark:text-red-400 whitespace-pre-line">

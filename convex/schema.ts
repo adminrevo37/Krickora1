@@ -286,6 +286,12 @@ export default defineSchema({
         })
       )
     ),
+    // SPEC_SCHEDULE_DAY_VIEW §2.13: a coach booking created BY an admin (from the
+    // manual-booking modal with "Managed by admin" ticked, default ON) is
+    // view+allocate-only for the coach — Modify/Cancel/Repeat are hidden in the UI
+    // AND server-rejected for non-admin callers. Allocation is never blocked.
+    // Additive/optional → no migration; only marks bookings made from this deploy on.
+    createdByAdmin: v.optional(v.boolean()),
   })
     .index("by_date", ["date"])
     .index("by_laneId_date", ["laneId", "date"])

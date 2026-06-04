@@ -72,3 +72,31 @@ export function coverageSummary(booking: Booking): { state: CoverageState; unall
   if (unalloc <= EPS) return { state: 'full', unallocatedHours: 0 }
   return { state: 'partial', unallocatedHours: unalloc }
 }
+
+// SPEC_SCHEDULE_DAY_VIEW §3: the single status dot under a date in the week strip.
+//  - Customers (non-coach): green if the day has any booking (own OR shared), else null.
+//  - Coaches (worst state over that day's OWN coach bookings):
+//      red   — coach booking(s) exist but NONE has any allocation at all.
+//      amber — some allocation exists AND at least one booking has a contiguous
+//              unallocated gap > 15 min (≥30 min at 15-min granularity).
+//      green — booked and adequately allocated (only ≤15-min gaps).
+// A day with only non-coach bookings (rare for a coach) shows green.
+// Threshold: a single 15-min gap never warns; coverageSegments already keeps
+// allocation-separated 15-min gaps distinct (only a merged ≥30 stretch warns).
+const GAP_WARN_HOURS = 0.25 // > 15 min warns
+
+export function dayDotState(
+  dayBookings: Booking[],
+  isCoach: boolean,
+): 'green' | 'amber' | 'red' | null {
+  if (dayBookings.length === 0) return null
+  if (!isCoach) return 'green'
+  const coachBookings = dayBookings.filter(b => b.isCoachBooking)
+  if (coachBookings.length === 0) return 'green'
+  const anyAllocated = coachBookings.some(b => coverageSummary(b).state !== 'empty')
+  if (!anyAllocated) return 'red'
+  const hasBigGap = coachBookings.some(b =>
+    coverageSegments(b).some(s => !s.allocated && s.endHour - s.startHour > GAP_WARN_HOURS + EPS),
+  )
+  return hasBigGap ? 'amber' : 'green'
+}

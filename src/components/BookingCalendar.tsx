@@ -39,7 +39,7 @@ import BookingModal from './BookingModal'
 import AuthModal from './AuthModal'
 import WaitlistModal from './WaitlistModal'
 
-export default function BookingCalendar({ impersonatedEmail }: { impersonatedEmail?: string } = {}) {
+export default function BookingCalendar({ impersonatedEmail, initialDate }: { impersonatedEmail?: string; initialDate?: string } = {}) {
   const { user, isAdmin: realIsAdmin, isCoach: realIsCoach, customerRecord } = useAuth()
   const [showFaultModal, setShowFaultModal] = useState(false)
   // When impersonating, behave as a regular customer (not admin/coach)
@@ -64,6 +64,12 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
   }, [isL1Coach, coachWindowDays, releaseRole, coachTierNorm, settings])
 
   const [selectedDay, setSelectedDay] = useState<Date>(() => {
+    // SPEC_SCHEDULE_DAY_VIEW §4: a "Book Now → that day" deep-link (?date=) selects
+    // that day if it's within the currently visible window.
+    if (initialDate) {
+      const match = weekDays.find(d => formatDateKey(d) === initialDate)
+      if (match) return match
+    }
     if (isL1Coach) return weekDays[0] // Today for L1 coaches (rolling window)
     // Always default to today if it exists in the weekDays array
     const todayMatch = weekDays.find(d => isToday(d))

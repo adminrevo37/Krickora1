@@ -1,10 +1,11 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { Link } from '@tanstack/react-router'
-import { useQuery } from 'convex/react'
+import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { useBookings } from '../hooks/useBookingStore'
 import { useAuth } from '../hooks/useAuth'
 import { useWaitlist } from '../hooks/useWaitlist'
+import { useSettings } from '../hooks/useSettings'
 import {
   LANES,
   formatDateKey,
@@ -16,19 +17,49 @@ import {
   type Booking,
 } from '../lib/booking-data'
 import { formatAccessCode } from '../lib/access-code'
+import { getErrorMessage } from '../lib/errors'
 import AuthModal from './AuthModal'
 import AthleteAllocationEditor from './AthleteAllocationEditor'
 // SPEC_COACH_PLANNER_RETIRE_AND_VIEW §6: allocation-coverage timeline + 3-state.
 import { AllocationTimeline, type SegmentTapTarget } from './CoverageTimeline'
-import { coverageSummary } from '../lib/coverage'
+// SPEC_SCHEDULE_DAY_VIEW §3: per-day status dot.
+import { coverageSummary, dayDotState } from '../lib/coverage'
 // SPEC_COACH_PLANNER_RETIRE_AND_VIEW §5: per-booking release-gated Repeat.
 import RepeatBookingButton from './RepeatBookingButton'
 // SPEC_MODIFY_BOOKING_UPGRADE: the split Edit (duration) + Reschedule flows are
 // merged into one ModifyBookingModal → modifyBooking. EditBookingModal /
 // RescheduleModal are retired (files kept, no longer referenced here).
 import ModifyBookingModal from './ModifyBookingModal'
-// SPEC_ADD_A_MATE: read-only "shared with you" bookings for users who are a mate.
-import MateBookingsSection from './MateBookingsSection'
+
+// SPEC_SCHEDULE_DAY_VIEW §2.11: facility details for the athlete "SMS Details" deep-link.
+const FACILITY = { name: 'Cricket Revolution', address: '78 Jones St, Stirling WA 6021' }
+
+// Shared (mate) booking row from api.mates.listMateBookings.
+interface SharedBooking {
+  id: string
+  laneId: string
+  variantId?: string | null
+  date: string
+  startHour: number
+  duration: number
+  status: string
+  accessCode?: string
+  ownerName: string
+  otherMates: string[]
+}
+
+// SPEC_SCHEDULE_DAY_VIEW §4: customer card mate-names chip. Lazily queries the
+// booking's mates (PII-safe short names) only when the booking has mates.
+function MateNames({ bookingId }: { bookingId: string }) {
+  const mates = useQuery(api.mates.listBookingMates, { bookingId: bookingId as any }) ?? []
+  if (mates.length === 0) return null
+  const names = mates.map((m: any) => m.displayName).join(' & ')
+  return (
+    <span className="inline-flex items-center gap-1 text-[11px] bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 px-2 py-0.5 rounded-full">
+      👥 With {names}
+    </span>
+  )
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -78,13 +109,21 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     bookings, cancelBooking, canCancel,
     modifyBooking, updateAthleteSlots,
   } = useBookings()
-  const { user, isCoach, isCustomer, getAllCoaches, assignCoach, removeCoach, customerRecord, getCreditBalance } = useAuth()
+  const { user, isCoach, isCustomer, isAdmin, getAllCoaches, assignCoach, removeCoach, customerRecord, getCreditBalance } = useAuth()
   const { getUserEntries, removeFromWaitlist, notifications, dismissNotification } = useWaitlist(user?.id)
+  const { settings } = useSettings()
   // When impersonating, filter bookings by the impersonated user's email
   const effectiveEmail = impersonatedEmail ?? user?.email
 
   const now = new Date()
   const todayKey = formatDateKey(now)
+
+  // SPEC_SCHEDULE_DAY_VIEW §2.4: L1 coaches get a rolling 8-day strip (no nav);
+  // L2 coaches + customers get a Mon–Sun week with ‹ › nav.
+  const coachTierNorm: 'L1' | 'L2' =
+    ((customerRecord as any)?.coachTier === 'L2' || (customerRecord as any)?.coachTier === 'BowlingL2') ? 'L2' : 'L1'
+  const isL1Coach = isCoach && coachTierNorm === 'L1'
+  const coachWindowDays = settings.coachBookingWindowDays ?? 8
 
   // ── local state ─────────────────────────────────────────────────────────────
   const [weekOffset, setWeekOffset] = useState(0)
@@ -92,6 +131,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const [activeTab, setActiveTab] = useState<'schedule' | 'past' | 'waitlist' | 'coaches'>('schedule')
   const [cancellingId, setCancellingId] = useState<string | null>(null)
   const [cancelError, setCancelError] = useState<string | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
   const [showAuth, setShowAuth] = useState(false)
   const [modifyBookingData, setModifyBookingData] = useState<Booking | null>(null)
   const [athleteEditBooking, setAthleteEditBooking] = useState<Booking | null>(null)
@@ -102,14 +142,20 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     setAthleteEditSeed(seg && !seg.allocated ? { startHour: seg.startHour, durationMinutes: seg.durationMinutes } : null)
     setAthleteEditBooking(booking)
   }
-  // §7: coach Schedule tab List ⇄ Week toggle (persisted).
-  const [coachView, setCoachView] = useState<'list' | 'week'>(() => {
-    try { return (localStorage.getItem('coachScheduleView') as 'list' | 'week') || 'list' } catch { return 'list' }
-  })
-  const setCoachViewPersist = (v: 'list' | 'week') => {
-    setCoachView(v)
-    try { localStorage.setItem('coachScheduleView', v) } catch {}
-  }
+  // SPEC_SCHEDULE_DAY_VIEW §2.12: coach [Week | List] toggle. Week is the default
+  // on every fresh open (NOT persisted to List); List is a deliberate per-visit
+  // choice that shows ALL upcoming bookings incl. admin blocks beyond the window.
+  const [coachView, setCoachView] = useState<'list' | 'week'>('week')
+  // §2.16: confirm-modal state for leaving a shared booking + leave mutation.
+  const [leaveBooking, setLeaveBooking] = useState<SharedBooking | null>(null)
+  const [leavingId, setLeavingId] = useState<string | null>(null)
+  const [leaveError, setLeaveError] = useState<string | null>(null)
+  const leaveBookingMut = useMutation(api.mates.leaveBooking)
+  // §2.16: bookings the user is a MATE on (read-only, integrated into the day list).
+  const mateBookings = (useQuery(api.mates.listMateBookings, user ? {} : 'skip') ?? []) as SharedBooking[]
+  // §2.6: default-day selection runs once after data first loads (preserve the
+  // user's tapped day for the rest of the visit).
+  const didInitDay = useRef(false)
 
   const coachIdForAthletes = customerRecord?._id ?? user?.email ?? ''
 
@@ -156,12 +202,10 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   [bookings, user, athleteNameCandidates, myAthleteIds, effectiveEmail, impersonatedEmail])
 
-  const isUpcoming = (b: Booking) => {
-    if (b.status === 'cancelled') return false
-    if (b.date > todayKey) return true
-    if (b.date === todayKey && b.startHour >= now.getHours()) return true
-    return false
-  }
+  // SPEC_SCHEDULE_DAY_VIEW §2.5: whole-day model. "Upcoming" = any non-cancelled
+  // booking dated today or later (no time-of-day test). Today's already-finished
+  // sessions stay in Schedule until midnight, then roll into Past.
+  const isUpcoming = (b: Booking) => b.status !== 'cancelled' && b.date >= todayKey
 
   // Upcoming = confirmed bookings, sorted by date+time
   const scheduleBookings = useMemo(() =>
@@ -181,38 +225,81 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       .sort((a, b) => b.date.localeCompare(a.date)),
   [userBookings])
 
-  // ── week strip ───────────────────────────────────────────────────────────────
-
-  const weekDays = useMemo(() => {
-    const baseMonday = getMondayOfWeek(now)
-    const monday = addDays(baseMonday, weekOffset * 7)
-    return Array.from({ length: 7 }, (_, i) => {
-      const d = addDays(monday, i)
-      const key = toDateKey(d)
-      const dayBookings = scheduleBookings.filter(b => b.date === key)
-      const hasUnallocated = dayBookings.some(
-        b => b.isCoachBooking && (!b.athleteSlots || b.athleteSlots.length === 0),
-      )
-      const hasBookings = dayBookings.length > 0
-      return { date: d, key, label: DAY_LABELS[i], hasBookings, hasUnallocated }
-    })
+  // ── shared (mate) bookings — §2.16, upcoming only ─────────────────────────────
+  const sharedBookings = useMemo(
+    () => mateBookings
+      .filter(b => b.status !== 'cancelled' && b.date >= todayKey)
+      .sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour),
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weekOffset, scheduleBookings])
+  [mateBookings])
 
-  const weekMonthLabel = useMemo(() => {
-    const first = weekDays[0].date
-    const last = weekDays[6].date
-    const opts: Intl.DateTimeFormatOptions = { month: 'short', year: 'numeric' }
-    if (first.getMonth() === last.getMonth()) {
-      return first.toLocaleDateString('en-US', opts)
+  const hasBookingOn = (key: string) =>
+    scheduleBookings.some(b => b.date === key) || sharedBookings.some(b => b.date === key)
+
+  // ── week / rolling date strip ─────────────────────────────────────────────────
+  // L1 coach: rolling `coachWindowDays` from today (no nav). Else: Mon–Sun of the
+  // current week + weekOffset, with ‹ › nav (‹ clamped at the current week, §2.15).
+  const stripDays = useMemo(() => {
+    const out: { date: Date; key: string; label: string }[] = []
+    if (isL1Coach) {
+      const base = new Date(now); base.setHours(0, 0, 0, 0)
+      for (let i = 0; i < coachWindowDays; i++) {
+        const d = addDays(base, i)
+        out.push({ date: d, key: toDateKey(d), label: d.toLocaleDateString('en-US', { weekday: 'short' }) })
+      }
+    } else {
+      const monday = addDays(getMondayOfWeek(now), weekOffset * 7)
+      for (let i = 0; i < 7; i++) {
+        const d = addDays(monday, i)
+        out.push({ date: d, key: toDateKey(d), label: DAY_LABELS[i] })
+      }
     }
-    return `${first.toLocaleDateString('en-US', { month: 'short' })} – ${last.toLocaleDateString('en-US', opts)}`
-  }, [weekDays])
+    return out
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isL1Coach, coachWindowDays, weekOffset])
 
-  const selectedDayBookings = useMemo(
-    () => scheduleBookings.filter(b => b.date === selectedDateKey),
-    [scheduleBookings, selectedDateKey],
-  )
+  const stripRangeLabel = useMemo(() => {
+    const first = stripDays[0].date
+    const last = stripDays[stripDays.length - 1].date
+    const opts: Intl.DateTimeFormatOptions = { month: 'short', year: 'numeric' }
+    if (first.getMonth() === last.getMonth()) return first.toLocaleDateString('en-US', opts)
+    return `${first.toLocaleDateString('en-US', { month: 'short' })} – ${last.toLocaleDateString('en-US', opts)}`
+  }, [stripDays])
+
+  const weekOffsetForKey = (key: string) => {
+    const mTarget = getMondayOfWeek(new Date(key + 'T00:00:00')).getTime()
+    const mNow = getMondayOfWeek(now).getTime()
+    return Math.round((mTarget - mNow) / (7 * 24 * 60 * 60 * 1000))
+  }
+
+  // Selected day = own bookings + shared bookings, merged + time-sorted (§2.16).
+  type DayItem = { kind: 'own'; b: Booking } | { kind: 'shared'; b: SharedBooking }
+  const dayItems: DayItem[] = useMemo(() => {
+    const own: DayItem[] = scheduleBookings.filter(b => b.date === selectedDateKey).map(b => ({ kind: 'own', b }))
+    const shared: DayItem[] = sharedBookings.filter(b => b.date === selectedDateKey).map(b => ({ kind: 'shared', b }))
+    return [...own, ...shared].sort((a, b) => a.b.startHour - b.b.startHour)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduleBookings, sharedBookings, selectedDateKey])
+
+  // §2.6: choose the default day ONCE, after schedule data first loads. Today if
+  // today has any booking; else the soonest reachable booking day; else today.
+  useEffect(() => {
+    if (didInitDay.current) return
+    if (scheduleBookings.length === 0 && sharedBookings.length === 0) return
+    didInitDay.current = true
+    if (hasBookingOn(todayKey)) { setSelectedDateKey(todayKey); return }
+    const soonest = [...scheduleBookings.map(b => b.date), ...sharedBookings.map(b => b.date)]
+      .filter(d => d >= todayKey).sort()[0]
+    if (!soonest) return
+    if (isL1Coach) {
+      // reachable only within the rolling window; else stay on today (List shows it)
+      if (stripDays.some(d => d.key === soonest)) setSelectedDateKey(soonest)
+      return
+    }
+    setSelectedDateKey(soonest)
+    setWeekOffset(weekOffsetForKey(soonest))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduleBookings, sharedBookings])
 
   // ── actions ─────────────────────────────────────────────────────────────────
 
@@ -240,6 +327,49 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   ) => {
     if (!user || !athleteEditBooking) return { success: false, error: 'Not signed in.' }
     return await updateAthleteSlots(athleteEditBooking.id, slots, user.id, opts?.confirmedOverride)
+  }
+
+  // §2.16: leave a shared booking (confirm modal already shown). Owner is notified
+  // (M3 email) — no backend change; the popup copy just says so.
+  const handleLeaveShared = async () => {
+    if (!leaveBooking) return
+    setLeaveError(null)
+    setLeavingId(leaveBooking.id)
+    try {
+      await leaveBookingMut({ bookingId: leaveBooking.id as any })
+      setLeaveBooking(null)
+    } catch (err: any) {
+      setLeaveError(getErrorMessage(err) ?? 'Failed to leave booking.')
+    } finally {
+      setLeavingId(null)
+    }
+  }
+
+  // §2.11: open the messaging app pre-filled with a child's session details + door
+  // code. Mobile → sms: deep link; desktop → copy to clipboard.
+  const handleSmsDetails = (
+    childName: string,
+    slot: { startHour: number; durationMinutes: number; accessCode?: string },
+    booking: Booking,
+  ) => {
+    const lane = getLane(booking.laneId)
+    const variantName = getVariantName(booking)
+    const dateLabel = new Date(booking.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+    const timeRange = `${formatTime(slot.startHour)} – ${formatTime(slot.startHour + slot.durationMinutes / 60)}`
+    const laneName = (lane?.name ?? booking.laneId) + (variantName ? ` (${variantName})` : '')
+    const code = slot.accessCode ? formatAccessCode(slot.accessCode) : '—'
+    const body =
+      `${childName} — your cricket session 🏏\n${FACILITY.name}, ${FACILITY.address}\n` +
+      `${dateLabel} · ${timeRange}\nLane: ${laneName} · Coach: ${booking.customerName}\n🔑 Door code: ${code}`
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+    if (isMobile) {
+      window.location.href = `sms:?body=${encodeURIComponent(body)}`
+    } else {
+      navigator.clipboard?.writeText(body).then(
+        () => setToast('Details copied — paste into a message to your athlete.'),
+        () => setToast('Could not copy details.'),
+      )
+    }
   }
 
   // ── lane / pricing helpers ──────────────────────────────────────────────────
@@ -299,6 +429,9 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     // §6: allocation-coverage. amber border unless fully allocated.
     const cov = coverageSummary(booking)
     const coachColor = (customerRecord as any)?.color as string | undefined
+    // §2.13: an admin-managed coach booking is view+allocate only — hide
+    // Modify/Repeat/Cancel for non-admins (allocation stays available).
+    const adminLocked = !!booking.createdByAdmin && !isAdmin
 
     const cardBg = cov.state !== 'full'
       ? 'bg-orange-50 dark:bg-orange-900/10 border-orange-300 dark:border-orange-700/60'
@@ -342,8 +475,12 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           onSegment={(seg) => openAthleteEditor(booking, seg)}
         />
 
-        {/* Booking actions */}
-        {(
+        {/* Booking actions — hidden when admin-managed (allocation only). */}
+        {adminLocked ? (
+          <div className="mt-2.5 flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-gray-400" onClick={e => e.stopPropagation()}>
+            🔒 Managed by admin — contact admin to change
+          </div>
+        ) : (
           <div className="mt-2.5 flex gap-1.5 flex-wrap" onClick={e => e.stopPropagation()}>
             {cancelCheck.allowed && (
               <button
@@ -427,7 +564,9 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
               </div>
             </div>
           )}
-          <div className="mt-2 flex gap-1.5">
+          <div className="mt-2 flex gap-1.5 flex-wrap">
+            {/* §2.11: SMS the child their session details + door code. */}
+            <button onClick={() => handleSmsDetails(childName, mySlot, booking)} className="text-[11px] px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors">📱 SMS Details</button>
             <a href={generateGoogleCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">📅 Google</a>
             <a href={generateOutlookCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors">📆 Outlook</a>
           </div>
@@ -455,6 +594,10 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
               <span className="ml-1">· {formatDuration(booking.duration)}</span>
               <span className="ml-1 font-semibold text-emerald-600 dark:text-emerald-400">· ${price}</span>
             </div>
+            {/* §2.16 / §4: mate names on the customer card. */}
+            {booking.mates && booking.mates.length > 0 && (
+              <div className="mt-1"><MateNames bookingId={booking.id} /></div>
+            )}
           </div>
           <span className="text-lg">{lane?.icon ?? '🏏'}</span>
         </div>
@@ -492,6 +635,52 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     )
   }
 
+  // §2.16: a booking the user is a MATE on — same card shell, read-only. No price,
+  // no Modify/Cancel/Repeat/Add-a-Mate. Only action is Leave (→ confirm modal).
+  const renderSharedBookingCard = (b: SharedBooking) => {
+    const lane = getLane(b.laneId)
+    const variantName = b.variantId ? lane?.variants?.find(v => v.id === b.variantId)?.name ?? null : null
+    const calParams = { laneName: lane?.name ?? b.laneId, variantName: variantName ?? undefined, date: b.date, startHour: b.startHour, duration: b.duration, customerName: b.ownerName, accessCode: b.accessCode }
+    return (
+      <div key={`shared-${b.id}`} className="bg-white dark:bg-gray-900 rounded-xl border border-blue-100 dark:border-blue-900/40 p-4 shadow-sm">
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-base font-bold text-gray-900 dark:text-white">
+                {formatTime(b.startHour)} – {formatTime(b.startHour + b.duration / 60)}
+              </span>
+              <span className="text-[10px] font-semibold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded-full">👥 Shared</span>
+            </div>
+            <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              {lane?.icon} {lane?.name ?? b.laneId}
+              {variantName && <span className="ml-1">· {variantName}</span>}
+              <span className="ml-1">· {formatDuration(b.duration)}</span>
+            </div>
+            <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Booked by {b.ownerName}</div>
+            {b.otherMates.length > 0 && (
+              <div className="text-[11px] text-gray-400 mt-0.5">Also attending: {b.otherMates.join(', ')}</div>
+            )}
+          </div>
+          <span className="text-lg">{lane?.icon ?? '🏏'}</span>
+        </div>
+        {b.accessCode && (
+          <div className="mb-2 flex items-center gap-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg px-3 py-2 border border-blue-200 dark:border-blue-800/50">
+            <span>🔑</span>
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">Access Code</div>
+              <div className="text-sm font-mono font-bold tracking-[0.2em] text-blue-800 dark:text-blue-200">{formatAccessCode(b.accessCode)}</div>
+            </div>
+          </div>
+        )}
+        <div className="flex gap-1.5 flex-wrap">
+          <a href={generateGoogleCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">📅 Google</a>
+          <a href={generateOutlookCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors">📆 Outlook</a>
+          <button onClick={() => setLeaveBooking(b)} className="text-[11px] px-2.5 py-1 rounded-lg border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">Leave</button>
+        </div>
+      </div>
+    )
+  }
+
   const renderBookingCard = (booking: Booking) => {
     const isOwner = !!user && (
       booking.customerEmail.toLowerCase() === user.email.toLowerCase() ||
@@ -502,68 +691,8 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     return renderCustomerBookingCard(booking)
   }
 
-  // ── coach schedule: flat date-grouped list of ALL upcoming bookings ──────────
-
-  // §7: compact Mon–Sun week strip of the coach's own sessions. Tap a session →
-  // existing ModifyBookingModal; the allocation timeline taps → seeded editor.
-  const renderCoachWeek = () => {
-    const coachColor = (customerRecord as any)?.color as string | undefined
-    const covBadge = (b: Booking) => {
-      const cov = coverageSummary(b)
-      if (cov.state === 'full') return null // no badge when fully allocated
-      if (cov.state === 'empty') return <span className="text-[9px] font-semibold bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 px-1.5 py-0.5 rounded-full uppercase">No athletes</span>
-      return <span className="text-[9px] font-semibold bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 px-1.5 py-0.5 rounded-full uppercase">{formatDuration(cov.unallocatedHours * 60)} free</span>
-    }
-    return (
-      <div className="space-y-3">
-        {/* Week nav */}
-        <div className="flex items-center justify-between bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 px-4 py-2.5">
-          <button onClick={() => setWeekOffset(w => w - 1)} className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm">‹</button>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">{weekMonthLabel}</span>
-            {weekOffset !== 0 && (
-              <button onClick={() => setWeekOffset(0)} className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-1.5 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800/50 hover:bg-emerald-100 transition-colors">This week</button>
-            )}
-          </div>
-          <button onClick={() => setWeekOffset(w => w + 1)} className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm">›</button>
-        </div>
-        {/* 7 day rows */}
-        <div className="space-y-2">
-          {weekDays.map(d => {
-            const dayBookings = scheduleBookings.filter(b => b.date === d.key)
-            const isTodayCol = d.key === todayKey
-            return (
-              <div key={d.key} className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-3">
-                <div className="flex items-center gap-2 mb-1.5">
-                  <span className={`text-xs font-bold ${isTodayCol ? 'text-amber-600 dark:text-amber-400' : 'text-gray-700 dark:text-gray-300'}`}>{d.label}</span>
-                  <span className="text-[10px] text-gray-400">{d.date.toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}</span>
-                </div>
-                {dayBookings.length === 0 ? (
-                  <div className="text-xs text-gray-300 dark:text-gray-600">—</div>
-                ) : (
-                  <div className="space-y-2">
-                    {dayBookings.map(b => {
-                      const lane = getLane(b.laneId)
-                      return (
-                        <div key={b.id} className="rounded-lg border border-gray-200 dark:border-gray-700 p-2">
-                          <button onClick={() => setModifyBookingData(b)} className="w-full text-left flex items-center gap-2">
-                            <span className="text-xs font-semibold text-gray-900 dark:text-white">{formatTime(b.startHour)}–{formatTime(b.startHour + b.duration / 60)}</span>
-                            <span className="text-[10px] text-gray-400">{lane?.shortName ?? b.laneId}</span>
-                            <span className="ml-auto">{covBadge(b)}</span>
-                          </button>
-                          <AllocationTimeline booking={b} coachColor={coachColor} onSegment={(seg) => openAthleteEditor(b, seg)} />
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    )
-  }
+  // ── coach List view: flat date-grouped list of ALL upcoming bookings ─────────
+  // (§2.12 — includes admin blocks beyond the coach's Week window.)
 
   const renderCoachSchedule = () => {
     // Group all upcoming bookings by date
@@ -679,6 +808,96 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     )
   }
 
+  // ── unified day view (§2): date strip + status dots + the selected day's cards ─
+  const renderDayView = () => {
+    const selectedLabel = new Date(selectedDateKey + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+    return (
+      <div className="space-y-3">
+        {/* Date strip */}
+        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden">
+          {/* Month + nav (L1 coaches use a fixed rolling window — no nav) */}
+          {!isL1Coach && (
+            <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 dark:border-gray-800">
+              <button
+                onClick={() => setWeekOffset(w => Math.max(0, w - 1))}
+                disabled={weekOffset === 0}
+                className={`w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-colors ${weekOffset === 0 ? 'text-gray-300 dark:text-gray-700 cursor-not-allowed' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'}`}
+              >‹</button>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">{stripRangeLabel}</span>
+                {weekOffset !== 0 && (
+                  <button
+                    onClick={() => { setWeekOffset(0); setSelectedDateKey(todayKey) }}
+                    className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-1.5 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800/50 hover:bg-emerald-100 transition-colors"
+                  >Today</button>
+                )}
+              </div>
+              <button
+                onClick={() => setWeekOffset(w => w + 1)}
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm"
+              >›</button>
+            </div>
+          )}
+          {/* Day cells + status dots */}
+          <div className={`grid ${isL1Coach ? 'grid-cols-8' : 'grid-cols-7'} gap-0`}>
+            {stripDays.map(({ date, key, label }) => {
+              const isTodayCol = key === todayKey
+              const isSelected = key === selectedDateKey
+              const ownDay = scheduleBookings.filter(b => b.date === key)
+              const sharedDay = sharedBookings.filter(b => b.date === key)
+              const dot = isCoach
+                ? dayDotState(ownDay, true)
+                : (ownDay.length + sharedDay.length > 0 ? 'green' : null)
+              const dotColor = dot === 'red' ? 'bg-red-500' : dot === 'amber' ? 'bg-amber-400' : dot === 'green' ? 'bg-emerald-400' : null
+              return (
+                <button
+                  key={key}
+                  onClick={() => setSelectedDateKey(key)}
+                  className={`flex flex-col items-center py-2.5 px-1 transition-all relative ${
+                    isSelected
+                      ? 'bg-emerald-500 text-white'
+                      : isTodayCol
+                        ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400'
+                        : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
+                  }`}
+                >
+                  <span className={`text-[10px] font-semibold uppercase tracking-wide mb-0.5 ${isSelected ? 'text-white/80' : ''}`}>{label}</span>
+                  <span className={`text-sm font-bold leading-none ${isSelected ? 'text-white' : ''}`}>{date.getDate()}</span>
+                  {dotColor
+                    ? <div className="flex mt-1"><div className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white/80' : dotColor}`} /></div>
+                    : <div className="h-2 mt-1" />}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Selected day cards */}
+        {dayItems.length === 0 ? (
+          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-8 text-center">
+            <div className="text-3xl mb-2">📭</div>
+            <h3 className="font-semibold text-gray-700 dark:text-gray-300 text-sm">No Active Bookings</h3>
+            <p className="text-xs text-gray-400 mt-1">{selectedLabel}</p>
+            {/* §2.15: no "Book Now" on past days. */}
+            {selectedDateKey >= todayKey && (
+              <Link to="/" search={{ date: selectedDateKey }} className="inline-block mt-3 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold rounded-xl transition-colors">
+                Book Now
+              </Link>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">{selectedLabel}</h3>
+              <span className="text-[10px] bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 px-1.5 py-0.5 rounded-full">{dayItems.length}</span>
+            </div>
+            {dayItems.map(item => item.kind === 'own' ? renderBookingCard(item.b) : renderSharedBookingCard(item.b))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   // ── render ───────────────────────────────────────────────────────────────────
 
   return (
@@ -740,8 +959,14 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
         </div>
       )}
 
-      {/* SPEC_ADD_A_MATE: bookings someone else added you to (read-only). */}
-      <MateBookingsSection />
+      {/* §2.11: SMS-details copied toast (desktop). */}
+      {toast && (
+        <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl p-3 border border-emerald-200 dark:border-emerald-800/50">
+          <span>✅</span>
+          <p className="text-sm text-emerald-700 dark:text-emerald-400 flex-1">{toast}</p>
+          <button onClick={() => setToast(null)} className="text-emerald-400 hover:text-emerald-600 text-xs">✕</button>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-xl p-1 overflow-x-auto">
@@ -763,109 +988,24 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
         ))}
       </div>
 
-      {/* ── SCHEDULE TAB — coaches: List ⇄ Week (§7) ── */}
-      {activeTab === 'schedule' && isCoach && (
+      {/* ── SCHEDULE TAB — unified day view; coaches toggle Week | List (§2.12) ── */}
+      {activeTab === 'schedule' && (
         <div className="space-y-3">
-          <div className="flex justify-end">
-            <div className="inline-flex bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5">
-              <button
-                onClick={() => setCoachViewPersist('list')}
-                className={`text-xs font-semibold px-3 py-1 rounded-md transition-all ${coachView === 'list' ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-800 dark:text-gray-200' : 'text-gray-500 dark:text-gray-400'}`}
-              >List</button>
-              <button
-                onClick={() => setCoachViewPersist('week')}
-                className={`text-xs font-semibold px-3 py-1 rounded-md transition-all ${coachView === 'week' ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-800 dark:text-gray-200' : 'text-gray-500 dark:text-gray-400'}`}
-              >Week</button>
-            </div>
-          </div>
-          {coachView === 'week' ? renderCoachWeek() : renderCoachSchedule()}
-        </div>
-      )}
-
-      {/* ── SCHEDULE TAB — customers keep the week-strip view ── */}
-      {activeTab === 'schedule' && !isCoach && (
-        <div className="space-y-3">
-          {/* Week strip */}
-          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden">
-            {/* Month + nav */}
-            <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-100 dark:border-gray-800">
-              <button
-                onClick={() => setWeekOffset(w => w - 1)}
-                className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm"
-              >‹</button>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">{weekMonthLabel}</span>
-                {weekOffset !== 0 && (
-                  <button
-                    onClick={() => { setWeekOffset(0); setSelectedDateKey(todayKey) }}
-                    className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-1.5 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800/50 hover:bg-emerald-100 transition-colors"
-                  >Today</button>
-                )}
+          {isCoach && (
+            <div className="flex justify-end">
+              <div className="inline-flex bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5">
+                <button
+                  onClick={() => setCoachView('week')}
+                  className={`text-xs font-semibold px-3 py-1 rounded-md transition-all ${coachView === 'week' ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-800 dark:text-gray-200' : 'text-gray-500 dark:text-gray-400'}`}
+                >Week</button>
+                <button
+                  onClick={() => setCoachView('list')}
+                  className={`text-xs font-semibold px-3 py-1 rounded-md transition-all ${coachView === 'list' ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-800 dark:text-gray-200' : 'text-gray-500 dark:text-gray-400'}`}
+                >List</button>
               </div>
-              <button
-                onClick={() => setWeekOffset(w => w + 1)}
-                className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm"
-              >›</button>
-            </div>
-            {/* 7-day grid */}
-            <div className="grid grid-cols-7 gap-0">
-              {weekDays.map(({ date, key, label, hasBookings, hasUnallocated }) => {
-                const isToday = key === todayKey
-                const isSelected = key === selectedDateKey
-                return (
-                  <button
-                    key={key}
-                    onClick={() => setSelectedDateKey(key)}
-                    className={`flex flex-col items-center py-2.5 px-1 transition-all relative ${
-                      isSelected
-                        ? 'bg-emerald-500 text-white'
-                        : isToday
-                          ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400'
-                          : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
-                    }`}
-                  >
-                    <span className={`text-[10px] font-semibold uppercase tracking-wide mb-0.5 ${isSelected ? 'text-white/80' : ''}`}>{label}</span>
-                    <span className={`text-sm font-bold leading-none ${isSelected ? 'text-white' : ''}`}>{date.getDate()}</span>
-                    {/* Dot indicators */}
-                    {hasBookings && (
-                      <div className="flex gap-0.5 mt-1">
-                        {hasUnallocated && (
-                          <div className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white/80' : 'bg-orange-400'}`} />
-                        )}
-                        {!hasUnallocated && (
-                          <div className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white/80' : 'bg-emerald-400'}`} />
-                        )}
-                      </div>
-                    )}
-                    {!hasBookings && <div className="h-2 mt-1" />}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          {/* Selected day bookings */}
-          {selectedDayBookings.length === 0 ? (
-            <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-8 text-center">
-              <div className="text-3xl mb-2">📭</div>
-              <h3 className="font-semibold text-gray-700 dark:text-gray-300 text-sm">
-                Nothing booked for {new Date(selectedDateKey + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
-              </h3>
-              {selectedDateKey === todayKey && (
-                <p className="text-xs text-gray-400 mt-1">Book a session from the calendar!</p>
-              )}
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-                  {new Date(selectedDateKey + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}
-                </h3>
-                <span className="text-[10px] bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 px-1.5 py-0.5 rounded-full">{selectedDayBookings.length}</span>
-              </div>
-              {selectedDayBookings.map(renderBookingCard)}
             </div>
           )}
+          {isCoach && coachView === 'list' ? renderCoachSchedule() : renderDayView()}
         </div>
       )}
 
@@ -1012,6 +1152,35 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           defaultSessionDuration={(customerRecord as any)?.defaultSessionDuration ?? undefined}
           athleteCapacity={(customerRecord as any)?.athleteCapacity ?? undefined}
         />
+      )}
+
+      {/* §2.16: leave a shared booking — confirm modal. */}
+      {leaveBooking && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => { if (!leavingId) { setLeaveBooking(null); setLeaveError(null) } }} />
+          <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm p-5">
+            <h3 className="text-base font-bold text-gray-900 dark:text-white mb-2">Leave this booking?</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              You'll lose access to the door code for this session, and you'll need a new invite to rejoin.
+              <span className="font-semibold"> The booking owner will be notified that you've left.</span>
+            </p>
+            {leaveError && (
+              <p className="text-xs text-red-600 dark:text-red-400 mt-2">{leaveError}</p>
+            )}
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={() => { setLeaveBooking(null); setLeaveError(null) }}
+                disabled={!!leavingId}
+                className="flex-1 py-2.5 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all disabled:opacity-50"
+              >Stay</button>
+              <button
+                onClick={handleLeaveShared}
+                disabled={!!leavingId}
+                className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-xl transition-all disabled:opacity-50"
+              >{leavingId ? 'Leaving…' : 'Leave booking'}</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
