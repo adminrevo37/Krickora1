@@ -15,6 +15,46 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        // Split the big, rarely-changing vendor libs into their own long-cached
+        // chunks so an app code change no longer busts the whole vendor bundle,
+        // and the initial entry chunk shrinks. Route components are already
+        // code-split by tanstackRouter({ autoCodeSplitting: true }); recharts +
+        // its d3 deps are pulled into a "charts" chunk so they stay a single
+        // separately-cacheable unit (still only fetched by the lazy
+        // admin.analytics route). Path-matching (function) form is used rather
+        // than the object form because the object form leaves react-dom /
+        // framer-motion in the entry chunk under React 19's jsx-runtime imports.
+        // react + react-dom + scheduler MUST share one chunk to keep a single
+        // React instance (see resolve.dedupe below).
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id))
+            return "react";
+          if (/[\\/]node_modules[\\/]@tanstack[\\/]/.test(id)) return "router";
+          if (
+            /[\\/]node_modules[\\/](convex|better-auth|@convex-dev)[\\/]/.test(id)
+          )
+            return "convex";
+          if (
+            /[\\/]node_modules[\\/](framer-motion|motion-dom|motion-utils)[\\/]/.test(
+              id,
+            )
+          )
+            return "motion";
+          if (
+            /[\\/]node_modules[\\/](recharts|recharts-scale|d3-[^\\/]+|victory-vendor|internmap)[\\/]/.test(
+              id,
+            )
+          )
+            return "charts";
+          return undefined;
+        },
+      },
+    },
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
