@@ -383,9 +383,15 @@ export function useAuth() {
     }
   }, [updateCustomerMutation])
 
+  // True once the signed-in user's Convex customer record has actually resolved
+  // (not just betterAuthUser). The postcode gate must wait for this, else it flashes
+  // on refresh while the record is still in flight (user.postcode is briefly undefined).
+  const profileReady = isAuthenticated && customerRecord !== undefined
+
   return {
     user,
     isAuthenticated,
+    profileReady,
     isCoach,
     isCustomer,
     isAdmin,

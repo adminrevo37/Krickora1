@@ -8,7 +8,7 @@ import { useImpersonation } from '../hooks/useImpersonation'
 import { useLaneConfig } from '../hooks/useLaneConfig'
 
 function RootComponent() {
-  const { user, isAuthenticated, isAdmin, isCoach, isLoading } = useAuth()
+  const { user, isAuthenticated, profileReady, isAdmin, isCoach, isLoading } = useAuth()
   const { impersonatedUser, isImpersonating, exitImpersonation } = useImpersonation()
   // SPEC_RECONFIGURABLE_LANES: hydrate the lane-config store once for the whole app.
   useLaneConfig()
@@ -155,7 +155,7 @@ function RootComponent() {
 
       {/* SPEC_PROFILE_POSTCODE_SUBURB — hard-block gate: signed-in non-admin users (and
           not while impersonating) must supply postcode + suburb before using the app. */}
-      {isAuthenticated && user && user.role !== 'admin' && !isImpersonating &&
+      {isAuthenticated && user && profileReady && user.role !== 'admin' && !isImpersonating &&
         (!user.postcode || !user.suburb) && (
           <PostcodeRequiredModal email={user.email} />
         )}
