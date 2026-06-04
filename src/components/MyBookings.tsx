@@ -102,6 +102,14 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     setAthleteEditSeed(seg && !seg.allocated ? { startHour: seg.startHour, durationMinutes: seg.durationMinutes } : null)
     setAthleteEditBooking(booking)
   }
+  // §7: coach Schedule tab List ⇄ Week toggle (persisted).
+  const [coachView, setCoachView] = useState<'list' | 'week'>(() => {
+    try { return (localStorage.getItem('coachScheduleView') as 'list' | 'week') || 'list' } catch { return 'list' }
+  })
+  const setCoachViewPersist = (v: 'list' | 'week') => {
+    setCoachView(v)
+    try { localStorage.setItem('coachScheduleView', v) } catch {}
+  }
 
   const coachIdForAthletes = customerRecord?._id ?? user?.email ?? ''
 
@@ -496,6 +504,67 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
 
   // ── coach schedule: flat date-grouped list of ALL upcoming bookings ──────────
 
+  // §7: compact Mon–Sun week strip of the coach's own sessions. Tap a session →
+  // existing ModifyBookingModal; the allocation timeline taps → seeded editor.
+  const renderCoachWeek = () => {
+    const coachColor = (customerRecord as any)?.color as string | undefined
+    const covBadge = (b: Booking) => {
+      const cov = coverageSummary(b)
+      if (cov.state === 'full') return <span className="text-[9px] font-semibold bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded-full uppercase">Full</span>
+      if (cov.state === 'empty') return <span className="text-[9px] font-semibold bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 px-1.5 py-0.5 rounded-full uppercase">No athletes</span>
+      return <span className="text-[9px] font-semibold bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 px-1.5 py-0.5 rounded-full uppercase">{formatDuration(cov.unallocatedHours * 60)} free</span>
+    }
+    return (
+      <div className="space-y-3">
+        {/* Week nav */}
+        <div className="flex items-center justify-between bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 px-4 py-2.5">
+          <button onClick={() => setWeekOffset(w => w - 1)} className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm">‹</button>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">{weekMonthLabel}</span>
+            {weekOffset !== 0 && (
+              <button onClick={() => setWeekOffset(0)} className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 px-1.5 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800/50 hover:bg-emerald-100 transition-colors">This week</button>
+            )}
+          </div>
+          <button onClick={() => setWeekOffset(w => w + 1)} className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-sm">›</button>
+        </div>
+        {/* 7 day rows */}
+        <div className="space-y-2">
+          {weekDays.map(d => {
+            const dayBookings = scheduleBookings.filter(b => b.date === d.key)
+            const isTodayCol = d.key === todayKey
+            return (
+              <div key={d.key} className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-3">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className={`text-xs font-bold ${isTodayCol ? 'text-amber-600 dark:text-amber-400' : 'text-gray-700 dark:text-gray-300'}`}>{d.label}</span>
+                  <span className="text-[10px] text-gray-400">{d.date.toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}</span>
+                </div>
+                {dayBookings.length === 0 ? (
+                  <div className="text-xs text-gray-300 dark:text-gray-600">—</div>
+                ) : (
+                  <div className="space-y-2">
+                    {dayBookings.map(b => {
+                      const lane = getLane(b.laneId)
+                      return (
+                        <div key={b.id} className="rounded-lg border border-gray-200 dark:border-gray-700 p-2">
+                          <button onClick={() => setModifyBookingData(b)} className="w-full text-left flex items-center gap-2">
+                            <span className="text-xs font-semibold text-gray-900 dark:text-white">{formatTime(b.startHour)}–{formatTime(b.startHour + b.duration / 60)}</span>
+                            <span className="text-[10px] text-gray-400">{lane?.shortName ?? b.laneId}</span>
+                            <span className="ml-auto">{covBadge(b)}</span>
+                          </button>
+                          <AllocationTimeline booking={b} coachColor={coachColor} onSegment={(seg) => openAthleteEditor(b, seg)} />
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
   const renderCoachSchedule = () => {
     // Group all upcoming bookings by date
     const byDate: Record<string, Booking[]> = {}
@@ -694,8 +763,24 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
         ))}
       </div>
 
-      {/* ── SCHEDULE TAB — coaches see all upcoming in a flat list ── */}
-      {activeTab === 'schedule' && isCoach && renderCoachSchedule()}
+      {/* ── SCHEDULE TAB — coaches: List ⇄ Week (§7) ── */}
+      {activeTab === 'schedule' && isCoach && (
+        <div className="space-y-3">
+          <div className="flex justify-end">
+            <div className="inline-flex bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5">
+              <button
+                onClick={() => setCoachViewPersist('list')}
+                className={`text-xs font-semibold px-3 py-1 rounded-md transition-all ${coachView === 'list' ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-800 dark:text-gray-200' : 'text-gray-500 dark:text-gray-400'}`}
+              >List</button>
+              <button
+                onClick={() => setCoachViewPersist('week')}
+                className={`text-xs font-semibold px-3 py-1 rounded-md transition-all ${coachView === 'week' ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-800 dark:text-gray-200' : 'text-gray-500 dark:text-gray-400'}`}
+              >Week</button>
+            </div>
+          </div>
+          {coachView === 'week' ? renderCoachWeek() : renderCoachSchedule()}
+        </div>
+      )}
 
       {/* ── SCHEDULE TAB — customers keep the week-strip view ── */}
       {activeTab === 'schedule' && !isCoach && (
