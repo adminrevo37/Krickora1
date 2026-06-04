@@ -8,6 +8,7 @@
  */
 import { mutation, query } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
+import { internal } from "./_generated/api";
 import { requireAdmin } from "./lib/adminGuard";
 import { enforceRateLimit } from "./lib/rateLimit";
 
@@ -80,7 +81,7 @@ export const submitFaultReport = mutation({
       reportedByName = customer?.name ?? (identity?.name as string | undefined);
     }
 
-    return await ctx.db.insert("faultReports", {
+    const reportId = await ctx.db.insert("faultReports", {
       laneId: args.laneId,
       category: args.category,
       details,
@@ -90,6 +91,16 @@ export const submitFaultReport = mutation({
       status: "open",
       createdAt: new Date().toISOString(),
     });
+
+    // SPEC_PWA_PUSH §5.1 — admin operational alert (new fault report).
+    await ctx.scheduler.runAfter(0, internal.push.sendAdminPush, {
+      title: "New fault report",
+      body: `${args.laneId ? `${args.laneId}: ` : ""}${details.slice(0, 100)}`,
+      url: "/admin",
+      tag: `fault-${reportId.toString()}`,
+    });
+
+    return reportId;
   },
 });
 

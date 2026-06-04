@@ -189,6 +189,20 @@ export const confirmBookingPayment = internalMutation({
         date: b.date,
         description,
       });
+
+      // SPEC_PWA_PUSH §5.1 — booking confirmation + door code push (customer).
+      // The email receipt above is the payment confirmation; this is the
+      // booking-confirmation push the customer sees once the card payment clears.
+      if (patch.status === "confirmed" && !b.isCoachBooking) {
+        await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+          email: b.customerEmail,
+          category: "booking-confirmation",
+          title: "Booking confirmed 🏏",
+          body: `${b.laneNameSnapshot ?? laneName} · ${b.date}${b.accessCode ? ` · Door code ${b.accessCode}` : ""}`,
+          url: "/bookings",
+          tag: `booking-${booking._id.toString()}`,
+        });
+      }
     }
 
     return { success: true, alreadyPaid: false };
@@ -215,6 +229,14 @@ export const markBookingPaymentFailed = internalMutation({
     await ctx.db.patch(booking._id, {
       paymentStatus: "failed",
       ...(args.stripeSessionId ? { stripeSessionId: args.stripeSessionId } : {}),
+    });
+
+    // SPEC_PWA_PUSH §5.1 — admin operational alert (payment failed).
+    await ctx.scheduler.runAfter(0, internal.push.sendAdminPush, {
+      title: "Payment failed",
+      body: `${b.customerName ?? b.customerEmail ?? "A customer"} — ${b.laneNameSnapshot ?? b.laneId} ${b.date}.`,
+      url: "/admin",
+      tag: `payfail-${booking._id.toString()}`,
     });
 
     return { success: true };

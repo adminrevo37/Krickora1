@@ -5,6 +5,7 @@ import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
 import { useAuth } from '../hooks/useAuth'
 import EmailNotificationsCard from '../components/EmailNotificationsCard'
+import PushNotificationsCard from '../components/PushNotificationsCard'
 import MyAthletesCard from '../components/MyAthletesCard'
 import MyMatesCard from '../components/MyMatesCard'
 import PostcodeSuburbFields, { isLocationComplete } from '../components/PostcodeSuburbFields'
@@ -246,6 +247,9 @@ function ProfilePage() {
           <MyMatesCard />
         </div>
       )}
+      <div className="mt-6">
+        <PushNotificationsCard />
+      </div>
       <div className="mt-6">
         <EmailNotificationsCard
           customerRecord={customerRecord}

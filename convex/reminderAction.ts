@@ -31,6 +31,16 @@ export const sendBookingReminders = internalAction({
           accessCode: booking.accessCode,
         });
 
+        // SPEC_PWA_PUSH §5.1 — session reminder push (customer), beside the email.
+        await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+          email: booking.customerEmail,
+          category: "session-reminders",
+          title: "Session reminder 🏏",
+          body: `${booking.laneName} · ${booking.date}, ${booking.timeSlot}${booking.accessCode ? ` · Door code ${booking.accessCode}` : ""}`,
+          url: "/bookings",
+          tag: `reminder-${booking.id}`,
+        });
+
         // Mark as reminded so we don't send again
         await ctx.runMutation(internal.reminderQueries.markReminderSent, {
           bookingId: booking.id,

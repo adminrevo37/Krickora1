@@ -268,6 +268,22 @@ export default function SettingsPanel() {
         </div>
       </div>
 
+      {/* Push Notifications (SPEC_PWA_PUSH_NOTIFICATIONS §5.7) */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h3 className="text-lg font-bold text-gray-800">🔔 Push Notifications</h3>
+          <p className="text-sm text-gray-500 mt-0.5">Master kill-switch for all web push. Email is never affected.</p>
+        </div>
+        <div className="p-6">
+          <ToggleRow
+            label="Push notifications enabled"
+            description="When off, no push notifications are sent to anyone (emails still send as normal). Turn off to instantly disable push without a deploy."
+            checked={settings.pushEnabledGlobal ?? true}
+            onChange={(v) => updateSettings({ pushEnabledGlobal: v })}
+          />
+        </div>
+      </div>
+
       {/* Admin Security Gate */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-100">

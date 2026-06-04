@@ -466,7 +466,41 @@ export default defineSchema({
     // SPEC_ADD_A_MATE "Misc Settings". Max mates a customer may add to one
     // booking (the owner is NOT counted). Default 3 → 4 people total per net.
     maxMatesPerBooking: v.optional(v.number()),          // default 3
+    // SPEC_PWA_PUSH_NOTIFICATIONS §5.7 global kill-switch. When false, sendPush
+    // short-circuits — all push disabled instantly without a deploy (email
+    // unaffected). Default true.
+    pushEnabledGlobal: v.optional(v.boolean()),
   }).index("by_key", ["key"]),
+
+  // ============================================================================
+  // WEB PUSH (SPEC_PWA_PUSH_NOTIFICATIONS) — additive, no migration.
+  // ============================================================================
+  // One row per subscribed device. Keyed by email (the stable per-person login
+  // identity, available at every notification send-site; §6 alt confirmed at
+  // build — admin/coach/customer are all one auth user, so email is the natural
+  // join key here). userId (auth subject) stored too for completeness.
+  pushSubscriptions: defineTable({
+    email: v.string(), // lowercased account email
+    userId: v.optional(v.string()), // Better Auth subject at subscribe time
+    endpoint: v.string(), // unique per device/browser
+    p256dh: v.string(),
+    auth: v.string(),
+    deviceLabel: v.string(), // e.g. "iPhone · Safari"
+    createdAt: v.number(),
+    lastSeenAt: v.number(),
+  })
+    .index("by_email", ["email"])
+    .index("by_endpoint", ["endpoint"]),
+
+  // Per-person push category preferences. categories is a sparse map
+  // categoryKey -> boolean; an ABSENT key defaults ON for the relevant role.
+  // categories is a sparse map categoryKey -> boolean. Uses v.record (not v.object)
+  // because the category keys contain hyphens, which object-validator identifiers
+  // disallow. An ABSENT key defaults ON for the relevant role.
+  pushPreferences: defineTable({
+    email: v.string(),
+    categories: v.record(v.string(), v.boolean()),
+  }).index("by_email", ["email"]),
 
   // Admin unlock sessions (SPEC_SECURITY_HARDENING #2). One row per admin email;
   // present + unexpired = that admin re-entered their password recently.

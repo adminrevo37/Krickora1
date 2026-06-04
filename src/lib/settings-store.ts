@@ -53,6 +53,7 @@ export interface SiteSettings {
   abandonedCheckoutMinutes?: number
   waitlistOfferHoldMinutes?: number
   maxMatesPerBooking?: number
+  pushEnabledGlobal?: boolean
   registrationLocked?: boolean
   adminGateEnabled?: boolean
   adminUnlockMinutes?: number
@@ -100,6 +101,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   abandonedCheckoutMinutes: 10,
   waitlistOfferHoldMinutes: 15,
   maxMatesPerBooking: 3,
+  pushEnabledGlobal: true,
   registrationLocked: false,
   adminGateEnabled: false,
   adminUnlockMinutes: 45,

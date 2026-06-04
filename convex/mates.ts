@@ -332,14 +332,24 @@ export const addMateToBooking = mutation({
 
     // M1 — tell the mate (with the door code + instructions).
     if (mate.email) {
+      const ownerNm = shortName(ownerCustomer?.name ?? booking.customerName ?? "A friend");
       await ctx.scheduler.runAfter(0, internal.emails.sendMateAdded, {
         to: mate.email,
-        ownerName: shortName(ownerCustomer?.name ?? booking.customerName ?? "A friend"),
+        ownerName: ownerNm,
         laneName: laneNm(booking),
         date: booking.date,
         timeSlot: fmtTime(booking.startHour),
         duration: fmtDur(booking.duration),
         accessCode: booking.accessCode ?? "",
+      });
+      // SPEC_PWA_PUSH §5.1 — mate added (M1) push.
+      await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+        email: mate.email,
+        category: "mate-alerts",
+        title: `${ownerNm} added you to a session 🏏`,
+        body: `${laneNm(booking)} · ${booking.date}, ${fmtTime(booking.startHour)}${booking.accessCode ? ` · Door code ${booking.accessCode}` : ""}`,
+        url: "/bookings",
+        tag: `mate-${args.bookingId.toString()}`,
       });
     }
     return { success: true };
@@ -376,12 +386,22 @@ export const removeMateFromBooking = mutation({
     // finished/in-progress session has nothing to notify about.
     const notStarted = bookingStartMs(booking.date, booking.startHour) > awstNowMs();
     if (mate?.email && notStarted) {
+      const ownerNm = shortName(ownerCustomer?.name ?? booking.customerName ?? "The booking owner");
       await ctx.scheduler.runAfter(0, internal.emails.sendMateRemoved, {
         to: mate.email,
-        ownerName: shortName(ownerCustomer?.name ?? booking.customerName ?? "The booking owner"),
+        ownerName: ownerNm,
         laneName: laneNm(booking),
         date: booking.date,
         timeSlot: fmtTime(booking.startHour),
+      });
+      // SPEC_PWA_PUSH §5.1 — mate removed (M2) push.
+      await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+        email: mate.email,
+        category: "mate-alerts",
+        title: "Removed from a shared session",
+        body: `${ownerNm} removed you from ${laneNm(booking)} · ${booking.date}, ${fmtTime(booking.startHour)}.`,
+        url: "/bookings",
+        tag: `mate-${args.bookingId.toString()}`,
       });
     }
     return { success: true };
@@ -575,14 +595,24 @@ export const acceptBookingInvite = mutation({
     if (ownerCustomer) await upsertFriendship(ctx, ownerCustomer._id, caller._id);
 
     if (caller.email) {
+      const ownerNm = shortName(ownerCustomer?.name ?? booking.customerName ?? "A friend");
       await ctx.scheduler.runAfter(0, internal.emails.sendMateAdded, {
         to: caller.email,
-        ownerName: shortName(ownerCustomer?.name ?? booking.customerName ?? "A friend"),
+        ownerName: ownerNm,
         laneName: laneNm(booking),
         date: booking.date,
         timeSlot: fmtTime(booking.startHour),
         duration: fmtDur(booking.duration),
         accessCode: booking.accessCode ?? "",
+      });
+      // SPEC_PWA_PUSH §5.1 — joined a shared session (M1) push.
+      await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+        email: caller.email,
+        category: "mate-alerts",
+        title: "You're in 🏏",
+        body: `Joined ${ownerNm}'s session · ${laneNm(booking)} · ${booking.date}, ${fmtTime(booking.startHour)}${booking.accessCode ? ` · Door code ${booking.accessCode}` : ""}`,
+        url: "/bookings",
+        tag: `mate-${invite.bookingId.toString()}`,
       });
     }
     return { status: "joined", bookingId: invite.bookingId };
@@ -615,6 +645,15 @@ export async function notifyMatesOnCancel(ctx: any, booking: any): Promise<void>
       laneName: laneNm(booking),
       date: booking.date,
       timeSlot: fmtTime(booking.startHour),
+    });
+    // SPEC_PWA_PUSH §5.1 — shared booking cancelled (M4) push.
+    await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+      email: c.email,
+      category: "mate-alerts",
+      title: "Shared session cancelled",
+      body: `${ownerName}'s session — ${laneNm(booking)} · ${booking.date}, ${fmtTime(booking.startHour)} is off.`,
+      url: "/bookings",
+      tag: `mate-${booking._id.toString()}`,
     });
   }
 }
@@ -657,6 +696,15 @@ export async function notifyMatesOnModify(
       newTimeSlot: fmtTime(change.newStartHour),
       newDuration: fmtDur(change.newDuration),
       accessCode: change.newAccessCode ?? booking.accessCode ?? "",
+    });
+    // SPEC_PWA_PUSH §5.1 — shared booking modified (M5) push.
+    await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+      email: c.email,
+      category: "mate-alerts",
+      title: "Shared session updated",
+      body: `${ownerName}'s session — now ${defaultLaneName(change.newLaneId)} · ${change.newDate}, ${fmtTime(change.newStartHour)}${(change.newAccessCode ?? booking.accessCode) ? ` · Door code ${change.newAccessCode ?? booking.accessCode}` : ""}`,
+      url: "/bookings",
+      tag: `mate-${booking._id.toString()}`,
     });
   }
 }

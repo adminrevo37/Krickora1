@@ -205,6 +205,17 @@ async function scheduleAllocationEmails(
         accessCode: code,
       });
     }
+    // SPEC_PWA_PUSH §5.1 — child coaching alert (parent), beside the email.
+    const pNames = entries.map((s) => s.name).join(" & ");
+    const pTime = entries.map((s) => fmtTimeRange(s.startHour, s.durationMinutes)).join("; ");
+    await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+      email: to,
+      category: "child-coaching",
+      title: "Coaching session booked",
+      body: `${pNames} — ${laneName}, ${formattedDate}, ${pTime}`,
+      url: "/bookings",
+      tag: `alloc-${opts.laneId}-${opts.date}`,
+    });
   }
 }
 
@@ -235,6 +246,14 @@ async function scheduleAthleteCancellationEmails(
       date: formattedDate,
       timeSlot,
     });
+    await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+      email: to,
+      category: "child-coaching",
+      title: "Coaching session cancelled",
+      body: `${names} — ${laneName}, ${formattedDate} is cancelled.`,
+      url: "/bookings",
+      tag: `alloc-${opts.laneId}-${opts.date}`,
+    });
   }
 }
 
@@ -263,6 +282,14 @@ async function scheduleAthleteRemovedEmails(
       laneName,
       date: formattedDate,
       timeSlot,
+    });
+    await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+      email: to,
+      category: "child-coaching",
+      title: "Removed from coaching session",
+      body: `${names} — ${laneName}, ${formattedDate}.`,
+      url: "/bookings",
+      tag: `alloc-${opts.laneId}-${opts.date}`,
     });
   }
 }
@@ -301,6 +328,14 @@ async function scheduleAthleteRescheduleEmails(
       timeSlot,
       duration: durationLabel(totalDur),
       accessCode: code,
+    });
+    await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+      email: to,
+      category: "child-coaching",
+      title: "Coaching session moved",
+      body: `${names} — now ${laneName}, ${formattedNew}, ${timeSlot}.`,
+      url: "/bookings",
+      tag: `alloc-${opts.laneId}-${opts.newDate}`,
     });
   }
 }
@@ -613,6 +648,17 @@ export async function applyBookingChange(
       newDuration: durationLabel(change.newDuration),
       accessCode: accessCode ?? "",
     });
+    // SPEC_PWA_PUSH §5.1 — booking change push (customer bookings only).
+    if (!booking.isCoachBooking) {
+      await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+        email: booking.customerEmail,
+        category: "booking-changes",
+        title: "Booking updated",
+        body: `${newSnap.laneNameSnapshot} · ${fmtAwstDateLabel(change.newDate)}, ${fmtHour12(change.newStartHour)}${accessCode ? ` · Door code ${accessCode}` : ""}`,
+        url: "/bookings",
+        tag: `booking-${booking._id.toString()}`,
+      });
+    }
   }
 
   // Coach bookings: notify affected athletes' parents + write the audit entry.
@@ -1117,6 +1163,28 @@ export const createBooking = mutation({
           creditApplied: args.creditApplied,
         }),
       );
+      // SPEC_PWA_PUSH §5.1 — booking confirmation push (customer bookings only;
+      // coach bookings get a coach-allocation push instead, below).
+      if (!args.isCoachBooking) {
+        await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+          email: args.customerEmail,
+          category: "booking-confirmation",
+          title: "Booking confirmed 🏏",
+          body: `${laneSnap.laneNameSnapshot ?? defaultLaneName(args.laneId)} · ${fmtAwstDateLabel(args.date)}, ${fmtTimeRange(args.startHour, args.duration)} · Door code ${bookingAccessCode}`,
+          url: "/bookings",
+          tag: `booking-${id.toString()}`,
+        });
+      } else if (args.createdByAdmin) {
+        // "Your booking created by admin (admin-managed)" → coach.
+        await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+          email: args.customerEmail,
+          category: "coach-allocation",
+          title: "Session booked for you",
+          body: `${laneSnap.laneNameSnapshot ?? defaultLaneName(args.laneId)} · ${fmtAwstDateLabel(args.date)}, ${fmtTimeRange(args.startHour, args.duration)}`,
+          url: "/bookings",
+          tag: `booking-${id.toString()}`,
+        });
+      }
     }
 
     // Send athlete allocation emails for coach bookings with initial athlete
@@ -1365,6 +1433,17 @@ export const updateBooking = mutation({
           newDuration: fmtDUpd(effNewDuration),
           accessCode: (cleanUpdates as any).accessCode ?? (existing as any).accessCode ?? "",
         });
+        // SPEC_PWA_PUSH §5.1 — booking change push (customer bookings only).
+        if (!(existing as any).isCoachBooking) {
+          await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+            email: notifyEmail,
+            category: "booking-changes",
+            title: "Booking updated",
+            body: `${defaultLaneName(effNewLaneId)} · ${fmtAwstDateLabel(effNewDate)}, ${fmtTUpd(effNewStartHour)}`,
+            url: "/bookings",
+            tag: `booking-${id.toString()}`,
+          });
+        }
       }
     }
 
@@ -1524,6 +1603,19 @@ export const cancelBooking = mutation({
         timeSlot,
         duration: durationLabel,
       });
+      // SPEC_PWA_PUSH §5.1 — booking cancellation push (customer), only when
+      // cancelled by admin/system (not the customer themselves).
+      const selfCancel = args.cancelledByUserId != null && args.cancelledByUserId === booking.userId;
+      if (!booking.isCoachBooking && !selfCancel) {
+        await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+          email: booking.customerEmail,
+          category: "booking-changes",
+          title: "Booking cancelled",
+          body: `${booking.laneNameSnapshot || defaultLaneName(booking.laneId)} · ${fmtAwstDateLabel(booking.date)}, ${timeSlot}`,
+          url: "/bookings",
+          tag: `booking-${args.id.toString()}`,
+        });
+      }
     }
 
     // Bug #1: notify allocated athletes that the coach session is cancelled.
@@ -1600,6 +1692,17 @@ export const deleteBooking = mutation({
           timeSlot,
           duration: durationLabel,
         });
+        // SPEC_PWA_PUSH §5.1 — admin deleted the booking (customer bookings).
+        if (!delBooking.isCoachBooking) {
+          await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+            email: delBooking.customerEmail,
+            category: "booking-changes",
+            title: "Booking cancelled",
+            body: `${delBooking.laneNameSnapshot || defaultLaneName(delBooking.laneId)} · ${fmtAwstDateLabel(delBooking.date)}, ${timeSlot}`,
+            url: "/bookings",
+            tag: `booking-${args.id.toString()}`,
+          });
+        }
       }
     }
 
@@ -2186,6 +2289,19 @@ export const updateBookingAthleteSlots = mutation({
         bookingAccessCode: booking.accessCode,
         coachName: booking.customerName,
       });
+      // SPEC_PWA_PUSH §5.1 — coach allocation alert. Only when someone OTHER than
+      // the coach (i.e. an admin) allocated to their session — a coach allocating
+      // their own athletes doesn't need a push to themselves.
+      if (!aIsOwner && booking.customerEmail) {
+        await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+          email: booking.customerEmail,
+          category: "coach-allocation",
+          title: "Athletes allocated to your session",
+          body: `${(booking.laneNameSnapshot || defaultLaneName(booking.laneId))} · ${fmtAwstDateLabel(booking.date)} — ${changedSlots.length} athlete${changedSlots.length === 1 ? "" : "s"}`,
+          url: "/bookings",
+          tag: `coachalloc-${args.id.toString()}`,
+        });
+      }
     }
 
     // decision #3a: notify athletes dropped from the booking during this edit
@@ -3389,6 +3505,7 @@ export const updateSiteSettings = mutation({
     abandonedCheckoutMinutes: v.optional(v.number()),
     waitlistOfferHoldMinutes: v.optional(v.number()),
     maxMatesPerBooking: v.optional(v.number()),
+    pushEnabledGlobal: v.optional(v.boolean()),
     dailyHours: v.optional(
       v.array(
         v.object({

@@ -24,6 +24,7 @@ const REMOTE_SCALAR_KEYS = [
   'modifyMoveEarlierMaxHours',
   'coachLateCancellationHours', 'abandonedCheckoutMinutes',
   'waitlistOfferHoldMinutes', 'maxMatesPerBooking',
+  'pushEnabledGlobal',
   'registrationLocked', 'adminGateEnabled', 'adminUnlockMinutes',
 ] as const
 

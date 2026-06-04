@@ -119,6 +119,17 @@ export async function systemCancelBooking(
       duration: durationLabel,
       reason: opts.reason,
     });
+    // SPEC_PWA_PUSH §5.1 — system/admin cancellation (closure → credit), customer.
+    if (!booking.isCoachBooking) {
+      await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+        email: booking.customerEmail,
+        category: "booking-changes",
+        title: "Booking cancelled",
+        body: `${LANE_NAMES[booking.laneId] ?? booking.laneId} · ${booking.date}, ${timeSlot}${opts.reason ? ` — ${opts.reason}` : ""}. Credit issued.`,
+        url: "/bookings",
+        tag: `booking-${booking._id.toString()}`,
+      });
+    }
   }
 
   return {

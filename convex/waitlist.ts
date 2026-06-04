@@ -277,6 +277,16 @@ export const advanceWaitlistOffer = internalMutation({
       offerDeadline: `${fmtAwstTime(expiresAtMs)} AWST`,
     });
 
+    // SPEC_PWA_PUSH §5.1 — waitlist vacancy offer push (time-sensitive).
+    await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+      email: next.userEmail,
+      category: "waitlist-offers",
+      title: "A net opened up 🏏",
+      body: `${laneName} · ${fmtAwstDateLabel(date)}, ${fmtHour12(hour)} - ${fmtHour12(hour + 1)} — reserved for you until ${fmtAwstTime(expiresAtMs)} AWST.`,
+      url: `/?book=${offerLane}&date=${date}&hour=${hour}`,
+      tag: `waitlist-${offerLane}-${date}-${hour}`,
+    });
+
     // 7. Roll on at expiry if they don't book.
     await ctx.scheduler.runAfter(holdMs, internal.waitlist.advanceWaitlistOffer, {
       laneId: preferLaneId,

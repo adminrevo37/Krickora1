@@ -4,6 +4,8 @@ import { useAuth } from '../hooks/useAuth'
 import { signOutUser } from '../lib/auth-client'
 import AuthModal from '../components/AuthModal'
 import PostcodeRequiredModal from '../components/PostcodeRequiredModal'
+import PwaUpdater from '../components/PwaUpdater'
+import InstallPrompt, { openInstallHelp } from '../components/InstallPrompt'
 import { useImpersonation } from '../hooks/useImpersonation'
 import { useLaneConfig } from '../hooks/useLaneConfig'
 
@@ -86,6 +88,9 @@ function RootComponent() {
                           <Link to="/payments" onClick={() => setShowUserMenu(false)} className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
                             <span>💳</span> Payments &amp; Credit
                           </Link>
+                          <button onClick={() => { setShowUserMenu(false); openInstallHelp() }} className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
+                            <span>📲</span> Install app
+                          </button>
                           <div className="my-1 border-t border-gray-100" />
                           <button onClick={async () => { await signOutUser(); setShowUserMenu(false) }} className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg">
                             <span>🚪</span> Sign Out
@@ -146,10 +151,19 @@ function RootComponent() {
               <span className="text-lg">🏏</span>
               <span className="font-semibold text-red-600">Cricket Revolution Training Nets</span>
             </div>
-            <p className="text-sm text-gray-500">&copy; {new Date().getFullYear()} Cricket Revolution Training Nets.</p>
+            <div className="flex items-center gap-4">
+              <button onClick={() => openInstallHelp()} className="text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2">
+                Install app
+              </button>
+              <p className="text-sm text-gray-500">&copy; {new Date().getFullYear()} Cricket Revolution Training Nets.</p>
+            </div>
           </div>
         </div>
       </footer>
+
+      {/* PWA: SW update toast + install/enable nudge (SPEC_PWA_PUSH_NOTIFICATIONS) */}
+      <PwaUpdater />
+      <InstallPrompt />
 
       {showAuth && <AuthModal onClose={() => setShowAuth(false)} onSuccess={() => setShowAuth(false)} />}
 
