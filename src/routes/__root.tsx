@@ -21,11 +21,14 @@ function RootComponent() {
   return (
     <div className="min-h-screen bg-white text-gray-900">
       {/* paddingTop = iOS safe-area inset so the header content clears the status
-          bar / clock / notch in the installed PWA (0 in a normal browser tab).
-          The white/blur background fills behind the status bar; content sits below it. */}
+          bar in the installed PWA (0 in a normal browser tab). The raw inset
+          conservatively clears the centered Dynamic Island/notch for full-width
+          content; the logo/buttons sit at the left/right edges (beside the island),
+          so we tighten by ~10px to sit just below the status-bar signal/clock and
+          not waste a tall empty bar. The white/blur bg still fills behind the bar. */}
       <header
         className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-gray-200"
-        style={{ paddingTop: 'env(safe-area-inset-top)' }}
+        style={{ paddingTop: 'max(0px, calc(env(safe-area-inset-top) - 0.625rem))' }}
       >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
@@ -120,7 +123,7 @@ function RootComponent() {
       {isImpersonating && impersonatedUser && (
         <div
           className="sticky z-40 bg-amber-500 text-white text-sm font-medium px-4 py-2 flex items-center justify-between gap-4 shadow-md"
-          style={{ top: 'calc(4rem + env(safe-area-inset-top))' }}
+          style={{ top: 'calc(4rem + max(0px, calc(env(safe-area-inset-top) - 0.625rem)))' }}
         >
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-base leading-none shrink-0">👁️</span>
