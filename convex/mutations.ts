@@ -96,6 +96,45 @@ function buildConfirmationEmailArgs(b: {
   };
 }
 
+// SPEC_ANALYTICS_ATHLETE_CATCHMENT: snapshot each athlete slot's home suburb.
+// Resolves athleteId -> athletes.accountCustomerId -> customers.{postcode,suburb}
+// (the parent/account holder; a self-athlete resolves to their own account, same
+// path) and writes athletePostcode/athleteSuburb onto the slot SERVER-SIDE. The
+// coach's own postcode is never read (R3). Slots with no athleteId, a deleted
+// athlete, or a parent with no postcode yet get no snapshot (left absent ->
+// "Unknown" in the report). Cached per athleteId. Every athlete-slot write site
+// routes through this so the snapshot stays consistent. Returns the slots with the
+// two fields attached (or the input unchanged when empty/undefined).
+async function attachAthleteSuburbs<T extends { athleteId?: any }>(
+  ctx: any,
+  slots: T[] | undefined
+): Promise<Array<T & { athletePostcode?: string; athleteSuburb?: string }> | undefined> {
+  if (!slots || slots.length === 0) return slots as any;
+  const cache = new Map<string, { postcode?: string; suburb?: string }>();
+  const out: Array<T & { athletePostcode?: string; athleteSuburb?: string }> = [];
+  for (const s of slots) {
+    let snap: { postcode?: string; suburb?: string } = {};
+    const aid = s.athleteId ? String(s.athleteId) : "";
+    if (aid) {
+      const cached = cache.get(aid);
+      if (cached !== undefined) {
+        snap = cached;
+      } else {
+        const athlete: any = await ctx.db.get(s.athleteId);
+        if (athlete?.accountCustomerId) {
+          const parent: any = await ctx.db.get(athlete.accountCustomerId);
+          if (parent?.postcode && parent?.suburb) {
+            snap = { postcode: parent.postcode, suburb: parent.suburb };
+          }
+        }
+        cache.set(aid, snap);
+      }
+    }
+    out.push({ ...s, athletePostcode: snap.postcode, athleteSuburb: snap.suburb });
+  }
+  return out;
+}
+
 // Resolve athlete slots to their owning ACCOUNT (parent) email + child name and
 // group them per account (sibling consolidation) — SPEC_PARENT_ATHLETE_MODEL.
 // Recipient = the account email; addressed with the child's name. Falls back to
@@ -1010,13 +1049,15 @@ export const createBooking = mutation({
     }
 
     // For coach bookings, all assigned athletes share the coach's access code
-    const normalizedAthleteSlots = args.athleteSlots && args.isCoachBooking
+    const codedAthleteSlots = args.athleteSlots && args.isCoachBooking
       ? args.athleteSlots.map((s) => ({
           ...s,
           accessCode: bookingAccessCode,
           codeGeneratedAt: s.codeGeneratedAt ?? new Date().toISOString(),
         }))
       : args.athleteSlots;
+    // SPEC_ANALYTICS_ATHLETE_CATCHMENT: snapshot each athlete's home suburb.
+    const normalizedAthleteSlots = await attachAthleteSuburbs(ctx, codedAthleteSlots);
 
     // SPEC_PROFILE_POSTCODE_SUBURB Addendum A: snapshot the booker's postcode/suburb
     // onto the booking for the catchment report. Customer + admin-manual bookings only
@@ -1325,11 +1366,13 @@ export const updateBooking = mutation({
     const effectiveCode = (cleanUpdates as any).accessCode ?? mergedExisting.accessCode;
     const effectiveSlots = (cleanUpdates as any).athleteSlots ?? mergedExisting.athleteSlots;
     if (isCoach && effectiveCode && Array.isArray(effectiveSlots)) {
-      (cleanUpdates as any).athleteSlots = effectiveSlots.map((s: any) => ({
+      const codedSlots = effectiveSlots.map((s: any) => ({
         ...s,
         accessCode: effectiveCode,
         codeGeneratedAt: s.codeGeneratedAt ?? new Date().toISOString(),
       }));
+      // SPEC_ANALYTICS_ATHLETE_CATCHMENT: re-snapshot each athlete's home suburb.
+      (cleanUpdates as any).athleteSlots = await attachAthleteSuburbs(ctx, codedSlots);
     }
 
     // Compute scheduling change info once (used for conflict check, GCal, email)
@@ -2271,8 +2314,10 @@ export const updateBookingAthleteSlots = mutation({
       };
     });
 
+    // SPEC_ANALYTICS_ATHLETE_CATCHMENT: snapshot each athlete's home suburb.
+    const finalSlotsWithSuburbs = await attachAthleteSuburbs(ctx, finalSlots);
     await ctx.db.patch(args.id, {
-      athleteSlots: finalSlots,
+      athleteSlots: finalSlotsWithSuburbs,
     });
 
     // Send allocation emails to newly-added or changed athletes — resolved to
@@ -2519,6 +2564,8 @@ async function writeCoachSessionCopy(
     accessCode: newCode,
     codeGeneratedAt: nowIso,
   }));
+  // SPEC_ANALYTICS_ATHLETE_CATCHMENT: snapshot each athlete's home suburb.
+  const copiedSlotsWithSuburbs = (await attachAthleteSuburbs(ctx, copiedSlots)) ?? [];
 
   const newCoachPrice = (src.duration / 30) * coachPer30;
   const newId = await ctx.db.insert("bookings", {
@@ -2535,7 +2582,7 @@ async function writeCoachSessionCopy(
     isCoachBooking: true,
     coachPrice: newCoachPrice,
     additionalLaneIds: src.additionalLaneIds,
-    athleteSlots: copiedSlots.length > 0 ? copiedSlots : undefined,
+    athleteSlots: copiedSlotsWithSuburbs.length > 0 ? copiedSlotsWithSuburbs : undefined,
     accessCode: newCode,
     laneNameSnapshot: analysis.laneNameSnapshot,
     variantLabelSnapshot: analysis.variantLabelSnapshot,
@@ -3086,6 +3133,69 @@ export const backfillBookingSuburbs = internalMutation({
       }
     }
     return { totalBookings: bookings.length, patched, skippedNoCustomerLocation };
+  },
+});
+
+// SPEC_ANALYTICS_ATHLETE_CATCHMENT — one-time backfill: stamp each existing coach
+// booking's athlete slots with the athlete's CURRENT parent-account postcode/suburb,
+// so the athlete catchment report isn't empty on launch. Idempotent + re-runnable
+// (only fills slots missing athleteSuburb). Coach bookings only (the only ones with
+// athleteSlots). Run via deploy key:
+//   npx convex run mutations:backfillAthleteSlotSuburbs
+export const backfillAthleteSlotSuburbs = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const bookings = await ctx.db.query("bookings").collect();
+    // Cache athlete -> {postcode,suburb} resolutions by athleteId.
+    const cache = new Map<string, { postcode?: string; suburb?: string }>();
+    let bookingsPatched = 0;
+    let slotsFilled = 0;
+    let slotsUnresolved = 0;
+    for (const b of bookings) {
+      if (!(b as any).isCoachBooking) continue;
+      const slots = (b as any).athleteSlots as any[] | undefined;
+      if (!slots || slots.length === 0) continue;
+      let changed = false;
+      const next: any[] = [];
+      for (const s of slots) {
+        if (s.athleteSuburb) { next.push(s); continue; } // already snapshotted
+        let snap: { postcode?: string; suburb?: string } = {};
+        const aid = s.athleteId ? String(s.athleteId) : "";
+        if (aid) {
+          const cached = cache.get(aid);
+          if (cached !== undefined) {
+            snap = cached;
+          } else {
+            const athlete: any = await ctx.db.get(s.athleteId);
+            if (athlete?.accountCustomerId) {
+              const parent: any = await ctx.db.get(athlete.accountCustomerId);
+              if (parent?.postcode && parent?.suburb) {
+                snap = { postcode: parent.postcode, suburb: parent.suburb };
+              }
+            }
+            cache.set(aid, snap);
+          }
+        }
+        if (snap.suburb) {
+          next.push({ ...s, athletePostcode: snap.postcode, athleteSuburb: snap.suburb });
+          slotsFilled++;
+          changed = true;
+        } else {
+          next.push(s);
+          slotsUnresolved++;
+        }
+      }
+      if (changed) {
+        await ctx.db.patch(b._id, { athleteSlots: next });
+        bookingsPatched++;
+      }
+    }
+    return {
+      totalBookings: bookings.length,
+      bookingsPatched,
+      slotsFilled,
+      slotsUnresolved,
+    };
   },
 });
 

@@ -352,3 +352,57 @@ export const getCatchmentReport = query({
     return { bySuburb, unknown, total, from: from ?? null, to: to ?? null };
   },
 });
+
+// SPEC_ANALYTICS_ATHLETE_CATCHMENT — a SECOND catchment table shown beside the
+// customer one above. Tallies ATHLETES allocated to coach bookings by THEIR home
+// suburb (= their parent/account holder's postcode/suburb), read from the snapshot
+// written on each athlete slot at allocation time. Reads ONLY coach bookings'
+// slots; the customer report (above) excludes coach bookings → the two never
+// double-count the same row. The coach's own suburb is never read (R3). Same shape
+// as getCatchmentReport so the frontend table component is reusable.
+export const getAthleteCatchmentReport = query({
+  args: { from: v.optional(v.string()), to: v.optional(v.string()) }, // YYYY-MM-DD inclusive
+  handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.isAdmin) return null;
+
+    const from = args.from?.trim() || undefined;
+    const to = args.to?.trim() || undefined;
+    const all = await ctx.db.query("bookings").collect();
+
+    const agg = new Map<string, { suburb: string; postcode: string; bookings: number }>();
+    let unknown = 0; // slot with no resolvable suburb (legacy / deleted athlete / no postcode yet)
+    let total = 0;
+    for (const b of all) {
+      if (!(b as any).isCoachBooking) continue;      // coach bookings only
+      if (b.status !== "confirmed") continue;        // exclude cancelled/pending/tentative (Q2)
+      if (from && b.date < from) continue;
+      if (to && b.date > to) continue;
+      const slots = (b as any).athleteSlots as any[] | undefined;
+      if (!slots || slots.length === 0) continue;
+      // Q3: count one per DISTINCT athlete per booking. Dedupe slots sharing an
+      // athleteId within this booking; siblings (different ids) count separately.
+      // Legacy slots with no athleteId can't be deduped → each counts (as Unknown).
+      const seen = new Set<string>();
+      for (const s of slots) {
+        if (s.athleteId) {
+          const k = String(s.athleteId);
+          if (seen.has(k)) continue;
+          seen.add(k);
+        }
+        total++;
+        const suburb = ((s.athleteSuburb as string) || "").trim();
+        const postcode = ((s.athletePostcode as string) || "").trim();
+        if (!suburb) { unknown++; continue; }
+        const key = `${suburb}|${postcode}`;
+        const row = agg.get(key) ?? { suburb, postcode, bookings: 0 };
+        row.bookings++;
+        agg.set(key, row);
+      }
+    }
+    const bySuburb = Array.from(agg.values()).sort(
+      (a, b) => b.bookings - a.bookings || a.suburb.localeCompare(b.suburb)
+    );
+    return { bySuburb, unknown, total, from: from ?? null, to: to ?? null };
+  },
+});

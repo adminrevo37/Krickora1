@@ -184,6 +184,13 @@ export default defineSchema({
           durationMinutes: v.number(),
           accessCode: v.optional(v.string()),
           codeGeneratedAt: v.optional(v.string()),
+          // SPEC_ANALYTICS_ATHLETE_CATCHMENT: snapshot of the athlete's home
+          // postcode/suburb (= their parent/account holder's), resolved at
+          // allocation time and written server-side. Powers the "Athletes coached
+          // by suburb" report without a live join, preserving history if a family
+          // moves. Absent on legacy/unresolvable slots → bucketed as "Unknown".
+          athletePostcode: v.optional(v.string()),
+          athleteSuburb: v.optional(v.string()),
         })
       )
     ),

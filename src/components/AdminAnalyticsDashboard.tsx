@@ -388,43 +388,39 @@ export default function AdminAnalyticsDashboard() {
         </div>
       )}
 
-      {/* ── Catchment: sessions by suburb (SPEC_PROFILE_POSTCODE_SUBURB Addendum A) ── */}
-      <CatchmentReport />
+      {/* ── Catchment: sessions by suburb (customer + athlete, side-by-side) ── */}
+      <CatchmentReports />
     </div>
   )
 }
 
 // ── Sub-components ───────────────────────────────────────────────────────────
 
-// Session COUNT per suburb/postcode (confirmed, non-coach bookings; one per booking).
-// Own date range + CSV export, independent of the months selector above.
-function CatchmentReport() {
+// Session COUNT per suburb/postcode. Two side-by-side tables sharing ONE date
+// range (SPEC_ANALYTICS_ATHLETE_CATCHMENT R2):
+//   • Customers — confirmed non-coach bookings, one per booking.
+//   • Athletes coached — athletes allocated to confirmed coach bookings, by their
+//     parent account's suburb, one per distinct athlete per booking.
+// The two reads never overlap (customer report excludes coach bookings; athlete
+// report reads only coach bookings' slots). Own date range + CSV, independent of
+// the months selector above.
+type CatchmentData = {
+  bySuburb: { suburb: string; postcode: string; bookings: number }[]
+  unknown: number
+  total: number
+} | null | undefined
+
+function CatchmentReports() {
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
-  const data = useQuery(api.analytics.getCatchmentReport, {
+  const customerData = useQuery(api.analytics.getCatchmentReport, {
     from: from || undefined,
     to: to || undefined,
   })
-
-  const rows = data?.bySuburb ?? []
-  const counted = (data?.total ?? 0) - (data?.unknown ?? 0)
-
-  const exportCsv = () => {
-    if (!data) return
-    const lines = [['Suburb', 'Postcode', 'Sessions']]
-    for (const r of rows) lines.push([r.suburb, r.postcode, String(r.bookings)])
-    if (data.unknown > 0) lines.push(['Unknown', '', String(data.unknown)])
-    const csv = lines
-      .map((cols) => cols.map((c) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(','))
-      .join('\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `catchment-by-suburb${from ? `_${from}` : ''}${to ? `_${to}` : ''}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
+  const athleteData = useQuery(api.analytics.getAthleteCatchmentReport, {
+    from: from || undefined,
+    to: to || undefined,
+  })
 
   return (
     <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
@@ -432,7 +428,7 @@ function CatchmentReport() {
         <div>
           <h3 className="text-base font-semibold text-gray-800">Catchment — Sessions by Suburb</h3>
           <p className="text-xs text-gray-400 mt-0.5">
-            Where customers travel from. Confirmed bookings only (excludes coach &amp; cancelled), one count per booking.
+            Where people travel from. Confirmed bookings only (excludes cancelled). Customers (lane hire) vs athletes coached.
           </p>
         </div>
         <div className="flex items-end gap-2 flex-wrap">
@@ -450,16 +446,84 @@ function CatchmentReport() {
             <button onClick={() => { setFrom(''); setTo('') }}
               className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-800 underline">Clear</button>
           )}
-          <button onClick={exportCsv} disabled={!data || rows.length === 0}
-            className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-            Export CSV
-          </button>
         </div>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-gray-100">
+        <CatchmentTable
+          title="Customers — sessions by suburb"
+          subtitle="Lane-hire customers (excludes coach bookings)."
+          data={customerData}
+          accent="emerald"
+          csvName={`catchment-customers${from ? `_${from}` : ''}${to ? `_${to}` : ''}.csv`}
+          csvHeader="customerSessions"
+        />
+        <CatchmentTable
+          title="Athletes coached — sessions by suburb"
+          subtitle="Athletes allocated to coach bookings, by their home suburb."
+          data={athleteData}
+          accent="indigo"
+          csvName={`catchment-athletes${from ? `_${from}` : ''}${to ? `_${to}` : ''}.csv`}
+          csvHeader="athleteSessions"
+        />
+      </div>
+    </div>
+  )
+}
+
+function CatchmentTable({
+  title,
+  subtitle,
+  data,
+  accent,
+  csvName,
+  csvHeader,
+}: {
+  title: string
+  subtitle: string
+  data: CatchmentData
+  accent: 'emerald' | 'indigo'
+  csvName: string
+  csvHeader: string
+}) {
+  const rows = data?.bySuburb ?? []
+  const counted = (data?.total ?? 0) - (data?.unknown ?? 0)
+  const badge = accent === 'indigo'
+    ? 'bg-indigo-100 text-indigo-700'
+    : 'bg-emerald-100 text-emerald-700'
+
+  const exportCsv = () => {
+    if (!data) return
+    const lines = [['Suburb', 'Postcode', csvHeader]]
+    for (const r of rows) lines.push([r.suburb, r.postcode, String(r.bookings)])
+    if (data.unknown > 0) lines.push(['Unknown', '', String(data.unknown)])
+    const csv = lines
+      .map((cols) => cols.map((c) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(','))
+      .join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = csvName
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div className="min-w-0">
+      <div className="px-5 py-3 flex items-start justify-between gap-3 border-b border-gray-100">
+        <div className="min-w-0">
+          <h4 className="text-sm font-semibold text-gray-700">{title}</h4>
+          <p className="text-xs text-gray-400 mt-0.5">{subtitle}</p>
+        </div>
+        <button onClick={exportCsv} disabled={!data || rows.length === 0}
+          className="shrink-0 px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+          CSV
+        </button>
       </div>
       {!data ? (
         <div className="p-6 text-sm text-gray-400">Loading…</div>
       ) : rows.length === 0 && (data.unknown ?? 0) === 0 ? (
-        <div className="p-6 text-sm text-gray-400 italic">No confirmed bookings in this range.</div>
+        <div className="p-6 text-sm text-gray-400 italic">No confirmed sessions in this range.</div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -478,7 +542,7 @@ function CatchmentReport() {
                   <td className="px-4 py-3 font-medium text-gray-900">{r.suburb}</td>
                   <td className="px-4 py-3 text-gray-500">{r.postcode || '—'}</td>
                   <td className="px-4 py-3 text-right">
-                    <span className="inline-flex items-center justify-center bg-emerald-100 text-emerald-700 text-xs font-bold rounded-full min-w-8 h-8 px-2">
+                    <span className={`inline-flex items-center justify-center ${badge} text-xs font-bold rounded-full min-w-8 h-8 px-2`}>
                       {r.bookings}
                     </span>
                   </td>
