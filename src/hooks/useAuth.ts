@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
-import { useSession } from '../lib/auth-client'
+import { useSession, readHadSession, writeHadSession } from '../lib/auth-client'
 import { useImpersonation } from './useImpersonation'
 
 /**
@@ -47,11 +47,22 @@ export function useAuth() {
   // ── Stabilization: track if we were ever authenticated ───────────────
   // This prevents a transient 401/403 (from blocked tracker CORS) from
   // immediately flipping isAuthenticated to false and triggering a redirect.
-  const wasAuthenticatedRef = useRef(false)
-  // Update the ref when we confirm authentication
+  //
+  // SPEC_AUTH_LOADING_SMOOTHING §3b — seed the ref from the persisted
+  // `krickora.hadSession` hint so a hard refresh starts in the "authenticated"
+  // stance (showing the loading spinner, not the signed-out header) until the
+  // session re-validates. The hint is written when auth is confirmed and cleared
+  // on a definitive no-session below + in signOutUser, so a genuinely logged-out
+  // visitor never starts true.
+  const wasAuthenticatedRef = useRef(readHadSession())
+  // Update the ref + persist the hint when we confirm authentication
   if (betterAuthUser && !wasAuthenticatedRef.current) {
     wasAuthenticatedRef.current = true
   }
+  // Keep the persisted hint in sync with the live auth state (idempotent writes).
+  useEffect(() => {
+    if (betterAuthUser) writeHadSession(true)
+  }, [betterAuthUser])
 
   // ── TRUE loading state ───────────────────────────────────────────────
   // We consider it "loading" if:
@@ -60,9 +71,17 @@ export function useAuth() {
   // 3. We WERE authenticated but Convex user went undefined (transient error) —
   //    keep loading=true instead of flashing unauthenticated UI
   const isInTransientError = wasAuthenticatedRef.current && betterAuthUser === undefined && !sessionPending && !!session?.user
-  const isLoading = sessionPending 
+  // SPEC_AUTH_LOADING_SMOOTHING §3b — while the session hint says we had a session,
+  // hold "loading" until the Convex identity (getCurrentUser) actually resolves, so a
+  // brief sessionPending=false / session=null window on hard refresh shows the spinner
+  // instead of flashing the signed-out header. getCurrentUser never throws and resolves
+  // to null when unauthenticated, so this can never stick — once betterAuthUser is no
+  // longer undefined the term is false and we fall through to the definitive decision.
+  const isHintedReauth = wasAuthenticatedRef.current && betterAuthUser === undefined
+  const isLoading = sessionPending
     || (!!session?.user && betterAuthUser === undefined)
     || isInTransientError
+    || isHintedReauth
 
   // ── Authentication: only false when we're SURE there's no session ────
   // If we were previously authenticated and now see undefined from Convex,
@@ -75,19 +94,30 @@ export function useAuth() {
     if (betterAuthUser) return true
     // Definitive: Better Auth says no session (not pending, no data)
     if (!sessionPending && !session?.user) {
-      // Clear the stabilization flag — user genuinely signed out
+      // Clear the stabilization flag + persisted hint — user genuinely signed out
+      // (or the token expired). Clearing the hint here stops the next refresh from
+      // spinning on a session that no longer exists.
       wasAuthenticatedRef.current = false
+      writeHadSession(false)
       return false
     }
     // Fallback: keep previous state
     return wasAuthenticatedRef.current
   })()
 
-  // ── Convex queries for real-time cloud data ──────────────────────────
-  const customerRecord = useQuery(
-    api.queries.getCustomerByEmail,
-    betterAuthUser?.email ? { email: betterAuthUser.email } : 'skip'
-  )
+  // ── Customer record (SPEC_AUTH_LOADING_SMOOTHING §3c) ────────────────
+  // Sourced from the merged getCurrentUser query (which now returns the caller's
+  // customers row nested as `customer`) instead of a second sequential
+  // getCustomerByEmail round-trip. Identity + profile arrive together, so postcode/
+  // role/etc. are never briefly undefined after the user resolves (kills the flash
+  // gap) and one Convex subscription is dropped. Shape is the full customers doc, so
+  // every customerRecord consumer below is unchanged. Trichotomy preserved:
+  //   undefined → still loading / logged out (matches the old 'skip' behaviour)
+  //   null      → authenticated but no customers row yet (triggers auto-create)
+  //   <doc>     → ready. Stays reactive to customers edits (getCurrentUser reads them).
+  const customerRecord = betterAuthUser
+    ? ((betterAuthUser as any).customer ?? null)
+    : undefined
 
   const allCoachRecords = useQuery(api.queries.listCustomersByRole, { role: 'coach' }) ?? []
   // SEC-1: listCustomers / listCoachInvites are admin-only — they throw "Unauthenticated"

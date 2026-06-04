@@ -41,6 +41,35 @@ function setStoredToken(token: string | null) {
   } catch {}
 }
 
+// ============================================================================
+// SESSION HINT (SPEC_AUTH_LOADING_SMOOTHING §3b)
+// ----------------------------------------------------------------------------
+// A tiny localStorage flag that records "this browser had an authenticated
+// session last time". useAuth initialises its wasAuthenticatedRef from it so a
+// hard refresh shows the loading spinner (not the signed-out header) while the
+// Better Auth token + Convex identity re-validate. Cleared on definitive
+// sign-out / no-session so a genuinely logged-out visitor never sees a spinner.
+// ============================================================================
+
+const HAD_SESSION_KEY = "krickora.hadSession";
+
+export function readHadSession(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(HAD_SESSION_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function writeHadSession(had: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    if (had) window.localStorage.setItem(HAD_SESSION_KEY, "1");
+    else window.localStorage.removeItem(HAD_SESSION_KEY);
+  } catch {}
+}
+
 const credentialFetch: typeof globalThis.fetch = async (input, init) => {
   const existingHeaders = (init?.headers as Record<string, string>) || {};
   const token = getStoredToken();
@@ -217,10 +246,12 @@ export async function signOutUser() {
       fetchOptions: fetchOpts(),
     });
     setStoredToken(null);
+    writeHadSession(false);
     return { success: true };
   } catch (error: any) {
     // Even if signOut fails server-side, clear the local token so the user is effectively logged out
     setStoredToken(null);
+    writeHadSession(false);
     return { success: false, error: { message: error.message || "Sign out failed" } };
   }
 }

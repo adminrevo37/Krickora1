@@ -443,6 +443,24 @@ export const getCurrentUser = query({
       )) as BetterAuthUser | null;
       if (!user) return null;
 
+      // SPEC_AUTH_LOADING_SMOOTHING §3c — return the caller's customers row nested
+      // so the client gets identity + profile (postcode/role/phone/credit/...) in ONE
+      // Convex query instead of the old getCurrentUser → getCustomerByEmail waterfall.
+      // This stays reactive to customers edits (the query reads the customers table).
+      // Guarded separately so a customers-lookup failure can never null out identity.
+      let customer: any = null;
+      try {
+        const normalized = (user.email ?? "").toLowerCase().trim();
+        if (normalized) {
+          customer = await ctx.db
+            .query("customers")
+            .withIndex("by_email", (q: any) => q.eq("email", normalized))
+            .first();
+        }
+      } catch {
+        customer = null;
+      }
+
       return {
         id: user._id,
         _id: user._id,
@@ -453,6 +471,7 @@ export const getCurrentUser = query({
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
         role: (user as any).role ?? "user",
+        customer,
       };
     } catch {
       return null;
