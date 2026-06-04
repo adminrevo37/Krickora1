@@ -24,6 +24,10 @@ function ProfilePage() {
   const [phone, setPhone] = useState('')
   // SPEC_PROFILE_POSTCODE_SUBURB: editable location (all roles).
   const [location, setLocation] = useState({ postcode: '', suburb: '' })
+  // SPEC_COACH_SESSION_LENGTH §2.2: a coach's default athlete session length
+  // (self-editable; athleteCapacity stays admin-managed).
+  const isCoach = user?.role === 'coach'
+  const [sessionLength, setSessionLength] = useState(60)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
@@ -50,6 +54,7 @@ function ProfilePage() {
       setPhone(user.phone || '')
       const cr = customerRecord as any
       setLocation({ postcode: (cr?.postcode ?? '').trim(), suburb: (cr?.suburb ?? '').trim() })
+      setSessionLength(Math.min(cr?.defaultSessionDuration ?? 60, 90))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, customerRecord])
@@ -85,6 +90,8 @@ function ProfilePage() {
         phone: phone.trim() || undefined,
         postcode: location.postcode.trim(),
         suburb: location.suburb.trim(),
+        // §2.2: coaches save their own default session length.
+        ...(isCoach ? { defaultSessionDuration: sessionLength } : {}),
       })
       setMessage({ type: 'success', text: 'Profile updated successfully' })
       setIsEditing(false)
@@ -100,6 +107,7 @@ function ProfilePage() {
     setPhone(user.phone || '')
     const cr = customerRecord as any
     setLocation({ postcode: (cr?.postcode ?? '').trim(), suburb: (cr?.suburb ?? '').trim() })
+    setSessionLength(Math.min(cr?.defaultSessionDuration ?? 60, 90))
     setIsEditing(false)
     setMessage(null)
   }
@@ -137,6 +145,9 @@ function ProfilePage() {
               <div className="flex justify-between"><span className="text-gray-500">Phone</span><span className="font-medium text-gray-800">{user.phone || '—'}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Suburb</span><span className="font-medium text-gray-800">{location.suburb || '—'}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Postcode</span><span className="font-medium text-gray-800">{location.postcode || '—'}</span></div>
+              {isCoach && (
+                <div className="flex justify-between"><span className="text-gray-500">Default session length</span><span className="font-medium text-gray-800">{sessionLength} min</span></div>
+              )}
             </div>
             <button
               onClick={() => setIsEditing(true)}
@@ -189,6 +200,22 @@ function ProfilePage() {
               />
             </div>
             <PostcodeSuburbFields value={location} onChange={setLocation} idPrefix="profile" />
+            {/* §2.2: coach default session length ({30,45,60,75,90}). */}
+            {isCoach && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Default session length</label>
+                <select
+                  value={sessionLength}
+                  onChange={(e) => setSessionLength(Number(e.target.value))}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                >
+                  {[30, 45, 60, 75, 90].map(d => (
+                    <option key={d} value={d}>{d} min</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">Pre-fills each athlete slot when you allocate a session. You can still change any slot.</p>
+              </div>
+            )}
             <div className="flex gap-2 pt-2">
               <button
                 type="submit"

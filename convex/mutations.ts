@@ -2111,12 +2111,11 @@ export const updateBookingAthleteSlots = mutation({
       }
     }
 
-    // Validate athlete slots fit within booking window
-    const athleteSettings = await ctx.db
-      .query("siteSettings")
-      .withIndex("by_key", (q: any) => q.eq("key", "global"))
-      .first();
-    const minAthleteMins = athleteSettings?.minAthleteDurationMinutes ?? 15;
+    // Validate athlete slots fit within booking window.
+    // SPEC_COACH_SESSION_LENGTH §2.3: floor is a fixed 30 minutes (the global
+    // "Min athlete slot" admin setting is retired). Allocation options are
+    // {30,45,60,75,90}; legacy sub-30 slots snap up on their next edit.
+    const minAthleteMins = 30;
     const bookingEnd = booking.startHour + booking.duration / 60;
     for (const slot of args.athleteSlots) {
       const slotEnd = slot.startHour + slot.durationMinutes / 60;
@@ -2777,15 +2776,20 @@ export const updateCustomerByEmail = mutation({
       }
       // SEC: a non-admin may only edit profile fields on their OWN record. Strip
       // privilege/financial fields (role, coachTier, assignedCoachIds,
-      // creditBalance, defaultSessionDuration, athleteCapacity) so a customer
-      // can't self-promote to admin or grant themselves credit via this path.
+      // creditBalance, athleteCapacity) so a customer can't self-promote to admin
+      // or grant themselves credit via this path.
       if (!updIsAdminCaller) {
         delete (updates as any).role;
         delete (updates as any).coachTier;
         delete (updates as any).assignedCoachIds;
         delete (updates as any).creditBalance;
-        delete (updates as any).defaultSessionDuration;
         delete (updates as any).athleteCapacity;
+        // SPEC_COACH_SESSION_LENGTH §2.2: a coach MAY self-edit their own
+        // defaultSessionDuration (session-length preference). Everyone else
+        // (and athleteCapacity, which stays admin-managed) is still stripped.
+        const editingOwnCoachRecord =
+          updCallerEmail === normalizedEmail && (existing as any).role === "coach";
+        if (!editingOwnCoachRecord) delete (updates as any).defaultSessionDuration;
       }
       const cleanUpdates = Object.fromEntries(
         Object.entries(updates).filter(([_, v]) => v !== undefined)
@@ -3003,6 +3007,8 @@ export const createCoach = mutation({
         phone: args.phone?.trim() || existing.phone,
         coachTier: args.coachTier || existing.coachTier,
         color: args.color || existing.color,
+        // SPEC_COACH_SESSION_LENGTH §2.2: default session length 60 for new coaches.
+        defaultSessionDuration: (existing as any).defaultSessionDuration ?? 60,
       });
       return existing._id;
     }
@@ -3014,6 +3020,7 @@ export const createCoach = mutation({
       role: "coach",
       coachTier: args.coachTier,
       color: args.color,
+      defaultSessionDuration: 60,
       createdAt: new Date().toISOString(),
     });
     return id;

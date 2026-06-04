@@ -24,6 +24,23 @@ interface AthleteAllocationEditorProps {
 // (e.g. 9.5000000001). All slot start times pass through this.
 const roundToQuarter = (h: number) => Math.round(h * 4) / 4
 
+// SPEC_COACH_SESSION_LENGTH §2.1: allocation slot options. Floor 30, no 15-step,
+// no 120. Each option is only OFFERED when it fits the remaining booking time.
+const ALLOC_OPTIONS = [30, 45, 60, 75, 90]
+const SESSION_FLOOR = 30
+
+// Snap an arbitrary duration to the nearest valid option that fits `maxMinutes`:
+// the largest option ≤ the value, else the smallest fitting option. Used to snap
+// legacy 15-min / 120-min slots into the new set on edit (§2.5). If nothing fits
+// (booking shorter than the floor — shouldn't happen, coach min booking is 60),
+// the original value is left untouched.
+function snapDuration(value: number, maxMinutes: number): number {
+  const fits = ALLOC_OPTIONS.filter(o => o <= maxMinutes + 0.001)
+  if (fits.length === 0) return value
+  const le = fits.filter(o => o <= value)
+  return le.length ? le[le.length - 1] : fits[0]
+}
+
 export default function AthleteAllocationEditor({
   bookingStartHour,
   bookingDuration,
@@ -37,8 +54,9 @@ export default function AthleteAllocationEditor({
   seedNewSlot,
 }: AthleteAllocationEditorProps) {
   const bookingEndHour = bookingStartHour + bookingDuration / 60
-  // Use the coach's configured default session duration, capped at the booking length.
-  const defaultSlotDuration = Math.min(defaultSessionDuration ?? 60, bookingDuration)
+  // Use the coach's configured default session duration, clamped to the {30..90}
+  // set (§2.2 — a legacy/120 default clamps to 90) and capped at the booking length.
+  const defaultSlotDuration = Math.min(Math.min(defaultSessionDuration ?? 60, 90), bookingDuration)
 
   // Part 2.5 — auto-populate: lay out up to `athleteCapacity` empty slots
   // back-to-back at the preferred interval, starting at booking start (capped to
@@ -50,8 +68,9 @@ export default function AthleteAllocationEditor({
     let cursor = bookingStartHour
     for (let i = 0; i < cap; i++) {
       const remaining = Math.round((bookingEndHour - cursor) * 60)
-      if (remaining < 15) break
-      const dur = Math.min(defaultSlotDuration, remaining)
+      // §2.4: a sub-30 remainder can't hold a session — stop laying out slots.
+      if (remaining < SESSION_FLOOR) break
+      const dur = snapDuration(Math.min(defaultSlotDuration, remaining), remaining)
       out.push({ athleteName: '', startHour: roundToQuarter(cursor), durationMinutes: dur })
       cursor += dur / 60
     }
@@ -60,15 +79,23 @@ export default function AthleteAllocationEditor({
 
   // Index of the gap-seeded slot (appended after any existing slots), or null.
   const seededIndex = seedNewSlot ? currentSlots.length : null
+  // §2.5: snap any legacy (15-min / 120-min / off-set) slot duration into the new
+  // {30..90} option set on edit, bounded by the time left from that slot's start.
+  const normalizeSlot = (s: AthleteSlot): AthleteSlot => ({
+    ...s,
+    durationMinutes: snapDuration(s.durationMinutes, Math.round((bookingEndHour - s.startHour) * 60)),
+  })
   const [slots, setSlots] = useState<AthleteSlot[]>(() => {
     if (seedNewSlot) {
-      const existing = currentSlots.map(s => ({ ...s }))
+      const existing = currentSlots.map(normalizeSlot)
+      // §2.4: seed the gap with the largest valid option that fits the gap.
+      const seedDur = snapDuration(seedNewSlot.durationMinutes, seedNewSlot.durationMinutes)
       return [
         ...existing,
-        { athleteName: '', startHour: roundToQuarter(seedNewSlot.startHour), durationMinutes: seedNewSlot.durationMinutes },
+        { athleteName: '', startHour: roundToQuarter(seedNewSlot.startHour), durationMinutes: seedDur },
       ]
     }
-    return currentSlots.length > 0 ? currentSlots.map(s => ({ ...s })) : buildAutoSlots()
+    return currentSlots.length > 0 ? currentSlots.map(normalizeSlot) : buildAutoSlots()
   })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -144,12 +171,9 @@ export default function AthleteAllocationEditor({
   }, [bookingStartHour, bookingEndHour])
 
   const getValidDurations = useCallback((startHour: number) => {
+    // §2.1: only the {30,45,60,75,90} options that fit the time left from this start.
     const maxMinutes = Math.round((bookingEndHour - startHour) * 60)
-    const durations: number[] = []
-    for (let m = 15; m <= maxMinutes; m += 15) {
-      durations.push(m)
-    }
-    return durations
+    return ALLOC_OPTIONS.filter(m => m <= maxMinutes + 0.001)
   }, [bookingEndHour])
 
   const getSelectedAthleteNames = useCallback((excludeIndex: number) => {
@@ -205,7 +229,9 @@ export default function AthleteAllocationEditor({
       updated[index] = {
         ...oldSlot,
         startHour: newStart,
-        durationMinutes: Math.max(15, newDur),
+        // §2.3: floor 30. If the new start leaves <30, snap to the largest option
+        // that fits so the duration stays in the valid set.
+        durationMinutes: snapDuration(Math.max(SESSION_FLOOR, newDur), maxDur),
       }
     } else if (field === 'durationMinutes') {
       updated[index] = {
@@ -226,7 +252,7 @@ export default function AthleteAllocationEditor({
       if (s.startHour < bookingStartHour) return `${s.athleteName}'s start time is before the booking starts.`
       const slotEnd = s.startHour + s.durationMinutes / 60
       if (slotEnd > bookingEndHour + 0.001) return `${s.athleteName}'s session extends past the booking end.`
-      if (s.durationMinutes < 15) return `${s.athleteName}'s session must be at least 15 minutes.`
+      if (s.durationMinutes < SESSION_FLOOR) return `${s.athleteName}'s session must be at least ${SESSION_FLOOR} minutes.`
     }
     const names = filled.map(s => s.athleteName.toLowerCase().trim())
     const uniqueNames = new Set(names)
@@ -714,7 +740,7 @@ export default function AthleteAllocationEditor({
               <button
                 onClick={() => {
                   if (currentSlots.length > 0) {
-                    setSlots(currentSlots.map(s => ({ ...s })))
+                    setSlots(currentSlots.map(normalizeSlot))
                     setReviewMode(true)
                     setError(null)
                   } else {

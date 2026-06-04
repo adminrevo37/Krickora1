@@ -83,6 +83,20 @@ export function AllocationTimeline({
             </button>
           )
         }
+        // SPEC_COACH_SESSION_LENGTH §2.4: a gap shorter than the 30-min floor can't
+        // hold a session — render it non-tappable ("N min free"), not "＋ Add athlete".
+        if (durMin < 30) {
+          return (
+            <div
+              key={i}
+              style={{ background: AMBER_HATCH, color: AMBER_TEXT, minHeight: height }}
+              className="w-full flex items-center justify-between px-2.5 py-1 text-left"
+            >
+              <span className="text-xs font-semibold">{durMin} min free</span>
+              <span className="text-[10px] opacity-90 ml-2 shrink-0">{range}</span>
+            </div>
+          )
+        }
         return (
           <button
             key={i}

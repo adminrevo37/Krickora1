@@ -538,7 +538,8 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
   const [coachTier, setCoachTier] = useState(normaliseCoachTier(user.coachTier))
   const [color, setColor] = useState(user.color || '')
   const [role, setRole] = useState(user.role || 'user')
-  const [defaultSessionDuration, setDefaultSessionDuration] = useState<number>(user.defaultSessionDuration || 60)
+  // §2.1: clamp a legacy/120 default down to the {30..90} option set so the select isn't blank.
+  const [defaultSessionDuration, setDefaultSessionDuration] = useState<number>(Math.min(user.defaultSessionDuration || 60, 90))
   const [athleteCapacity, setAthleteCapacity] = useState<number>(user.athleteCapacity || 1)
   const [busy, setBusy] = useState(false)
   // SPEC_ADMIN_MANUAL_POWERS — manual support actions
@@ -667,7 +668,8 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
               <span className="font-medium text-gray-700">Default session duration</span>
               <p className="text-xs text-gray-400 mb-1">Pre-fills the athlete slot duration when adding allocations</p>
               <select value={defaultSessionDuration} onChange={e => setDefaultSessionDuration(Number(e.target.value))} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
-                {[30, 45, 60, 75, 90, 120].map(d => (
+                {/* SPEC_COACH_SESSION_LENGTH §2.1: options {30,45,60,75,90}; 120 dropped. */}
+                {[30, 45, 60, 75, 90].map(d => (
                   <option key={d} value={d}>{d} min</option>
                 ))}
               </select>

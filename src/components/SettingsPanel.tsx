@@ -236,10 +236,12 @@ export default function SettingsPanel() {
           <h3 className="text-lg font-bold text-gray-800">⏱️ Session Durations</h3>
           <p className="text-sm text-gray-500 mt-0.5">Maximum and minimum bookable durations</p>
         </div>
+        {/* SPEC_COACH_SESSION_LENGTH §2.3: the "Min athlete slot" field is retired —
+            the floor is a fixed 30 min and slot options are {30,45,60,75,90}.
+            Per-coach default session length is set in the coach's own profile. */}
         <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           <NumberInput label="Customer max duration (minutes)" value={settings.customerMaxDurationMinutes ?? 180} step={30} onChange={(v) => updateSettings({ customerMaxDurationMinutes: v })} />
           <NumberInput label="Coach max duration (minutes)" value={settings.coachMaxDurationMinutes ?? 600} step={30} onChange={(v) => updateSettings({ coachMaxDurationMinutes: v })} />
-          <NumberInput label="Min athlete slot (minutes)" value={settings.minAthleteDurationMinutes ?? 15} step={5} onChange={(v) => updateSettings({ minAthleteDurationMinutes: v })} />
         </div>
       </div>
 
