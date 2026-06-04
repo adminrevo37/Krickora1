@@ -20,7 +20,13 @@ function RootComponent() {
 
   return (
     <div className="min-h-screen bg-white text-gray-900">
-      <header className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-gray-200">
+      {/* paddingTop = iOS safe-area inset so the header content clears the status
+          bar / clock / notch in the installed PWA (0 in a normal browser tab).
+          The white/blur background fills behind the status bar; content sits below it. */}
+      <header
+        className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-gray-200"
+        style={{ paddingTop: 'env(safe-area-inset-top)' }}
+      >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <Link to="/" className="flex items-center gap-3 group">
@@ -112,7 +118,10 @@ function RootComponent() {
 
       {/* Impersonation banner */}
       {isImpersonating && impersonatedUser && (
-        <div className="sticky top-16 z-40 bg-amber-500 text-white text-sm font-medium px-4 py-2 flex items-center justify-between gap-4 shadow-md">
+        <div
+          className="sticky z-40 bg-amber-500 text-white text-sm font-medium px-4 py-2 flex items-center justify-between gap-4 shadow-md"
+          style={{ top: 'calc(4rem + env(safe-area-inset-top))' }}
+        >
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-base leading-none shrink-0">👁️</span>
             <span className="truncate">

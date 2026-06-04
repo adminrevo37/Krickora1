@@ -54,7 +54,10 @@ export default function InstallPrompt() {
   return (
     <>
       {(showInstallNudge || showEnableNudge) && (
-        <div className="fixed bottom-3 inset-x-3 sm:left-auto sm:right-4 sm:w-96 z-[60]">
+        <div
+          className="fixed inset-x-3 sm:left-auto sm:right-4 sm:w-96 z-[60]"
+          style={{ bottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
+        >
           <div className="bg-white rounded-2xl shadow-xl border border-gray-200 p-4 flex items-start gap-3">
             <div className="w-10 h-10 rounded-xl bg-red-600 flex items-center justify-center shrink-0">
               <span className="text-white text-lg">🏏</span>
