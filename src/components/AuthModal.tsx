@@ -4,6 +4,7 @@ import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import SnakeAlert from './SnakeAlert'
 import PostcodeSuburbFields, { isLocationComplete } from './PostcodeSuburbFields'
+import { isValidAuMobile, normalizeAuMobile } from '../lib/phone'
 
 const BLACKLIST_PHONES = ['0438952540', '+61438952540', '61438952540']
 const BLACKLIST_EMAILS = ['jallenby@hotmail.com', 'jim.allenby@playerschoice.com.au', 'snake@test.com']
@@ -80,6 +81,11 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
           setIsLoading(false)
           return
         }
+        if (!isValidAuMobile(phone)) {
+          setError('Please enter a valid Australian mobile (e.g. 0412 345 678).')
+          setIsLoading(false)
+          return
+        }
         if (!isLocationComplete(location)) {
           setError('Please enter a valid WA postcode and select your suburb.')
           setIsLoading(false)
@@ -143,6 +149,7 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
               lastName: lastName.trim(),
               postcode: location.postcode.trim(),
               suburb: location.suburb.trim(),
+              phone: normalizeAuMobile(phone) ?? phone.trim(),
             })
             synced = true
           } catch (nameErr) {
@@ -246,15 +253,19 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
           {mode === 'signup' && (
             <div>
               <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-1.5 block">
-                Phone <span className="text-gray-400 font-normal">(optional)</span>
+                Mobile
               </label>
               <input
                 type="tel"
+                inputMode="tel"
+                autoComplete="tel"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="04XX XXX XXX"
+                onChange={(e) => { setPhone(e.target.value); setError(null) }}
+                placeholder="0412 345 678"
+                required
                 className="w-full px-4 py-2.5 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
               />
+              <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Australian mobile — spaces are fine (e.g. 0412 345 678 or +61 412 345 678).</p>
             </div>
           )}
 

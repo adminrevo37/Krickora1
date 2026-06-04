@@ -20,6 +20,7 @@ import { sendTemplateEmail } from "./lib/email";
 import { checkRateLimit } from "./lib/rateLimit";
 import { composeName, splitName } from "./lib/names";
 import { validateLocationIfProvided, normalizePostcode, normalizeSuburb } from "./lib/locations";
+import { normalizeAuMobile } from "./lib/phone";
 import { requireAdmin, requireAdminUnlocked, getCallerContext, writeRoleAudit } from "./lib/adminGuard";
 
 const siteUrl = process.env.SITE_URL || "";
@@ -655,7 +656,7 @@ export const deleteUser = mutation({
 // Shared creation logic (no auth — callers must enforce their own guard).
 async function ensureCustomerImpl(
   ctx: any,
-  args: { email: string; name?: string; firstName?: string; lastName?: string; postcode?: string; suburb?: string }
+  args: { email: string; name?: string; firstName?: string; lastName?: string; postcode?: string; suburb?: string; phone?: string }
 ): Promise<any | null> {
   const normalizedEmail = args.email.toLowerCase().trim();
   if (!normalizedEmail) return null;
@@ -673,6 +674,11 @@ async function ensureCustomerImpl(
   const givenSuburb = normalizeSuburb(args.suburb);
   const hasLocation = Boolean(givenPostcode && givenSuburb);
 
+  // Mobile: normalise to E.164 (+614xxxxxxxx) for storage. Stored when valid;
+  // an invalid/blank value is simply not written (the signup form is the gate).
+  const givenPhone = normalizeAuMobile(args.phone);
+  const hasPhone = Boolean(givenPhone);
+
   const existing = await ctx.db
     .query("customers")
     .withIndex("by_email", (q: any) => q.eq("email", normalizedEmail))
@@ -682,7 +688,7 @@ async function ensureCustomerImpl(
     // The databaseHook creates the row first (name only, best-effort split). The
     // frontend then re-calls with the PRECISE two fields — patch them in so a
     // multi-word surname is captured exactly (last writer wins for own record).
-    if (hasExplicitName || hasLocation) {
+    if (hasExplicitName || hasLocation || hasPhone) {
       await ctx.db.patch(existing._id, {
         ...(hasExplicitName
           ? {
@@ -692,6 +698,7 @@ async function ensureCustomerImpl(
             }
           : {}),
         ...(hasLocation ? { postcode: givenPostcode, suburb: givenSuburb } : {}),
+        ...(hasPhone ? { phone: givenPhone } : {}),
       });
     }
     return existing._id;
@@ -710,6 +717,7 @@ async function ensureCustomerImpl(
     firstName: split.firstName,
     lastName: split.lastName,
     ...(hasLocation ? { postcode: givenPostcode, suburb: givenSuburb } : {}),
+    ...(hasPhone ? { phone: givenPhone } : {}),
     email: normalizedEmail,
     role: "customer",
     creditBalance: 0,
@@ -763,6 +771,7 @@ export const ensureCustomerExistsInternal = internalMutation({
     lastName: v.optional(v.string()),
     postcode: v.optional(v.string()),
     suburb: v.optional(v.string()),
+    phone: v.optional(v.string()),
   },
   handler: async (ctx, args) => ensureCustomerImpl(ctx, args),
 });
@@ -830,6 +839,7 @@ export const ensureCustomerExists = mutation({
     lastName: v.optional(v.string()),
     postcode: v.optional(v.string()),
     suburb: v.optional(v.string()),
+    phone: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const caller = await getCallerContext(ctx);

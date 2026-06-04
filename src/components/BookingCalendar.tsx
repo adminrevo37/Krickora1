@@ -304,12 +304,15 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       <LaneLegend />
 
       {/* Calendar Grid */}
-      <div className="bg-white rounded-2xl border-2 border-black shadow-sm overflow-x-auto">
+      {/* Frozen lane-header row (top) + frozen Time column (left) so they stay
+          visible while scrolling the grid on mobile. The grid scrolls inside this
+          bounded box (both axes) rather than the whole page. */}
+      <div className="bg-white rounded-2xl border-2 border-black shadow-sm overflow-auto max-h-[72vh]">
         <div className="min-w-[560px]">
-        <div className="grid grid-cols-[70px_repeat(5,1fr)] border-b-2 border-black bg-white">
-          <div className="p-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider flex items-center justify-center">Time</div>
+        <div className="grid grid-cols-[70px_repeat(5,1fr)] border-b-2 border-black bg-white sticky top-0 z-30">
+          <div className="p-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider flex items-center justify-center sticky left-0 z-40 bg-white">Time</div>
           {LANES.map((lane) => (
-            <div key={lane.id} className="p-2 text-center border-l-2 border-black">
+            <div key={lane.id} className="p-2 text-center border-l-2 border-black bg-white">
               <LaneHeaderInner laneId={lane.id} dateKey={dateKey} />
             </div>
           ))}
@@ -322,13 +325,13 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
             <div className="text-[11px] text-red-500/80 mt-1">Bookings are unavailable — please choose another day.</div>
           </div>
         )}
-        <div className={`max-h-[600px] overflow-y-auto ${isSelectedDayClosed ? 'opacity-40 pointer-events-none' : ''}`}>
+        <div className={isSelectedDayClosed ? 'opacity-40 pointer-events-none' : ''}>
           {visibleTimeSlots.map((slot, slotIdx) => {
             const isHalfHour = slot.hour !== Math.floor(slot.hour)
             return (
               <div key={slot.hour} className={`grid grid-cols-[70px_repeat(5,1fr)] ${slotIdx < visibleTimeSlots.length - 1 ? `border-b ${isHalfHour ? 'border-gray-300' : 'border-black'}` : ''}`}>
-                <div className={`p-1.5 flex items-center justify-center ${isHalfHour ? 'opacity-60' : ''}`}>
-                  <span className="text-[11px] font-medium text-gray-500">{slot.label}</span>
+                <div className="p-1.5 flex items-center justify-center sticky left-0 z-20 bg-white">
+                  <span className={`text-[11px] font-medium text-gray-500 ${isHalfHour ? 'opacity-60' : ''}`}>{slot.label}</span>
                 </div>
                 {LANES.map((lane) => {
                   const laneActiveSet = laneActiveHalfHours.get(lane.id) ?? new Set()
