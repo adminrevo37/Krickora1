@@ -3,7 +3,7 @@ import { useQuery, useConvex } from 'convex/react'
 import { getErrorMessage } from '../lib/errors'
 import {
   LANES, canBookSlot, formatDateKey, formatTime, getCustomerPrice, getCoachPrice, getCoachPerHourRate,
-  getCoachDurations, getCustomerDurations, getValidCoachStartTimes, isWeekday,
+  getCoachDurations, getCustomerDurations, getValidCoachStartTimes,
   generateGoogleCalendarUrl, roundCoachBookingDuration, getMinCoachDurationFromAthletes,
   type Booking, type Lane, type LaneVariant, type AthleteSlot,
 } from '../lib/booking-data'
@@ -603,7 +603,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
             )}
             {!isValidCoachStart && isCoach && (
               <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-200 dark:border-red-800/50">
-                <p className="text-xs text-red-700 dark:text-red-400">⚠️ {isWeekday(date) ? 'Weekday coach bookings can only start at 3:30pm.' : 'Weekend coach bookings must start on the hour.'}</p>
+                <p className="text-xs text-red-700 dark:text-red-400">⚠️ Coach bookings must start on the hour.</p>
               </div>
             )}
 
