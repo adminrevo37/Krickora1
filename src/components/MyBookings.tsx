@@ -853,18 +853,18 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                 <button
                   key={key}
                   onClick={() => setSelectedDateKey(key)}
-                  className={`flex flex-col items-center py-2.5 px-1 transition-all relative ${
+                  className={`flex flex-col items-center py-2.5 px-1 transition-all relative rounded-xl ${
                     isSelected
-                      ? 'bg-emerald-500 text-white'
+                      ? 'ring-2 ring-inset ring-gray-800 dark:ring-white text-gray-900 dark:text-white'
                       : isTodayCol
                         ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400'
                         : 'text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
                   }`}
                 >
-                  <span className={`text-[10px] font-semibold uppercase tracking-wide mb-0.5 ${isSelected ? 'text-white/80' : ''}`}>{label}</span>
-                  <span className={`text-sm font-bold leading-none ${isSelected ? 'text-white' : ''}`}>{date.getDate()}</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-wide mb-0.5">{label}</span>
+                  <span className="text-sm font-bold leading-none">{date.getDate()}</span>
                   {dotColor
-                    ? <div className="flex mt-1"><div className={`w-1.5 h-1.5 rounded-full ${isSelected ? 'bg-white/80' : dotColor}`} /></div>
+                    ? <div className="flex mt-1"><div className={`w-1.5 h-1.5 rounded-full ${dotColor}`} /></div>
                     : <div className="h-2 mt-1" />}
                 </button>
               )
