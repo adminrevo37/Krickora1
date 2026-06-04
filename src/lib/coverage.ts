@@ -60,6 +60,30 @@ export function coverageSegments(booking: Booking): CoverageSegment[] {
   return out
 }
 
+// Per-athlete rows for the My Bookings allocation timeline: ONE row per athlete
+// slot (no cross-athlete merge) interleaved with the unallocated gap segments, in
+// time order. So a combined family booking (two children of the same parent) shows
+// each child on its own vertical row instead of a merged "A & B" block. The merged
+// `coverageSegments` view is kept for the calendar colour bands + coverageSummary +
+// the day dot (which only care about allocated-vs-gap coverage, not per-athlete rows).
+export function allocationRows(booking: Booking): CoverageSegment[] {
+  const start = booking.startHour
+  const end = booking.startHour + booking.duration / 60
+  if (!(end > start)) return []
+  const allocated: CoverageSegment[] = (booking.athleteSlots ?? [])
+    .map(s => ({
+      startHour: Math.max(start, s.startHour),
+      endHour: Math.min(end, s.startHour + s.durationMinutes / 60),
+      allocated: true,
+      athleteNames: [s.athleteName],
+    }))
+    .filter(seg => seg.endHour - seg.startHour > EPS)
+    .sort((a, b) => a.startHour - b.startHour || a.endHour - b.endHour)
+  // Reuse the tested gap computation (gaps = time covered by NO athlete).
+  const gaps = coverageSegments(booking).filter(s => !s.allocated)
+  return [...allocated, ...gaps].sort((a, b) => a.startHour - b.startHour || a.endHour - b.endHour)
+}
+
 export type CoverageState = 'full' | 'partial' | 'empty'
 
 // Three-state summary for the My Bookings badge.

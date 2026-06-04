@@ -6,7 +6,7 @@
 
 import { formatTime } from '../lib/booking-data'
 import type { Booking } from '../lib/booking-data'
-import { coverageSegments } from '../lib/coverage'
+import { coverageSegments, allocationRows } from '../lib/coverage'
 import { getContrastText, AMBER_HATCH, AMBER_TEXT, DEFAULT_COACH_COLOR } from '../lib/colour'
 
 export interface SegmentTapTarget {
@@ -55,7 +55,8 @@ export function AllocationTimeline({
   coachColor?: string
   onSegment?: (target: SegmentTapTarget) => void
 }) {
-  const segs = coverageSegments(booking)
+  // One row per athlete slot (family siblings split into separate rows) + gaps.
+  const segs = allocationRows(booking)
   const total = booking.duration / 60
   const color = coachColor || DEFAULT_COACH_COLOR
   const textColor = getContrastText(color)
