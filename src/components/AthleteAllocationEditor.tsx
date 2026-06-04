@@ -14,6 +14,10 @@ interface AthleteAllocationEditorProps {
   bottomSheet?: boolean // render as a mobile bottom sheet instead of a centred modal
   defaultSessionDuration?: number // coach's preferred default slot length in minutes
   athleteCapacity?: number // coach's max athletes per session (1-4) — drives auto-populate
+  // SPEC_COACH_PLANNER_RETIRE_AND_VIEW §6: when the coach taps an unallocated gap
+  // on a card, open straight into edit mode with a fresh empty slot pre-seeded to
+  // that gap's time range (existing slots preserved), dropdown auto-open.
+  seedNewSlot?: { startHour: number; durationMinutes: number }
 }
 
 // Bug #6: snap an hour value to the nearest quarter to avoid float drift
@@ -30,6 +34,7 @@ export default function AthleteAllocationEditor({
   bottomSheet = false,
   defaultSessionDuration,
   athleteCapacity,
+  seedNewSlot,
 }: AthleteAllocationEditorProps) {
   const bookingEndHour = bookingStartHour + bookingDuration / 60
   // Use the coach's configured default session duration, capped at the booking length.
@@ -53,19 +58,31 @@ export default function AthleteAllocationEditor({
     return out.length > 0 ? out : [{ athleteName: '', startHour: bookingStartHour, durationMinutes: defaultSlotDuration }]
   }
 
-  const [slots, setSlots] = useState<AthleteSlot[]>(
-    currentSlots.length > 0 ? currentSlots.map(s => ({ ...s })) : buildAutoSlots()
-  )
+  // Index of the gap-seeded slot (appended after any existing slots), or null.
+  const seededIndex = seedNewSlot ? currentSlots.length : null
+  const [slots, setSlots] = useState<AthleteSlot[]>(() => {
+    if (seedNewSlot) {
+      const existing = currentSlots.map(s => ({ ...s }))
+      return [
+        ...existing,
+        { athleteName: '', startHour: roundToQuarter(seedNewSlot.startHour), durationMinutes: seedNewSlot.durationMinutes },
+      ]
+    }
+    return currentSlots.length > 0 ? currentSlots.map(s => ({ ...s })) : buildAutoSlots()
+  })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  // Auto-open the dropdown for slot 0 when opening a new (unallocated) booking
-  const [activeDropdown, setActiveDropdown] = useState<number | null>(currentSlots.length === 0 ? 0 : null)
+  // Auto-open the dropdown for the seeded gap slot, else slot 0 on a new booking.
+  const [activeDropdown, setActiveDropdown] = useState<number | null>(
+    seededIndex !== null ? seededIndex : currentSlots.length === 0 ? 0 : null
+  )
   const [loadingTimedOut, setLoadingTimedOut] = useState(false)
   // Review mode: when athletes are already allocated, show a clean read-only summary
-  // so coaches can quickly confirm without accidentally editing anything
-  const [reviewMode, setReviewMode] = useState(currentSlots.length > 0)
+  // so coaches can quickly confirm without accidentally editing anything. A gap-seed
+  // tap goes straight to edit mode so the coach just picks the athlete.
+  const [reviewMode, setReviewMode] = useState(currentSlots.length > 0 && !seedNewSlot)
   // Bug #3: same-athlete double-booking warning (coach confirms to proceed).
   const [conflictWarning, setConflictWarning] = useState<string | null>(null)
   // Part 4: coach-managed roster — add an athlete by parent email + child name.

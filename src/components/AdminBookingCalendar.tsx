@@ -15,6 +15,8 @@ import LaneBlockModal from './LaneBlockModal'
 import LaneOverrideModal from './LaneOverrideModal'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
 import { LaneHeaderInner, LaneLegend, bandClassForSlot, bandStart, bandTagText } from './laneDisplay'
+import { CoverageBlockBg } from './CoverageTimeline'
+import { getContrastText } from '../lib/colour'
 
 // Generate days from N months back to N months ahead (AWST aware)
 function generateAdminDays(monthsBack: number = 12, monthsAhead: number = 12): Date[] {
@@ -72,17 +74,7 @@ export default function AdminBookingCalendar() {
     }
     return undefined
   }
-  const getContrastText = (hex?: string): string => {
-    if (!hex) return '#fff'
-    const h = hex.replace('#', '')
-    const full = h.length === 3 ? h.split('').map(x => x + x).join('') : h
-    if (full.length !== 6) return '#fff'
-    const r = parseInt(full.slice(0, 2), 16)
-    const g = parseInt(full.slice(2, 4), 16)
-    const bl = parseInt(full.slice(4, 6), 16)
-    const luma = (0.299 * r + 0.587 * g + 0.114 * bl) / 255
-    return luma > 0.6 ? '#1f2937' : '#fff'
-  }
+  // getContrastText lifted to src/lib/colour.ts (shared with the coach views).
   const allDays = useMemo(() => generateAdminDays(12, 12), [])
   const [selectedDay, setSelectedDay] = useState<Date>(() => {
     const today = getAWSTNow()
@@ -555,16 +547,18 @@ export default function AdminBookingCalendar() {
                       style={{
                         gridRow: `${rowIdx + 2} / span ${spanCount}`,
                         gridColumn: laneIdx + 2,
-                        ...(coachColor ? { backgroundColor: coachColor, color: coachTextColor } : {}),
+                        ...(booked.isCoachBooking ? { color: coachTextColor } : {}),
                       }}
                       className={`relative group text-[10px] py-2 px-1 rounded font-semibold flex flex-col ${
-                        coachColor ? '' : 'bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400'
+                        booked.isCoachBooking ? '' : 'bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400'
                       }`}
                     >
+                      {/* §6: allocation coverage (coach colour allocated / amber unallocated). */}
+                      {booked.isCoachBooking && <CoverageBlockBg booking={booked} coachColor={coachColor} />}
                       <button
                         onClick={(e) => { e.stopPropagation(); setDetailsBooking(booked) }}
                         title={`View / modify booking — ${booked.customerName}`}
-                        className="text-left w-full hover:opacity-80 transition-opacity leading-tight flex-1"
+                        className="relative z-10 text-left w-full hover:opacity-80 transition-opacity leading-tight flex-1"
                       >
                         <div className="break-words font-semibold">{booked.isCoachBooking ? '🏅 Coach: ' : '🔒 '}{booked.customerName}</div>
                         <div className="text-[9px] opacity-80 mt-0.5 font-medium flex items-center gap-1">

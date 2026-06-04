@@ -25,6 +25,8 @@ import {
 import { getHoursForDate } from '../lib/settings-store'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
 import { LaneHeaderInner, LaneLegend, bandClassForSlot, bandStart, bandTagText } from './laneDisplay'
+import { CoverageBlockBg } from './CoverageTimeline'
+import { getContrastText } from '../lib/colour'
 import { useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { useBookings } from '../hooks/useBookingStore'
@@ -354,6 +356,12 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
                   }
                   const visualSpan = getBookingVisualHeight()
 
+                  // §6: show allocation coverage on the coach's OWN coach bookings.
+                  const ownCoachBooking = !!booked && !!booked.isCoachBooking && !!userIsCoach && !!user && (
+                    (booked.customerEmail?.toLowerCase() === user.email?.toLowerCase()) || booked.userId === user.id
+                  )
+                  const myCoachColor = (customerRecord as any)?.color as string | undefined
+
                   if (isLaneInactiveAtHalfHour) {
                     return (
                       <div key={lane.id} className="relative border-l-2 border-black min-h-[32px] bg-white">
@@ -396,7 +404,19 @@ export default function BookingCalendar({ impersonatedEmail }: { impersonatedEma
                           {bandTagText(lane.id, dateKey, bs.seg)}
                         </div>
                       )}
-                      {isStartOfBooking && booked && (
+                      {isStartOfBooking && booked && ownCoachBooking && (
+                        <div className="absolute inset-x-0.5 top-0.5 z-10 rounded-md overflow-hidden border border-black/10"
+                          style={{ height: `${visualSpan * 32 - 4}px` }}>
+                          <CoverageBlockBg booking={booked} coachColor={myCoachColor} />
+                          <div className="relative z-10 px-1.5 py-0.5">
+                            <div className="text-[8px] font-semibold drop-shadow" style={{ color: getContrastText(myCoachColor) }}>
+                              {formatTime(booked.startHour)}-{formatTime(booked.startHour + booked.duration / 60)} 🏅
+                              {booked.status === 'cancelled' && <span className="ml-1">(cancelled)</span>}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {isStartOfBooking && booked && !ownCoachBooking && (
                         <div className={`absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border ${isTentative ? 'bg-gradient-to-br from-blue-100 to-blue-50 border-blue-200' : 'bg-gradient-to-br from-red-100 to-red-50 border-red-200'}`}
                           style={{ height: `${visualSpan * 32 - 4}px` }}>
                           <div className={`text-[9px] font-semibold truncate ${isTentative ? 'text-blue-700' : 'text-red-700'}`}>

@@ -18,6 +18,9 @@ import {
 import { formatAccessCode } from '../lib/access-code'
 import AuthModal from './AuthModal'
 import AthleteAllocationEditor from './AthleteAllocationEditor'
+// SPEC_COACH_PLANNER_RETIRE_AND_VIEW §6: allocation-coverage timeline + 3-state.
+import { AllocationTimeline, type SegmentTapTarget } from './CoverageTimeline'
+import { coverageSummary } from '../lib/coverage'
 // SPEC_MODIFY_BOOKING_UPGRADE: the split Edit (duration) + Reschedule flows are
 // merged into one ModifyBookingModal → modifyBooking. EditBookingModal /
 // RescheduleModal are retired (files kept, no longer referenced here).
@@ -50,11 +53,6 @@ function toDateKey(d: Date): string {
 }
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-
-const SLOT_COLORS = [
-  'bg-orange-400', 'bg-blue-400', 'bg-emerald-400', 'bg-purple-400',
-  'bg-pink-400', 'bg-cyan-400', 'bg-amber-400', 'bg-indigo-400',
-]
 
 function formatDuration(mins: number): string {
   const hrs = Math.floor(mins / 60)
@@ -95,6 +93,13 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const [showAuth, setShowAuth] = useState(false)
   const [modifyBookingData, setModifyBookingData] = useState<Booking | null>(null)
   const [athleteEditBooking, setAthleteEditBooking] = useState<Booking | null>(null)
+  // §6: when a coach taps an unallocated gap, seed the editor to that slot.
+  const [athleteEditSeed, setAthleteEditSeed] = useState<{ startHour: number; durationMinutes: number } | null>(null)
+  // Open the allocation editor; optional gap seed (amber tap) vs whole-card tap.
+  const openAthleteEditor = (booking: Booking, seg?: SegmentTapTarget) => {
+    setAthleteEditSeed(seg && !seg.allocated ? { startHour: seg.startHour, durationMinutes: seg.durationMinutes } : null)
+    setAthleteEditBooking(booking)
+  }
 
   const coachIdForAthletes = customerRecord?._id ?? user?.email ?? ''
 
@@ -281,17 +286,18 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     const lane = getLane(booking.laneId)
     const variantName = getVariantName(booking)
     const cancelCheck = canCancel(booking.id)
-    const hasAthletes = (booking.athleteSlots ?? []).length > 0
-    const needsAthletes = booking.isCoachBooking && !hasAthletes
+    // §6: allocation-coverage. amber border unless fully allocated.
+    const cov = coverageSummary(booking)
+    const coachColor = (customerRecord as any)?.color as string | undefined
 
-    const cardBg = needsAthletes
+    const cardBg = cov.state !== 'full'
       ? 'bg-orange-50 dark:bg-orange-900/10 border-orange-300 dark:border-orange-700/60'
       : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800'
 
     return (
       <div
         key={booking.id}
-        onClick={() => booking.isCoachBooking && setAthleteEditBooking(booking)}
+        onClick={() => booking.isCoachBooking && openAthleteEditor(booking)}
         className={`rounded-xl border p-4 shadow-sm transition-all ${cardBg} ${booking.isCoachBooking ? 'cursor-pointer active:scale-[0.99]' : ''}`}
       >
         {/* Top row: time + lane */}
@@ -301,8 +307,12 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
               <span className="text-base font-bold text-gray-900 dark:text-white">
                 {formatTime(booking.startHour)} – {formatTime(booking.startHour + booking.duration / 60)}
               </span>
-              {needsAthletes && (
+              {cov.state === 'full' ? (
+                <span className="text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded-full uppercase tracking-wide">Full</span>
+              ) : cov.state === 'empty' ? (
                 <span className="text-[10px] font-semibold bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 px-1.5 py-0.5 rounded-full uppercase tracking-wide">No athletes</span>
+              ) : (
+                <span className="text-[10px] font-semibold bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300 px-1.5 py-0.5 rounded-full uppercase tracking-wide">{formatDuration(cov.unallocatedHours * 60)} free</span>
               )}
             </div>
             <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
@@ -314,29 +324,13 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           <span className="text-lg">{lane?.icon ?? '🏏'}</span>
         </div>
 
-        {/* Athlete chips */}
-        {hasAthletes && (
-          <div className="overflow-x-auto -mx-1 px-1 pb-1">
-            <div className="flex gap-1.5 min-w-0">
-              {(booking.athleteSlots ?? []).map((s, i) => (
-                <div
-                  key={i}
-                  className={`shrink-0 flex items-center gap-1 px-2 py-1 rounded-full text-white text-[11px] font-semibold ${SLOT_COLORS[i % SLOT_COLORS.length]}`}
-                >
-                  <span>{s.athleteName.split(' ')[0]}</span>
-                  <span className="opacity-75">{s.durationMinutes}m</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* No-athletes dashed prompt */}
-        {needsAthletes && (
-          <div className="mt-2 border-2 border-dashed border-orange-300 dark:border-orange-700 rounded-lg py-2 flex items-center justify-center gap-1.5 text-xs font-semibold text-orange-500 dark:text-orange-400">
-            🏏 Tap to add athlete allocations
-          </div>
-        )}
+        {/* §6: vertical allocation timeline — allocated rows (coach colour) list
+            athlete names; amber gaps are "＋ Add athlete" (tap → seeded editor). */}
+        <AllocationTimeline
+          booking={booking}
+          coachColor={coachColor}
+          onSegment={(seg) => openAthleteEditor(booking, seg)}
+        />
 
         {/* Booking actions */}
         {(
@@ -924,7 +918,8 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           currentSlots={athleteEditBooking.athleteSlots ?? []}
           coachId={coachIdForAthletes}
           onSave={handleSaveAthleteSlots}
-          onClose={() => setAthleteEditBooking(null)}
+          onClose={() => { setAthleteEditBooking(null); setAthleteEditSeed(null) }}
+          seedNewSlot={athleteEditSeed ?? undefined}
           bottomSheet={isCoach}
           defaultSessionDuration={(customerRecord as any)?.defaultSessionDuration ?? undefined}
           athleteCapacity={(customerRecord as any)?.athleteCapacity ?? undefined}
