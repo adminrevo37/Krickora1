@@ -145,6 +145,19 @@ export default function AdminBookingCalendar() {
   })
   const activeMonth = monthGroups.find(m => m.key === activeMonthKey) ?? monthGroups[0]
 
+  // True month-grid layout: fixed Mon–Sun columns, each date placed under its
+  // weekday with blank leading cells (e.g. 1 May 2026 is a Friday → Mon–Thu of
+  // the first row stay empty). Built from the calendar month itself so it's a full
+  // 1..N regardless of the rolling allDays window.
+  const monthGrid = useMemo(() => {
+    if (!activeMonth) return { leadBlanks: 0, days: [] as Date[] }
+    const [yr, mo] = activeMonth.key.split('-').map(Number)
+    const daysInMonth = new Date(yr, mo + 1, 0).getDate()
+    const leadBlanks = (new Date(yr, mo, 1).getDay() + 6) % 7 // Monday-start index
+    const days = Array.from({ length: daysInMonth }, (_, i) => new Date(yr, mo, i + 1))
+    return { leadBlanks, days }
+  }, [activeMonth])
+
   const monthScrollRef = useRef<HTMLDivElement | null>(null)
   const activeMonthBtnRef = useRef<HTMLButtonElement | null>(null)
   useEffect(() => {
@@ -317,10 +330,20 @@ export default function AdminBookingCalendar() {
         <div className="p-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">{activeMonth?.label}</h3>
-            <span className="text-xs text-gray-500 dark:text-gray-400">{activeMonth?.days.length} days</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">{monthGrid.days.length} days</span>
+          </div>
+          {/* Fixed weekday columns (Mon–Sun) */}
+          <div className="grid grid-cols-7 gap-2 mb-1.5">
+            {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => (
+              <div key={d} className="text-center text-[10px] font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">{d}</div>
+            ))}
           </div>
           <div className="grid grid-cols-7 gap-2">
-            {activeMonth?.days.map(day => {
+            {/* Blank leading cells so day 1 sits under its real weekday */}
+            {Array.from({ length: monthGrid.leadBlanks }).map((_, i) => (
+              <div key={`blank-${i}`} aria-hidden />
+            ))}
+            {monthGrid.days.map(day => {
               const active = formatDateKey(day) === formatDateKey(selectedDay)
               const today = isToday(day)
               const dayBookCount = bookings.filter(b => b.date === formatDateKey(day) && b.status !== 'cancelled').length
@@ -328,7 +351,7 @@ export default function AdminBookingCalendar() {
                 <button
                   key={formatDateKey(day)}
                   onClick={() => setSelectedDay(day)}
-                  className={`relative flex flex-col items-center py-2 px-1 rounded-xl transition-all duration-200 text-center ${
+                  className={`relative flex flex-col items-center justify-center py-2 px-1 rounded-xl transition-all duration-200 text-center min-h-[48px] ${
                     active
                       ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 scale-105'
                       : today
@@ -336,10 +359,7 @@ export default function AdminBookingCalendar() {
                         : 'bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-emerald-50 dark:hover:bg-emerald-900/20'
                   }`}
                 >
-                  <span className="text-[10px] uppercase font-medium opacity-75">
-                    {day.toLocaleDateString('en-US', { weekday: 'short' })}
-                  </span>
-                  <span className="text-base font-bold">{day.getDate()}</span>
+                  <span className="text-base font-bold leading-none">{day.getDate()}</span>
                   {dayBookCount > 0 && (
                     <span className={`text-[9px] mt-0.5 px-1 rounded-full ${active ? 'bg-white/30' : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400'}`}>
                       {dayBookCount}
