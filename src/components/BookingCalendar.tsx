@@ -402,7 +402,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
 
                   return (
                     <div key={lane.id}
-                      className={`relative border-l-2 border-black min-h-[32px] transition-all duration-150 ${past ? 'bg-gray-100' : waitlistMode ? (isSelected ? 'bg-amber-100 cursor-pointer ring-2 ring-inset ring-amber-400' : 'cursor-pointer hover:bg-amber-50') : booked ? '' : tooLate ? 'bg-gray-100' : canBook && hasDurations ? `${band} hover:bg-emerald-50/50 cursor-pointer group` : band}`}
+                      className={`relative border-l-2 border-black min-h-[32px] transition-all duration-150 ${past ? 'bg-gray-200' : waitlistMode ? (isSelected ? 'bg-amber-100 cursor-pointer ring-2 ring-inset ring-amber-400' : 'cursor-pointer hover:bg-amber-50') : booked ? '' : tooLate ? 'bg-gray-200' : canBook && hasDurations ? 'bg-emerald-50 hover:bg-emerald-100 cursor-pointer group' : band}`}
                       onClick={() => {
                         if (past || isLaneInactiveAtHalfHour) return
                         if (waitlistMode) { toggleWaitlistSelection(lane.id, dateKey, slot.hour); return }
@@ -449,8 +449,13 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                         </div>
                       )}
                       {isMiddleOfBooking && <div className={`absolute inset-0 ${isTentative ? 'bg-blue-50/30' : 'bg-red-50/30'}`} />}
-                      {past && !booked && <div className="absolute inset-0 flex items-center justify-center"><div className="w-3 h-[1px] bg-gray-300 rotate-45" /></div>}
+                      {past && !booked && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><span className="text-[14px] leading-none text-gray-400 font-medium">–</span></div>}
                       {tooLate && !booked && <div className="absolute inset-0 flex items-center justify-center"><span className="text-[8px] text-gray-400">Too late</span></div>}
+                      {canBook && hasDurations && !booked && !past && !tooLate && (
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                          <span className="text-[15px] leading-none text-emerald-400 font-semibold group-hover:text-emerald-600 transition-colors">+</span>
+                        </div>
+                      )}
                       {!past && !booked && canBook && hasDurations && timeCheck.allowed && !waitlistMode && (
                         <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                           <div className="flex items-center gap-0.5 bg-emerald-500 text-white text-[9px] font-semibold px-1.5 py-0.5 rounded-full shadow-lg shadow-emerald-500/30"><span>+</span><span>Book</span></div>
