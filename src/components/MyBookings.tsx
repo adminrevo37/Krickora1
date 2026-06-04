@@ -21,6 +21,8 @@ import AthleteAllocationEditor from './AthleteAllocationEditor'
 // SPEC_COACH_PLANNER_RETIRE_AND_VIEW §6: allocation-coverage timeline + 3-state.
 import { AllocationTimeline, type SegmentTapTarget } from './CoverageTimeline'
 import { coverageSummary } from '../lib/coverage'
+// SPEC_COACH_PLANNER_RETIRE_AND_VIEW §5: per-booking release-gated Repeat.
+import RepeatBookingButton from './RepeatBookingButton'
 // SPEC_MODIFY_BOOKING_UPGRADE: the split Edit (duration) + Reschedule flows are
 // merged into one ModifyBookingModal → modifyBooking. EditBookingModal /
 // RescheduleModal are retired (files kept, no longer referenced here).
@@ -343,6 +345,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                 ✏️ Modify
               </button>
             )}
+            {booking.isCoachBooking && booking.status !== 'cancelled' && <RepeatBookingButton booking={booking} />}
             <button
               onClick={() => handleCancel(booking.id)}
               disabled={cancellingId === booking.id || !cancelCheck.allowed}
