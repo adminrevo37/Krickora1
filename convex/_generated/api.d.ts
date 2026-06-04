@@ -14,6 +14,7 @@ import type * as adminGateActions from "../adminGateActions.js";
 import type * as adminPassword from "../adminPassword.js";
 import type * as adminPasswordTrigger from "../adminPasswordTrigger.js";
 import type * as analytics from "../analytics.js";
+import type * as announcements from "../announcements.js";
 import type * as athletes from "../athletes.js";
 import type * as auth from "../auth.js";
 import type * as broadcast from "../broadcast.js";
@@ -77,6 +78,7 @@ declare const fullApi: ApiFromModules<{
   adminPassword: typeof adminPassword;
   adminPasswordTrigger: typeof adminPasswordTrigger;
   analytics: typeof analytics;
+  announcements: typeof announcements;
   athletes: typeof athletes;
   auth: typeof auth;
   broadcast: typeof broadcast;

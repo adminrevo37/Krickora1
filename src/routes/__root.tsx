@@ -6,6 +6,7 @@ import AuthModal from '../components/AuthModal'
 import PostcodeRequiredModal from '../components/PostcodeRequiredModal'
 import PwaUpdater from '../components/PwaUpdater'
 import InstallPrompt, { openInstallHelp } from '../components/InstallPrompt'
+import AnnouncementHost from '../components/AnnouncementHost'
 import { useImpersonation } from '../hooks/useImpersonation'
 import { useLaneConfig } from '../hooks/useLaneConfig'
 
@@ -118,6 +119,11 @@ function RootComponent() {
           </div>
         </div>
       </header>
+
+      {/* SPEC_INAPP_BANNERS — admin-managed in-app banner strip + pop-up modal.
+          Self-gates on auth resolving (no flash); renders nothing when there's
+          nothing to show. */}
+      <AnnouncementHost />
 
       {/* Impersonation banner */}
       {isImpersonating && impersonatedUser && (

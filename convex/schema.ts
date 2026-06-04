@@ -537,6 +537,48 @@ export default defineSchema({
     status: v.string(),          // 'sending' | 'sent' | 'failed'
   }).index("by_createdAt", ["createdAt"]),
 
+  // SPEC_INAPP_BANNERS — admin-managed, dismissable in-app banners / pop-ups shown
+  // when a targeted user NEXT opens the app (no push, no email — purely in-app).
+  // Complements the OUTBOUND broadcasts table above. Additive, no migration.
+  announcements: defineTable({
+    createdBy: v.string(),       // admin userId / email
+    createdByName: v.optional(v.string()),
+    createdAt: v.number(),       // Unix ms
+    title: v.string(),
+    body: v.string(),
+    ctaLabel: v.optional(v.string()),
+    ctaTarget: v.optional(v.string()),   // internal route (/bookings) or external URL
+    displayType: v.string(),     // 'banner' | 'modal'
+    style: v.string(),           // 'info' | 'notice' | 'promo'
+    audienceMode: v.string(),    // 'all' | 'roles' | 'bookingRange'
+    // For audienceMode='all': when true the banner ALSO shows to logged-out viewers
+    // (public landing notices; dismissal then falls back to localStorage). §3/§8 #1.
+    includeLoggedOut: v.optional(v.boolean()),
+    // For 'roles' (which roles see it) OR a sub-filter on 'bookingRange'
+    // (narrows "accounts with a booking in range" by role). Subset of
+    // ['customer','coach','admin'] (bookingRange uses customer/coach/athlete).
+    audienceRoles: v.optional(v.array(v.string())),
+    rangeStart: v.optional(v.string()), // YYYY-MM-DD (bookingRange)
+    rangeEnd: v.optional(v.string()),
+    startAt: v.optional(v.number()),    // Unix ms — auto show from (client-evaluated)
+    endAt: v.optional(v.number()),      // Unix ms — auto hide after (client-evaluated)
+    dismissible: v.boolean(),           // default true
+    priority: v.number(),               // default 0; higher shows first
+    active: v.boolean(),                // default true; admin master toggle
+  }).index("by_active", ["active"]),
+
+  // SPEC_INAPP_BANNERS — per-user, server-side dismissals (consistent across a
+  // user's devices). userId = the caller's lowercased email (the stable identity
+  // used across this app). Logged-out dismissals use localStorage instead (§3).
+  announcementDismissals: defineTable({
+    announcementId: v.id("announcements"),
+    userId: v.string(),          // lowercased email
+    dismissedAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_announcement", ["announcementId"])
+    .index("by_user_announcement", ["userId", "announcementId"]),
+
   // Admin unlock sessions (SPEC_SECURITY_HARDENING #2). One row per admin email;
   // present + unexpired = that admin re-entered their password recently.
   adminUnlocks: defineTable({

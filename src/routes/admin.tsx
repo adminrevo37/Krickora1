@@ -15,6 +15,7 @@ import AdminDiscountCodesTab from '../components/AdminDiscountCodesTab'
 import AdminFaultInbox from '../components/AdminFaultInbox'
 import WaitlistAdmin from '../components/WaitlistAdmin'
 import AdminBroadcast from '../components/AdminBroadcast'
+import AdminAnnouncements from '../components/AdminAnnouncements'
 import PostcodeSuburbFields, { isLocationComplete } from '../components/PostcodeSuburbFields'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
@@ -27,11 +28,11 @@ type Section =
   | 'bookings' | 'closures'
   | 'customers' | 'coaches'
   | 'statements' | 'discounts'
-  | 'faults' | 'waitlist' | 'broadcast' | 'lanes' | 'settings'
+  | 'faults' | 'waitlist' | 'broadcast' | 'announcements' | 'lanes' | 'settings'
 
 const VALID_SECTIONS: Section[] = [
   'bookings', 'closures', 'customers', 'coaches',
-  'statements', 'discounts', 'faults', 'waitlist', 'broadcast', 'lanes', 'settings',
+  'statements', 'discounts', 'faults', 'waitlist', 'broadcast', 'announcements', 'lanes', 'settings',
 ]
 
 export const Route = createFileRoute('/admin')({
@@ -82,7 +83,8 @@ const NAV_GROUPS: Array<{
   {
     label: 'Communications',
     items: [
-      { id: 'broadcast',  label: 'Broadcast',  icon: '📣' },
+      { id: 'broadcast',     label: 'Broadcast',     icon: '📣' },
+      { id: 'announcements', label: 'Announcements', icon: '📌' },
     ],
   },
   {
@@ -104,6 +106,7 @@ const SECTION_TITLES: Record<Section, string> = {
   faults:     'Fault Reports',
   waitlist:   'Waitlist',
   broadcast:  'Broadcast',
+  announcements: 'Announcements',
   lanes:      'Lanes',
   settings:   'Settings',
 }
@@ -283,6 +286,7 @@ function AdminPage() {
             {section === 'faults'     && <AdminFaultInbox />}
             {section === 'waitlist'   && <WaitlistAdmin />}
             {section === 'broadcast'  && <AdminBroadcast />}
+            {section === 'announcements' && <AdminAnnouncements />}
             {section === 'lanes'      && <AdminLanesPanel />}
             {section === 'settings'   && <SettingsPanel />}
           </div>
