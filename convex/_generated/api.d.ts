@@ -20,6 +20,7 @@ import type * as auth from "../auth.js";
 import type * as broadcast from "../broadcast.js";
 import type * as closures from "../closures.js";
 import type * as crons from "../crons.js";
+import type * as digestAction from "../digestAction.js";
 import type * as emails from "../emails.js";
 import type * as faults from "../faults.js";
 import type * as googleCalendar from "../googleCalendar.js";
@@ -84,6 +85,7 @@ declare const fullApi: ApiFromModules<{
   broadcast: typeof broadcast;
   closures: typeof closures;
   crons: typeof crons;
+  digestAction: typeof digestAction;
   emails: typeof emails;
   faults: typeof faults;
   googleCalendar: typeof googleCalendar;

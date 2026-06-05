@@ -761,6 +761,9 @@ async function ensureCustomerImpl(
     email: normalizedEmail,
     role: "customer",
     creditBalance: 0,
+    // SPEC_PUSH_NOTIFICATIONS_V2 §3.4 — the 22-min session-reminder PUSH replaces
+    // the reminder email, so new accounts start with the reminder email OFF.
+    emailPrefs: [{ slug: "booking-reminder", enabled: false }],
     createdAt: now,
   });
 

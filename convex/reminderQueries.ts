@@ -89,9 +89,10 @@ export const getBookingsNeedingReminder = internalQuery({
         return false; // Too far away
       }
 
-      // Send reminder if booking is between 5 and 7 hours away
-      // (gives a window so the cron doesn't miss it)
-      return hoursUntil > 0 && hoursUntil <= 7 && hoursUntil >= 4.5;
+      // SPEC_PUSH_NOTIFICATIONS_V2 §3.1 — fire ~22 min before the booking. The
+      // cron runs every 5 min (§3.2), so a tight 18–24 min window (0.30–0.40 h)
+      // is hit reliably exactly once; the reminderSent guard prevents repeats.
+      return hoursUntil >= 0.3 && hoursUntil <= 0.4;
     });
 
     return needsReminder.map((b) => ({

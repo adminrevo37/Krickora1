@@ -14,6 +14,8 @@ export type PushCategoryKey =
   | "mate-alerts"
   | "child-coaching"
   | "coach-allocation"
+  | "account-credit"
+  | "coach-roster"
   | "admin-ops";
 
 export interface PushCategory {
@@ -64,6 +66,18 @@ export const PUSH_CATEGORIES: PushCategory[] = [
     key: "coach-allocation",
     label: "Coach allocation alerts",
     description: "When an athlete is allocated to your session, or admin books you in.",
+    roles: ["coach"],
+  },
+  {
+    key: "account-credit",
+    label: "Account & credit",
+    description: "When credit is added or adjusted on your account.",
+    roles: ["customer"],
+  },
+  {
+    key: "coach-roster",
+    label: "Coach roster changes",
+    description: "When an athlete adds or removes you as their coach.",
     roles: ["coach"],
   },
   {

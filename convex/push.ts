@@ -21,11 +21,16 @@ function configureVapid(): boolean {
   return true;
 }
 
+type PushAction = { action: string; title: string; url?: string };
+
 type Payload = {
   title: string;
   body: string;
   url?: string;
   tag?: string;
+  // SPEC_PUSH_NOTIFICATIONS_V2 §8 — notification action buttons (Android/desktop
+  // render them; iOS Safari/PWA ignores them → the body tap is the fallback).
+  actions?: PushAction[];
 };
 
 // Send one payload to a set of subscriptions; prune dead ones.
@@ -39,6 +44,7 @@ async function deliver(
     body: payload.body,
     url: payload.url ?? "/",
     tag: payload.tag,
+    actions: payload.actions,
   });
   let sent = 0;
   for (const s of subs) {
@@ -70,6 +76,9 @@ export const sendPushInternal = internalAction({
     body: v.string(),
     url: v.optional(v.string()),
     tag: v.optional(v.string()),
+    actions: v.optional(
+      v.array(v.object({ action: v.string(), title: v.string(), url: v.optional(v.string()) }))
+    ),
   },
   handler: async (ctx, args) => {
     if (!configureVapid()) {
@@ -88,6 +97,7 @@ export const sendPushInternal = internalAction({
       body: args.body,
       url: args.url,
       tag: args.tag,
+      actions: args.actions,
     });
     return { success: sent > 0, sent };
   },

@@ -6,7 +6,15 @@
 
 import { mutation, query, internalQuery, internalMutation } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
+import { internal } from "./_generated/api";
 import { isPushCategory } from "./lib/pushCategories";
+import { requireAdmin } from "./lib/adminGuard";
+
+// SPEC_PUSH_NOTIFICATIONS_V2 §4 — email slugs auto-silenced the FIRST time an
+// account enables push (so the alert arrives via push, not a duplicate email).
+// Only flipped if the user hasn't already made an explicit choice for the slug,
+// and only once ever (guarded by pushPreferences.pushEmailDefaultsApplied).
+const SUPERSEDE_EMAIL_SLUGS = ["mate-alerts", "athlete-allocation", "coach-allocation"];
 
 async function requireEmail(ctx: any): Promise<string> {
   const identity = await ctx.auth.getUserIdentity();
@@ -28,6 +36,14 @@ export const subscribePush = mutation({
     const email = await requireEmail(ctx);
     const identity = await ctx.auth.getUserIdentity();
     const now = Date.now();
+    // SPEC_PUSH_NOTIFICATIONS_V2 §4 — did this account have ANY subscribed device
+    // before this call? If not, this is its first-ever push-enable → run the
+    // one-time email auto-off after the insert succeeds.
+    const priorSubs = await ctx.db
+      .query("pushSubscriptions")
+      .withIndex("by_email", (q: any) => q.eq("email", email))
+      .collect();
+    const isFirstEverEnable = priorSubs.length === 0;
     // Upsert by endpoint (re-subscribing the same device refreshes its keys).
     const existing = await ctx.db
       .query("pushSubscriptions")
@@ -44,7 +60,7 @@ export const subscribePush = mutation({
       });
       return existing._id;
     }
-    return await ctx.db.insert("pushSubscriptions", {
+    const insertedId = await ctx.db.insert("pushSubscriptions", {
       email,
       userId: identity?.subject,
       endpoint: args.endpoint,
@@ -54,6 +70,62 @@ export const subscribePush = mutation({
       createdAt: now,
       lastSeenAt: now,
     });
+    // §4 — first device ever for this account: silence the superseded emails once.
+    if (isFirstEverEnable) {
+      await ctx.scheduler.runAfter(0, internal.pushNotifications.applyPushSupersedesEmailDefaults, {
+        email,
+      });
+    }
+    return insertedId;
+  },
+});
+
+// SPEC_PUSH_NOTIFICATIONS_V2 §4 — one-time auto-off. Disable the superseded email
+// slugs for `email`, but ONLY those the user hasn't explicitly set, and ONLY once
+// (guarded by pushPreferences.pushEmailDefaultsApplied). Idempotent + best-effort.
+export const applyPushSupersedesEmailDefaults = internalMutation({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    const email = args.email.toLowerCase().trim();
+    if (!email) return;
+
+    // Once-only guard lives on the pushPreferences row.
+    const pref = await ctx.db
+      .query("pushPreferences")
+      .withIndex("by_email", (q: any) => q.eq("email", email))
+      .first();
+    if (pref?.pushEmailDefaultsApplied) return;
+
+    // Patch the customer's emailPrefs: add a disabled entry for each superseded
+    // slug that has no explicit pref yet (never clobber a deliberate user choice).
+    const customer = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", email))
+      .first();
+    if (customer) {
+      const prefs: Array<{ slug: string; enabled: boolean }> = [
+        ...(customer.emailPrefs ?? []),
+      ];
+      let changed = false;
+      for (const slug of SUPERSEDE_EMAIL_SLUGS) {
+        if (!prefs.some((p) => p.slug === slug)) {
+          prefs.push({ slug, enabled: false });
+          changed = true;
+        }
+      }
+      if (changed) await ctx.db.patch(customer._id, { emailPrefs: prefs });
+    }
+
+    // Set the once-only guard (create the prefs row if it doesn't exist yet).
+    if (pref) {
+      await ctx.db.patch(pref._id, { pushEmailDefaultsApplied: true });
+    } else {
+      await ctx.db.insert("pushPreferences", {
+        email,
+        categories: {},
+        pushEmailDefaultsApplied: true,
+      });
+    }
   },
 });
 
@@ -270,6 +342,28 @@ export const getAdminPushEmails = internalQuery({
       .withIndex("by_role", (q: any) => q.eq("role", "admin"))
       .collect();
     return admins.map((a) => a.email.toLowerCase().trim()).filter(Boolean);
+  },
+});
+
+// SPEC_PUSH_NOTIFICATIONS_V2 §3.4 — one-time migration. Default the session-
+// reminder EMAIL off for every existing account that hasn't explicitly set it
+// (the 22-min push now replaces it). Idempotent: skips rows that already carry a
+// booking-reminder pref. Run once from the admin app after deploy.
+export const migratePushV2Defaults = mutation({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+    const customers = await ctx.db.query("customers").collect();
+    let patched = 0;
+    for (const c of customers) {
+      const prefs: Array<{ slug: string; enabled: boolean }> = c.emailPrefs ?? [];
+      if (prefs.some((p) => p.slug === "booking-reminder")) continue;
+      await ctx.db.patch(c._id, {
+        emailPrefs: [...prefs, { slug: "booking-reminder", enabled: false }],
+      });
+      patched++;
+    }
+    return { customersScanned: customers.length, patched };
   },
 });
 

@@ -9,6 +9,8 @@
  * Amounts are in DOLLARS, rounded to cents.
  */
 
+import { internal } from "../_generated/api";
+
 type CreditReason =
   | "cancellation"
   | "modify_decrease"
@@ -49,6 +51,25 @@ export async function recordCreditMovement(
     note: args.note,
     at: new Date().toISOString(),
   });
+  // SPEC_PUSH_NOTIFICATIONS_V2 §6.1 — push the customer when credit is issued or
+  // adjusted (NOT on silent checkout redemption, and not while the account is
+  // being deleted). Email is unaffected. Best-effort: scheduled, never blocks.
+  if (args.reason !== "redeemed" && args.reason !== "account_deleted" && args.customer.email) {
+    const amt = `$${Math.abs(delta).toFixed(2)}`;
+    const bal = `$${newBalance.toFixed(2)}`;
+    const body =
+      delta > 0
+        ? `${amt} credit added to your account — balance ${bal}.`
+        : `${amt} credit adjusted on your account — balance ${bal}.`;
+    await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+      email: String(args.customer.email).toLowerCase().trim(),
+      category: "account-credit",
+      title: "Cricket Revolution",
+      body,
+      url: "/profile",
+      tag: `credit-${args.customer._id}`,
+    });
+  }
   return newBalance;
 }
 

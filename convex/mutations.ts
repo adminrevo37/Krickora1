@@ -1125,6 +1125,7 @@ export const createBooking = mutation({
       // §2.13: only an admin can mark a COACH booking as admin-managed. Ignore the
       // flag on customer bookings or from non-admin callers.
       createdByAdmin: isAdminCaller && args.isCoachBooking && args.createdByAdmin ? true : undefined,
+      createdAt: Date.now(), // §6.2 admin digest windowing
     });
 
     // SPEC_WAITLIST_OFFER_REDESIGN: if this booking is the waitlisted member
@@ -2586,6 +2587,7 @@ async function writeCoachSessionCopy(
     accessCode: newCode,
     laneNameSnapshot: analysis.laneNameSnapshot,
     variantLabelSnapshot: analysis.variantLabelSnapshot,
+    createdAt: Date.now(), // §6.2 admin digest windowing
   } as any);
 
   if (copiedSlots.length > 0) {

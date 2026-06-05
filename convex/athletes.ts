@@ -10,6 +10,43 @@ import { composeName, splitName } from "./lib/names";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
+// SPEC_PUSH_NOTIFICATIONS_V2 §6.4 — notify a coach that an athlete added/removed
+// them from their roster. coachId is a customers _id; no-op for anything that
+// doesn't resolve to a coach account. Best-effort (scheduled, never blocks).
+async function notifyCoachRoster(
+  ctx: any,
+  coachId: string,
+  athleteDisplay: string,
+  added: boolean
+): Promise<void> {
+  if (!coachId) return;
+  let coach: any = null;
+  try {
+    coach = await ctx.db.get(coachId as any);
+  } catch {
+    coach = null; // not a valid Id (e.g. a legacy email entry) — skip
+  }
+  if (!coach || coach.role !== "coach" || !coach.email) return;
+  const name = (athleteDisplay ?? "").trim() || "An athlete";
+  await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+    email: String(coach.email).toLowerCase().trim(),
+    category: "coach-roster",
+    title: added ? "New athlete on your roster" : "Athlete left your roster",
+    body: added
+      ? `${name} has added you as a coach. You can now allocate them sessions.`
+      : `${name} is no longer on your roster.`,
+    url: "/bookings",
+    tag: `coach-roster-${coachId}`,
+  });
+}
+
+// SPEC_PUSH_NOTIFICATIONS_V2 §6.2 — record a customer→coach link creation for the
+// hourly admin digest's "added a coach" count.
+async function logCoachAddEvent(ctx: any, accountId: string): Promise<void> {
+  if (!accountId) return;
+  await ctx.db.insert("coachLinkEvents", { accountId: accountId as any, at: Date.now() });
+}
+
 // Resolve the caller's own customers row (or null). Never throws.
 async function getCallerCustomer(ctx: any): Promise<any | null> {
   const caller = await getCallerContext(ctx);
@@ -178,7 +215,14 @@ export const setAthleteCoaches = mutation({
     const coachIds = Array.from(
       new Set(args.coachIds.map((c) => c.trim()).filter(Boolean))
     );
+    const prevCoaches = new Set<string>(athlete.assignedCoachIds ?? []);
     await ctx.db.patch(args.athleteId, { assignedCoachIds: coachIds });
+    // §6.4 — notify newly-added / removed coaches; §6.2 — log the add for the digest.
+    const added = coachIds.filter((c) => !prevCoaches.has(c));
+    const removed = Array.from(prevCoaches).filter((c) => !coachIds.includes(c));
+    for (const c of added) await notifyCoachRoster(ctx, c, athlete.name, true);
+    for (const c of removed) await notifyCoachRoster(ctx, c, athlete.name, false);
+    if (added.length > 0) await logCoachAddEvent(ctx, athlete.accountCustomerId);
     return args.athleteId;
   },
 });
@@ -211,6 +255,9 @@ export const setupAthletesAtSignup = mutation({
     const now = new Date().toISOString();
     const clean = (ids: string[]) =>
       Array.from(new Set(ids.map((c) => c.trim()).filter(Boolean)));
+    // §6.4/§6.2 — coaches newly linked during this signup (notify + digest log).
+    const coachNotifs: Array<{ coachId: string; display: string }> = [];
+    const account: any = await ctx.db.get(accountId as any);
 
     const existing = await ctx.db
       .query("athletes")
@@ -221,10 +268,10 @@ export const setupAthletesAtSignup = mutation({
     const selfCoaches = clean(args.selfCoachIds ?? []);
     if (selfCoaches.length > 0) {
       let self = existing.find((a: any) => a.isSelf);
+      const selfDisplay = account?.name ?? "An athlete";
       if (!self) {
         // Create-self-if-missing: the customer-sync step normally makes this row,
         // but never assume ordering. Carry the account holder's name.
-        const account: any = await ctx.db.get(accountId as any);
         const selfId = await ctx.db.insert("athletes", {
           accountCustomerId: accountId as any,
           name: account?.name ?? "",
@@ -235,9 +282,12 @@ export const setupAthletesAtSignup = mutation({
           createdAt: now,
         });
         existing.push({ _id: selfId, isSelf: true } as any);
+        for (const c of selfCoaches) coachNotifs.push({ coachId: c, display: selfDisplay });
       } else {
+        const before = new Set<string>(self.assignedCoachIds ?? []);
         const merged = clean([...(self.assignedCoachIds ?? []), ...selfCoaches]);
         await ctx.db.patch(self._id, { assignedCoachIds: merged });
+        for (const c of merged) if (!before.has(c)) coachNotifs.push({ coachId: c, display: selfDisplay });
       }
     }
 
@@ -254,6 +304,7 @@ export const setupAthletesAtSignup = mutation({
         (e: any) => !e.isSelf && (e.name ?? "").toLowerCase().trim() === name.toLowerCase()
       );
       if (match) {
+        const before = new Set<string>(match.assignedCoachIds ?? []);
         const merged = clean([...(match.assignedCoachIds ?? []), ...coachIds]);
         await ctx.db.patch(match._id, {
           assignedCoachIds: merged,
@@ -261,6 +312,7 @@ export const setupAthletesAtSignup = mutation({
           lastName: last || undefined,
           name,
         });
+        for (const c of merged) if (!before.has(c)) coachNotifs.push({ coachId: c, display: name });
       } else {
         await ctx.db.insert("athletes", {
           accountCustomerId: accountId as any,
@@ -272,8 +324,13 @@ export const setupAthletesAtSignup = mutation({
           createdAt: now,
         });
         created++;
+        for (const c of coachIds) coachNotifs.push({ coachId: c, display: name });
       }
     }
+
+    // §6.4 — notify each newly-linked coach; §6.2 — one digest event for the account.
+    for (const n of coachNotifs) await notifyCoachRoster(ctx, n.coachId, n.display, true);
+    if (coachNotifs.length > 0) await logCoachAddEvent(ctx, accountId as string);
 
     return { success: true, childrenCreated: created };
   },
@@ -376,6 +433,11 @@ export const addAthleteToCoach = mutation({
         childName,
         coachName,
       });
+      // §6.4 — if an ADMIN linked the athlete on the coach's behalf, tell the
+      // coach (a coach adding to their own roster already knows → no self-ping).
+      if (caller.isAdmin && !isSelfCoach) {
+        await notifyCoachRoster(ctx, coachIdNorm, childName, true);
+      }
       return { status: "added", accountExists: true };
     }
 
@@ -451,6 +513,10 @@ export const removeAthleteFromCoach = mutation({
       (c: string) => c !== coachIdNorm && c !== args.coachId
     );
     await ctx.db.patch(args.athleteId, { assignedCoachIds: next });
+    // §6.4 — if an ADMIN removed the athlete on the coach's behalf, tell the coach.
+    if (caller.isAdmin && !isSelfCoach) {
+      await notifyCoachRoster(ctx, coachIdNorm, athlete.name, false);
+    }
     return { success: true };
   },
 });

@@ -1,7 +1,7 @@
 import { internalMutation, mutation } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
-import { requireAdmin } from "./lib/adminGuard";
+import { requireAdmin, getCallerContext } from "./lib/adminGuard";
 
 /**
  * Waitlist — sequential first-refusal engine (SPEC_WAITLIST_OFFER_REDESIGN).
@@ -277,14 +277,22 @@ export const advanceWaitlistOffer = internalMutation({
       offerDeadline: `${fmtAwstTime(expiresAtMs)} AWST`,
     });
 
-    // SPEC_PWA_PUSH §5.1 — waitlist vacancy offer push (time-sensitive).
+    // SPEC_PWA_PUSH §5.1 + V2 §5/§8 — waitlist vacancy offer push (time-sensitive),
+    // deep-linked straight to checkout for the held slot (&wl=1) with Accept/Deny
+    // action buttons. Accept → checkout; Deny → release + roll to the next person.
+    const checkoutUrl = `/?book=${offerLane}&date=${date}&hour=${hour}&wl=1`;
+    const declineUrl = `/?wlDecline=${offerLane}&date=${date}&hour=${hour}`;
     await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
       email: next.userEmail,
       category: "waitlist-offers",
       title: "A net opened up 🏏",
       body: `${laneName} · ${fmtAwstDateLabel(date)}, ${fmtHour12(hour)} - ${fmtHour12(hour + 1)} — reserved for you until ${fmtAwstTime(expiresAtMs)} AWST.`,
-      url: `/?book=${offerLane}&date=${date}&hour=${hour}`,
+      url: checkoutUrl,
       tag: `waitlist-${offerLane}-${date}-${hour}`,
+      actions: [
+        { action: "accept", title: "Accept", url: checkoutUrl },
+        { action: "deny", title: "Pass", url: declineUrl },
+      ],
     });
 
     // 7. Roll on at expiry if they don't book.
@@ -293,6 +301,18 @@ export const advanceWaitlistOffer = internalMutation({
       date,
       hour,
     });
+
+    // V2 §6.3 — "expiring soon" reminder push a few minutes before the hold lapses
+    // (only if the hold is long enough to make it meaningful). It re-checks the
+    // offer is still live + unclaimed before sending.
+    const EXPIRY_REMINDER_LEAD_MS = 5 * 60 * 1000;
+    if (holdMs > EXPIRY_REMINDER_LEAD_MS + 60 * 1000) {
+      await ctx.scheduler.runAfter(
+        holdMs - EXPIRY_REMINDER_LEAD_MS,
+        internal.waitlist.remindWaitlistOfferExpiring,
+        { waitlistId: next._id, offerLane, date, hour, expiresAtMs }
+      );
+    }
 
     return { result: "offered", userId: next.userId };
   },
@@ -350,5 +370,102 @@ export const adminClearWaitlistOffer = mutation({
       hour: args.hour,
     });
     return { cleared: true };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// SPEC_PUSH_NOTIFICATIONS_V2 §6.3 — "expiring soon" reminder push.
+// Scheduled by advanceWaitlistOffer for (hold − 5 min). Fires only if the offer
+// is STILL live + unclaimed (same offer instance, identified by offerExpiresAt).
+// ---------------------------------------------------------------------------
+export const remindWaitlistOfferExpiring = internalMutation({
+  args: {
+    waitlistId: v.id("waitlist"),
+    offerLane: v.string(),
+    date: v.string(),
+    hour: v.number(),
+    expiresAtMs: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const entry = await ctx.db.get(args.waitlistId);
+    if (!entry) return { sent: false, reason: "gone" };
+    if (statusOf(entry) !== "offered") return { sent: false, reason: "not offered" };
+    // Same offer instance? (A re-offer would carry a different expiry.)
+    const exp = entry.offerExpiresAt ? new Date(entry.offerExpiresAt).getTime() : 0;
+    if (exp !== args.expiresAtMs) return { sent: false, reason: "superseded" };
+    if (Date.now() >= exp) return { sent: false, reason: "already expired" };
+
+    const laneName = LANE_NAME_MAP[args.offerLane] ?? args.offerLane;
+    const checkoutUrl = `/?book=${args.offerLane}&date=${args.date}&hour=${args.hour}&wl=1`;
+    const declineUrl = `/?wlDecline=${args.offerLane}&date=${args.date}&hour=${args.hour}`;
+    await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+      email: entry.userEmail,
+      category: "waitlist-offers",
+      title: "Your net is about to be released ⏳",
+      body: `${laneName} · ${fmtAwstDateLabel(args.date)}, ${fmtHour12(args.hour)} - ${fmtHour12(args.hour + 1)} — claim it before ${fmtAwstTime(exp)} AWST.`,
+      url: checkoutUrl,
+      // Distinct tag so it doesn't overwrite the original offer notification.
+      tag: `waitlist-expiry-${args.offerLane}-${args.date}-${args.hour}`,
+      actions: [
+        { action: "accept", title: "Accept", url: checkoutUrl },
+        { action: "deny", title: "Pass", url: declineUrl },
+      ],
+    });
+    return { sent: true };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// SPEC_PUSH_NOTIFICATIONS_V2 §8 — the offeree declines (notification "Pass"/Deny
+// action, or the in-app "Pass" button on iOS). Releases this user's exclusive
+// hold + marks their entry expired, then immediately rolls the offer to the next
+// waiting member. Only the user who holds the live offer may decline it.
+// ---------------------------------------------------------------------------
+export const declineWaitlistOffer = mutation({
+  args: { laneId: v.string(), date: v.string(), hour: v.number() },
+  handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) throw new ConvexError("Authentication required.");
+    const email = (caller.email ?? "").toLowerCase().trim();
+    const subject = caller.identity.subject;
+
+    const slotEnd = args.hour + 1;
+    // Entries are keyed any-lane ('*'); find THIS caller's offered entry for the hour.
+    const entries = await ctx.db
+      .query("waitlist")
+      .withIndex("by_slot", (q: any) => q.eq("laneId", "*").eq("date", args.date).eq("hour", args.hour))
+      .collect();
+    const mine = entries.find(
+      (e: any) =>
+        statusOf(e) === "offered" &&
+        (e.userEmail?.toLowerCase().trim() === email || e.userId === subject)
+    );
+    if (!mine) {
+      // Nothing to decline (already rolled / booked / never offered to them).
+      return { declined: false, reason: "no live offer" };
+    }
+    await ctx.db.patch(mine._id, { status: "expired", offerExpiresAt: undefined });
+
+    // Release this user's waitlist hold(s) overlapping the hour, on any lane.
+    for (const lid of Object.keys(LANE_NAME_MAP)) {
+      const holds = await ctx.db
+        .query("slotHolds")
+        .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", args.date))
+        .collect();
+      for (const h of holds) {
+        if (h.holdType !== "waitlist") continue;
+        if (h.userId !== mine.userId && h.userEmail?.toLowerCase().trim() !== email) continue;
+        const hEnd = h.startHour + h.duration / 60;
+        if (args.hour < hEnd && slotEnd > h.startHour) await ctx.db.delete(h._id);
+      }
+    }
+
+    // Roll to the next waiting member immediately.
+    await ctx.scheduler.runAfter(0, internal.waitlist.advanceWaitlistOffer, {
+      laneId: args.laneId,
+      date: args.date,
+      hour: args.hour,
+    });
+    return { declined: true };
   },
 });

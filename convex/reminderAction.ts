@@ -31,12 +31,14 @@ export const sendBookingReminders = internalAction({
           accessCode: booking.accessCode,
         });
 
-        // SPEC_PWA_PUSH §5.1 — session reminder push (customer), beside the email.
+        // SPEC_PUSH_NOTIFICATIONS_V2 §3.3 — session reminder push (~22 min before),
+        // DOOR CODE FIRST. The push is now the primary channel (the reminder email
+        // is off by default for everyone — §3.4).
         await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
           email: booking.customerEmail,
           category: "session-reminders",
-          title: "Session reminder 🏏",
-          body: `${booking.laneName} · ${booking.date}, ${booking.timeSlot}${booking.accessCode ? ` · Door code ${booking.accessCode}` : ""}`,
+          title: "Your net starts soon 🏏",
+          body: `${booking.accessCode ? `Door code ${booking.accessCode} 🔓 — ` : ""}starts in ~22 min · ${booking.laneName} ${booking.timeSlot}`,
           url: "/bookings",
           tag: `reminder-${booking.id}`,
         });

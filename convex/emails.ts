@@ -604,7 +604,10 @@ export const sendMateAdded = internalAction({
     accessCode: v.string(),
     calendarUrl: v.optional(v.string()),
   },
-  handler: async (_ctx, args) => {
+  handler: async (ctx, args) => {
+    if (!(await emailEnabledForUser(ctx, args.to, "mate-alerts"))) {
+      return { success: true, skipped: true, reason: "mate emails off" };
+    }
     return await sendEmail("mate-added", args.to, {
       ownerName: args.ownerName,
       laneName: args.laneName,
@@ -626,7 +629,10 @@ export const sendMateRemoved = internalAction({
     date: v.string(),
     timeSlot: v.string(),
   },
-  handler: async (_ctx, args) => {
+  handler: async (ctx, args) => {
+    if (!(await emailEnabledForUser(ctx, args.to, "mate-alerts"))) {
+      return { success: true, skipped: true, reason: "mate emails off" };
+    }
     return await sendEmail("mate-removed", args.to, {
       ownerName: args.ownerName,
       laneName: args.laneName,
@@ -645,7 +651,10 @@ export const sendMateLeft = internalAction({
     date: v.string(),
     timeSlot: v.string(),
   },
-  handler: async (_ctx, args) => {
+  handler: async (ctx, args) => {
+    if (!(await emailEnabledForUser(ctx, args.to, "mate-alerts"))) {
+      return { success: true, skipped: true, reason: "mate emails off" };
+    }
     return await sendEmail("mate-left", args.to, {
       mateName: args.mateName,
       laneName: args.laneName,
@@ -664,7 +673,10 @@ export const sendMateCancelled = internalAction({
     date: v.string(),
     timeSlot: v.string(),
   },
-  handler: async (_ctx, args) => {
+  handler: async (ctx, args) => {
+    if (!(await emailEnabledForUser(ctx, args.to, "mate-alerts"))) {
+      return { success: true, skipped: true, reason: "mate emails off" };
+    }
     return await sendEmail("mate-cancelled", args.to, {
       ownerName: args.ownerName,
       laneName: args.laneName,
@@ -687,7 +699,10 @@ export const sendMateModified = internalAction({
     accessCode: v.string(),
     calendarUrl: v.optional(v.string()),
   },
-  handler: async (_ctx, args) => {
+  handler: async (ctx, args) => {
+    if (!(await emailEnabledForUser(ctx, args.to, "mate-alerts"))) {
+      return { success: true, skipped: true, reason: "mate emails off" };
+    }
     return await sendEmail("mate-modified", args.to, {
       ownerName: args.ownerName,
       newLaneName: args.newLaneName,

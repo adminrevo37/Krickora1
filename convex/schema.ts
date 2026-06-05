@@ -96,6 +96,15 @@ export default defineSchema({
     createdAt: v.string(),
   }).index("by_account", ["accountCustomerId"]),
 
+  // SPEC_PUSH_NOTIFICATIONS_V2 §6.2 — one row each time a CUSTOMER/parent links a
+  // coach to one of their athletes (signup or My Athletes). Powers the hourly
+  // admin digest's "customers who added a coach" count without a per-link
+  // timestamp on the athletes row. Additive, no migration.
+  coachLinkEvents: defineTable({
+    accountId: v.id("customers"), // the account/parent that added a coach
+    at: v.number(), // ms
+  }).index("by_at", ["at"]),
+
   // Account-credit movement log (SPEC_PAYMENTS_AND_CREDIT #1). Every change to
   // customers.creditBalance appends one row — the user-facing credit history.
   // delta > 0 = credit issued (cancellation, modify decrease, admin grant),
@@ -311,12 +320,17 @@ export default defineSchema({
     // AND server-rejected for non-admin callers. Allocation is never blocked.
     // Additive/optional → no migration; only marks bookings made from this deploy on.
     createdByAdmin: v.optional(v.boolean()),
+    // SPEC_PUSH_NOTIFICATIONS_V2 §6.2 — creation timestamp in ms, for the hourly
+    // admin digest's "new bookings last hour" count. Additive/optional → legacy
+    // bookings have none and are simply not counted by the digest.
+    createdAt: v.optional(v.number()),
   })
     .index("by_date", ["date"])
     .index("by_laneId_date", ["laneId", "date"])
     .index("by_userId", ["userId"])
     .index("by_customerEmail", ["customerEmail"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    .index("by_createdAt", ["createdAt"]),
 
   // SPEC_ADD_A_MATE: persistent saved-mates list (the "friendships" book). One
   // row per (owner → mate) pair the owner has added to a booking at least once,
@@ -525,6 +539,10 @@ export default defineSchema({
     // broadcasts (set false by the email unsubscribe link).
     receiveAnnouncements: v.optional(v.boolean()),
     receiveMarketing: v.optional(v.boolean()),
+    // SPEC_PUSH_NOTIFICATIONS_V2 §4 — once-only guard. Set true the first time this
+    // account enables push, after auto-disabling the superseded email slugs. Absent
+    // = the one-time auto-off has not run yet. Never auto-flips a second time.
+    pushEmailDefaultsApplied: v.optional(v.boolean()),
   }).index("by_email", ["email"]),
 
   // SPEC_ADMIN_BROADCAST §5 — sent broadcasts (audit + history list). One row per
