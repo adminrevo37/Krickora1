@@ -1,6 +1,7 @@
-import { useState } from 'react'
-import { createRootRoute, Outlet, Link, useNavigate } from '@tanstack/react-router'
+import { useState, useEffect } from 'react'
+import { createRootRoute, Outlet, Link, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useAuth } from '../hooks/useAuth'
+import { trackPageView, setTrackerUserId } from '../lib/tracker'
 import { signOutUser } from '../lib/auth-client'
 import AuthModal from '../components/AuthModal'
 import PostcodeRequiredModal from '../components/PostcodeRequiredModal'
@@ -24,6 +25,14 @@ function RootComponent() {
   const [showUserMenu, setShowUserMenu] = useState(false)
 
   const openAuth = (mode: 'signin' | 'signup') => { setAuthMode(mode); setShowAuth(true) }
+
+  // SPEC_ANALYTICS_BUILD_2026-06 — attribute analytics to the signed-in user and
+  // log a pageview on every client route change (the first pageview is emitted by
+  // initTracker in main.tsx). pathname is read from the router so SPA navigations
+  // are captured, not just hard loads.
+  const pathname = useRouterState({ select: (s) => s.location.pathname })
+  useEffect(() => { setTrackerUserId(user?.id ?? null) }, [user?.id])
+  useEffect(() => { trackPageView() }, [pathname])
 
   return (
     <div className="min-h-screen bg-white text-gray-900">

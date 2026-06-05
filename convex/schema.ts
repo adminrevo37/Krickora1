@@ -23,7 +23,47 @@ export default defineSchema({
     .index("by_timestamp", ["timestamp"])
     .index("by_sessionId", ["sessionId"])
     .index("by_userId", ["userId"])
-    .index("by_type_timestamp", ["type", "timestamp"]),
+    .index("by_type_timestamp", ["type", "timestamp"])
+    // SPEC_ANALYTICS_BUILD_2026-06 C2.5 — funnel reconstruction reads the
+    // booking-flow step events (type='event', name in the funnel-step set) by
+    // name within a time window, so the named-event range read is indexed.
+    .index("by_name_timestamp", ["name", "timestamp"]),
+
+  // ============================================================================
+  // SPEC_ANALYTICS_BUILD_2026-06 C2.2 — persisted end-of-day revenue/usage roll-up.
+  // ============================================================================
+  // One immutable row per AWST calendar date, written by the daily-revenue-snapshot
+  // cron (and a one-off backfill). Lets the dashboard read cheap, stable trend
+  // history instead of re-scanning every booking on each load, and preserves the
+  // figures even if historical bookings are later edited. Upserted by `date`
+  // (idempotent re-runs overwrite the same row). Additive — no migration.
+  revenueSnapshots: defineTable({
+    date: v.string(), // YYYY-MM-DD (AWST calendar day the figures cover)
+    custRevenue: v.number(), // dollars — confirmed customer (lane-hire) revenue
+    coachCharges: v.number(), // dollars — coach session charges accrued
+    bookings: v.number(), // confirmed bookings count (customer + coach)
+    customerBookings: v.number(),
+    coachBookings: v.number(),
+    hours: v.number(), // total booked hours
+    occupancyPct: v.number(), // booked hours ÷ open lane-hours capacity × 100
+    createdAt: v.number(), // ms when the snapshot row was written
+  }).index("by_date", ["date"]),
+
+  // SPEC_ANALYTICS_BUILD_2026-06 C2.4 — push notification event log. One row per
+  // lifecycle event so the dashboard can compute sends-by-category, delivery rate,
+  // CTR and per-platform splits without instrumenting the (node) sender's return
+  // values. `sent`/`failed`/`pruned` are written server-side in the send action;
+  // `delivered`/`clicked` arrive from the service worker via the /push/beacon HTTP
+  // action. email is stored only for server-side rows (never from the public
+  // beacon). Additive — no migration.
+  pushEvents: defineTable({
+    at: v.number(), // ms
+    type: v.string(), // 'sent' | 'failed' | 'pruned' | 'delivered' | 'clicked'
+    category: v.optional(v.string()), // push category key (e.g. 'session-reminders')
+    platform: v.optional(v.string()), // 'ios' | 'fcm' | 'firefox' | 'windows' | 'other'
+    email: v.optional(v.string()), // recipient (server-side rows only; never from beacon)
+    tag: v.optional(v.string()),
+  }).index("by_at", ["at"]),
 
   // Application tables
   customers: defineTable({
@@ -378,10 +418,30 @@ export default defineSchema({
     // Optional so existing rows need no migration — read as (status ?? 'waiting').
     status: v.optional(v.string()),
     offerExpiresAt: v.optional(v.string()), // ISO; set while status='offered'
+    // SPEC_ANALYTICS_BUILD_2026-06 — ms timestamp the current offer was made, set
+    // alongside status='offered'. Lets the response analytics measure how long a
+    // member took to accept/decline (or that they never acted). Additive/optional.
+    offeredAt: v.optional(v.number()),
   })
     .index("by_userId", ["userId"])
     .index("by_slot", ["laneId", "date", "hour"])
     .index("by_laneId_date", ["laneId", "date"]),
+
+  // SPEC_ANALYTICS_BUILD_2026-06 — waitlist offer lifecycle log (one row per offer
+  // outcome). 'offered' is written when the exclusive offer is made; 'accepted'
+  // (the offeree booked the held slot), 'declined' (pressed Pass/Deny) and
+  // 'expired' (the hold lapsed with no button press) each carry latencyMs = the
+  // time from the offer to the action. Powers "median time-to-accept/reject" and
+  // "% who never press a button". Additive — no migration.
+  waitlistOfferEvents: defineTable({
+    at: v.number(), // ms
+    action: v.string(), // 'offered' | 'accepted' | 'declined' | 'expired'
+    email: v.optional(v.string()),
+    laneId: v.optional(v.string()),
+    date: v.optional(v.string()),
+    hour: v.optional(v.number()),
+    latencyMs: v.optional(v.number()), // response actions only (time since offer)
+  }).index("by_at", ["at"]),
 
   waitlistNotifications: defineTable({
     userId: v.string(),

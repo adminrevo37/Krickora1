@@ -1,5 +1,6 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useConvex } from 'convex/react'
+import { trackFunnelStep, clearBookingFlow } from '../lib/tracker'
 import { getErrorMessage } from '../lib/errors'
 import {
   LANES, canBookSlot, formatDateKey, formatTime, getCustomerPrice, getCoachPrice, getCoachPerHourRate,
@@ -122,6 +123,23 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
 
   // Rounding notice for coach
   const [roundingNotice, setRoundingNotice] = useState<string | null>(null)
+
+  // SPEC_ANALYTICS_BUILD_2026-06 C2.5 — booking-flow funnel (customer flows only).
+  // modal_open on mount; booking_abandoned on close UNLESS the booking confirmed
+  // or we redirected to Stripe (the flowId is kept across the redirect so the
+  // /checkout/success page can close the funnel with booking_confirmed).
+  const funnelConfirmedRef = useRef(false)
+  const funnelRedirectingRef = useRef(false)
+  useEffect(() => {
+    if (!isCoach) trackFunnelStep('modal_open', { laneId: lane.id })
+    return () => {
+      if (!isCoach && !funnelConfirmedRef.current && !funnelRedirectingRef.current) {
+        trackFunnelStep('booking_abandoned')
+      }
+      if (!funnelRedirectingRef.current) clearBookingFlow()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Fetch coach's assigned athletes from Convex
   const coachIdForQuery = customerRecord?._id ?? user?.email ?? ''
@@ -349,6 +367,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
 
   const handleContinueToPayment = () => {
     if (!user) { setShowAuth(true); return }
+    if (!isCoach) trackFunnelStep('continue_to_payment', { totalPrice })
     if (isCoach) { handleCoachBooking(); return }
     // Nothing left to charge (a discount and/or account credit covers the full
     // amount) → confirm directly, skip Stripe (SPEC_PAYMENTS_AND_CREDIT #1).
@@ -398,6 +417,10 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
         discountCode: appliedDiscount?.code,
         creditApplied: creditToApply > 0 ? creditToApply : undefined,
       }
+      // Funnel: a fully-covered (free/credit/discount) booking confirms in-app
+      // without a Stripe round-trip — close the funnel here.
+      funnelConfirmedRef.current = true
+      trackFunnelStep('booking_confirmed', { kind: totalPrice === 0 ? 'free' : 'instant' })
       setConfirmedBooking(booking); setStep('success')
       setTimeout(() => onConfirm(booking), 4000)
       // Email is sent by createBooking mutation — no client-side duplicate
@@ -498,6 +521,9 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
         // Credit is deducted server-side when the Stripe webhook confirms the
         // booking (confirmBookingPayment) — NOT here. If the customer abandons
         // checkout, the slot is released and no credit is spent.
+        // Funnel: keep the flowId across the redirect; /checkout/success closes it.
+        funnelRedirectingRef.current = true
+        trackFunnelStep('checkout_redirect', { totalPrice })
         window.location.assign(session.url)
         return
       }
@@ -651,7 +677,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                 <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Machine Type</label>
                 <div className="grid grid-cols-2 gap-3">
                   {variantOptions.map((variant) => (
-                    <button key={variant.id} onClick={() => setSelectedVariant(variant)}
+                    <button key={variant.id} onClick={() => { setSelectedVariant(variant); trackFunnelStep('variant_chosen', { variant: variant.id }) }}
                       className={`p-3 rounded-xl border-2 transition-all text-left ${selectedVariant?.id === variant.id ? variant.id.includes('truman') ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20 shadow-md' : 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 shadow-md' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'}`}>
                       <div className="text-base font-bold text-gray-800 dark:text-gray-200">{variant.name}</div>
                       <div className="text-xs text-gray-500 mt-0.5">${getCustomerPrice(lane, variant.id, 60)}/hr</div>
@@ -681,7 +707,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               ) : (
                 <div className="grid grid-cols-2 gap-3">
                   {availableDurations.map(d => (
-                    <button key={d} onClick={() => setDuration(d)}
+                    <button key={d} onClick={() => { setDuration(d); trackFunnelStep('duration_chosen', { duration: d }) }}
                       className={`p-3 rounded-xl border-2 transition-all text-left ${duration === d ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 shadow-md' : 'border-gray-200 dark:border-gray-700'}`}>
                       <div className="text-lg font-bold text-gray-800 dark:text-gray-200">${getCustomerPrice(lane, selectedVariant?.id ?? null, d)}</div>
                       <div className="text-sm text-gray-600 dark:text-gray-400">{d === 60 ? '1 Hour' : d === 90 ? '1.5 Hours' : d === 120 ? '2 Hours' : d === 180 ? '3 Hours' : `${Math.floor(d / 60)}hr${d % 60 > 0 ? ` ${d % 60}min` : ''}`}</div>

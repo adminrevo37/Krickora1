@@ -376,3 +376,51 @@ export const prunePushSubscription = internalMutation({
     return true;
   },
 });
+
+// ── SPEC_ANALYTICS_BUILD_2026-06 C2.4 — push event logging ────────────────────
+// Server-side lifecycle rows (sent/failed/pruned) written by the node send action
+// (which has no db access). One row per (recipient, event). Best-effort.
+export const logPushEvent = internalMutation({
+  args: {
+    at: v.number(),
+    type: v.string(), // 'sent' | 'failed' | 'pruned'
+    category: v.optional(v.string()),
+    platform: v.optional(v.string()),
+    email: v.optional(v.string()),
+    tag: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.insert("pushEvents", {
+      at: args.at,
+      type: args.type.slice(0, 32),
+      category: args.category?.slice(0, 64),
+      platform: args.platform?.slice(0, 32),
+      email: args.email?.toLowerCase().slice(0, 256),
+      tag: args.tag?.slice(0, 128),
+    });
+    return true;
+  },
+});
+
+// Delivered/clicked rows arrive from the service worker via the public
+// /push/beacon HTTP action. No email is recorded from the (unauthenticated)
+// beacon — only the coarse category/platform/tag the push payload carried.
+export const recordPushBeaconInternal = internalMutation({
+  args: {
+    type: v.string(), // 'delivered' | 'clicked'
+    category: v.optional(v.string()),
+    platform: v.optional(v.string()),
+    tag: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    if (args.type !== "delivered" && args.type !== "clicked") return false;
+    await ctx.db.insert("pushEvents", {
+      at: Date.now(),
+      type: args.type,
+      category: args.category?.slice(0, 64),
+      platform: args.platform?.slice(0, 32),
+      tag: args.tag?.slice(0, 128),
+    });
+    return true;
+  },
+});

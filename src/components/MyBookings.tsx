@@ -17,6 +17,7 @@ import {
   type Booking,
 } from '../lib/booking-data'
 import { formatAccessCode } from '../lib/access-code'
+import { trackCodeView } from '../lib/tracker'
 import { getErrorMessage } from '../lib/errors'
 import AuthModal from './AuthModal'
 import AthleteAllocationEditor from './AthleteAllocationEditor'
@@ -302,6 +303,27 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     setSelectedDateKey(soonest)
     setWeekOffset(weekOffsetForKey(soonest))
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduleBookings, sharedBookings])
+
+  // SPEC_ANALYTICS_BUILD_2026-06 C2.8 — door-code access lead time. The codes are
+  // shown inline on this page, so loading My Bookings with an upcoming coded
+  // booking IS the "opened the app to get my code" event. Fire code_view once per
+  // booking per page visit, recording how long before the session start it was
+  // (leadMinutes). The AWST instant is computed timezone-independently so the lead
+  // is correct regardless of the viewer's device clock zone.
+  const codeViewFired = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const awstStartMs = (date: string, startHour: number) => {
+      const [y, m, d] = date.split('-').map(Number)
+      return Date.UTC(y, (m || 1) - 1, d || 1) - 8 * 3600000 + startHour * 3600000
+    }
+    const fire = (id: string, date: string, startHour: number, code?: string) => {
+      if (!code || codeViewFired.current.has(id)) return
+      codeViewFired.current.add(id)
+      trackCodeView(id, awstStartMs(date, startHour))
+    }
+    for (const b of scheduleBookings) fire(b.id, b.date, b.startHour, (b as any).accessCode)
+    for (const b of sharedBookings) fire(b.id, b.date, b.startHour, (b as any).accessCode)
   }, [scheduleBookings, sharedBookings])
 
   // ── actions ─────────────────────────────────────────────────────────────────

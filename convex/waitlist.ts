@@ -61,6 +61,36 @@ function fmtAwstTime(ms: number): string {
 
 const statusOf = (e: any): string => e.status ?? "waiting";
 
+// SPEC_ANALYTICS_BUILD_2026-06 — log a waitlist-offer lifecycle event. Response
+// actions (accepted/declined/expired) carry latencyMs = now − the entry's
+// offeredAt, so the dashboard can report median time-to-accept/reject and the
+// share who never press a button. Best-effort: never blocks the engine.
+async function logWaitlistOfferEvent(
+  ctx: any,
+  action: "offered" | "accepted" | "declined" | "expired",
+  entry: any,
+  slot?: { laneId?: string; date?: string; hour?: number }
+): Promise<void> {
+  try {
+    const offeredAt = entry?.offeredAt;
+    const latencyMs =
+      action !== "offered" && typeof offeredAt === "number"
+        ? Math.max(0, Date.now() - offeredAt)
+        : undefined;
+    await ctx.db.insert("waitlistOfferEvents", {
+      at: Date.now(),
+      action,
+      email: entry?.userEmail?.toLowerCase?.().trim?.(),
+      laneId: slot?.laneId,
+      date: slot?.date ?? entry?.date,
+      hour: slot?.hour ?? entry?.hour,
+      latencyMs,
+    });
+  } catch {
+    /* analytics logging must never break the waitlist engine */
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers (imported by mutations.ts / slotHolds.ts triggers)
 // ---------------------------------------------------------------------------
@@ -127,6 +157,8 @@ export async function consumeWaitlistHoldForBooking(
       const st = statusOf(e);
       if (st === "offered" || st === "waiting") {
         await ctx.db.patch(e._id, { status: "booked" });
+        // An offered entry that books the held slot = the offer was ACCEPTED.
+        if (st === "offered") await logWaitlistOfferEvent(ctx, "accepted", e);
       }
     }
   }
@@ -203,6 +235,8 @@ export const advanceWaitlistOffer = internalMutation({
         const st = statusOf(e);
         if (st === "waiting" || st === "offered") {
           await ctx.db.patch(e._id, { status: "expired", offerExpiresAt: undefined });
+          // Only an OUTSTANDING offer that lapsed counts as a no-action expiry.
+          if (st === "offered") await logWaitlistOfferEvent(ctx, "expired", e, { date, hour });
         }
       }
       return { result: "filled_cleared" };
@@ -213,8 +247,9 @@ export const advanceWaitlistOffer = internalMutation({
     if (offered) {
       const exp = offered.offerExpiresAt ? new Date(offered.offerExpiresAt).getTime() : 0;
       if (exp > now) return { result: "offer_live" };
-      // Expired offer → retire it and roll on.
+      // Expired offer → retire it and roll on. The offeree never pressed a button.
       await ctx.db.patch(offered._id, { status: "expired", offerExpiresAt: undefined });
+      await logWaitlistOfferEvent(ctx, "expired", offered, { date, hour });
       await deleteWaitlistHolds();
     }
 
@@ -251,7 +286,9 @@ export const advanceWaitlistOffer = internalMutation({
     await ctx.db.patch(next._id, {
       status: "offered",
       offerExpiresAt: new Date(expiresAtMs).toISOString(),
+      offeredAt: now,
     });
+    await logWaitlistOfferEvent(ctx, "offered", { ...next, offeredAt: now }, { laneId: offerLane, date, hour });
     await ctx.db.insert("slotHolds", {
       laneId: offerLane,
       date,
@@ -510,6 +547,7 @@ export const declineWaitlistOffer = mutation({
       return { declined: false, reason: "no live offer" };
     }
     await ctx.db.patch(mine._id, { status: "expired", offerExpiresAt: undefined });
+    await logWaitlistOfferEvent(ctx, "declined", mine, { laneId: args.laneId, date: args.date, hour: args.hour });
 
     // Release this user's waitlist hold(s) overlapping the hour, on any lane.
     for (const lid of Object.keys(LANE_NAME_MAP)) {

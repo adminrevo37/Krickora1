@@ -1,0 +1,580 @@
+// SPEC_ANALYTICS_BUILD_2026-06 — admin analytics: bookings explorer, time-series
+// revenue/bookings (hour/day/week/month), occupancy, retention cohorts, LTV,
+// credit, referral attribution, discount performance, and the persisted
+// revenue-snapshot reads. All queries are admin-only (return null/empty
+// otherwise). Live full-table scans are acceptable at current volume — flagged
+// for indexed range reads at scale (AUDIT B3).
+
+import { query } from "./_generated/server";
+import { v } from "convex/values";
+import { getCallerContext } from "./lib/adminGuard";
+import { defaultLaneName } from "./lib/lanes";
+import {
+  DOW_LABELS,
+  awstDateKey,
+  dayLabel,
+  isoWeekKey,
+  monthKey,
+  median,
+  round2,
+} from "./lib/analyticsHelpers";
+
+const LANE_IDS = ["bm1", "bm2", "bm3", "ru1", "ru2"];
+const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+function inRange(date: string, from?: string, to?: string): boolean {
+  if (from && date < from) return false;
+  if (to && date > to) return false;
+  return true;
+}
+
+async function isAdmin(ctx: any): Promise<boolean> {
+  const caller = await getCallerContext(ctx);
+  return caller.isAdmin;
+}
+
+// Resolve open lane-hours capacity for a given AWST date from siteSettings.
+function openHoursForDate(settings: any, dateKey: string): number {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const dow = new Date(Date.UTC(y, (m || 1) - 1, d || 1)).getUTCDay();
+  let open = settings?.openingHour ?? 9;
+  let close = settings?.closingHour ?? 21;
+  const dh = (settings?.dailyHours ?? []).find((x: any) => x.day === DAY_NAMES[dow]);
+  if (dh) {
+    if (dh.closed) return 0;
+    open = dh.open;
+    close = dh.close;
+  }
+  return Math.max(0, close - open);
+}
+
+// ============================================================================
+// C2.1 — BOOKINGS EXPLORER (filterable, sortable, paginated)
+// ============================================================================
+export const queryBookings = query({
+  args: {
+    from: v.optional(v.string()),
+    to: v.optional(v.string()),
+    laneId: v.optional(v.string()),
+    variantId: v.optional(v.string()),
+    status: v.optional(v.string()),
+    kind: v.optional(v.string()), // 'customer' | 'coach'
+    search: v.optional(v.string()), // name/email contains
+    suburb: v.optional(v.string()),
+    sortBy: v.optional(v.string()), // 'date' | 'created' | 'price' | 'name'
+    sortDir: v.optional(v.string()), // 'asc' | 'desc'
+    page: v.optional(v.number()),
+    pageSize: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    if (!(await isAdmin(ctx))) return null;
+    const all = args.from
+      ? await ctx.db
+          .query("bookings")
+          .withIndex("by_date", (q: any) => q.gte("date", args.from))
+          .collect()
+      : await ctx.db.query("bookings").collect();
+
+    const search = (args.search ?? "").toLowerCase().trim();
+    const suburb = (args.suburb ?? "").toLowerCase().trim();
+
+    let rows = all.filter((b: any) => {
+      if (!inRange(b.date, args.from, args.to)) return false;
+      if (args.laneId) {
+        const occ = b.laneId === args.laneId ||
+          (Array.isArray(b.additionalLaneIds) && b.additionalLaneIds.includes(args.laneId));
+        if (!occ) return false;
+      }
+      if (args.variantId && b.variantId !== args.variantId) return false;
+      if (args.status && b.status !== args.status) return false;
+      if (args.kind === "coach" && !b.isCoachBooking) return false;
+      if (args.kind === "customer" && b.isCoachBooking) return false;
+      if (suburb && (b.bookingSuburb ?? "").toLowerCase() !== suburb) return false;
+      if (search) {
+        const hay = `${b.customerName ?? ""} ${b.customerEmail ?? ""}`.toLowerCase();
+        if (!hay.includes(search)) return false;
+      }
+      return true;
+    });
+
+    const total = rows.length;
+    const dir = args.sortDir === "asc" ? 1 : -1;
+    const by = args.sortBy ?? "date";
+    rows.sort((a: any, b: any) => {
+      let av: any, bv: any;
+      if (by === "price") { av = a.priceInCents ?? (a.coachPrice ?? 0) * 100; bv = b.priceInCents ?? (b.coachPrice ?? 0) * 100; }
+      else if (by === "created") { av = a.createdAt ?? a._creationTime; bv = b.createdAt ?? b._creationTime; }
+      else if (by === "name") { av = (a.customerName ?? "").toLowerCase(); bv = (b.customerName ?? "").toLowerCase(); }
+      else { av = `${a.date} ${String(a.startHour).padStart(5, "0")}`; bv = `${b.date} ${String(b.startHour).padStart(5, "0")}`; }
+      return av < bv ? -1 * dir : av > bv ? 1 * dir : 0;
+    });
+
+    const pageSize = Math.min(Math.max(args.pageSize ?? 50, 1), 200);
+    const page = Math.max(args.page ?? 0, 0);
+    const pageRows = rows.slice(page * pageSize, page * pageSize + pageSize).map((b: any) => ({
+      id: b._id,
+      date: b.date,
+      startHour: b.startHour,
+      duration: b.duration,
+      laneId: b.laneId,
+      laneName: b.laneNameSnapshot ?? defaultLaneName(b.laneId),
+      variant: b.variantLabelSnapshot ?? b.variantId ?? "",
+      additionalLanes: (b.additionalLaneIds ?? []).length,
+      customerName: b.customerName ?? "",
+      customerEmail: b.customerEmail ?? "",
+      suburb: b.bookingSuburb ?? "",
+      postcode: b.bookingPostcode ?? "",
+      status: b.status,
+      isCoachBooking: !!b.isCoachBooking,
+      price: b.isCoachBooking ? (b.coachPrice ?? 0) : (b.priceInCents != null ? b.priceInCents / 100 : 0),
+      discountCode: b.discountCode ?? "",
+      createdAt: b.createdAt ?? b._creationTime,
+    }));
+
+    return { rows: pageRows, total, page, pageSize };
+  },
+});
+
+// ============================================================================
+// C2.7 — TIME-SERIES booking + revenue (granularity: hour | day | week | month)
+// Buckets by SESSION date so future bookings are included (navigable forward).
+// 'hour' aggregates by hour-of-day (scheduled startHour) across the range.
+// ============================================================================
+export const getBookingRevenueSeries = query({
+  args: {
+    granularity: v.string(), // 'hour' | 'day' | 'week' | 'month'
+    from: v.optional(v.string()),
+    to: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    if (!(await isAdmin(ctx))) return null;
+    const all = await ctx.db.query("bookings").collect();
+    const g = args.granularity;
+
+    type Bucket = {
+      key: string; label: string; custRevenue: number; coachCharges: number;
+      bookings: number; customerBookings: number; coachBookings: number; hours: number;
+    };
+    const map = new Map<string, Bucket>();
+    const ensure = (key: string, label: string): Bucket => {
+      let b = map.get(key);
+      if (!b) { b = { key, label, custRevenue: 0, coachCharges: 0, bookings: 0, customerBookings: 0, coachBookings: 0, hours: 0 }; map.set(key, b); }
+      return b;
+    };
+
+    for (const b of all as any[]) {
+      if (!inRange(b.date, args.from, args.to)) continue;
+      if (b.status === "cancelled" || b.status === "tentative") continue;
+      if (b.status !== "confirmed" && b.status !== "pending" && b.status !== "pending_payment") {
+        // Only count realised/active bookings; skip unknown statuses.
+      }
+      const isConfirmed = b.status === "confirmed";
+      if (!isConfirmed) continue;
+      const hours = (b.duration ?? 0) / 60;
+      const rev = b.priceInCents != null ? b.priceInCents / 100 : 0;
+      const coach = b.isCoachBooking ? (b.coachPrice ?? 0) : 0;
+
+      let key: string, label: string;
+      if (g === "hour") {
+        const h = Math.floor(b.startHour ?? 0);
+        key = String(h).padStart(2, "0");
+        const period = h >= 12 ? "pm" : "am";
+        const disp = h > 12 ? h - 12 : h === 0 ? 12 : h;
+        label = `${disp}${period}`;
+      } else if (g === "week") {
+        const w = isoWeekKey(b.date); key = w.key; label = w.label;
+      } else if (g === "month") {
+        const m = monthKey(b.date); key = m.key; label = m.label;
+      } else {
+        key = b.date; label = dayLabel(b.date);
+      }
+
+      const bucket = ensure(key, label);
+      bucket.bookings++;
+      bucket.hours += hours;
+      if (b.isCoachBooking) { bucket.coachBookings++; bucket.coachCharges += coach; }
+      else { bucket.customerBookings++; bucket.custRevenue += rev; }
+    }
+
+    const series = Array.from(map.values())
+      .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+      .map((b) => ({
+        ...b,
+        custRevenue: round2(b.custRevenue),
+        coachCharges: round2(b.coachCharges),
+        hours: round2(b.hours),
+      }));
+    return { granularity: g, series };
+  },
+});
+
+// Min/max session date across all bookings, so the dashboard can bound + extend
+// the time-series navigation into the future (where future bookings exist).
+export const getBookingDateBounds = query({
+  args: {},
+  handler: async (ctx) => {
+    if (!(await isAdmin(ctx))) return null;
+    const all = await ctx.db.query("bookings").collect();
+    let min: string | null = null;
+    let max: string | null = null;
+    for (const b of all as any[]) {
+      if (b.status === "cancelled") continue;
+      if (min === null || b.date < min) min = b.date;
+      if (max === null || b.date > max) max = b.date;
+    }
+    return { min, max };
+  },
+});
+
+// ============================================================================
+// C2.2 — REVENUE SNAPSHOTS read (persisted end-of-day trend history)
+// ============================================================================
+export const getRevenueSnapshots = query({
+  args: { from: v.optional(v.string()), to: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    if (!(await isAdmin(ctx))) return null;
+    const rows = await ctx.db
+      .query("revenueSnapshots")
+      .withIndex("by_date")
+      .collect();
+    return rows
+      .filter((r: any) => inRange(r.date, args.from, args.to))
+      .sort((a: any, b: any) => (a.date < b.date ? -1 : 1))
+      .map((r: any) => ({
+        date: r.date,
+        custRevenue: r.custRevenue,
+        coachCharges: r.coachCharges,
+        bookings: r.bookings,
+        customerBookings: r.customerBookings,
+        coachBookings: r.coachBookings,
+        hours: r.hours,
+        occupancyPct: r.occupancyPct,
+      }));
+  },
+});
+
+// ============================================================================
+// C2.6 — OCCUPANCY (booked hours ÷ open lane-hours capacity)
+// ============================================================================
+export const getOccupancy = query({
+  args: { from: v.optional(v.string()), to: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    if (!(await isAdmin(ctx))) return null;
+    const settings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    const lanesRows = await ctx.db.query("lanes").collect();
+    const laneCount = lanesRows.length > 0 ? lanesRows.length : LANE_IDS.length;
+
+    const all = (await ctx.db.query("bookings").collect()).filter(
+      (b: any) => b.status === "confirmed" && inRange(b.date, args.from, args.to)
+    );
+
+    const byDate = new Map<string, number>(); // booked lane-hours per day
+    const byLane = new Map<string, number>();
+    const byHour = new Map<number, number>(); // booked count per hour-of-day
+    for (const b of all as any[]) {
+      const laneIds = [b.laneId, ...(b.additionalLaneIds ?? [])];
+      const hours = (b.duration ?? 0) / 60;
+      byDate.set(b.date, (byDate.get(b.date) ?? 0) + hours * laneIds.length);
+      for (const lid of laneIds) byLane.set(lid, (byLane.get(lid) ?? 0) + hours);
+      const hb = Math.floor(b.startHour ?? 0);
+      byHour.set(hb, (byHour.get(hb) ?? 0) + 1);
+    }
+
+    let totalBooked = 0;
+    let totalCapacity = 0;
+    const daily: { date: string; occupancyPct: number; bookedHours: number; capacityHours: number }[] = [];
+    for (const [date, booked] of Array.from(byDate.entries()).sort()) {
+      const cap = openHoursForDate(settings, date) * laneCount;
+      totalBooked += booked;
+      totalCapacity += cap;
+      daily.push({
+        date,
+        bookedHours: round2(booked),
+        capacityHours: round2(cap),
+        occupancyPct: cap > 0 ? Math.round((booked / cap) * 100) : 0,
+      });
+    }
+
+    const lanes = LANE_IDS.map((lid) => ({
+      laneId: lid,
+      name: defaultLaneName(lid),
+      hours: round2(byLane.get(lid) ?? 0),
+    }));
+    const byHourOfDay = Array.from(byHour.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([h, count]) => ({ hour: h, count }));
+
+    return {
+      overallPct: totalCapacity > 0 ? Math.round((totalBooked / totalCapacity) * 100) : 0,
+      totalBookedHours: round2(totalBooked),
+      totalCapacityHours: round2(totalCapacity),
+      laneCount,
+      daily,
+      lanes,
+      byHourOfDay,
+    };
+  },
+});
+
+// ============================================================================
+// C2.6 — RETENTION COHORTS (weekly cohorts by first booking, repeat rate)
+// ============================================================================
+export const getRetentionCohorts = query({
+  args: { weeks: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    if (!(await isAdmin(ctx))) return null;
+    const maxOffsets = Math.min(Math.max(args.weeks ?? 8, 2), 16);
+    const all = (await ctx.db.query("bookings").collect()).filter(
+      (b: any) => !b.isCoachBooking && b.status === "confirmed" && b.customerEmail
+    );
+
+    // email -> set of week keys with a booking, and earliest week.
+    const weeksByEmail = new Map<string, Set<string>>();
+    const firstWeekByEmail = new Map<string, { key: string; ms: number }>();
+    for (const b of all as any[]) {
+      const email = b.customerEmail.toLowerCase();
+      const w = isoWeekKey(b.date);
+      const set = weeksByEmail.get(email) ?? new Set<string>();
+      set.add(w.key);
+      weeksByEmail.set(email, set);
+      const prev = firstWeekByEmail.get(email);
+      if (!prev || w.mondayMs < prev.ms) firstWeekByEmail.set(email, { key: w.key, ms: w.mondayMs });
+    }
+
+    // Group customers by their first-booking week (cohort).
+    const cohortMembers = new Map<string, { ms: number; emails: string[] }>();
+    for (const [email, first] of firstWeekByEmail) {
+      const c = cohortMembers.get(first.key) ?? { ms: first.ms, emails: [] };
+      c.emails.push(email);
+      cohortMembers.set(first.key, c);
+    }
+
+    const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+    const cohorts = Array.from(cohortMembers.entries())
+      .sort((a, b) => a[1].ms - b[1].ms)
+      .map(([key, c]) => {
+        const size = c.emails.length;
+        const retention: number[] = [];
+        for (let off = 0; off < maxOffsets; off++) {
+          const targetMs = c.ms + off * WEEK_MS;
+          const targetKey = isoWeekKey(awstDateKey(targetMs)).key;
+          let active = 0;
+          for (const email of c.emails) {
+            if (weeksByEmail.get(email)?.has(targetKey)) active++;
+          }
+          retention.push(size > 0 ? Math.round((active / size) * 100) : 0);
+        }
+        return { cohort: isoWeekKey(key).label, cohortKey: key, size, retention };
+      });
+
+    return { cohorts, maxOffsets };
+  },
+});
+
+// ============================================================================
+// C2.6 — LTV + averages, plus customer-level revenue table
+// ============================================================================
+export const getCustomerValue = query({
+  args: { from: v.optional(v.string()), to: v.optional(v.string()), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    if (!(await isAdmin(ctx))) return null;
+    const all = (await ctx.db.query("bookings").collect()).filter(
+      (b: any) => !b.isCoachBooking && b.status === "confirmed" && b.customerEmail && inRange(b.date, args.from, args.to)
+    );
+    const byEmail = new Map<string, { email: string; name: string; bookings: number; revenue: number; firstDate: string; lastDate: string }>();
+    for (const b of all as any[]) {
+      const email = b.customerEmail.toLowerCase();
+      const rev = b.priceInCents != null ? b.priceInCents / 100 : 0;
+      const c = byEmail.get(email) ?? { email, name: b.customerName ?? email, bookings: 0, revenue: 0, firstDate: b.date, lastDate: b.date };
+      c.bookings++;
+      c.revenue += rev;
+      if (b.date < c.firstDate) c.firstDate = b.date;
+      if (b.date > c.lastDate) c.lastDate = b.date;
+      byEmail.set(email, c);
+    }
+    const customers = Array.from(byEmail.values());
+    const totalRevenue = customers.reduce((s, c) => s + c.revenue, 0);
+    const totalBookings = customers.reduce((s, c) => s + c.bookings, 0);
+    const n = customers.length;
+    const limit = Math.min(Math.max(args.limit ?? 25, 1), 200);
+    const top = customers
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, limit)
+      .map((c) => ({ ...c, revenue: round2(c.revenue) }));
+    return {
+      uniqueCustomers: n,
+      avgLtv: n > 0 ? round2(totalRevenue / n) : 0,
+      avgBookingsPerCustomer: n > 0 ? round2(totalBookings / n) : 0,
+      avgRevenuePerBooking: totalBookings > 0 ? round2(totalRevenue / totalBookings) : 0,
+      totalRevenue: round2(totalRevenue),
+      top,
+    };
+  },
+});
+
+// ============================================================================
+// C2.9 — CREDIT analytics (issuance by reason, redemption, redemption latency)
+// ============================================================================
+export const getCreditAnalytics = query({
+  args: { from: v.optional(v.string()), to: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    if (!(await isAdmin(ctx))) return null;
+    const ledger = await ctx.db.query("creditLedger").collect();
+    const fromMs = args.from ? Date.parse(args.from + "T00:00:00+08:00") : -Infinity;
+    const toMs = args.to ? Date.parse(args.to + "T23:59:59+08:00") : Infinity;
+
+    const issuedByReason: Record<string, number> = {};
+    let totalIssued = 0;
+    let totalRedeemed = 0;
+    let issuedCount = 0;
+    let redeemedCount = 0;
+
+    // Per-customer FIFO matching of issuance → redemption for latency.
+    const byCustomer = new Map<string, any[]>();
+    for (const e of ledger as any[]) {
+      const arr = byCustomer.get(e.customerId) ?? [];
+      arr.push(e);
+      byCustomer.set(e.customerId, arr);
+    }
+
+    const latencies: number[] = []; // ms, issue -> redeem
+    for (const [, entries] of byCustomer) {
+      const sorted = entries.sort((a: any, b: any) => Date.parse(a.at) - Date.parse(b.at));
+      const issueQueue: { amount: number; at: number }[] = [];
+      for (const e of sorted) {
+        const t = Date.parse(e.at);
+        if (e.delta > 0) {
+          issueQueue.push({ amount: e.delta, at: t });
+        } else if (e.delta < 0) {
+          // redemption — consume oldest issuances FIFO
+          let need = -e.delta;
+          while (need > 0 && issueQueue.length > 0) {
+            const head = issueQueue[0];
+            const take = Math.min(need, head.amount);
+            if (t >= head.at) latencies.push(t - head.at);
+            head.amount -= take;
+            need -= take;
+            if (head.amount <= 1e-9) issueQueue.shift();
+          }
+        }
+      }
+    }
+
+    for (const e of ledger as any[]) {
+      const t = Date.parse(e.at);
+      if (t < fromMs || t > toMs) continue;
+      if (e.delta > 0) {
+        totalIssued += e.delta;
+        issuedCount++;
+        issuedByReason[e.reason] = (issuedByReason[e.reason] ?? 0) + e.delta;
+      } else if (e.delta < 0) {
+        totalRedeemed += -e.delta;
+        redeemedCount++;
+      }
+    }
+
+    // Current outstanding balance across all customers.
+    const customers = await ctx.db.query("customers").collect();
+    let outstanding = 0;
+    let holders = 0;
+    for (const c of customers as any[]) {
+      const bal = c.creditBalance ?? 0;
+      if (bal > 0) { outstanding += bal; holders++; }
+    }
+
+    const DAY = 24 * 60 * 60 * 1000;
+    return {
+      totalIssued: round2(totalIssued),
+      totalRedeemed: round2(totalRedeemed),
+      issuedCount,
+      redeemedCount,
+      issuedByReason: Object.fromEntries(Object.entries(issuedByReason).map(([k, v2]) => [k, round2(v2)])),
+      cancellationCredit: round2(issuedByReason["cancellation"] ?? 0),
+      outstanding: round2(outstanding),
+      holders,
+      redeemedPctOfIssued: totalIssued > 0 ? Math.round((totalRedeemed / totalIssued) * 100) : 0,
+      medianDaysToRedeem: latencies.length ? round2(median(latencies) / DAY) : 0,
+      avgDaysToRedeem: latencies.length ? round2(latencies.reduce((s, x) => s + x, 0) / latencies.length / DAY) : 0,
+      matchedRedemptions: latencies.length,
+    };
+  },
+});
+
+// ============================================================================
+// C2.6 — REFERRAL attribution ("How did you hear about us?")
+// ============================================================================
+export const getReferralBreakdown = query({
+  args: { from: v.optional(v.string()), to: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    if (!(await isAdmin(ctx))) return null;
+    const customers = await ctx.db.query("customers").collect();
+    const fromMs = args.from ? Date.parse(args.from + "T00:00:00+08:00") : -Infinity;
+    const toMs = args.to ? Date.parse(args.to + "T23:59:59+08:00") : Infinity;
+    const counts: Record<string, number> = {};
+    let withSource = 0;
+    let total = 0;
+    for (const c of customers as any[]) {
+      if (c.role !== "customer" && c.role !== "user") continue;
+      const t = Date.parse(c.createdAt ?? "");
+      if (Number.isFinite(t) && (t < fromMs || t > toMs)) continue;
+      total++;
+      const src = (c.referralSource ?? "").trim();
+      if (!src) continue;
+      withSource++;
+      const label = src === "Other" && c.referralSourceOther ? `Other: ${c.referralSourceOther}` : src;
+      counts[label] = (counts[label] ?? 0) + 1;
+    }
+    const rows = Object.entries(counts)
+      .map(([source, count]) => ({ source, count }))
+      .sort((a, b) => b.count - a.count);
+    return { rows, total, withSource, unknown: total - withSource };
+  },
+});
+
+// ============================================================================
+// C2.6 — DISCOUNT code performance
+// ============================================================================
+export const getDiscountPerformance = query({
+  args: { from: v.optional(v.string()), to: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    if (!(await isAdmin(ctx))) return null;
+    const redemptions = await ctx.db.query("discountRedemptions").collect();
+    const codes = await ctx.db.query("discountCodes").collect();
+    const codeMeta = new Map<string, any>();
+    for (const c of codes as any[]) codeMeta.set(c.code, c);
+
+    const fromMs = args.from ? Date.parse(args.from + "T00:00:00+08:00") : -Infinity;
+    const toMs = args.to ? Date.parse(args.to + "T23:59:59+08:00") : Infinity;
+
+    const byCode = new Map<string, { code: string; redemptions: number; customers: Set<string> }>();
+    for (const r of redemptions as any[]) {
+      const t = Date.parse(r.at ?? "");
+      if (Number.isFinite(t) && (t < fromMs || t > toMs)) continue;
+      const row = byCode.get(r.code) ?? { code: r.code, redemptions: 0, customers: new Set<string>() };
+      row.redemptions++;
+      row.customers.add((r.customerEmail ?? "").toLowerCase());
+      byCode.set(r.code, row);
+    }
+
+    const rows = Array.from(byCode.values())
+      .map((r) => {
+        const meta = codeMeta.get(r.code);
+        return {
+          code: r.code,
+          label: meta?.label ?? r.code,
+          discountType: meta?.discountType ?? "percent",
+          discount: meta?.discount ?? 0,
+          amountOff: meta?.amountOff ?? 0,
+          active: meta?.active ?? false,
+          redemptions: r.redemptions,
+          uniqueCustomers: r.customers.size,
+          usageLimit: meta?.usageLimit ?? null,
+        };
+      })
+      .sort((a, b) => b.redemptions - a.redemptions);
+    return { rows, totalRedemptions: rows.reduce((s, r) => s + r.redemptions, 0) };
+  },
+});

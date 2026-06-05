@@ -36,6 +36,7 @@ import { useSettings } from '../hooks/useSettings'
 import BookingModal from './BookingModal'
 import AuthModal from './AuthModal'
 import WaitlistModal from './WaitlistModal'
+import { trackEvent, startBookingFlow, trackFunnelStep } from '../lib/tracker'
 
 export default function BookingCalendar({ impersonatedEmail, initialDate }: { impersonatedEmail?: string; initialDate?: string } = {}) {
   const { user, isAdmin: realIsAdmin, isCoach: realIsCoach, customerRecord } = useAuth()
@@ -225,6 +226,13 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       }
     }
     if (!user) { setPendingAction({ type: 'book', lane, slot }); setAuthModalOpen(true); return }
+    // SPEC_ANALYTICS_BUILD_2026-06 C2.5 — a slot selection starts a fresh booking
+    // attempt (new flowId); the funnel ladder is reconstructed per flow. Customer
+    // flows only (coaches/admin skip payment → would skew the checkout funnel).
+    if (!isAdmin && !userIsCoach) {
+      startBookingFlow()
+      trackFunnelStep('slot_select', { laneId: lane.id, date: dateKey, hour: slot.hour })
+    }
     setSelectedSlot({ lane, date: selectedDay, startHour: slot.hour })
     setModalOpen(true)
   }
@@ -252,6 +260,10 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   const handleAuthSuccess = () => {
     setAuthModalOpen(false)
     if (pendingAction?.type === 'book') {
+      if (!isAdmin && !userIsCoach) {
+        startBookingFlow()
+        trackFunnelStep('slot_select', { laneId: pendingAction.lane.id, date: dateKey, hour: pendingAction.slot.hour })
+      }
       setSelectedSlot({ lane: pendingAction.lane, date: selectedDay, startHour: pendingAction.slot.hour })
       setModalOpen(true)
     } else if (pendingAction?.type === 'waitlist') {
@@ -311,6 +323,10 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       cleanUrl()
     }
   }, [deepLinkHandled, user, weekDays, declineWaitlistOffer])
+
+  // SPEC_ANALYTICS_BUILD_2026-06 C2.5 — top-of-funnel engagement signal (one per
+  // calendar mount), counted above the per-attempt conversion ladder.
+  useEffect(() => { trackEvent('calendar_open') }, [])
 
   // Determine header label
   const nextWeekOpen = !isL1Coach && isNextWeekOpen(releaseRole, coachTierNorm, settings)

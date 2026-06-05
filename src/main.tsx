@@ -8,6 +8,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ConvexReactClient } from 'convex/react'
 import { ConvexBetterAuthProvider } from '@convex-dev/better-auth/react'
 import { authClient } from '@/lib/auth-client'
+import { initTracker } from '@/lib/tracker'
 
 import { routeTree } from './routeTree.gen'
 
@@ -70,6 +71,11 @@ if (!g.__KRICKORA_RENDERED__) {
   const router = getRouter()
   const queryClient = getQueryClient()
   const convex = getConvex()
+
+  // SPEC_ANALYTICS_BUILD_2026-06 — start the analytics pipeline (session_start +
+  // first pageview + session_end listeners). Route-change pageviews + the signed-in
+  // userId are wired in __root.tsx once auth + the router resolve.
+  if (convex) initTracker(convex)
 
   const innerApp = (
     <QueryClientProvider client={queryClient}>

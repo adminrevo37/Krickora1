@@ -11,6 +11,15 @@ import { internalAction, action } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import webpush from "web-push";
+import { platformFromEndpoint } from "./lib/analyticsHelpers";
+
+// SPEC_ANALYTICS_BUILD_2026-06 C2.4 — the service worker beacons delivered/clicked
+// events back to this Convex deployment's HTTP action. CONVEX_SITE_URL is provided
+// automatically by the Convex runtime (the *.convex.site origin).
+function pushBeaconUrl(): string | undefined {
+  const site = process.env.CONVEX_SITE_URL;
+  return site ? `${site}/push/beacon` : undefined;
+}
 
 function configureVapid(): boolean {
   const pub = process.env.VAPID_PUBLIC_KEY;
@@ -33,19 +42,43 @@ type Payload = {
   actions?: PushAction[];
 };
 
-// Send one payload to a set of subscriptions; prune dead ones.
+// Send one payload to a set of subscriptions; prune dead ones. `meta` (when
+// supplied) drives the pushEvents analytics log: one sent/failed/pruned row per
+// device, tagged with the recipient + per-device platform (C2.4). The SW beacon
+// fields (b=beacon URL, c=category) ride inside the payload so the service worker
+// can report delivered/clicked.
 async function deliver(
   ctx: any,
   subs: Array<{ id: any; endpoint: string; p256dh: string; auth: string }>,
-  payload: Payload
+  payload: Payload,
+  meta?: { category?: string; email?: string; tag?: string; log?: boolean }
 ): Promise<number> {
+  const beacon = pushBeaconUrl();
   const body = JSON.stringify({
     title: payload.title,
     body: payload.body,
     url: payload.url ?? "/",
     tag: payload.tag,
     actions: payload.actions,
+    b: beacon,
+    c: meta?.category,
   });
+  const shouldLog = meta?.log !== false;
+  const logEvent = async (type: string, endpoint: string) => {
+    if (!shouldLog) return;
+    try {
+      await ctx.runMutation(internal.pushNotifications.logPushEvent, {
+        at: Date.now(),
+        type,
+        category: meta?.category,
+        platform: platformFromEndpoint(endpoint),
+        email: meta?.email,
+        tag: meta?.tag ?? payload.tag,
+      });
+    } catch {
+      /* logging must never break a send */
+    }
+  };
   let sent = 0;
   for (const s of subs) {
     try {
@@ -54,13 +87,16 @@ async function deliver(
         body
       );
       sent++;
+      await logEvent("sent", s.endpoint);
     } catch (err: any) {
       const code = err?.statusCode;
       if (code === 404 || code === 410) {
         // Subscription expired/unsubscribed — prune it.
         await ctx.runMutation(internal.pushNotifications.prunePushSubscription, { id: s.id });
+        await logEvent("pruned", s.endpoint);
       } else {
         console.error(`[push] send failed (${code ?? "?"}) to ${s.endpoint.slice(0, 40)}…: ${err?.message}`);
+        await logEvent("failed", s.endpoint);
       }
     }
   }
@@ -98,7 +134,7 @@ export const sendPushInternal = internalAction({
       url: args.url,
       tag: args.tag,
       actions: args.actions,
-    });
+    }, { category: args.category, email: args.email, tag: args.tag });
     return { success: sent > 0, sent };
   },
 });
@@ -149,7 +185,7 @@ export const sendTestPush = action({
       body: "✓ Push notifications are working.",
       url: "/profile",
       tag: "test-push",
-    });
+    }, { category: "test-push", email, tag: "test-push" });
     return sent > 0
       ? { success: true, sent }
       : { success: false, reason: "Could not deliver to your devices — they may have expired. Try re-enabling." };

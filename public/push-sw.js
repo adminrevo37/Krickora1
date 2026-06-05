@@ -10,6 +10,42 @@
  */
 /* global self, clients */
 
+// SPEC_ANALYTICS_BUILD_2026-06 C2.4 — coarse platform from this device's push
+// subscription endpoint, matching the server's send-side bucketing so delivered/
+// clicked attribute to the same platform as 'sent'.
+function platformFromEndpoint(endpoint) {
+  const e = (endpoint || '').toLowerCase()
+  if (e.includes('push.apple.com')) return 'ios'
+  if (e.includes('fcm.googleapis.com') || e.includes('android')) return 'fcm'
+  if (e.includes('mozilla.com')) return 'firefox'
+  if (e.includes('windows.com') || e.includes('microsoft')) return 'windows'
+  return 'other'
+}
+
+// Fire-and-forget beacon to the Convex /push/beacon HTTP action. `data.b` carries
+// the absolute beacon URL (set by the server from CONVEX_SITE_URL); `data.c` the
+// category. Never throws — analytics must not affect notification delivery.
+async function beacon(type, data) {
+  try {
+    const url = data && data.b
+    if (!url) return
+    let pf = 'other'
+    try {
+      const sub = await self.registration.pushManager.getSubscription()
+      if (sub && sub.endpoint) pf = platformFromEndpoint(sub.endpoint)
+    } catch (_e) { /* ignore */ }
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, c: data.c, tag: data.tag, pf }),
+      keepalive: true,
+      credentials: 'omit',
+    })
+  } catch (_e) {
+    /* ignore beacon failures */
+  }
+}
+
 self.addEventListener('push', (event) => {
   let data = {}
   try {
@@ -36,11 +72,14 @@ self.addEventListener('push', (event) => {
     // Collapse repeated updates to the same booking rather than stacking.
     renotify: data.tag ? true : undefined,
     actions,
-    data: { url: data.url || '/', actionUrls },
+    // Carry the beacon URL (b), category (c) and tag through to notificationclick
+    // so the click event can also report back (C2.4).
+    data: { url: data.url || '/', actionUrls, b: data.b, c: data.c, tag: data.tag },
   }
   event.waitUntil(
     (async () => {
       await self.registration.showNotification(title, options)
+      await beacon('delivered', data)
       // §8 app badge — best-effort presence badge on the installed-app icon.
       // Feature-detected; unsupported platforms (incl. iOS) simply skip it.
       try {
@@ -63,6 +102,7 @@ self.addEventListener('notificationclick', (event) => {
   }
   event.waitUntil(
     (async () => {
+      await beacon('clicked', d)
       // Clear the app badge — the user is engaging with the notification.
       try {
         if (self.navigator && self.navigator.clearAppBadge) await self.navigator.clearAppBadge()

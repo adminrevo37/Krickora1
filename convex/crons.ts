@@ -37,4 +37,13 @@ crons.weekly(
   internal.weeklySummary.sendWeeklyBookingSummaries
 );
 
+// SPEC_ANALYTICS_BUILD_2026-06 C2.2 — persist the previous AWST day's
+// revenue/bookings/occupancy snapshot. Runs at 00:20 AWST = 16:20 UTC, after the
+// day has fully ended so the figures are final.
+crons.daily(
+  "daily-revenue-snapshot",
+  { hourUTC: 16, minuteUTC: 20 },
+  internal.analyticsSnapshot.runDailyRevenueSnapshot
+);
+
 export default crons;

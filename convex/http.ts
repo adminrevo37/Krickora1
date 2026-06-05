@@ -182,6 +182,44 @@ http.route({
   }),
 });
 
+// ── SPEC_ANALYTICS_BUILD_2026-06 C2.4 — push delivery/click beacon (no auth) ──
+// The service worker POSTs a tiny JSON body on the `push` (delivered) and
+// `notificationclick` (clicked) events: { type, c?: category, tag?, pf?: platform }.
+// Unauthenticated by design (the SW has no session); size-capped + only the coarse
+// category/platform/tag are recorded — never PII. Mirrors trackEvent's hardening.
+http.route({
+  path: "/push/beacon",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const raw = await request.text();
+      if (raw.length <= 2048) {
+        const data = JSON.parse(raw || "{}");
+        const type = String(data.type ?? "");
+        if (type === "delivered" || type === "clicked") {
+          await ctx.runMutation(internal.pushNotifications.recordPushBeaconInternal, {
+            type,
+            category: typeof data.c === "string" ? data.c.slice(0, 64) : undefined,
+            platform: typeof data.pf === "string" ? data.pf.slice(0, 32) : undefined,
+            tag: typeof data.tag === "string" ? data.tag.slice(0, 128) : undefined,
+          });
+        }
+      }
+    } catch {
+      /* never error a beacon — analytics must not affect the SW */
+    }
+    return new Response(null, { status: 204, headers: corsHeaders(request) });
+  }),
+});
+
+http.route({
+  path: "/push/beacon",
+  method: "OPTIONS",
+  handler: httpAction(async (_, request) => {
+    return new Response(null, { status: 204, headers: corsHeaders(request) });
+  }),
+});
+
 // ── Stripe webhook (raw body required, no auth) ──────────────────────
 // Required env vars: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 // Register in Stripe Dashboard → Developers → Webhooks:
