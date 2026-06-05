@@ -117,8 +117,8 @@ function PushTestHelperBanner() {
             <p className="text-red-100">Turn off email notifications in "My Profile".</p>
             <p className="font-semibold">Book your Nets!</p>
 
-            {/* All three buttons so the troubleshoot sequence (Turn off → Enable →
-                Send test) can be followed literally. */}
+            {/* Test always shows. The on/off control is a single button that
+                reflects the current device state: Turn off when on, Turn on when off. */}
             <div className="flex flex-wrap items-center gap-2 pt-1.5">
               <button
                 onClick={handleTest}
@@ -127,20 +127,23 @@ function PushTestHelperBanner() {
               >
                 {testing ? 'Sending…' : 'Test Push Notifications'}
               </button>
-              <button
-                onClick={handleEnable}
-                disabled={busy || isSubscribed}
-                className="px-3 py-1.5 rounded-lg bg-emerald-500 text-white font-semibold shadow-sm hover:bg-emerald-600 disabled:opacity-50"
-              >
-                {busy ? 'Enabling…' : 'Enable notifications on this device'}
-              </button>
-              <button
-                onClick={disable}
-                disabled={busy || !isSubscribed}
-                className="px-3 py-1.5 rounded-lg bg-white/15 text-white font-medium border border-white/60 hover:bg-white/25 disabled:opacity-50"
-              >
-                Turn off
-              </button>
+              {isSubscribed ? (
+                <button
+                  onClick={disable}
+                  disabled={busy}
+                  className="px-3 py-1.5 rounded-lg bg-blue-600 text-white font-semibold shadow-sm hover:bg-blue-700 disabled:opacity-50"
+                >
+                  Turn off
+                </button>
+              ) : (
+                <button
+                  onClick={handleEnable}
+                  disabled={busy}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-500 text-white font-semibold shadow-sm hover:bg-emerald-600 disabled:opacity-50"
+                >
+                  {busy ? 'Turning on…' : 'Turn on'}
+                </button>
+              )}
             </div>
           </div>
 
