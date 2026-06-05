@@ -5,6 +5,7 @@ import { trackPageView, setTrackerUserId } from '../lib/tracker'
 import { signOutUser } from '../lib/auth-client'
 import AuthModal from '../components/AuthModal'
 import PostcodeRequiredModal from '../components/PostcodeRequiredModal'
+import EmailVerificationGate from '../components/EmailVerificationGate'
 import PwaUpdater from '../components/PwaUpdater'
 import InstallPrompt, { openInstallHelp } from '../components/InstallPrompt'
 import AnnouncementHost from '../components/AnnouncementHost'
@@ -218,10 +219,19 @@ function RootComponent() {
 
       {showAuth && <AuthModal initialMode={authMode} onClose={() => setShowAuth(false)} onSuccess={() => setShowAuth(false)} />}
 
-      {/* SPEC_PROFILE_POSTCODE_SUBURB — hard-block gate: signed-in non-admin users (and
-          not while impersonating) must supply postcode + suburb before using the app. */}
+      {/* SIGNUP-VERIFY-LOCKDOWN — non-dismissable gate: a signed-in non-admin user
+          (not while impersonating) must verify their email before proceeding. Takes
+          precedence over the postcode gate; auto-unmounts when emailVerified flips. */}
       {isAuthenticated && user && profileReady && user.role !== 'admin' && !isImpersonating &&
-        (!user.postcode || !user.suburb) && (
+        user.emailVerified === false && (
+          <EmailVerificationGate email={user.email} />
+        )}
+
+      {/* SPEC_PROFILE_POSTCODE_SUBURB — hard-block gate: signed-in non-admin users (and
+          not while impersonating) must supply postcode + suburb before using the app.
+          Only after email is verified (the verify gate above shows first). */}
+      {isAuthenticated && user && profileReady && user.role !== 'admin' && !isImpersonating &&
+        user.emailVerified !== false && (!user.postcode || !user.suburb) && (
           <PostcodeRequiredModal email={user.email} />
         )}
     </div>

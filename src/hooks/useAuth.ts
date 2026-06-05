@@ -201,16 +201,21 @@ export function useAuth() {
       // SPEC_PROFILE_POSTCODE_SUBURB — drives the hard-block login gate + profile.
       postcode: (customerRecord as any)?.postcode as string | undefined,
       suburb: (customerRecord as any)?.suburb as string | undefined,
+      // SIGNUP-VERIFY-LOCKDOWN (2026-06) — drives the non-dismissable "verify your
+      // email" gate in __root. true once the Better Auth account is verified.
+      emailVerified: (betterAuthUser as any).emailVerified === true,
     }
     // When impersonating, override email/name/role so every page that reads
     // user.email (Statements, Profile, Bookings) loads the impersonated user's
     // data. isAdmin is preserved from real auth so admin pages stay accessible.
+    // Impersonated views are never gated (admin is verified).
     if (isImpersonating && impersonatedUser) {
       return {
         ...base,
         name: impersonatedUser.name,
         email: impersonatedUser.email,
         role: impersonatedUser.role as 'customer' | 'coach' | 'admin',
+        emailVerified: true,
       }
     }
     return base

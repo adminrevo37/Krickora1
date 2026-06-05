@@ -38,11 +38,16 @@ const geoCache: Record<string, [number, number] | null> = (() => {
 })()
 function saveGeo() { try { localStorage.setItem('kr_geocache', JSON.stringify(geoCache)) } catch { /* ignore */ } }
 
+let lastGeoAt = 0
 async function geocode(suburb: string, postcode: string): Promise<[number, number] | null> {
   const key = norm(suburb)
   if (SUBURBS[key]) return SUBURBS[key]
   if (key in geoCache) return geoCache[key]
   try {
+    // Respect Nominatim's 1 req/sec usage policy (only hit for uncached suburbs).
+    const wait = Math.max(0, 1100 - (Date.now() - lastGeoAt))
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait))
+    lastGeoAt = Date.now()
     const q = encodeURIComponent(`${suburb}, ${postcode || ''} Western Australia, Australia`)
     const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${q}`, {
       headers: { 'Accept': 'application/json' },
@@ -72,19 +77,23 @@ export default function MapTab({ range }: { range: DateRange }) {
   const layerRef = useRef<L.LayerGroup | null>(null)
   const [unplaced, setUnplaced] = useState<string[]>([])
 
-  // Init the map once.
+  // Init the map once. Centred on Perth metro.
   useEffect(() => {
     if (!mapRef.current || leafletRef.current) return
-    const map = L.map(mapRef.current, { scrollWheelZoom: true }).setView([-31.89, 115.81], 11)
+    const map = L.map(mapRef.current, { scrollWheelZoom: true }).setView([-31.95, 115.86], 11)
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap contributors', maxZoom: 18,
     }).addTo(map)
     layerRef.current = L.layerGroup().addTo(map)
     leafletRef.current = map
     // Leaflet renders blank tiles when the container's size isn't settled at init
-    // (it mounts inside a lazy tab) — recompute once layout has painted.
-    setTimeout(() => map.invalidateSize(), 250)
-    return () => { map.remove(); leafletRef.current = null }
+    // (it mounts inside a lazy tab). A ResizeObserver recomputes the size whenever
+    // the container appears/resizes — bulletproof against the tab-mount race.
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => map.invalidateSize()) : null
+    if (ro && mapRef.current) ro.observe(mapRef.current)
+    const t1 = setTimeout(() => map.invalidateSize(), 200)
+    const t2 = setTimeout(() => map.invalidateSize(), 700)
+    return () => { clearTimeout(t1); clearTimeout(t2); ro?.disconnect(); map.remove(); leafletRef.current = null }
   }, [])
 
   // Plot bubbles whenever the catchment data changes.
