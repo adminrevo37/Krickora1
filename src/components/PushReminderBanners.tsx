@@ -56,10 +56,10 @@ function InstallNagBanner() {
         {open && (
           <div className="mt-2 pt-2 border-t border-red-400/50 space-y-1.5 leading-relaxed">
             <p>
-              <strong>iPhone</strong> → Use <u>Safari</u> → Share → Add to Home Screen → Save!
+              <strong>iPhone</strong> → Use <u>Safari</u> → Share → Add to Home Screen → follow the final prompt!
             </p>
             <p>
-              <strong>Android</strong> → Use Chrome → Share → Add to Home Screen → Save!
+              <strong>Android</strong> → Use Chrome → Share → Add to Home Screen → follow the final prompt!
             </p>
             <p>Exit web browser and click on the App saved on your home screen.</p>
           </div>
