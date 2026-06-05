@@ -22,11 +22,14 @@ const DISMISS_KEY = 'krickora.pushHelperDismissed'
 
 export default function PushReminderBanners() {
   const { isAuthenticated } = useAuth()
-  const { isStandalone } = usePwaInstall()
+  const { isStandalone, isIos, isAndroid } = usePwaInstall()
+  // MOBILE ONLY — install/push prompts are for phone setup; desktop sees nothing
+  // (Inspector 2026-06-05: keep the start-of-use experience clean on desktop).
+  const isMobile = isIos || isAndroid
+  if (!isMobile) return null
   // Installed app (standalone): the push-test helper — only useful once signed in.
   if (isStandalone) return isAuthenticated ? <PushTestHelperBanner /> : null
-  // Normal web browser (mobile or desktop): the install nag shows on EVERY page,
-  // for EVERYONE — logged in or out (Inspector 2026-06-05).
+  // Mobile web browser: the install nag shows on EVERY page, logged in or out.
   return <InstallNagBanner />
 }
 
