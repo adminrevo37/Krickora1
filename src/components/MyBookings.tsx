@@ -111,7 +111,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     modifyBooking, updateAthleteSlots,
   } = useBookings()
   const { user, isCoach, isCustomer, isAdmin, getAllCoaches, assignCoach, removeCoach, customerRecord, getCreditBalance } = useAuth()
-  const { getUserEntries, removeFromWaitlist, notifications, dismissNotification } = useWaitlist(user?.id)
+  const { notifications, dismissNotification } = useWaitlist(user?.id)
   const { settings } = useSettings()
   // When impersonating, filter bookings by the impersonated user's email
   const effectiveEmail = impersonatedEmail ?? user?.email
@@ -389,7 +389,17 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     return getLanePrice(lane, booking.variantId ?? null, booking.duration)
   }
 
-  const userWaitlistEntries = user ? getUserEntries(user.id) : []
+  // Waitlist tab is driven by the REAL Convex waitlist table (reactive — anyone
+  // joining/leaving updates this live), not the old in-memory store. Remove calls
+  // the server mutation so it actually persists. Show only active (waiting/offered).
+  const removeWaitlistMut = useMutation(api.mutations.removeFromWaitlist)
+  const myWaitlistRows = (useQuery(
+    api.queries.listWaitlistByUser,
+    user?.id ? { userId: user.id } : 'skip',
+  ) ?? []) as Array<{ _id: string; laneId: string; date: string; hour: number; status?: string }>
+  const userWaitlistEntries = myWaitlistRows
+    .filter((w) => { const s = w.status ?? 'waiting'; return s === 'waiting' || s === 'offered' })
+    .map((w) => ({ id: w._id, laneId: w.laneId, date: w.date, hour: w.hour, status: w.status ?? 'waiting' }))
   const userNotifications = notifications
   const coaches = getAllCoaches()
   const assignedCoachIds: string[] = customerRecord?.assignedCoachIds ?? []
@@ -1098,7 +1108,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                         <div className="text-xs text-gray-400">{formatDate(entry.date)} at {formatTime(entry.hour)}</div>
                       </div>
                     </div>
-                    <button onClick={() => removeFromWaitlist(entry.id)} className="text-xs text-gray-400 hover:text-red-500 transition-colors ml-3 shrink-0">Remove</button>
+                    <button onClick={async () => { try { await removeWaitlistMut({ id: entry.id as any }) } catch (err) { console.error('Failed to leave waitlist:', err) } }} className="text-xs text-gray-400 hover:text-red-500 transition-colors ml-3 shrink-0">Remove</button>
                   </div>
                 )
               })}
