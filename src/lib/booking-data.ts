@@ -334,6 +334,13 @@ export function getCustomerDurations(bookings: Booking[], laneId: string, dateKe
   const customerMax = getSettingsStore().get().customerMaxDurationMinutes ?? 180
   const candidates: number[] = []
   for (let d = 60; d <= customerMax; d += 60) candidates.push(d)
+  // When this slot starts ON THE HALF-HOUR (i.e. the previous booking finished at :30),
+  // also offer 1.5 hours so the customer can book 1hr OR 1.5hr and land back on the hour.
+  // Price is computed dynamically from the admin hourly rate (getCustomerPrice handles
+  // 90 min = 1.5×/hr). All the normal lane availability/gap constraints still apply below.
+  const startsOnHalfHour = Math.abs((startHour % 1) - 0.5) < 0.001
+  if (startsOnHalfHour && 90 <= customerMax) candidates.push(90)
+  candidates.sort((a, b) => a - b)
 
   for (const d of candidates) {
     if (d > maxMins) continue
