@@ -7,7 +7,7 @@ import { useQuery } from 'convex/react'
 import { api } from '../../../convex/_generated/api'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { type DateRange, Section, Loading, Empty } from './shared'
+import { type DateRange, Section } from './shared'
 
 // Approximate centroids for common Perth-metro suburbs (lat, lng). Covers the
 // venue's catchment; anything else is geocoded via Nominatim on demand.
@@ -135,21 +135,27 @@ export default function MapTab({ range }: { range: DateRange }) {
   return (
     <div className="space-y-4">
       <Section title="Catchment heatmap" subtitle="Where customers travel from — bubble size & colour scale with unique customers per suburb (OpenStreetMap)">
-        {data === undefined ? <Loading label="Loading catchment…" /> : data === null ? <Empty label="Unavailable." /> : (
-          <div className="p-4 space-y-3">
-            <div ref={mapRef} className="w-full rounded-xl overflow-hidden border border-gray-200" style={{ height: 520 }} />
-            <div className="flex items-center gap-4 flex-wrap text-xs text-gray-500">
-              <span className="font-medium text-gray-600">Unique customers:</span>
-              {[['low', '#10b981'], ['', '#84cc16'], ['', '#f59e0b'], ['', '#ea580c'], ['high', '#b91c1c']].map(([lbl, c], i) => (
-                <span key={i} className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full" style={{ background: c }} />{lbl}</span>
-              ))}
-              <span className="ml-auto">{data.uniqueCustomers ?? '—'} unique customers · {data.total} sessions</span>
-            </div>
-            {unplaced.length > 0 && (
-              <p className="text-[11px] text-amber-600">Could not place: {unplaced.join(', ')} (unknown suburb — add to lookup or check spelling).</p>
+        <div className="p-4 space-y-3">
+          {/* The map container is ALWAYS mounted (not gated on data) — Leaflet's init
+              effect needs the ref present on first render, and the plot effect adds
+              bubbles once the catchment data arrives. */}
+          <div className="relative">
+            <div ref={mapRef} className="w-full rounded-xl overflow-hidden border border-gray-200 bg-gray-50" style={{ height: 520 }} />
+            {data === undefined && (
+              <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-400 bg-white/60 rounded-xl">Loading catchment…</div>
             )}
           </div>
-        )}
+          <div className="flex items-center gap-4 flex-wrap text-xs text-gray-500">
+            <span className="font-medium text-gray-600">Unique customers:</span>
+            {[['low', '#10b981'], ['', '#84cc16'], ['', '#f59e0b'], ['', '#ea580c'], ['high', '#b91c1c']].map(([lbl, c], i) => (
+              <span key={i} className="inline-flex items-center gap-1"><span className="w-3 h-3 rounded-full" style={{ background: c }} />{lbl}</span>
+            ))}
+            <span className="ml-auto">{data ? `${data.uniqueCustomers ?? '—'} unique customers · ${data.total} sessions` : ''}</span>
+          </div>
+          {unplaced.length > 0 && (
+            <p className="text-[11px] text-amber-600">Could not place: {unplaced.join(', ')} (unknown suburb — add to lookup or check spelling).</p>
+          )}
+        </div>
       </Section>
     </div>
   )
