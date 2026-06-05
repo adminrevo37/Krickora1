@@ -84,7 +84,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     for (let h = open; h < close; h += 0.5) slots.push({ hour: h, label: formatTime(h) })
     return slots
   }, [selectedDay, settings])
-  const { bookings, canBookTime } = useBookings()
+  const { bookings, canBookTime, bookingsLoading } = useBookings()
   const { isLaneBlocked } = useLaneBlocks()
 
   const [modalOpen, setModalOpen] = useState(false)
@@ -378,6 +378,16 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
           (sticky top-0 below) stays locked. On mobile the cap is tighter (60dvh) so
           the grid actually overflows the box and scrolls internally instead of the
           whole page scrolling the header away. Desktop keeps the taller 72vh. */}
+      <div className="relative">
+      {/* Hold the grid back behind a spinner until the FIRST booking data arrives,
+          so users never see a momentarily-empty calendar (all booked slots would
+          otherwise flash as available). Once loaded, Convex keeps it live-updated. */}
+      {bookingsLoading && (
+        <div className="absolute inset-0 z-50 rounded-2xl bg-white/95 flex flex-col items-center justify-center gap-2">
+          <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+          <span className="text-sm text-gray-400">Loading bookings…</span>
+        </div>
+      )}
       <div ref={gridScrollRef} className="bg-white rounded-2xl border-2 border-black shadow-sm overflow-auto max-h-[60dvh] sm:max-h-[72vh]">
         <div className="min-w-[560px]">
         <div className="grid grid-cols-[70px_repeat(5,1fr)] border-b-2 border-black bg-white sticky top-0 z-30">
@@ -561,6 +571,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
           })}
         </div>
         </div>
+      </div>
       </div>
 
       {/* Modals */}

@@ -43,7 +43,13 @@ function toBooking(doc: any): Booking {
 }
 
 export function useBookings() {
-  const rawBookings = useQuery(api.queries.listBookings) ?? []
+  // useQuery returns `undefined` until the first server result arrives. Coercing
+  // straight to [] makes the calendar render a FULLY EMPTY day during that window
+  // (the "empty calendar flash"). Track the loading state so the UI can hold the
+  // grid back until real booking data is in.
+  const rawBookingsResult = useQuery(api.queries.listBookings)
+  const bookingsLoading = rawBookingsResult === undefined
+  const rawBookings = rawBookingsResult ?? []
   const { user, isAdmin } = useAuth()
   // isAdmin is derived from customerRecord.role (real auth, not impersonated role) — correct under impersonation
   // betterAuthUser.id is always the real session user ID (correct under impersonation too)
@@ -309,6 +315,7 @@ export function useBookings() {
 
   return {
     bookings,
+    bookingsLoading,
     addBooking,
     cancelBooking,
     canCancel,
