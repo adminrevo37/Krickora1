@@ -675,10 +675,17 @@ export const deleteUser = mutation({
 // Shared creation logic (no auth — callers must enforce their own guard).
 async function ensureCustomerImpl(
   ctx: any,
-  args: { email: string; name?: string; firstName?: string; lastName?: string; postcode?: string; suburb?: string; phone?: string }
+  args: { email: string; name?: string; firstName?: string; lastName?: string; postcode?: string; suburb?: string; phone?: string; referralSource?: string; referralSourceOther?: string }
 ): Promise<any | null> {
   const normalizedEmail = args.email.toLowerCase().trim();
   if (!normalizedEmail) return null;
+
+  // SPEC_SIGNUP_UPDATES_2026-06 G5 — "How did you hear about us?" arrives on the
+  // signup follow-up call (the databaseHook path has none). Stored when supplied;
+  // the free-text only when the chosen option is "Other".
+  const givenReferral = (args.referralSource ?? "").trim();
+  const givenReferralOther = (args.referralSourceOther ?? "").trim();
+  const hasReferral = Boolean(givenReferral);
 
   // SPEC_NAME_SPLIT — explicit first/last passed by the signup follow-up call.
   const givenFirst = (args.firstName ?? "").trim();
@@ -707,7 +714,7 @@ async function ensureCustomerImpl(
     // The databaseHook creates the row first (name only, best-effort split). The
     // frontend then re-calls with the PRECISE two fields — patch them in so a
     // multi-word surname is captured exactly (last writer wins for own record).
-    if (hasExplicitName || hasLocation || hasPhone) {
+    if (hasExplicitName || hasLocation || hasPhone || hasReferral) {
       await ctx.db.patch(existing._id, {
         ...(hasExplicitName
           ? {
@@ -718,6 +725,13 @@ async function ensureCustomerImpl(
           : {}),
         ...(hasLocation ? { postcode: givenPostcode, suburb: givenSuburb } : {}),
         ...(hasPhone ? { phone: givenPhone } : {}),
+        ...(hasReferral
+          ? {
+              referralSource: givenReferral,
+              referralSourceOther:
+                givenReferral === "Other" ? givenReferralOther || undefined : undefined,
+            }
+          : {}),
       });
     }
     return existing._id;
@@ -737,6 +751,13 @@ async function ensureCustomerImpl(
     lastName: split.lastName,
     ...(hasLocation ? { postcode: givenPostcode, suburb: givenSuburb } : {}),
     ...(hasPhone ? { phone: givenPhone } : {}),
+    ...(hasReferral
+      ? {
+          referralSource: givenReferral,
+          referralSourceOther:
+            givenReferral === "Other" ? givenReferralOther || undefined : undefined,
+        }
+      : {}),
     email: normalizedEmail,
     role: "customer",
     creditBalance: 0,
@@ -791,6 +812,8 @@ export const ensureCustomerExistsInternal = internalMutation({
     postcode: v.optional(v.string()),
     suburb: v.optional(v.string()),
     phone: v.optional(v.string()),
+    referralSource: v.optional(v.string()),
+    referralSourceOther: v.optional(v.string()),
   },
   handler: async (ctx, args) => ensureCustomerImpl(ctx, args),
 });
@@ -859,6 +882,8 @@ export const ensureCustomerExists = mutation({
     postcode: v.optional(v.string()),
     suburb: v.optional(v.string()),
     phone: v.optional(v.string()),
+    referralSource: v.optional(v.string()),
+    referralSourceOther: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const caller = await getCallerContext(ctx);

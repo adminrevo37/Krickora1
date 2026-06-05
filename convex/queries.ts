@@ -240,6 +240,23 @@ export const listCustomersByRole = query({
   },
 });
 
+// SPEC_SIGNUP_UPDATES_2026-06 G2/G4 — public coach list for the SIGNUP form,
+// where the caller is not yet authenticated (listCustomersByRole returns [] for
+// anon callers). Returns ONLY the opaque _id + display name — no email, phone,
+// tier or other PII. Coaches are public-facing for a coaching business, and the
+// write path that consumes these ids (athletes.setupAthletesAtSignup) is still
+// auth-gated to the caller's own account, so exposing the roster is low-risk.
+export const listCoachesPublic = query({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db
+      .query("customers")
+      .withIndex("by_role", (q: any) => q.eq("role", "coach"))
+      .collect();
+    return rows.map((c: any) => ({ _id: c._id, name: c.name }));
+  },
+});
+
 // Get customer by ID — self or admin only (returns null otherwise).
 export const getCustomer = query({
   args: { id: v.id("customers") },

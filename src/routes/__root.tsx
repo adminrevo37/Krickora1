@@ -17,7 +17,12 @@ function RootComponent() {
   useLaneConfig()
   const navigate = useNavigate()
   const [showAuth, setShowAuth] = useState(false)
+  // SPEC_SIGNUP_UPDATES_2026-06 G1 — which mode the AuthModal opens in, set by the
+  // two explicit logged-out header buttons (Log In to Book / Sign Up).
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signup')
   const [showUserMenu, setShowUserMenu] = useState(false)
+
+  const openAuth = (mode: 'signin' | 'signup') => { setAuthMode(mode); setShowAuth(true) }
 
   return (
     <div className="min-h-screen bg-white text-gray-900">
@@ -46,18 +51,18 @@ function RootComponent() {
             </Link>
 
             <div className="flex items-center gap-3">
-              {/* Book a Net — primary CTA, always visible */}
-              <Link
-                to="/"
-                className="flex items-center gap-1.5 px-3 py-1.5 sm:px-4 sm:py-2 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 active:scale-95 text-white font-semibold rounded-xl shadow-md shadow-emerald-500/25 transition-all text-sm whitespace-nowrap"
-              >
-                <span className="text-base leading-none">🏏</span>
-                <span>Book a Net</span>
-              </Link>
-
               {isLoading ? (
                 <div className="w-20 h-8 bg-gray-100 rounded-xl animate-pulse" />
               ) : isAuthenticated && user ? (
+                <>
+                {/* Book a Net — primary CTA, only for logged-in users (G1) */}
+                <Link
+                  to="/"
+                  className="flex items-center gap-1.5 px-3 py-1.5 sm:px-4 sm:py-2 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 active:scale-95 text-white font-semibold rounded-xl shadow-md shadow-emerald-500/25 transition-all text-sm whitespace-nowrap"
+                >
+                  <span className="text-base leading-none">🏏</span>
+                  <span>Book a Net</span>
+                </Link>
                 <div className="relative">
                   <button
                     onClick={() => setShowUserMenu(!showUserMenu)}
@@ -110,10 +115,24 @@ function RootComponent() {
                     </>
                   )}
                 </div>
+                </>
               ) : (
-                <button onClick={() => setShowAuth(true)} className="text-sm font-medium px-4 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl shadow-md transition-all">
-                  Sign In
-                </button>
+                <>
+                  {/* G1 — explicit, equal-weight logged-out entry points */}
+                  <button
+                    onClick={() => openAuth('signin')}
+                    className="text-sm font-semibold px-3 py-1.5 sm:px-4 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl shadow-md transition-all whitespace-nowrap"
+                  >
+                    <span className="sm:hidden">Log In</span>
+                    <span className="hidden sm:inline">Log In to Book</span>
+                  </button>
+                  <button
+                    onClick={() => openAuth('signup')}
+                    className="text-sm font-semibold px-3 py-1.5 sm:px-4 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl shadow-md transition-all whitespace-nowrap"
+                  >
+                    Sign Up
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -183,7 +202,7 @@ function RootComponent() {
       <PwaUpdater />
       <InstallPrompt />
 
-      {showAuth && <AuthModal onClose={() => setShowAuth(false)} onSuccess={() => setShowAuth(false)} />}
+      {showAuth && <AuthModal initialMode={authMode} onClose={() => setShowAuth(false)} onSuccess={() => setShowAuth(false)} />}
 
       {/* SPEC_PROFILE_POSTCODE_SUBURB — hard-block gate: signed-in non-admin users (and
           not while impersonating) must supply postcode + suburb before using the app. */}

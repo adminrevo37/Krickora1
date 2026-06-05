@@ -6,6 +6,7 @@ import { internal } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
 import { requireAdmin, getCallerContext } from "./lib/adminGuard";
 import { getAWSTNow } from "./lib/bookingWindow";
+import { composeName, splitName } from "./lib/names";
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -87,18 +88,31 @@ export const listAthletesByAccount = query({
 
 export const createAthlete = mutation({
   args: {
-    name: v.string(),
+    // SPEC_SIGNUP_UPDATES_2026-06 G3 — first/last are the new source fields.
+    // `name` is kept optional for legacy single-name callers; when first/last are
+    // supplied the display `name` is composed from them.
+    name: v.optional(v.string()),
+    firstName: v.optional(v.string()),
+    lastName: v.optional(v.string()),
     accountCustomerId: v.optional(v.id("customers")),
     dob: v.optional(v.string()),
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { accountId } = await authorizeAccount(ctx, args.accountCustomerId);
-    const name = args.name.trim();
+    // Prefer explicit first/last; fall back to splitting a single `name`.
+    const givenFirst = (args.firstName ?? "").trim();
+    const givenLast = (args.lastName ?? "").trim();
+    const split = givenFirst || givenLast
+      ? { firstName: givenFirst, lastName: givenLast }
+      : splitName(args.name);
+    const name = composeName(split.firstName, split.lastName);
     if (!name) throw new ConvexError("Athlete name is required.");
     return await ctx.db.insert("athletes", {
       accountCustomerId: accountId as any,
       name,
+      firstName: split.firstName || undefined,
+      lastName: split.lastName || undefined,
       assignedCoachIds: [],
       isSelf: false,
       dob: args.dob?.trim() || undefined,
@@ -111,7 +125,11 @@ export const createAthlete = mutation({
 export const updateAthlete = mutation({
   args: {
     athleteId: v.id("athletes"),
+    // SPEC_SIGNUP_UPDATES_2026-06 G3 — edit via first/last; `name` recomposed.
+    // Legacy single-name edits still honoured when first/last aren't supplied.
     name: v.optional(v.string()),
+    firstName: v.optional(v.string()),
+    lastName: v.optional(v.string()),
     dob: v.optional(v.string()),
     notes: v.optional(v.string()),
   },
@@ -120,10 +138,23 @@ export const updateAthlete = mutation({
     if (!athlete) throw new ConvexError("Athlete not found.");
     await authorizeAccount(ctx, athlete.accountCustomerId);
     const updates: Record<string, any> = {};
-    if (args.name !== undefined) {
+    if (args.firstName !== undefined || args.lastName !== undefined) {
+      // Compose from the new first/last, falling back to whatever the athlete
+      // already has for the field not being changed.
+      const first = (args.firstName ?? athlete.firstName ?? "").trim();
+      const last = (args.lastName ?? athlete.lastName ?? "").trim();
+      const composed = composeName(first, last);
+      if (!composed) throw new ConvexError("Athlete name cannot be empty.");
+      updates.firstName = first || undefined;
+      updates.lastName = last || undefined;
+      updates.name = composed;
+    } else if (args.name !== undefined) {
       const n = args.name.trim();
       if (!n) throw new ConvexError("Athlete name cannot be empty.");
+      const split = splitName(n);
       updates.name = n;
+      updates.firstName = split.firstName || undefined;
+      updates.lastName = split.lastName || undefined;
     }
     if (args.dob !== undefined) updates.dob = args.dob.trim() || undefined;
     if (args.notes !== undefined) updates.notes = args.notes.trim() || undefined;
@@ -149,6 +180,102 @@ export const setAthleteCoaches = mutation({
     );
     await ctx.db.patch(args.athleteId, { assignedCoachIds: coachIds });
     return args.athleteId;
+  },
+});
+
+// SPEC_SIGNUP_UPDATES_2026-06 G2 — one-shot setup called by the signup follow-up
+// (AuthModal) once the new account's auth token has attached. Writes the coaching
+// data the customer entered on the signup form:
+//   - selfCoachIds → the account's isSelf athlete (created if somehow missing)
+//   - athletes[]   → one child athlete row each (first/last + coaches)
+// Authorised to the CALLER'S OWN account only (reuses authorizeAccount). Convex
+// mutations are transactional, so the AuthModal retry-until-token loop is safe:
+// a call rejected for a lagging token rolls back entirely (no partial/dupe rows).
+// Idempotent against an accidental second successful call: a child matching an
+// existing athlete by composed name has its coaches merged instead of duplicated.
+export const setupAthletesAtSignup = mutation({
+  args: {
+    selfCoachIds: v.optional(v.array(v.string())),
+    athletes: v.optional(
+      v.array(
+        v.object({
+          firstName: v.string(),
+          lastName: v.string(),
+          coachIds: v.array(v.string()),
+        })
+      )
+    ),
+  },
+  handler: async (ctx, args) => {
+    const { accountId } = await authorizeAccount(ctx);
+    const now = new Date().toISOString();
+    const clean = (ids: string[]) =>
+      Array.from(new Set(ids.map((c) => c.trim()).filter(Boolean)));
+
+    const existing = await ctx.db
+      .query("athletes")
+      .withIndex("by_account", (q: any) => q.eq("accountCustomerId", accountId))
+      .collect();
+
+    // ── self-athlete coaches (adult "I am being coached") ──
+    const selfCoaches = clean(args.selfCoachIds ?? []);
+    if (selfCoaches.length > 0) {
+      let self = existing.find((a: any) => a.isSelf);
+      if (!self) {
+        // Create-self-if-missing: the customer-sync step normally makes this row,
+        // but never assume ordering. Carry the account holder's name.
+        const account: any = await ctx.db.get(accountId as any);
+        const selfId = await ctx.db.insert("athletes", {
+          accountCustomerId: accountId as any,
+          name: account?.name ?? "",
+          firstName: account?.firstName || undefined,
+          lastName: account?.lastName || undefined,
+          assignedCoachIds: selfCoaches,
+          isSelf: true,
+          createdAt: now,
+        });
+        existing.push({ _id: selfId, isSelf: true } as any);
+      } else {
+        const merged = clean([...(self.assignedCoachIds ?? []), ...selfCoaches]);
+        await ctx.db.patch(self._id, { assignedCoachIds: merged });
+      }
+    }
+
+    // ── child athletes ──
+    let created = 0;
+    for (const a of args.athletes ?? []) {
+      const first = a.firstName.trim();
+      const last = a.lastName.trim();
+      const name = composeName(first, last);
+      if (!name) continue; // skip blank rows defensively
+      const coachIds = clean(a.coachIds);
+      // Merge into an existing same-name athlete rather than duplicate.
+      const match = existing.find(
+        (e: any) => !e.isSelf && (e.name ?? "").toLowerCase().trim() === name.toLowerCase()
+      );
+      if (match) {
+        const merged = clean([...(match.assignedCoachIds ?? []), ...coachIds]);
+        await ctx.db.patch(match._id, {
+          assignedCoachIds: merged,
+          firstName: first || undefined,
+          lastName: last || undefined,
+          name,
+        });
+      } else {
+        await ctx.db.insert("athletes", {
+          accountCustomerId: accountId as any,
+          name,
+          firstName: first || undefined,
+          lastName: last || undefined,
+          assignedCoachIds: coachIds,
+          isSelf: false,
+          createdAt: now,
+        });
+        created++;
+      }
+    }
+
+    return { success: true, childrenCreated: created };
   },
 });
 
@@ -399,5 +526,29 @@ export const migrateToAthletes = mutation({
       bookingsPatched,
       slotsLinked,
     };
+  },
+});
+
+// SPEC_SIGNUP_UPDATES_2026-06 G3 migration (idempotent) — backfill
+// firstName/lastName on every athlete that lacks them, via a last-space split of
+// the existing `name` (same approach as the customer Name-Split migration).
+// `name` itself is left untouched (it stays the authoritative display string).
+// Safe to re-run: only patches athletes whose firstName AND lastName are unset.
+export const migrateAthleteNames = mutation({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+    const athletes = await ctx.db.query("athletes").collect();
+    let patched = 0;
+    for (const a of athletes) {
+      if (a.firstName !== undefined || a.lastName !== undefined) continue;
+      const { firstName, lastName } = splitName(a.name);
+      await ctx.db.patch(a._id, {
+        firstName: firstName || undefined,
+        lastName: lastName || undefined,
+      });
+      patched++;
+    }
+    return { athletesScanned: athletes.length, patched };
   },
 });

@@ -39,6 +39,12 @@ export default defineSchema({
     suburb: v.optional(v.string()),
     email: v.string(),
     phone: v.optional(v.string()),
+    // SPEC_SIGNUP_UPDATES_2026-06 G5 — "How did you hear about us?" captured at
+    // signup (required there). referralSource = the chosen option; when it is
+    // "Other", the free text the customer typed is stored in referralSourceOther.
+    // Optional in schema → no forced migration (legacy accounts have neither).
+    referralSource: v.optional(v.string()),
+    referralSourceOther: v.optional(v.string()),
     role: v.string(), // 'customer' | 'coach' | 'admin' | 'user' (default: 'user' for new signups)
     assignedCoachIds: v.optional(v.array(v.string())),
     creditBalance: v.optional(v.number()),
@@ -76,7 +82,13 @@ export default defineSchema({
   // athletes. assignedCoachIds lives HERE now (per-athlete), not on customers.
   athletes: defineTable({
     accountCustomerId: v.id("customers"), // owning account (parent/adult)
-    name: v.string(), // the kid's (or adult's) name — what coaches see
+    name: v.string(), // DERIVED display string = "firstName lastName" — what coaches see
+    // SPEC_SIGNUP_UPDATES_2026-06 G3 — athletes get first/last source fields,
+    // mirroring the customer Name-Split pattern. `name` stays the authoritative
+    // derived read so every existing roster/allocation/email read is untouched.
+    // Optional → no forced migration (migrateAthleteNames backfills these).
+    firstName: v.optional(v.string()),
+    lastName: v.optional(v.string()),
     assignedCoachIds: v.optional(v.array(v.string())), // coach _id(s) for THIS athlete
     isSelf: v.optional(v.boolean()), // true = the account holder training themselves
     dob: v.optional(v.string()), // reserved, unused for now — enables future age groups w/o migration

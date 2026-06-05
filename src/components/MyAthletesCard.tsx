@@ -3,13 +3,26 @@ import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { getErrorMessage } from '../lib/errors'
+import CoachMultiSelect from './CoachMultiSelect'
 
 /**
  * "My Athletes" — account-holder self-management of their child-athletes
  * (SPEC_PARENT_ATHLETE_MODEL). Lists the account's athletes (including the
  * self-athlete), lets the parent add a child, rename/remove, and assign coaches
- * per athlete. Replaces the old account-level "select your coach" control.
+ * per athlete.
+ *
+ * SPEC_SIGNUP_UPDATES_2026-06:
+ *  - G3: athletes carry first + last name (both required).
+ *  - G4: coach assignment uses the searchable CoachMultiSelect with an EXPLICIT
+ *    Save/Cancel per athlete — taps now STAGE locally (an "unsaved changes"
+ *    marker shows) and commit only on Save. Replaces the old auto-save-on-tap.
  */
+function sameSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  const sa = [...a].sort(), sb = [...b].sort()
+  return sa.every((v, i) => v === sb[i])
+}
+
 export default function MyAthletesCard() {
   const athletes = useQuery(api.athletes.listAthletesByAccount, {}) ?? []
   const coaches = useQuery(api.queries.listCustomersByRole, { role: 'coach' }) ?? []
@@ -18,11 +31,15 @@ export default function MyAthletesCard() {
   const removeAthlete = useMutation(api.athletes.removeAthlete)
   const setAthleteCoaches = useMutation(api.athletes.setAthleteCoaches)
 
-  const [newName, setNewName] = useState('')
+  const [newFirst, setNewFirst] = useState('')
+  const [newLast, setNewLast] = useState('')
   const [adding, setAdding] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [editName, setEditName] = useState('')
+  const [editFirst, setEditFirst] = useState('')
+  const [editLast, setEditLast] = useState('')
   const [busyId, setBusyId] = useState<string | null>(null)
+  // Staged coach selections per athlete (G4). Absent → use the server value.
+  const [coachDraft, setCoachDraft] = useState<Record<string, string[]>>({})
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   const flash = (type: 'success' | 'error', text: string) => {
@@ -30,15 +47,26 @@ export default function MyAthletesCard() {
     setTimeout(() => setMessage(null), 4000)
   }
 
+  const draftFor = (a: any): string[] => coachDraft[a._id] ?? (a.assignedCoachIds ?? [])
+  const isDirty = (a: any): boolean => !sameSet(draftFor(a), a.assignedCoachIds ?? [])
+  const setDraft = (a: any, ids: string[]) => setCoachDraft((prev) => ({ ...prev, [a._id]: ids }))
+  const clearDraft = (a: any) =>
+    setCoachDraft((prev) => { const next = { ...prev }; delete next[a._id]; return next })
+
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
-    const name = newName.trim()
-    if (!name) return
+    const firstName = newFirst.trim()
+    const lastName = newLast.trim()
+    if (!firstName || !lastName) {
+      flash('error', 'Enter a first and last name.')
+      return
+    }
     setAdding(true)
     try {
-      await createAthlete({ name })
-      setNewName('')
-      flash('success', `Added ${name}`)
+      await createAthlete({ firstName, lastName })
+      setNewFirst('')
+      setNewLast('')
+      flash('success', `Added ${firstName} ${lastName}`)
     } catch (err: any) {
       flash('error', getErrorMessage(err) ?? 'Failed to add athlete')
     } finally {
@@ -46,12 +74,22 @@ export default function MyAthletesCard() {
     }
   }
 
+  const startEdit = (a: any) => {
+    setEditingId(a._id)
+    setEditFirst(a.firstName ?? a.name?.split(' ').slice(0, -1).join(' ') ?? a.name ?? '')
+    setEditLast(a.lastName ?? a.name?.split(' ').slice(-1).join(' ') ?? '')
+  }
+
   const handleRename = async (athleteId: string) => {
-    const name = editName.trim()
-    if (!name) return
+    const firstName = editFirst.trim()
+    const lastName = editLast.trim()
+    if (!firstName || !lastName) {
+      flash('error', 'Enter a first and last name.')
+      return
+    }
     setBusyId(athleteId)
     try {
-      await updateAthlete({ athleteId: athleteId as Id<'athletes'>, name })
+      await updateAthlete({ athleteId: athleteId as Id<'athletes'>, firstName, lastName })
       setEditingId(null)
       flash('success', 'Name updated')
     } catch (err: any) {
@@ -74,14 +112,12 @@ export default function MyAthletesCard() {
     }
   }
 
-  const toggleCoach = async (athlete: any, coachId: string) => {
-    const current: string[] = athlete.assignedCoachIds ?? []
-    const next = current.includes(coachId)
-      ? current.filter((c) => c !== coachId)
-      : [...current, coachId]
-    setBusyId(athlete._id)
+  const saveCoaches = async (a: any) => {
+    setBusyId(a._id)
     try {
-      await setAthleteCoaches({ athleteId: athlete._id as Id<'athletes'>, coachIds: next })
+      await setAthleteCoaches({ athleteId: a._id as Id<'athletes'>, coachIds: draftFor(a) })
+      clearDraft(a)
+      flash('success', 'Coaches updated')
     } catch (err: any) {
       flash('error', getErrorMessage(err) ?? 'Failed to update coaches')
     } finally {
@@ -109,16 +145,25 @@ export default function MyAthletesCard() {
           <p className="text-sm text-gray-400">No athletes yet. Add one below.</p>
         )}
 
-        {athletes.map((a: any) => (
+        {athletes.map((a: any) => {
+          const dirty = isDirty(a)
+          return (
           <div key={a._id} className="rounded-xl border border-gray-200 p-4">
             <div className="flex items-center justify-between gap-2">
               {editingId === a._id ? (
-                <div className="flex items-center gap-2 flex-1">
+                <div className="flex items-center gap-2 flex-1 flex-wrap">
                   <input
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    className="flex-1 px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    value={editFirst}
+                    onChange={(e) => setEditFirst(e.target.value)}
+                    placeholder="First name"
+                    className="flex-1 min-w-[7rem] px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     autoFocus
+                  />
+                  <input
+                    value={editLast}
+                    onChange={(e) => setEditLast(e.target.value)}
+                    placeholder="Last name"
+                    className="flex-1 min-w-[7rem] px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                   <button
                     onClick={() => handleRename(a._id)}
@@ -144,7 +189,7 @@ export default function MyAthletesCard() {
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     <button
-                      onClick={() => { setEditingId(a._id); setEditName(a.name) }}
+                      onClick={() => startEdit(a)}
                       className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100"
                     >
                       Rename
@@ -163,47 +208,60 @@ export default function MyAthletesCard() {
               )}
             </div>
 
-            {/* Coach assignment */}
+            {/* Coach assignment — staged with explicit Save/Cancel (G4) */}
             <div className="mt-3">
-              <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Coaches</div>
-              {coaches.length === 0 ? (
-                <p className="text-xs text-gray-400">No coaches available yet.</p>
-              ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {coaches.map((c: any) => {
-                    const assigned = (a.assignedCoachIds ?? []).includes(c._id)
-                    return (
-                      <button
-                        key={c._id}
-                        onClick={() => toggleCoach(a, c._id)}
-                        disabled={busyId === a._id}
-                        className={`text-xs px-2.5 py-1 rounded-full border transition-colors disabled:opacity-50 ${
-                          assigned
-                            ? 'bg-emerald-500 text-white border-emerald-500'
-                            : 'bg-white text-gray-600 border-gray-300 hover:border-emerald-400'
-                        }`}
-                      >
-                        {assigned ? '✓ ' : ''}{c.name}
-                      </button>
-                    )
-                  })}
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider">Coaches</div>
+                {dirty && (
+                  <span className="text-[11px] font-medium text-amber-600">● Unsaved changes</span>
+                )}
+              </div>
+              <CoachMultiSelect
+                coaches={coaches}
+                value={draftFor(a)}
+                onChange={(ids) => setDraft(a, ids)}
+                disabled={busyId === a._id}
+              />
+              {dirty && (
+                <div className="flex items-center gap-2 mt-2">
+                  <button
+                    onClick={() => saveCoaches(a)}
+                    disabled={busyId === a._id}
+                    className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+                  >
+                    {busyId === a._id ? 'Saving…' : 'Save coaches'}
+                  </button>
+                  <button
+                    onClick={() => clearDraft(a)}
+                    disabled={busyId === a._id}
+                    className="px-3 py-1.5 text-gray-500 text-sm hover:text-gray-700"
+                  >
+                    Cancel
+                  </button>
                 </div>
               )}
             </div>
           </div>
-        ))}
+          )
+        })}
 
         {/* Add child */}
-        <form onSubmit={handleAdd} className="flex items-center gap-2 pt-1">
+        <form onSubmit={handleAdd} className="flex items-center gap-2 pt-1 flex-wrap">
           <input
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            placeholder="Add a child / athlete name"
-            className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            value={newFirst}
+            onChange={(e) => setNewFirst(e.target.value)}
+            placeholder="First name"
+            className="flex-1 min-w-[7rem] px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+          <input
+            value={newLast}
+            onChange={(e) => setNewLast(e.target.value)}
+            placeholder="Last name"
+            className="flex-1 min-w-[7rem] px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
           />
           <button
             type="submit"
-            disabled={adding || !newName.trim()}
+            disabled={adding || !newFirst.trim() || !newLast.trim()}
             className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-medium text-sm hover:bg-emerald-700 disabled:opacity-50"
           >
             {adding ? 'Adding…' : 'Add'}

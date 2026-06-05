@@ -627,6 +627,15 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
           <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none">×</button>
         </div>
         <p className="text-xs text-gray-400">{user.email}</p>
+        {/* SPEC_SIGNUP_UPDATES_2026-06 G5 — referral captured at signup (read-only). */}
+        {!isCoach && user.referralSource && (
+          <p className="text-xs text-gray-500">
+            <span className="font-medium text-gray-600">Heard about us:</span>{' '}
+            {user.referralSource === 'Other'
+              ? `Other — ${user.referralSourceOther || '(unspecified)'}`
+              : user.referralSource}
+          </p>
+        )}
         {isCoach ? (
           <label className="block text-sm">
             <span className="font-medium text-gray-700">Full name</span>

@@ -162,13 +162,13 @@ function LandingPage({ onSignIn, onSignUp }: { onSignIn: () => void; onSignUp: (
               onClick={onSignUp}
               className="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-white text-emerald-700 font-bold text-base shadow-lg hover:bg-emerald-50 transition-all active:scale-95"
             >
-              Create Account — It's Free
+              Sign Up
             </button>
             <button
               onClick={onSignIn}
               className="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-transparent text-white font-semibold text-base border border-white/40 hover:bg-white/10 transition-all active:scale-95"
             >
-              Sign In
+              Log In to Book
             </button>
           </div>
 
@@ -371,13 +371,13 @@ function LandingPage({ onSignIn, onSignUp }: { onSignIn: () => void; onSignUp: (
               onClick={onSignUp}
               className="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-white text-emerald-700 font-bold text-base shadow-lg hover:bg-emerald-50 transition-all active:scale-95"
             >
-              Get Started — Free
+              Sign Up
             </button>
             <button
               onClick={onSignIn}
               className="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-transparent text-white font-semibold text-base border border-white/40 hover:bg-white/10 transition-all active:scale-95"
             >
-              Already have an account?
+              Log In to Book
             </button>
           </div>
         </div>
