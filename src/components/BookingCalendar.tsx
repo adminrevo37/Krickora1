@@ -328,25 +328,17 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
         </div>
       </div>
 
-      {/* Date Header — the day + (desktop) meta line. Waitlisting now lives on the
-          full rows below (§4); the standalone button is gone. */}
-      <div>
+      {/* Date Header + Legend — DESKTOP ONLY. On mobile the full date and the
+          legends are removed entirely (the selected day is obvious from the day
+          strip above, and the grid gets the full height). */}
+      <div className="hidden sm:block">
         <h3 className="text-xl font-bold text-gray-800">{selectedDay.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</h3>
-        <p className="hidden sm:block text-sm text-gray-500 mt-0.5">{isToday(selectedDay) ? '🟢 Today' : formatDayLabel(selectedDay)} &middot; {formatTime(getHoursForDate(settings, selectedDay).open)} - {formatTime(getHoursForDate(settings, selectedDay).close)} AWST &middot; 5 Lanes</p>
+        <p className="text-sm text-gray-500 mt-0.5">{isToday(selectedDay) ? '🟢 Today' : formatDayLabel(selectedDay)} &middot; {formatTime(getHoursForDate(settings, selectedDay).open)} - {formatTime(getHoursForDate(settings, selectedDay).close)} AWST &middot; 5 Lanes</p>
       </div>
-
-      {/* Legend — inline on desktop, behind a collapsible Info disclosure on mobile (§2). */}
       <div className="hidden sm:block space-y-3">
         <LegendRow />
         <LaneLegend />
       </div>
-      <details className="sm:hidden bg-white rounded-xl border border-gray-200 text-xs">
-        <summary className="px-3 py-2 cursor-pointer font-semibold text-gray-600 select-none">ℹ️ Info / Legend</summary>
-        <div className="px-3 pb-3 space-y-3">
-          <LegendRow />
-          <LaneLegend />
-        </div>
-      </details>
 
       {/* Calendar Grid */}
       {/* Frozen lane-header row (top) + frozen Time column (left) so they stay
