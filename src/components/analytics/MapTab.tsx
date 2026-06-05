@@ -81,6 +81,9 @@ export default function MapTab({ range }: { range: DateRange }) {
     }).addTo(map)
     layerRef.current = L.layerGroup().addTo(map)
     leafletRef.current = map
+    // Leaflet renders blank tiles when the container's size isn't settled at init
+    // (it mounts inside a lazy tab) — recompute once layout has painted.
+    setTimeout(() => map.invalidateSize(), 250)
     return () => { map.remove(); leafletRef.current = null }
   }, [])
 
@@ -113,6 +116,7 @@ export default function MapTab({ range }: { range: DateRange }) {
       }
       if (!cancelled) {
         setUnplaced(missing)
+        map.invalidateSize()
         if (pts.length > 0) map.fitBounds(L.latLngBounds(pts).pad(0.2))
       }
     })()
