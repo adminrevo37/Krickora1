@@ -111,8 +111,7 @@ function PushTestHelperBanner() {
           <div className="space-y-1 leading-relaxed min-w-0">
             <p className="font-medium">🔔 Test Push Notifications Now</p>
             <p className="text-red-100">
-              If the first push notification doesn't arrive? Turn off → Enable notifications on this
-              device → Send test → Success! :)
+              If the first push notification doesn't arrive? Turn off → Turn on → Send test → Success! :)
             </p>
             <p className="text-red-100">Turn off email notifications in "My Profile".</p>
             <p className="font-semibold">Book your Nets!</p>
