@@ -23,8 +23,11 @@ const DISMISS_KEY = 'krickora.pushHelperDismissed'
 export default function PushReminderBanners() {
   const { isAuthenticated } = useAuth()
   const { isStandalone } = usePwaInstall()
-  if (!isAuthenticated) return null
-  return isStandalone ? <PushTestHelperBanner /> : <InstallNagBanner />
+  // Installed app (standalone): the push-test helper — only useful once signed in.
+  if (isStandalone) return isAuthenticated ? <PushTestHelperBanner /> : null
+  // Normal web browser (mobile or desktop): the install nag shows on EVERY page,
+  // for EVERYONE — logged in or out (Inspector 2026-06-05).
+  return <InstallNagBanner />
 }
 
 // ── Browser: permanent install nag (not dismissable) ──────────────────────────
