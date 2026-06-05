@@ -774,6 +774,9 @@ export default defineSchema({
     category: v.optional(v.string()), // 'equipment' | 'facility' | 'other'
     details: v.string(),
     photoStorageId: v.optional(v.id("_storage")), // optional uploaded photo
+    // SPEC_MOBILE_BOOKING_UPDATES §6 — when reported from a specific booking on My
+    // Bookings, the booking it relates to (for admin tracking). Additive/optional.
+    bookingId: v.optional(v.string()),
     reportedByEmail: v.optional(v.string()),
     reportedByName: v.optional(v.string()),
     status: v.string(),               // 'open' | 'resolved' | 'dismissed'

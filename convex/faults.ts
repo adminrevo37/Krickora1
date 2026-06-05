@@ -39,6 +39,7 @@ export const submitFaultReport = mutation({
     category: v.optional(v.string()),
     details: v.string(),
     photoStorageId: v.optional(v.id("_storage")),
+    bookingId: v.optional(v.string()), // §6 — set when reported from a booking
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
@@ -72,6 +73,7 @@ export const submitFaultReport = mutation({
     }
 
     let reportedByName: string | undefined;
+    let reportedByMobile: string | undefined;
     const reportedByEmail = identity?.email?.toLowerCase().trim();
     if (reportedByEmail) {
       const customer = await ctx.db
@@ -79,6 +81,26 @@ export const submitFaultReport = mutation({
         .withIndex("by_email", (q: any) => q.eq("email", reportedByEmail))
         .first();
       reportedByName = customer?.name ?? (identity?.name as string | undefined);
+      reportedByMobile = customer?.phone?.trim() || undefined;
+    }
+
+    // §6 — if reported from a specific booking, pull its session info for the admin.
+    let sessionInfo = "";
+    if (args.bookingId) {
+      let booking: any = null;
+      try {
+        booking = await ctx.db.get(args.bookingId as any);
+      } catch {
+        booking = null; // not a valid booking id — skip session enrichment
+      }
+      if (booking) {
+        const b = booking as any;
+        const lane = b.laneNameSnapshot ?? b.laneId ?? "";
+        const hr = Math.floor(b.startHour);
+        const mn = Math.round((b.startHour - hr) * 60);
+        const t = `${((hr % 12) || 12)}:${String(mn).padStart(2, "0")}${hr >= 12 ? "pm" : "am"}`;
+        sessionInfo = `${lane} ${b.date} ${t}`.trim();
+      }
     }
 
     const reportId = await ctx.db.insert("faultReports", {
@@ -86,16 +108,20 @@ export const submitFaultReport = mutation({
       category: args.category,
       details,
       photoStorageId: args.photoStorageId,
+      bookingId: args.bookingId,
       reportedByEmail,
       reportedByName,
       status: "open",
       createdAt: new Date().toISOString(),
     });
 
-    // SPEC_PWA_PUSH §5.1 — admin operational alert (new fault report).
+    // SPEC_MOBILE_BOOKING_UPDATES §6 — admin push carries who (+ mobile), the
+    // session it relates to, and a note excerpt for quick triage.
+    const who = `${reportedByName ?? "Someone"}${reportedByMobile ? ` (${reportedByMobile})` : " (no mobile on file)"}`;
+    const where = sessionInfo || args.laneId || "general";
     await ctx.scheduler.runAfter(0, internal.push.sendAdminPush, {
-      title: "New fault report",
-      body: `${args.laneId ? `${args.laneId}: ` : ""}${details.slice(0, 100)}`,
+      title: "🛠️ New issue reported",
+      body: `${who} · ${where}: ${details.slice(0, 100)}`,
       url: "/admin",
       tag: `fault-${reportId.toString()}`,
     });

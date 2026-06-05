@@ -120,16 +120,33 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   }, [bookings, dateKey])
 
   const visibleTimeSlots = useMemo(() => {
-    return allTimeSlots.filter(slot => {
+    const base = allTimeSlots.filter(slot => {
       if (slot.hour === Math.floor(slot.hour)) return true
-      // 3:30pm is an extra coach start time on weekdays — always show its row.
-      if (userIsCoach && slot.hour === 15.5 && isWeekday(selectedDay)) return true
+      // SPEC_MOBILE_BOOKING_UPDATES §7.1 — 3:30pm row is COACHES-ONLY (all tiers),
+      // weekdays. Never leak it to customers, even if a coach booking spans it →
+      // do NOT fall through to the active-lane rule below for 15.5.
+      if (slot.hour === 15.5) return userIsCoach && isWeekday(selectedDay)
+      // Other half-hours: show if any lane is active there (e.g. a 30-min coach slot).
       for (const activeSet of laneActiveHalfHours.values()) {
         if (activeSet.has(slot.hour)) return true
       }
       return false
     })
-  }, [allTimeSlots, laneActiveHalfHours, userIsCoach, selectedDay])
+    // §7.2 — inject a 6:30am row for L1 coaches ONLY (it's below opening, so it's
+    // not in allTimeSlots). Hidden for customers and L2 coaches.
+    if (isL1Coach && !base.some(s => s.hour === 6.5)) {
+      base.push({ hour: 6.5, label: formatTime(6.5) })
+    }
+    base.sort((a, b) => a.hour - b.hour)
+    // §7.3 — on TODAY, hide rows whose hour has already completed (end ≤ now AWST),
+    // so the next bookable slot sits at the top. Applies to customers + coaches.
+    if (isToday(selectedDay)) {
+      const now = getAWSTNow()
+      const nowHour = now.getHours() + now.getMinutes() / 60
+      return base.filter(s => (s.hour + 1) > nowHour)
+    }
+    return base
+  }, [allTimeSlots, laneActiveHalfHours, userIsCoach, isL1Coach, selectedDay])
 
   const laneStartTimes = useMemo(() => {
     const map = new Map<string, number[]>()
@@ -139,8 +156,8 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
 
   // Valid start times for coaches on the selected day (every open hour + 3:30pm on weekdays)
   const validCoachStartsForDay = useMemo(
-    () => (userIsCoach ? getValidCoachStartTimes(selectedDay) : []),
-    [userIsCoach, selectedDay]
+    () => (userIsCoach ? getValidCoachStartTimes(selectedDay, coachTierNorm) : []),
+    [userIsCoach, selectedDay, coachTierNorm]
   )
 
   const handleSlotClick = (lane: Lane, slot: TimeSlot) => {
@@ -370,6 +387,13 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                     (booked.customerEmail?.toLowerCase() === user.email?.toLowerCase()) || booked.userId === user.id
                   )
                   const myCoachColor = (customerRecord as any)?.color as string | undefined
+                  // SPEC_MOBILE_BOOKING_UPDATES §3 — the user's OWN (non-coach) booking
+                  // renders BLUE "Your booking" so they spot it instantly. Precedence:
+                  // admin-name view → own-coach coverage → own → tentative → booked.
+                  const isOwnBooking = !!booked && !!user && !isAdmin && !ownCoachBooking && !booked.isCoachBooking && (
+                    (booked.customerEmail?.toLowerCase() === user.email?.toLowerCase()) || booked.userId === user.id
+                  )
+                  const useBlueBlock = isTentative || isOwnBooking
 
                   if (isLaneInactiveAtHalfHour) {
                     return (
@@ -426,14 +450,14 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                         </div>
                       )}
                       {isStartOfBooking && booked && !ownCoachBooking && (
-                        <div className={`absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border ${isTentative ? 'bg-gradient-to-br from-blue-100 to-blue-50 border-blue-200' : 'bg-gradient-to-br from-red-100 to-red-50 border-red-200'}`}
+                        <div className={`absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border ${useBlueBlock ? 'bg-gradient-to-br from-blue-100 to-blue-50 border-blue-200' : 'bg-gradient-to-br from-red-100 to-red-50 border-red-200'}`}
                           style={{ height: `${visualSpan * 32 - 4}px` }}>
-                          <div className={`text-[9px] font-semibold truncate ${isTentative ? 'text-blue-700' : 'text-red-700'}`}>
-                            {isAdmin ? booked.customerName : isTentative ? 'Tentative' : 'Booked'}
+                          <div className={`text-[9px] font-semibold truncate ${useBlueBlock ? 'text-blue-700' : 'text-red-700'}`}>
+                            {isAdmin ? booked.customerName : isOwnBooking ? 'Your booking' : isTentative ? 'Tentative' : 'Booked'}
                             {booked.status === 'cancelled' && <span className="ml-1 text-orange-500">(cancelled)</span>}
-                            {isTentative && <span className="ml-1">⏳</span>}
+                            {isTentative && !isOwnBooking && <span className="ml-1">⏳</span>}
                           </div>
-                          <div className={`text-[8px] ${isTentative ? 'text-blue-500' : 'text-red-500'}`}>
+                          <div className={`text-[8px] ${useBlueBlock ? 'text-blue-500' : 'text-red-500'}`}>
                             {formatTime(booked.startHour)}-{formatTime(booked.startHour + booked.duration / 60)}
                             {isAdmin && booked.isCoachBooking && <span className="ml-1 text-orange-500">🏅</span>}
                           </div>
@@ -448,7 +472,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                           )}
                         </div>
                       )}
-                      {isMiddleOfBooking && <div className={`absolute inset-0 ${isTentative ? 'bg-blue-50/30' : 'bg-red-50/30'}`} />}
+                      {isMiddleOfBooking && <div className={`absolute inset-0 ${useBlueBlock ? 'bg-blue-50/30' : 'bg-red-50/30'}`} />}
                       {past && !booked && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><span className="text-[14px] leading-none text-gray-400 font-medium">–</span></div>}
                       {tooLate && !booked && <div className="absolute inset-0 flex items-center justify-center"><span className="text-[8px] text-gray-400">Too late</span></div>}
                       {canBook && hasDurations && !booked && !past && !tooLate && (

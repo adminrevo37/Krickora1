@@ -872,7 +872,14 @@ export const createBooking = mutation({
     if (dayHours?.closed) {
       throw new ConvexError("The facility is closed on this day.");
     }
-    if (args.startHour < OPENING_HOUR) {
+    // SPEC_MOBILE_BOOKING_UPDATES §7.2 — L1 coaches may book a pre-open 6:30am slot
+    // (an explicit early coaching slot allowed below the public opening hour).
+    const callerIsL1Coach =
+      !!args.isCoachBooking &&
+      callerCustomer?.role === "coach" &&
+      !(callerCustomer?.coachTier === "L2" || callerCustomer?.coachTier === "BowlingL2");
+    const allowEarlyCoachSlot = callerIsL1Coach && args.startHour === 6.5;
+    if (args.startHour < OPENING_HOUR && !allowEarlyCoachSlot) {
       throw new ConvexError("Booking starts before opening time.");
     }
     if (endHour > CLOSING_HOUR) {

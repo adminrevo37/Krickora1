@@ -1,4 +1,4 @@
-import { internalMutation, mutation } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import { requireAdmin, getCallerContext } from "./lib/adminGuard";
@@ -285,8 +285,8 @@ export const advanceWaitlistOffer = internalMutation({
     await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
       email: next.userEmail,
       category: "waitlist-offers",
-      title: "A net opened up 🏏",
-      body: `${laneName} · ${fmtAwstDateLabel(date)}, ${fmtHour12(hour)} - ${fmtHour12(hour + 1)} — reserved for you until ${fmtAwstTime(expiresAtMs)} AWST.`,
+      title: "Waitlist session has been allocated to you! 🏏",
+      body: `${laneName} · ${fmtAwstDateLabel(date)}, ${fmtHour12(hour)} - ${fmtHour12(hour + 1)} — reserved for you. Accept to pay, or Deny to pass it on (until ${fmtAwstTime(expiresAtMs)} AWST).`,
       url: checkoutUrl,
       tag: `waitlist-${offerLane}-${date}-${hour}`,
       actions: [
@@ -370,6 +370,37 @@ export const adminClearWaitlistOffer = mutation({
       hour: args.hour,
     });
     return { cleared: true };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// SPEC_MOBILE_BOOKING_UPDATES §4.5 — the caller's 1-based position in the FIFO
+// queue for a {date, hour} (any-lane '*' entries). Returns null if not queued.
+// Ordered by insertion time (_creationTime); only waiting/offered entries count.
+// ---------------------------------------------------------------------------
+export const myWaitlistPosition = query({
+  args: { date: v.string(), hour: v.number() },
+  handler: async (ctx, args): Promise<number | null> => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return null;
+    const email = (caller.email ?? "").toLowerCase().trim();
+    const subject = caller.identity.subject;
+    const entries = await ctx.db
+      .query("waitlist")
+      .withIndex("by_slot", (q: any) =>
+        q.eq("laneId", "*").eq("date", args.date).eq("hour", args.hour)
+      )
+      .collect();
+    const active = entries
+      .filter((e: any) => {
+        const s = e.status ?? "waiting";
+        return s === "waiting" || s === "offered";
+      })
+      .sort((a: any, b: any) => a._creationTime - b._creationTime);
+    const idx = active.findIndex(
+      (e: any) => e.userEmail?.toLowerCase().trim() === email || e.userId === subject
+    );
+    return idx === -1 ? null : idx + 1;
   },
 });
 

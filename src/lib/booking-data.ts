@@ -403,15 +403,22 @@ export function getAvailableStartTimes(bookings: Booking[], laneId: string, date
 }
 
 // Coach start times — every whole hour within the day's opening hours, all days,
-// PLUS an extra 3:30pm start on weekdays (after-school slot). Inspector 2026-06-04.
-export function getValidCoachStartTimes(date: Date): number[] {
+// PLUS an extra 3:30pm start on weekdays (after-school slot, ALL coaches), PLUS a
+// 6:30am pre-open slot for L1 coaches ONLY (SPEC_MOBILE_BOOKING_UPDATES §7.1/§7.2).
+// tier is optional so legacy callers (no tier) just get whole hours + 3:30pm.
+export function getValidCoachStartTimes(date: Date, tier?: 'L1' | 'L2'): number[] {
   const { open, close } = getHoursForDate(getSettingsStore().get(), date)
   const times: number[] = []
   for (let h = Math.ceil(open); h < close; h++) times.push(h)
+  // 3:30pm after-school slot — all coaches, weekdays only.
   if (isWeekday(date) && 15.5 >= open && 15.5 < close && !times.includes(15.5)) {
     times.push(15.5)
-    times.sort((a, b) => a - b)
   }
+  // 6:30am pre-open slot — L1 coaches only; allowed even if before opening.
+  if (tier === 'L1' && 6.5 < close && !times.includes(6.5)) {
+    times.push(6.5)
+  }
+  times.sort((a, b) => a - b)
   return times
 }
 
