@@ -27,13 +27,11 @@ import { useLaneConfigState } from '../hooks/useLaneConfig'
 import { LaneHeaderInner, LaneLegend, bandClassForSlot, bandStart, bandTagText } from './laneDisplay'
 import { CoverageBlockBg } from './CoverageTimeline'
 import { getContrastText } from '../lib/colour'
-import { useQuery } from 'convex/react'
+import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { useBookings } from '../hooks/useBookingStore'
 import { useLaneBlocks } from '../hooks/useLaneBlocks'
 import { useAuth } from '../hooks/useAuth'
-import FaultReportModal from './FaultReportModal'
-import { useWaitlist } from '../hooks/useWaitlist'
 import { useSettings } from '../hooks/useSettings'
 import BookingModal from './BookingModal'
 import AuthModal from './AuthModal'
@@ -41,7 +39,6 @@ import WaitlistModal from './WaitlistModal'
 
 export default function BookingCalendar({ impersonatedEmail, initialDate }: { impersonatedEmail?: string; initialDate?: string } = {}) {
   const { user, isAdmin: realIsAdmin, isCoach: realIsCoach, customerRecord } = useAuth()
-  const [showFaultModal, setShowFaultModal] = useState(false)
   // When impersonating, behave as a regular customer (not admin/coach)
   const isAdmin = impersonatedEmail ? false : realIsAdmin
   const userIsCoach = impersonatedEmail ? false : realIsCoach
@@ -89,15 +86,14 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   }, [selectedDay, settings])
   const { bookings, canBookTime } = useBookings()
   const { isLaneBlocked } = useLaneBlocks()
-  const { isOnWaitlist, getWaitlistCount } = useWaitlist(user?.id)
 
   const [modalOpen, setModalOpen] = useState(false)
   const [selectedSlot, setSelectedSlot] = useState<{ lane: Lane; date: Date; startHour: number } | null>(null)
   const [authModalOpen, setAuthModalOpen] = useState(false)
-  const [pendingAction, setPendingAction] = useState<{ type: 'book'; lane: Lane; slot: TimeSlot } | { type: 'waitlist' } | null>(null)
-  const [waitlistMode, setWaitlistMode] = useState(false)
+  const [pendingAction, setPendingAction] = useState<{ type: 'book'; lane: Lane; slot: TimeSlot } | { type: 'waitlist'; hour: number } | null>(null)
+  // SPEC_MOBILE_BOOKING_UPDATES §4 — the "waitlist mode" toggle is gone; the modal
+  // is opened directly from a full row's JOIN WAITLIST band, pre-seeded with the hour.
   const [waitlistSelections, setWaitlistSelections] = useState<{ laneId: string; date: string; hour: number }[]>([])
-  // Time-slot based: only date+hour matters (any lane opening triggers notification)
   const [waitlistModalOpen, setWaitlistModalOpen] = useState(false)
 
   const dateKey = formatDateKey(selectedDay)
@@ -112,6 +108,29 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   }, [closures])
   const isSelectedDayClosed = closedDates.has(dateKey)
   const selectedClosureReason = closedDates.get(dateKey)
+
+  // SPEC_MOBILE_BOOKING_UPDATES §4.5 — PUBLIC waitlist data from Convex (the local
+  // useWaitlist store only reflects this client). Counts only ACTIVE waiters; the
+  // per-day positions power "You're #k in the queue".
+  const waitlistRows = (useQuery(
+    api.queries.listWaitlistByLaneDate,
+    user ? { laneId: '*', date: dateKey } : 'skip'
+  ) ?? []) as Array<{ hour: number; status?: string; isMine?: boolean }>
+  const myWaitlistPositions = (useQuery(
+    api.waitlist.myWaitlistDayPositions,
+    user ? { date: dateKey } : 'skip'
+  ) ?? {}) as Record<string, number>
+  const waitlistByHour = useMemo(() => {
+    const count = new Map<number, number>()
+    const mine = new Set<number>()
+    for (const r of waitlistRows) {
+      const st = r.status ?? 'waiting'
+      if (st !== 'waiting' && st !== 'offered') continue
+      count.set(r.hour, (count.get(r.hour) ?? 0) + 1)
+      if (r.isMine) mine.add(r.hour)
+    }
+    return { count, mine }
+  }, [waitlistRows])
 
   const laneActiveHalfHours = useMemo(() => {
     const map = new Map<string, Set<number>>()
@@ -162,9 +181,8 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
 
   const handleSlotClick = (lane: Lane, slot: TimeSlot) => {
     if (isPast(selectedDay, slot.hour)) return
-    if (isSelectedDayClosed && !waitlistMode) return // facility closed — booking blocked (server also rejects)
+    if (isSelectedDayClosed) return // facility closed — booking blocked (server also rejects)
     const booked = isSlotBooked(bookings, lane.id, dateKey, slot.hour)
-    if (waitlistMode) { toggleWaitlistSelection(lane.id, dateKey, slot.hour); return }
     if (booked) return
     const timeCheck = canBookTime(dateKey, slot.hour)
     if (!timeCheck.allowed) return
@@ -181,17 +199,12 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     setModalOpen(true)
   }
 
-  // Time-slot based: toggle by date+hour only (laneId stored as '*' for any-lane)
-  const toggleWaitlistSelection = (_laneId: string, date: string, hour: number) => {
-    setWaitlistSelections(prev => {
-      const exists = prev.some(s => s.date === date && s.hour === hour)
-      if (exists) return prev.filter(s => !(s.date === date && s.hour === hour))
-      return [...prev, { laneId: '*', date, hour }]
-    })
-  }
-
-  const isWaitlistSelected = (_laneId: string, date: string, hour: number) => {
-    return waitlistSelections.some(s => s.date === date && s.hour === hour)
+  // §4.2 — open the waitlist modal for a full row, pre-seeded with this hour. The
+  // modal lets the user add the day's other full hours in one confirm (§4.3).
+  const openWaitlistForHour = (hour: number) => {
+    if (!user) { setPendingAction({ type: 'waitlist', hour }); setAuthModalOpen(true); return }
+    setWaitlistSelections([{ laneId: '*', date: dateKey, hour }])
+    setWaitlistModalOpen(true)
   }
 
   // Check if ALL lanes are booked/unavailable at this hour (so we can offer waitlist)
@@ -211,6 +224,9 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     if (pendingAction?.type === 'book') {
       setSelectedSlot({ lane: pendingAction.lane, date: selectedDay, startHour: pendingAction.slot.hour })
       setModalOpen(true)
+    } else if (pendingAction?.type === 'waitlist') {
+      setWaitlistSelections([{ laneId: '*', date: dateKey, hour: pendingAction.hour }])
+      setWaitlistModalOpen(true)
     }
     setPendingAction(null)
   }
@@ -225,13 +241,46 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     setSelectedSlot(null)
   }
 
-  const startWaitlistMode = () => {
-    if (!user) { setPendingAction({ type: 'waitlist' }); setAuthModalOpen(true); return }
-    setWaitlistMode(true); setWaitlistSelections([])
-  }
+  // Other full/waitlistable hours on this day (for the modal's multi-hour join, §4.3).
+  const fullHoursToday = useMemo(
+    () => visibleTimeSlots
+      .filter(s => !isPast(selectedDay, s.hour) && !isSelectedDayClosed && isTimeSlotFullyBooked(dateKey, s.hour))
+      .map(s => s.hour),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [visibleTimeSlots, selectedDay, isSelectedDayClosed, dateKey, bookings, laneActiveHalfHours]
+  )
 
-  const confirmWaitlist = () => { if (waitlistSelections.length === 0) return; setWaitlistModalOpen(true) }
-  const cancelWaitlistMode = () => { setWaitlistMode(false); setWaitlistSelections([]) }
+  // SPEC_PUSH_NOTIFICATIONS_V2 §5/§8 + MOBILE §4.6 — handle waitlist push deep-links:
+  //   ?book=<lane>&date=<d>&hour=<h>(&wl=1) → open the held slot's booking (checkout)
+  //   ?wlDecline=<lane>&date=<d>&hour=<h>   → pass the offer to the next person
+  const declineWaitlistOffer = useMutation(api.waitlist.declineWaitlistOffer)
+  const [deepLinkHandled, setDeepLinkHandled] = useState(false)
+  useEffect(() => {
+    if (deepLinkHandled || typeof window === 'undefined') return
+    const p = new URLSearchParams(window.location.search)
+    const cleanUrl = () => window.history.replaceState({}, '', window.location.pathname)
+    const declineLane = p.get('wlDecline')
+    const bookLane = p.get('book')
+    const dateP = p.get('date')
+    const hourP = p.get('hour')
+    if (declineLane && dateP && hourP) {
+      setDeepLinkHandled(true)
+      declineWaitlistOffer({ laneId: declineLane, date: dateP, hour: Number(hourP) }).catch(() => {})
+      cleanUrl()
+      return
+    }
+    if (bookLane && dateP && hourP && user) {
+      setDeepLinkHandled(true)
+      const lane = LANES.find(l => l.id === bookLane)
+      const match = weekDays.find(d => formatDateKey(d) === dateP)
+      if (lane && match) {
+        setSelectedDay(match)
+        setSelectedSlot({ lane, date: match, startHour: Number(hourP) })
+        setModalOpen(true)
+      }
+      cleanUrl()
+    }
+  }, [deepLinkHandled, user, weekDays, declineWaitlistOffer])
 
   // Determine header label
   const nextWeekOpen = !isL1Coach && isNextWeekOpen(releaseRole, coachTierNorm, settings)
@@ -241,25 +290,16 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
 
   return (
     <div className="space-y-6">
-      {showFaultModal && <FaultReportModal onClose={() => setShowFaultModal(false)} />}
       {/* Weekly-release banner (customers + L2 coaches only) */}
       {!isL1Coach && (
         <ReleaseBanner role={releaseRole} tier={coachTierNorm} settings={settings} nextWeekOpen={nextWeekOpen} lastDay={weekDays[weekDays.length - 1]} />
       )}
       {/* Week Day Selector */}
       <div className="bg-white rounded-2xl border border-gray-200 p-4 shadow-sm">
-        <div className="flex items-center justify-between mb-3">
+        {/* §2 — hide the "This Week"/month chrome on mobile; keep the day strip below. */}
+        <div className="hidden sm:flex items-center justify-between mb-3">
           <h2 className="text-lg font-semibold text-gray-800">{headerLabel}</h2>
           <div className="flex items-center gap-2">
-            {user && (
-              <button
-                onClick={() => setShowFaultModal(true)}
-                className="text-[11px] px-2.5 py-1 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-600 font-semibold transition-colors"
-                title="Report broken equipment or a facility issue"
-              >
-                🛠️ Report an issue
-              </button>
-            )}
             {userIsCoach && (
               <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${coachTierNorm === 'L2' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700'}`}>🏅 {coachTierNorm === 'L2' ? 'L2 Coach' : 'L1 Coach'}</span>
             )}
@@ -288,37 +328,25 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
         </div>
       </div>
 
-      {/* Date Header + Waitlist */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h3 className="text-xl font-bold text-gray-800">{selectedDay.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</h3>
-          <p className="text-sm text-gray-500 mt-0.5">{isToday(selectedDay) ? '🟢 Today' : formatDayLabel(selectedDay)} &middot; {formatTime(getHoursForDate(settings, selectedDay).open)} - {formatTime(getHoursForDate(settings, selectedDay).close)} AWST &middot; 5 Lanes</p>
-        </div>
-        <div className="flex items-center gap-3">
-          {waitlistMode ? (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-amber-600 font-medium animate-pulse">🔔 Tap any time slot to get notified when a lane opens</span>
-              <button onClick={confirmWaitlist} disabled={waitlistSelections.length === 0}
-                className="text-xs px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white font-semibold rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed">Confirm ({waitlistSelections.length})</button>
-              <button onClick={cancelWaitlistMode} className="text-xs px-3 py-1.5 bg-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-300 transition-all">Cancel</button>
-            </div>
-          ) : (
-            <button onClick={startWaitlistMode} className="text-xs px-3 py-2.5 bg-amber-100 text-amber-700 font-semibold rounded-lg hover:bg-amber-200 transition-all flex items-center gap-1.5">🔔 Join Waitlist</button>
-          )}
-        </div>
+      {/* Date Header — the day + (desktop) meta line. Waitlisting now lives on the
+          full rows below (§4); the standalone button is gone. */}
+      <div>
+        <h3 className="text-xl font-bold text-gray-800">{selectedDay.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</h3>
+        <p className="hidden sm:block text-sm text-gray-500 mt-0.5">{isToday(selectedDay) ? '🟢 Today' : formatDayLabel(selectedDay)} &middot; {formatTime(getHoursForDate(settings, selectedDay).open)} - {formatTime(getHoursForDate(settings, selectedDay).close)} AWST &middot; 5 Lanes</p>
       </div>
 
-      {/* Legend */}
-      <div className="flex items-center gap-4 text-xs flex-wrap">
-        <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-emerald-100 border border-emerald-300" /><span className="text-gray-600">Available</span></div>
-        <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-red-100 border border-red-300" /><span className="text-gray-600">Booked</span></div>
-        <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-blue-100 border border-blue-300" /><span className="text-gray-600">Tentative</span></div>
-        <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-amber-100 border border-amber-300" /><span className="text-gray-600">Waitlisted</span></div>
-        <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded bg-gray-200 border border-gray-300" /><span className="text-gray-600">Past</span></div>
+      {/* Legend — inline on desktop, behind a collapsible Info disclosure on mobile (§2). */}
+      <div className="hidden sm:block space-y-3">
+        <LegendRow />
+        <LaneLegend />
       </div>
-
-      {/* Lane variant colour legend (SPEC_RECONFIGURABLE_LANES) */}
-      <LaneLegend />
+      <details className="sm:hidden bg-white rounded-xl border border-gray-200 text-xs">
+        <summary className="px-3 py-2 cursor-pointer font-semibold text-gray-600 select-none">ℹ️ Info / Legend</summary>
+        <div className="px-3 pb-3 space-y-3">
+          <LegendRow />
+          <LaneLegend />
+        </div>
+      </details>
 
       {/* Calendar Grid */}
       {/* Frozen lane-header row (top) + frozen Time column (left) so they stay
@@ -345,11 +373,30 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
         <div className={isSelectedDayClosed ? 'opacity-40 pointer-events-none' : ''}>
           {visibleTimeSlots.map((slot, slotIdx) => {
             const isHalfHour = slot.hour !== Math.floor(slot.hour)
+            const rowPast = isPast(selectedDay, slot.hour)
+            // §4.2 — a fully-booked row becomes a single amber JOIN WAITLIST band for
+            // regular customers (admins/coaches keep the per-lane booking view).
+            const rowFull = !rowPast && !isSelectedDayClosed && isTimeSlotFullyBooked(dateKey, slot.hour)
+            const showWaitlistBand = rowFull && !isAdmin && !userIsCoach
+            const hourWaitCount = waitlistByHour.count.get(slot.hour) ?? 0
+            const myQueuePos = myWaitlistPositions[String(slot.hour)]
+            const onThisHour = waitlistByHour.mine.has(slot.hour) || myQueuePos != null
             return (
               <div key={slot.hour} className={`grid grid-cols-[70px_repeat(5,1fr)] ${slotIdx < visibleTimeSlots.length - 1 ? `border-b ${isHalfHour ? 'border-gray-300' : 'border-black'}` : ''}`}>
                 <div className="p-1.5 flex items-center justify-center sticky left-0 z-20 bg-white">
                   <span className={`text-[11px] font-medium text-gray-500 ${isHalfHour ? 'opacity-60' : ''}`}>{slot.label}</span>
                 </div>
+                {showWaitlistBand ? (
+                  <button type="button" onClick={() => { if (!onThisHour) openWaitlistForHour(slot.hour) }}
+                    className={`col-span-5 border-l-2 border-black min-h-[40px] flex items-center justify-center px-2 text-center transition-colors ${onThisHour ? 'bg-amber-100 cursor-default' : 'bg-amber-50 hover:bg-amber-100 cursor-pointer'}`}>
+                    {onThisHour ? (
+                      <span className="text-[11px] font-semibold text-amber-700">✓ You're #{myQueuePos ?? '—'} in the queue · {hourWaitCount} waiting</span>
+                    ) : (
+                      <span className="text-[11px] font-semibold text-amber-700">🔔 JOIN WAITLIST · {hourWaitCount > 0 ? `${hourWaitCount} ${hourWaitCount === 1 ? 'person' : 'people'} waiting` : 'Be first on the waitlist'}</span>
+                    )}
+                  </button>
+                ) : (
+                <>
                 {LANES.map((lane) => {
                   const laneActiveSet = laneActiveHalfHours.get(lane.id) ?? new Set()
                   const booked = isSlotBooked(bookings, lane.id, dateKey, slot.hour)
@@ -367,9 +414,6 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   const isValidStart = validStarts.includes(slot.hour) || (userIsCoach && validCoachStartsForDay.includes(slot.hour)) || isAdmin
                   const canBook = !isSelectedDayClosed && !past && !booked && !blocked && isValidStart && canBookSlot(bookings, lane.id, dateKey, slot.hour, 60)
                   const hasDurations = !isSelectedDayClosed && !past && !booked && isValidStart ? getCustomerDurations(bookings, lane.id, dateKey, slot.hour).length > 0 || (userIsCoach && validCoachStartsForDay.includes(slot.hour)) || isAdmin : false
-                  const waitlistCount = getWaitlistCount(lane.id, dateKey, slot.hour)
-                  const userOnWaitlist = user ? isOnWaitlist(user.id, lane.id, dateKey, slot.hour) : false
-                  const isSelected = isWaitlistSelected(lane.id, dateKey, slot.hour)
                   const timeCheck = canBookTime(dateKey, slot.hour)
                   const tooLate = !past && !booked && !timeCheck.allowed
 
@@ -426,10 +470,9 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
 
                   return (
                     <div key={lane.id}
-                      className={`relative border-l-2 border-black min-h-[32px] transition-all duration-150 ${past ? 'bg-gray-200' : waitlistMode ? (isSelected ? 'bg-amber-100 cursor-pointer ring-2 ring-inset ring-amber-400' : 'cursor-pointer hover:bg-amber-50') : booked ? '' : tooLate ? 'bg-gray-200' : canBook && hasDurations ? 'bg-emerald-50 hover:bg-emerald-100 cursor-pointer group' : band}`}
+                      className={`relative border-l-2 border-black min-h-[32px] transition-all duration-150 ${past ? 'bg-gray-200' : booked ? '' : tooLate ? 'bg-gray-200' : canBook && hasDurations ? 'bg-emerald-50 hover:bg-emerald-100 cursor-pointer group' : band}`}
                       onClick={() => {
                         if (past || isLaneInactiveAtHalfHour) return
-                        if (waitlistMode) { toggleWaitlistSelection(lane.id, dateKey, slot.hour); return }
                         if (!booked && canBook && hasDurations && timeCheck.allowed) handleSlotClick(lane, slot)
                       }}>
                       {!booked && !past && bs.isStart && bs.multi && (
@@ -461,15 +504,6 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                             {formatTime(booked.startHour)}-{formatTime(booked.startHour + booked.duration / 60)}
                             {isAdmin && booked.isCoachBooking && <span className="ml-1 text-orange-500">🏅</span>}
                           </div>
-                          {(waitlistCount > 0 || userOnWaitlist) && !waitlistMode && (
-                            <div className="flex items-center gap-0.5 mt-0.5">
-                              <span className="text-[7px] bg-amber-200 text-amber-700 px-1 rounded-full font-medium">🔔{waitlistCount}</span>
-                              {userOnWaitlist && <span className="text-[7px] bg-emerald-200 text-emerald-700 px-1 rounded-full font-medium">You</span>}
-                            </div>
-                          )}
-                          {waitlistMode && isSelected && (
-                            <div className="absolute -top-1 -right-1 w-4 h-4 bg-amber-500 rounded-full flex items-center justify-center text-white text-[8px] font-bold shadow">✓</div>
-                          )}
                         </div>
                       )}
                       {isMiddleOfBooking && <div className={`absolute inset-0 ${useBlueBlock ? 'bg-blue-50/30' : 'bg-red-50/30'}`} />}
@@ -480,7 +514,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                           <span className="text-[15px] leading-none text-emerald-400 font-semibold group-hover:text-emerald-600 transition-colors">+</span>
                         </div>
                       )}
-                      {!past && !booked && canBook && hasDurations && timeCheck.allowed && !waitlistMode && (
+                      {!past && !booked && canBook && hasDurations && timeCheck.allowed && (
                         <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                           <div className="flex items-center gap-0.5 bg-emerald-500 text-white text-[9px] font-semibold px-1.5 py-0.5 rounded-full shadow-lg shadow-emerald-500/30"><span>+</span><span>Book</span></div>
                         </div>
@@ -488,6 +522,8 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                     </div>
                   )
                 })}
+                </>
+                )}
               </div>
             )
           })}
@@ -502,9 +538,26 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       )}
       {authModalOpen && <AuthModal onClose={() => { setAuthModalOpen(false); setPendingAction(null) }} onSuccess={handleAuthSuccess} />}
       {waitlistModalOpen && (
-        <WaitlistModal selectedSlots={waitlistSelections} onClose={() => setWaitlistModalOpen(false)}
-          onSuccess={() => { setWaitlistModalOpen(false); setWaitlistMode(false); setWaitlistSelections([]) }} />
+        <WaitlistModal selectedSlots={waitlistSelections} availableHours={fullHoursToday} date={dateKey}
+          onClose={() => setWaitlistModalOpen(false)}
+          onSuccess={() => { setWaitlistModalOpen(false); setWaitlistSelections([]) }} />
       )}
+    </div>
+  )
+}
+
+// Status legend (SPEC_MOBILE_BOOKING_UPDATES §3 adds the blue "Your booking").
+function LegendRow() {
+  const item = (cls: string, label: string) => (
+    <div className="flex items-center gap-1.5"><div className={`w-3 h-3 rounded ${cls}`} /><span className="text-gray-600">{label}</span></div>
+  )
+  return (
+    <div className="flex items-center gap-4 text-xs flex-wrap">
+      {item('bg-emerald-100 border border-emerald-300', 'Available')}
+      {item('bg-red-100 border border-red-300', 'Booked')}
+      {item('bg-blue-100 border border-blue-300', 'Your booking')}
+      {item('bg-amber-100 border border-amber-300', 'Waitlist')}
+      {item('bg-gray-200 border border-gray-300', 'Past')}
     </div>
   )
 }

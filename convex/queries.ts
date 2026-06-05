@@ -479,6 +479,9 @@ function scopeWaitlist(rows: any[], caller: { isAdmin: boolean; identity: any | 
     date: w.date,
     hour: w.hour,
     notified: w.notified,
+    // status is not identifying — needed to count only ACTIVE waiters publicly
+    // (SPEC_MOBILE_BOOKING_UPDATES §4.5). Absent legacy rows read as 'waiting'.
+    status: w.status ?? "waiting",
     isMine: caller.identity != null && w.userId === caller.identity.subject,
   }));
 }

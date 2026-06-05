@@ -7,16 +7,26 @@ import { useWaitlist } from '../hooks/useWaitlist'
 
 interface WaitlistModalProps {
   selectedSlots: { laneId: string; date: string; hour: number }[]
+  // SPEC_MOBILE_BOOKING_UPDATES §4.3 — the day's other full/waitlistable hours, so
+  // the user can join several in one confirm. The tapped hour(s) start pre-ticked.
+  availableHours?: number[]
+  date?: string
   onClose: () => void
   onSuccess: () => void
 }
 
-export default function WaitlistModal({ selectedSlots, onClose, onSuccess }: WaitlistModalProps) {
+export default function WaitlistModal({ selectedSlots, availableHours, date, onClose, onSuccess }: WaitlistModalProps) {
   const { user } = useAuth()
   const { addToWaitlist } = useWaitlist(user?.id)
   const addToWaitlistServer = useMutation(api.mutations.addToWaitlist)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [done, setDone] = useState(false)
+  // The hours the user has ticked to join (seeded from the tapped slot).
+  const seedHours = selectedSlots.map(s => s.hour)
+  const seedDate = date ?? selectedSlots[0]?.date ?? ''
+  const [chosenHours, setChosenHours] = useState<number[]>(() => Array.from(new Set(seedHours)))
+  const toggleHour = (h: number) =>
+    setChosenHours(prev => prev.includes(h) ? prev.filter(x => x !== h) : [...prev, h])
 
   if (!user) return null
 
@@ -32,44 +42,28 @@ export default function WaitlistModal({ selectedSlots, onClose, onSuccess }: Wai
     return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
   }
 
-  // Group by date only — waitlist is time-slot based (any lane match notifies)
-  const grouped = new Map<string, { date: string; hours: number[] }>()
-  for (const slot of selectedSlots) {
-    const key = slot.date
-    if (!grouped.has(key)) grouped.set(key, { date: slot.date, hours: [] })
-    const bucket = grouped.get(key)!
-    if (!bucket.hours.includes(slot.hour)) bucket.hours.push(slot.hour)
-  }
+  // The list of hours to offer as a checklist: the day's full hours if provided,
+  // else just the seeded hour(s). Always include the seeded hours.
+  const offerHours = Array.from(new Set([...(availableHours ?? []), ...seedHours])).sort((a, b) => a - b)
 
   const handleSubmit = async () => {
+    if (chosenHours.length === 0) return
     setIsSubmitting(true)
     await new Promise(r => setTimeout(r, 600))
 
-    // Deduplicate to one entry per (date, hour) — any lane opening will notify
-    const unique = new Map<string, { date: string; hour: number }>()
-    for (const s of selectedSlots) unique.set(`${s.date}-${s.hour}`, { date: s.date, hour: s.hour })
-    const uniqueSlots = Array.from(unique.values())
-    addToWaitlist(
-      uniqueSlots.map(s => ({
-        userId: user.id,
-        userName: user.name,
-        userEmail: user.email,
-        laneId: '*',
-        date: s.date,
-        hour: s.hour,
-      }))
-    )
+    // One entry per (date, hour) — any lane opening at that time notifies.
+    const uniqueSlots = Array.from(new Set(chosenHours)).map(h => ({ date: seedDate, hour: h }))
+    const entries = uniqueSlots.map(s => ({
+      userId: user.id,
+      userName: user.name,
+      userEmail: user.email,
+      laneId: '*',
+      date: s.date,
+      hour: s.hour,
+    }))
+    addToWaitlist(entries)
     try {
-      await addToWaitlistServer({
-        entries: uniqueSlots.map(s => ({
-          userId: user.id,
-          userName: user.name,
-          userEmail: user.email,
-          laneId: '*',
-          date: s.date,
-          hour: s.hour,
-        })),
-      })
+      await addToWaitlistServer({ entries })
     } catch (err) {
       console.error('Failed to add to waitlist on server:', err)
     }
@@ -94,8 +88,8 @@ export default function WaitlistModal({ selectedSlots, onClose, onSuccess }: Wai
               <span className="text-2xl">✅</span>
             </div>
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              You have been added to the waitlist for <strong>{selectedSlots.length} slot{selectedSlots.length > 1 ? 's' : ''}</strong>.
-              We will email you at <strong>{user.email}</strong> when any of these slots become available.
+              You have been added to the waitlist for <strong>{chosenHours.length} slot{chosenHours.length > 1 ? 's' : ''}</strong>.
+              You'll be notified when any of these times open up — accept to grab it.
             </p>
           </div>
         </div>
@@ -112,7 +106,7 @@ export default function WaitlistModal({ selectedSlots, onClose, onSuccess }: Wai
             <div>
               <h3 className="text-lg font-bold">Join Waitlist</h3>
               <p className="text-white/80 text-sm mt-0.5">
-                {selectedSlots.length} slot{selectedSlots.length > 1 ? 's' : ''} selected
+                {chosenHours.length} slot{chosenHours.length === 1 ? '' : 's'} selected
               </p>
             </div>
             <button
@@ -126,32 +120,24 @@ export default function WaitlistModal({ selectedSlots, onClose, onSuccess }: Wai
 
         <div className="p-5 space-y-4 overflow-y-auto flex-1">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Get notified via email when any of these booked slots become available:
+            Pick the times you'd like a net for on <strong>{formatDate(seedDate)}</strong>. We'll
+            notify you when any lane opens — first in the queue gets first refusal.
           </p>
 
-          <div className="space-y-3">
-            {Array.from(grouped.values()).map(({ date, hours }) => (
-              <div
-                key={date}
-                className="bg-amber-50 dark:bg-amber-900/10 rounded-xl border border-amber-200 dark:border-amber-800/50 p-3"
-              >
-                <div className="flex items-center gap-2 mb-2">
-                  <span>🏏</span>
-                  <span className="font-semibold text-sm text-gray-800 dark:text-gray-200">Any Available Lane</span>
-                </div>
-                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1.5">{formatDate(date)}</div>
-                <div className="flex flex-wrap gap-1.5">
-                  {hours.sort((a, b) => a - b).map(h => (
-                    <span
-                      key={h}
-                      className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-2 py-0.5 rounded-full font-medium"
-                    >
-                      {formatHour(h)}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
+          <div className="flex flex-wrap gap-2">
+            {offerHours.map(h => {
+              const on = chosenHours.includes(h)
+              return (
+                <button
+                  key={h}
+                  type="button"
+                  onClick={() => toggleHour(h)}
+                  className={`text-sm px-3 py-1.5 rounded-full font-medium border transition-colors ${on ? 'bg-amber-500 border-amber-500 text-white' : 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'}`}
+                >
+                  {on ? '✓ ' : ''}{formatHour(h)}
+                </button>
+              )
+            })}
           </div>
 
           <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 text-xs text-gray-500 dark:text-gray-400">
@@ -162,7 +148,7 @@ export default function WaitlistModal({ selectedSlots, onClose, onSuccess }: Wai
         <div className="p-5 border-t border-gray-200 dark:border-gray-800 shrink-0">
           <button
             onClick={handleSubmit}
-            disabled={isSubmitting}
+            disabled={isSubmitting || chosenHours.length === 0}
             className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-semibold rounded-xl shadow-lg shadow-amber-500/20 hover:shadow-amber-500/40 transition-all duration-200 disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {isSubmitting ? (
@@ -171,7 +157,7 @@ export default function WaitlistModal({ selectedSlots, onClose, onSuccess }: Wai
                 Adding...
               </>
             ) : (
-              <>🔔 Join Waitlist for {selectedSlots.length} Slot{selectedSlots.length > 1 ? 's' : ''}</>
+              <>🔔 Join Waitlist for {chosenHours.length} Slot{chosenHours.length === 1 ? '' : 's'}</>
             )}
           </button>
         </div>

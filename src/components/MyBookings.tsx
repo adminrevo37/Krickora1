@@ -30,6 +30,7 @@ import RepeatBookingButton from './RepeatBookingButton'
 // merged into one ModifyBookingModal → modifyBooking. EditBookingModal /
 // RescheduleModal are retired (files kept, no longer referenced here).
 import ModifyBookingModal from './ModifyBookingModal'
+import FaultReportModal, { type FaultBookingContext } from './FaultReportModal'
 
 // SPEC_SCHEDULE_DAY_VIEW §2.11: facility details for the athlete "SMS Details" deep-link.
 const FACILITY = { name: 'Cricket Revolution', address: '78 Jones St, Stirling WA 6021' }
@@ -134,6 +135,8 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const [toast, setToast] = useState<string | null>(null)
   const [showAuth, setShowAuth] = useState(false)
   const [modifyBookingData, setModifyBookingData] = useState<Booking | null>(null)
+  // §6 — fault report: a per-booking context, or 'general' for the page-level button.
+  const [reportBooking, setReportBooking] = useState<FaultBookingContext | 'general' | null>(null)
   const [athleteEditBooking, setAthleteEditBooking] = useState<Booking | null>(null)
   // §6: when a coach taps an unallocated gap, seed the editor to that slot.
   const [athleteEditSeed, setAthleteEditSeed] = useState<{ startHour: number; durationMinutes: number } | null>(null)
@@ -502,6 +505,13 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
               }`}
             >
               {cancellingId === booking.id ? '…' : cancelCheck.allowed ? 'Cancel' : '🔒'}
+            </button>
+            {/* §6 — report an issue about THIS session (pre-attaches its context). */}
+            <button
+              onClick={(e) => { e.stopPropagation(); setReportBooking({ id: booking.id, laneId: booking.laneId, laneName: lane?.name, date: booking.date, timeLabel: `${formatTime(booking.startHour)}–${formatTime(booking.startHour + booking.duration / 60)}` }) }}
+              className="text-[11px] px-2.5 py-1 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            >
+              🛠️ Report an issue
             </button>
           </div>
         )}
@@ -988,6 +998,16 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
         ))}
       </div>
 
+      {/* §6 — page-level report entry point (per-booking buttons live on each card). */}
+      <div className="flex justify-end">
+        <button
+          onClick={() => setReportBooking('general')}
+          className="text-[11px] px-2.5 py-1 rounded-full bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 font-semibold transition-colors"
+        >
+          🛠️ Report an issue
+        </button>
+      </div>
+
       {/* ── SCHEDULE TAB — unified day view; coaches toggle Week | List (§2.12) ── */}
       {activeTab === 'schedule' && (
         <div className="space-y-3">
@@ -1128,6 +1148,12 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       )}
 
       {/* ── Modals ── */}
+      {reportBooking && (
+        <FaultReportModal
+          booking={reportBooking === 'general' ? undefined : reportBooking}
+          onClose={() => setReportBooking(null)}
+        />
+      )}
       {modifyBookingData && (
         <ModifyBookingModal
           booking={modifyBookingData}

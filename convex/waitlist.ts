@@ -404,6 +404,40 @@ export const myWaitlistPosition = query({
   },
 });
 
+// SPEC_MOBILE_BOOKING_UPDATES §4.5 — the caller's 1-based queue position for EVERY
+// hour they're queued on `date`, as { [hour]: position }. One query for the whole
+// day so the calendar can show "You're #k" per row without a hook-in-a-loop.
+export const myWaitlistDayPositions = query({
+  args: { date: v.string() },
+  handler: async (ctx, args): Promise<Record<string, number>> => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return {};
+    const email = (caller.email ?? "").toLowerCase().trim();
+    const subject = caller.identity.subject;
+    const entries = await ctx.db
+      .query("waitlist")
+      .withIndex("by_laneId_date", (q: any) => q.eq("laneId", "*").eq("date", args.date))
+      .collect();
+    const byHour = new Map<number, any[]>();
+    for (const e of entries) {
+      const s = e.status ?? "waiting";
+      if (s !== "waiting" && s !== "offered") continue;
+      const arr = byHour.get(e.hour) ?? [];
+      arr.push(e);
+      byHour.set(e.hour, arr);
+    }
+    const out: Record<string, number> = {};
+    for (const [hour, arr] of byHour) {
+      arr.sort((a: any, b: any) => a._creationTime - b._creationTime);
+      const idx = arr.findIndex(
+        (e: any) => e.userEmail?.toLowerCase().trim() === email || e.userId === subject
+      );
+      if (idx !== -1) out[String(hour)] = idx + 1;
+    }
+    return out;
+  },
+});
+
 // ---------------------------------------------------------------------------
 // SPEC_PUSH_NOTIFICATIONS_V2 §6.3 — "expiring soon" reminder push.
 // Scheduled by advanceWaitlistOffer for (hold − 5 min). Fires only if the offer

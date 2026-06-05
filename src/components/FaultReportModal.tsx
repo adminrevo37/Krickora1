@@ -8,11 +8,21 @@ import { LANES } from '../lib/booking-data'
  * Customer / coach "Report an issue" form (SPEC_ADMIN_AND_SETTINGS #5).
  * Submits to the admin fault inbox. Optional photo via Convex storage.
  */
-export default function FaultReportModal({ onClose }: { onClose: () => void }) {
+// SPEC_MOBILE_BOOKING_UPDATES §6 — when opened from a specific booking on My
+// Bookings, pre-attach that booking's context (shown read-only) and tag the report.
+export interface FaultBookingContext {
+  id: string
+  laneId?: string
+  laneName?: string
+  date?: string
+  timeLabel?: string
+}
+
+export default function FaultReportModal({ onClose, booking }: { onClose: () => void; booking?: FaultBookingContext }) {
   const submit = useMutation(api.faults.submitFaultReport)
   const generateUploadUrl = useMutation(api.faults.generateUploadUrl)
 
-  const [laneId, setLaneId] = useState('')
+  const [laneId, setLaneId] = useState(booking?.laneId ?? '')
   const [category, setCategory] = useState('equipment')
   const [details, setDetails] = useState('')
   const [photo, setPhoto] = useState<File | null>(null)
@@ -42,6 +52,7 @@ export default function FaultReportModal({ onClose }: { onClose: () => void }) {
         category,
         details: details.trim(),
         photoStorageId: photoStorageId as any,
+        bookingId: booking?.id,
       })
       setDone(true)
     } catch (e: any) {
@@ -69,13 +80,20 @@ export default function FaultReportModal({ onClose }: { onClose: () => void }) {
           <div className="space-y-4">
             <p className="text-xs text-gray-500 dark:text-gray-400">Report broken equipment or a facility problem. The team will review it.</p>
 
-            <label className="block">
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Lane <span className="text-gray-400 font-normal">(optional)</span></span>
-              <select value={laneId} onChange={e => setLaneId(e.target.value)} className="mt-1 w-full px-3 py-2 border border-gray-200 dark:border-gray-700 rounded-lg text-sm bg-white dark:bg-gray-800">
-                <option value="">General / facility</option>
-                {LANES.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-              </select>
-            </label>
+            {booking ? (
+              <div className="rounded-lg bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 px-3 py-2 text-xs text-gray-600 dark:text-gray-400">
+                <span className="font-semibold text-gray-700 dark:text-gray-300">About this session:</span>{' '}
+                {[booking.laneName, booking.date, booking.timeLabel].filter(Boolean).join(' · ')}
+              </div>
+            ) : (
+              <label className="block">
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Lane <span className="text-gray-400 font-normal">(optional)</span></span>
+                <select value={laneId} onChange={e => setLaneId(e.target.value)} className="mt-1 w-full px-3 py-2 border border-gray-200 dark:border-gray-700 rounded-lg text-sm bg-white dark:bg-gray-800">
+                  <option value="">General / facility</option>
+                  {LANES.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+                </select>
+              </label>
+            )}
 
             <label className="block">
               <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Type</span>
