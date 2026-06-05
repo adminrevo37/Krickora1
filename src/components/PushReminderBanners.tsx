@@ -62,6 +62,7 @@ function InstallNagBanner() {
               <strong>Android</strong> → Use Chrome → Share → Add to Home Screen → follow the final prompt!
             </p>
             <p>Exit web browser and click on the App saved on your home screen.</p>
+            <p>Follow the final instruction in App. 😊</p>
           </div>
         )}
       </div>
