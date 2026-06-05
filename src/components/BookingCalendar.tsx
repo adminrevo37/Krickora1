@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import {
   LANES,
   getCoachRolling7Days,
@@ -131,6 +131,36 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     }
     return { count, mine }
   }, [waitlistRows])
+
+  // The full-row JOIN WAITLIST label is centred on the part of the matrix that is
+  // actually ON SCREEN (the grid scrolls horizontally on mobile), and auto-tracks
+  // the visible lane area as the user scrolls sideways — so the full text is always
+  // readable instead of sitting off-screen in the middle of the 5-lane band.
+  const TIME_COL_W = 70
+  const gridScrollRef = useRef<HTMLDivElement>(null)
+  const [waitlistLabelX, setWaitlistLabelX] = useState(0)
+  useEffect(() => {
+    const el = gridScrollRef.current
+    if (!el) return
+    const update = () => {
+      const bandW = el.scrollWidth - TIME_COL_W
+      if (bandW <= 0) return
+      const half = Math.min(120, bandW / 2)
+      let c = el.scrollLeft + (el.clientWidth + TIME_COL_W) / 2 - TIME_COL_W
+      c = Math.max(half, Math.min(bandW - half, c))
+      setWaitlistLabelX(c)
+    }
+    update()
+    el.addEventListener('scroll', update, { passive: true })
+    window.addEventListener('resize', update)
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null
+    ro?.observe(el)
+    return () => {
+      el.removeEventListener('scroll', update)
+      window.removeEventListener('resize', update)
+      ro?.disconnect()
+    }
+  }, [dateKey])
 
   const laneActiveHalfHours = useMemo(() => {
     const map = new Map<string, Set<number>>()
@@ -348,7 +378,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
           (sticky top-0 below) stays locked. On mobile the cap is tighter (60dvh) so
           the grid actually overflows the box and scrolls internally instead of the
           whole page scrolling the header away. Desktop keeps the taller 72vh. */}
-      <div className="bg-white rounded-2xl border-2 border-black shadow-sm overflow-auto max-h-[60dvh] sm:max-h-[72vh]">
+      <div ref={gridScrollRef} className="bg-white rounded-2xl border-2 border-black shadow-sm overflow-auto max-h-[60dvh] sm:max-h-[72vh]">
         <div className="min-w-[560px]">
         <div className="grid grid-cols-[70px_repeat(5,1fr)] border-b-2 border-black bg-white sticky top-0 z-30">
           <div className="p-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider flex items-center justify-center sticky left-0 z-40 bg-white">Time</div>
@@ -384,12 +414,18 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                 </div>
                 {showWaitlistBand ? (
                   <button type="button" onClick={() => { if (!onThisHour) openWaitlistForHour(slot.hour) }}
-                    className={`col-span-5 border-l-2 border-black min-h-[40px] flex items-center justify-center px-2 text-center transition-colors ${onThisHour ? 'bg-amber-100 cursor-default' : 'bg-amber-50 hover:bg-amber-100 cursor-pointer'}`}>
-                    {onThisHour ? (
-                      <span className="text-[11px] font-semibold text-amber-700">✓ You're #{myQueuePos ?? '—'} in the queue · {hourWaitCount} waiting</span>
-                    ) : (
-                      <span className="text-[11px] font-semibold text-amber-700">🔔 JOIN WAITLIST · {hourWaitCount > 0 ? `${hourWaitCount} ${hourWaitCount === 1 ? 'person' : 'people'} waiting` : 'Be first on the waitlist'}</span>
-                    )}
+                    className={`relative col-span-5 border-l-2 border-black min-h-[40px] transition-colors ${onThisHour ? 'bg-amber-100 cursor-default' : 'bg-amber-50 hover:bg-amber-100 cursor-pointer'}`}>
+                    {/* Absolutely positioned + centred on the visible lane area (waitlistLabelX),
+                        so it tracks horizontal scroll and stays fully readable on mobile. */}
+                    <span
+                      style={{ left: waitlistLabelX }}
+                      className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] font-semibold text-amber-700 pointer-events-none">
+                      {onThisHour ? (
+                        <>✓ You're #{myQueuePos ?? '—'} in the queue · {hourWaitCount} waiting</>
+                      ) : (
+                        <>🔔 JOIN WAITLIST · {hourWaitCount > 0 ? `${hourWaitCount} ${hourWaitCount === 1 ? 'person' : 'people'} waiting` : 'Be first on the waitlist'}</>
+                      )}
+                    </span>
                   </button>
                 ) : (
                 <>
