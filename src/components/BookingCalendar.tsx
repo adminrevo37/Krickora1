@@ -344,7 +344,11 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       {/* Frozen lane-header row (top) + frozen Time column (left) so they stay
           visible while scrolling the grid on mobile. The grid scrolls inside this
           bounded box (both axes) rather than the whole page. */}
-      <div className="bg-white rounded-2xl border-2 border-black shadow-sm overflow-auto max-h-[72vh]">
+      {/* §5 — the grid scrolls INSIDE this bounded box so the frozen lane-header row
+          (sticky top-0 below) stays locked. On mobile the cap is tighter (60dvh) so
+          the grid actually overflows the box and scrolls internally instead of the
+          whole page scrolling the header away. Desktop keeps the taller 72vh. */}
+      <div className="bg-white rounded-2xl border-2 border-black shadow-sm overflow-auto max-h-[60dvh] sm:max-h-[72vh]">
         <div className="min-w-[560px]">
         <div className="grid grid-cols-[70px_repeat(5,1fr)] border-b-2 border-black bg-white sticky top-0 z-30">
           <div className="p-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider flex items-center justify-center sticky left-0 z-40 bg-white">Time</div>
