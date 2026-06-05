@@ -427,6 +427,9 @@ export default defineSchema({
     laneName: v.string(),
     date: v.string(),
     description: v.string(),
+    // Stripe-hosted receipt URL (the charge's receipt_url), captured at checkout so
+    // the customer Payments screen can link to the real receipt. Optional/additive.
+    receiptUrl: v.optional(v.string()),
   })
     .index("by_stripeSessionId", ["stripeSessionId"])
     .index("by_customerEmail", ["customerEmail"])

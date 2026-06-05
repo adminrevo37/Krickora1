@@ -52,6 +52,11 @@ function PaymentsPage() {
     (api as any).statements.listStatementAdjustments,
     customer?._id ? ({ subjectType: 'customer', subjectId: customer._id } as any) : 'skip'
   ) as any[] | undefined
+  // Stripe checkout invoices/receipts captured at payment time.
+  const invoices = useQuery(
+    api.queries.listMyStripePayments,
+    user?.email ? { email: user.email } : 'skip'
+  ) as any[] | undefined
 
   if (isLoading) {
     return <div className="max-w-5xl mx-auto px-4 py-16 text-center text-gray-500">Loading...</div>
@@ -164,8 +169,62 @@ function PaymentsPage() {
           </div>
         )}
         <div className="px-5 py-3 border-t border-gray-100 text-xs text-gray-400">
-          A Stripe receipt is emailed for each card payment. Contact us if you need a copy resent.
+          A Stripe receipt is emailed for each card payment. Your receipts are also listed below.
         </div>
+      </div>
+
+      {/* Tax Invoices & Receipts — the Stripe checkout records captured at payment time */}
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden mb-8">
+        <div className="px-5 py-3 border-b border-gray-200 bg-gray-50">
+          <h2 className="font-semibold text-gray-800">Tax Invoices &amp; Receipts</h2>
+          <p className="text-xs text-gray-500 mt-0.5">Every card payment from checkout, with a link to its Stripe receipt.</p>
+        </div>
+        {invoices === undefined ? (
+          <div className="p-8 text-center text-gray-500">Loading...</div>
+        ) : invoices.length === 0 ? (
+          <div className="p-8 text-center text-gray-500">No card payments yet.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-gray-600">
+                <tr>
+                  <th className="text-left px-5 py-2 font-semibold">Date</th>
+                  <th className="text-left px-5 py-2 font-semibold">Description</th>
+                  <th className="text-right px-5 py-2 font-semibold">Amount</th>
+                  <th className="text-left px-5 py-2 font-semibold">Status</th>
+                  <th className="text-right px-5 py-2 font-semibold">Receipt</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoices.map((inv: any) => (
+                  <tr key={inv._id} className="border-t border-gray-100">
+                    <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{inv.date}</td>
+                    <td className="px-5 py-3 text-gray-700">{inv.description || inv.laneName}</td>
+                    <td className="px-5 py-3 text-right text-gray-900 whitespace-nowrap">
+                      ${(inv.amount || 0).toFixed(2)} {String(inv.currency || 'aud').toUpperCase()}
+                    </td>
+                    <td className="px-5 py-3">
+                      {inv.status === 'paid' ? (
+                        <span className="inline-flex px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium">Paid</span>
+                      ) : (
+                        <span className="inline-flex px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-xs font-medium capitalize">{inv.status}</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3 text-right whitespace-nowrap">
+                      {inv.receiptUrl ? (
+                        <a href={inv.receiptUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline font-medium">
+                          View receipt ↗
+                        </a>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Credit history */}

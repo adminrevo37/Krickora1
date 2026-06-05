@@ -183,6 +183,38 @@ export const getStripePayment = query({
   },
 });
 
+// A customer's own Stripe payments / invoices (the checkout receipts) — self or
+// admin only; [] otherwise. Powers the "Tax Invoices & Receipts" list on the
+// customer Payments screen. Newest first (by record creation time).
+export const listMyStripePayments = query({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return [];
+    const normalized = args.email.toLowerCase().trim();
+    if (!caller.isAdmin && caller.email !== normalized) return [];
+    const rows = await ctx.db
+      .query("stripePayments")
+      .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", normalized))
+      .collect();
+    return rows
+      .map((p: any) => ({
+        _id: p._id,
+        bookingId: p.bookingId,
+        stripeSessionId: p.stripeSessionId,
+        amount: p.amount,
+        currency: p.currency,
+        status: p.status,
+        laneName: p.laneName,
+        date: p.date,
+        description: p.description,
+        receiptUrl: p.receiptUrl ?? null,
+        createdAt: p._creationTime,
+      }))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  },
+});
+
 // ============================================================================
 // CUSTOMER QUERIES
 // ============================================================================

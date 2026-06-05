@@ -3316,6 +3316,7 @@ export const recordStripePaymentInternal = internalMutation({
     accessCode: v.optional(v.string()),
     timeSlot: v.optional(v.string()),
     duration: v.optional(v.string()),
+    receiptUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Idempotency: don't double-record the same booking on webhook retry.
@@ -3323,12 +3324,18 @@ export const recordStripePaymentInternal = internalMutation({
       .query("stripePayments")
       .filter((q: any) => q.eq(q.field("bookingId"), args.bookingId))
       .first();
-    if (existing) return existing._id;
+    if (existing) {
+      // Backfill the receipt URL if it arrived on a retry and wasn't stored yet.
+      if (args.receiptUrl && !(existing as any).receiptUrl) {
+        await ctx.db.patch(existing._id, { receiptUrl: args.receiptUrl });
+      }
+      return existing._id;
+    }
 
     const id = await ctx.db.insert("stripePayments", {
       bookingId: args.bookingId,
       stripeSessionId: args.stripeSessionId,
-      customerEmail: args.customerEmail,
+      customerEmail: args.customerEmail.toLowerCase().trim(),
       customerName: args.customerName,
       amount: args.amount,
       currency: args.currency,
@@ -3336,6 +3343,7 @@ export const recordStripePaymentInternal = internalMutation({
       laneName: args.laneName,
       date: args.date,
       description: args.description,
+      receiptUrl: args.receiptUrl,
     });
 
     // Also ensure the customer exists in the customers table
@@ -3357,6 +3365,51 @@ export const recordStripePaymentInternal = internalMutation({
     // Note: confirmation email is sent by createBooking — do not duplicate here.
 
     return id;
+  },
+});
+
+// Seed sample Stripe payment records for a customer (ADMIN ONLY) — used to demo
+// the Payments "Tax Invoices & Receipts" list. Re-running replaces the prior seed
+// set (rows tagged with a 'seed-' bookingId prefix), so it's safe to call again.
+export const seedTestStripePayments = mutation({
+  args: { email: v.string(), customerName: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const email = args.email.toLowerCase().trim();
+    const name = args.customerName ?? "Test Customer";
+    const existing = await ctx.db
+      .query("stripePayments")
+      .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", email))
+      .collect();
+    for (const r of existing) {
+      if (typeof r.bookingId === "string" && r.bookingId.startsWith("seed-")) {
+        await ctx.db.delete(r._id);
+      }
+    }
+    const samples = [
+      { lane: "Bowling Machine 1", desc: "1 hour net — Bowling Machine 1", amount: 35, date: "2026-06-01", receipt: true },
+      { lane: "9m Run Up 1", desc: "1.5 hour net — 9m Run Up 1", amount: 50, date: "2026-05-24", receipt: true },
+      { lane: "Bowling Machine 3 (Truman)", desc: "1 hour net — Truman lane", amount: 45, date: "2026-05-18", receipt: false },
+    ];
+    let i = 0;
+    for (const s of samples) {
+      const session = `cs_test_seed_${email.replace(/[^a-z0-9]/g, "").slice(0, 10)}_${i}`;
+      await ctx.db.insert("stripePayments", {
+        bookingId: `seed-${email}-${i}`,
+        stripeSessionId: session,
+        customerEmail: email,
+        customerName: name,
+        amount: s.amount,
+        currency: "aud",
+        status: "paid",
+        laneName: s.lane,
+        date: s.date,
+        description: s.desc,
+        receiptUrl: s.receipt ? `https://pay.stripe.com/receipts/payment/${session}` : undefined,
+      });
+      i++;
+    }
+    return { inserted: samples.length, email };
   },
 });
 

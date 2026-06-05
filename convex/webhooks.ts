@@ -18,6 +18,7 @@ export const confirmBookingPayment = internalMutation({
     stripeSessionId: v.string(),
     amountPaid: v.number(),
     currency: v.optional(v.string()),
+    receiptUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.bookingId as any);
@@ -188,6 +189,7 @@ export const confirmBookingPayment = internalMutation({
         laneName,
         date: b.date,
         description,
+        receiptUrl: args.receiptUrl,
       });
 
       // SPEC_PWA_PUSH §5.1 — booking confirmation + door code push (customer).

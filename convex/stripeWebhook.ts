@@ -52,11 +52,27 @@ export const stripeWebhook = httpAction(async (ctx, request) => {
         const session = event.data.object as Stripe.Checkout.Session;
         const bookingId = session.metadata?.bookingId;
         if (bookingId) {
+          // Best-effort: pull the Stripe-hosted receipt URL off the charge so the
+          // customer Payments screen can link to it. Never block confirmation on it.
+          let receiptUrl: string | undefined;
+          try {
+            if (session.payment_intent) {
+              const pi = await stripe.paymentIntents.retrieve(
+                session.payment_intent as string,
+                { expand: ["latest_charge"] }
+              );
+              const charge = pi.latest_charge as Stripe.Charge | null;
+              receiptUrl = charge?.receipt_url ?? undefined;
+            }
+          } catch (e: any) {
+            console.warn("[stripe-webhook] could not fetch receipt_url:", e?.message);
+          }
           await ctx.runMutation(internal.webhooks.confirmBookingPayment, {
             bookingId,
             stripeSessionId: session.id,
             amountPaid: session.amount_total ?? 0,
             currency: session.currency ?? "aud",
+            receiptUrl,
           });
         } else {
           console.warn("[stripe-webhook] checkout.session.completed without bookingId metadata");
