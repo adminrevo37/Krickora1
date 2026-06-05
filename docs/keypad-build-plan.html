@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Krickora Keypad Entry — Build Plan</title>
+<style>
+  body { font-family: "Liberation Sans", Arial, sans-serif; font-size: 11pt; color: #1a1a1a; line-height: 1.45; margin: 2.2cm 2cm; }
+  h1 { font-size: 22pt; color: #0b3d2e; margin: 0 0 2pt 0; }
+  h2 { font-size: 15pt; color: #0b3d2e; border-bottom: 2px solid #0b3d2e; padding-bottom: 3pt; margin-top: 22pt; }
+  h3 { font-size: 12.5pt; color: #14543f; margin-top: 14pt; margin-bottom: 4pt; }
+  .sub { color: #555; font-size: 10.5pt; margin: 0 0 4pt 0; }
+  table { border-collapse: collapse; width: 100%; margin: 8pt 0; font-size: 10pt; }
+  th, td { border: 1px solid #b9c7c0; padding: 5pt 7pt; text-align: left; vertical-align: top; }
+  th { background: #e7f0ec; color: #0b3d2e; }
+  code, .mono { font-family: "Liberation Mono", "Courier New", monospace; font-size: 9.5pt; }
+  pre { background: #f4f6f5; border: 1px solid #d6e0db; padding: 8pt; font-family: "Liberation Mono", monospace; font-size: 9pt; white-space: pre-wrap; }
+  .callout { border-left: 4px solid #c47f00; background: #fdf6e9; padding: 7pt 10pt; margin: 8pt 0; }
+  .danger { border-left: 4px solid #b00020; background: #fdecee; padding: 7pt 10pt; margin: 8pt 0; }
+  .ok { border-left: 4px solid #0b7d4f; background: #eafaf2; padding: 7pt 10pt; margin: 8pt 0; }
+  ul, ol { margin: 4pt 0 4pt 0; padding-left: 20pt; }
+  li { margin: 2pt 0; }
+  .small { font-size: 9.5pt; color: #555; }
+  .tag { display: inline-block; background:#0b3d2e; color:#fff; font-size:8.5pt; padding:1pt 6pt; border-radius:3pt; }
+</style>
+</head>
+<body>
+
+<h1>Krickora — Self-Service Keypad Entry</h1>
+<p class="sub"><strong>DIY Build Plan &amp; Specification</strong> &nbsp;|&nbsp; Rev 0.1 (draft) &nbsp;|&nbsp; 2026-06-05 &nbsp;|&nbsp; Jaycar (AU) sourcing</p>
+
+<div class="callout">
+<strong>Read first — assumptions.</strong> No written hardware spec existed in the repo, so this plan is reconstructed from the booking/access-code software (<code>src/lib/access-code.ts</code>, Convex + Google Calendar + Stripe) and our design discussion. Where a decision is still open it is marked <span class="tag">DECISION</span>. Confirm the flagged items before ordering or installing. Prices are indicative AUD only — verify current Jaycar pricing/stock.
+</div>
+
+<h2>1. Intent &amp; scope</h2>
+<p>Customers book and pay online → the system issues a numeric door code bound to that booking → the customer enters the code at a keypad at the facility entry → the door releases and their booked bay (e.g. <em>bay&nbsp;4</em>) powers up for the booking window. This plan covers the <strong>physical keypad entry controller</strong>, its wiring, firmware, the backend validation endpoint it relies on, and the reliability/safety engineering to keep it running long-term.</p>
+
+<h2>2. Architecture — dumb edge, smart core</h2>
+<p>The design goal is <strong>maximum uptime</strong>. The reliable pattern is to keep the device <em>at the door</em> as simple and stateless as possible, and put the decision logic on the well-powered, UPS-backed server.</p>
+<ul>
+  <li><strong>Edge (at the door): ESP32 + ESPHome.</strong> Scans the keypad, drives the door relay, shows status. No OS, no SD card, boots in &lt;1&nbsp;s, recovers instantly from power loss. Native Home Assistant integration.</li>
+  <li><strong>Core (server): Home Assistant.</strong> Holds booking state, validates the entered code against the active booking window, decides open/deny, logs every attempt, and triggers the bay (lights/power/door).</li>
+  <li><strong>Source of truth: Convex backend.</strong> HA validates against a hardened <code>/door/validate</code> endpoint (spec in §8) and keeps a local <em>offline cache of today's valid codes</em> so entry still works if the internet drops.</li>
+</ul>
+
+<div class="ok"><strong>Why not a Raspberry Pi at the door?</strong> For a single-purpose door controller a Pi is usually <em>less</em> reliable, not more: a full Linux OS on an SD card is the #1 field-failure mode (corruption on power loss) — exactly the failure that locks customers out. A Pi is the right tool only if the door device itself must do heavy local compute (touchscreen, camera/ANPR, large offline DB). If a Pi is required, harden it: boot from SSD/eMMC (not SD), read-only root filesystem (overlayfs), hardware watchdog, and UPS with clean shutdown.</div>
+
+<h2>3. Bill of materials (Jaycar AU)</h2>
+<p class="small">Confirmed cat. numbers are linked. Items marked “confirm” are common Jaycar lines — verify the exact cat. no. in-store/online.</p>
+<table>
+<tr><th>#</th><th>Item</th><th>Jaycar Cat.</th><th>Qty</th><th>Approx AUD</th><th>Notes</th></tr>
+<tr><td>1</td><td>Duinotech ESP32 Main Board (WiFi/BT)</td><td>XC3800</td><td>1&nbsp;(+1 spare)</td><td>~$30 ea</td><td>Edge controller. Keep a pre-flashed spare for instant swap.</td></tr>
+<tr><td>2</td><td>12-Key Numeric Keypad (3×4 matrix)</td><td>SP0770</td><td>1</td><td>~$8</td><td>0–9, *, #. 7-wire matrix.</td></tr>
+<tr><td>3</td><td>4-Channel 5V Relay Module</td><td>XC4441</td><td>1</td><td>~$15</td><td>Over-spec: 1 ch for strike, spare ch for roller-door trigger / bay. Opto-isolated, 10A contacts.</td></tr>
+<tr><td>4</td><td>Electric Door Strike 12VDC — Fail-Secure (narrow)</td><td>LA5077</td><td>1</td><td>~$40</td><td><span class="tag">DECISION</span> Fail-secure (locked on power loss). See §10 egress before choosing. Fail-safe alts: LA5079 / LA5081.</td></tr>
+<tr><td>5</td><td>Non-Contact IR Exit Switch (Request-to-Exit)</td><td>LA5187</td><td>1</td><td>~$30</td><td>Touchless egress. Can reuse your existing green exit button instead.</td></tr>
+<tr><td>6</td><td>12V regulated power supply (≥2A)</td><td>confirm (e.g. MP3243 / 12V DIN PSU)</td><td>1</td><td>~$30</td><td>Powers strike + ESP32 (via buck). Size for strike inrush.</td></tr>
+<tr><td>7</td><td>DC-DC Buck Converter (12V→5V)</td><td>XC4514</td><td>1</td><td>~$10</td><td>Feeds ESP32 5V from the 12V rail. Or a quality USB supply.</td></tr>
+<tr><td>8</td><td>Flyback diode 1N4004 (strike coil)</td><td>ZR1004</td><td>1</td><td>~$1</td><td>Across the strike coil — protects relay/electronics from back-EMF. Essential.</td></tr>
+<tr><td>9</td><td>IP-rated project enclosure</td><td>confirm (HB-series)</td><td>1</td><td>~$20</td><td>Mount ESP32 + relay + buck inside; keypad on the door face.</td></tr>
+<tr><td>10</td><td>Hook-up wire, ferrules, screw terminals, standoffs</td><td>assorted</td><td>—</td><td>~$20</td><td>Use screw terminals, not breadboard, for a permanent install.</td></tr>
+</table>
+<p class="small"><strong>Optional over-spec add-ons:</strong> small UPS / 12V battery + charger for the door controller so entry survives a mains blip; piezo buzzer + RGB status LED for user feedback; door-position reed switch (LA-prefix) to detect held-open / forced-door.</p>
+
+<h2>4. Wiring — keypad &amp; relay to ESP32</h2>
+<p>The SP0770 3×4 keypad uses 7 lines (4 rows + 3 columns). Suggested ESP32 GPIO map (avoids strapping/boot pins):</p>
+<table>
+<tr><th>Signal</th><th>ESP32 GPIO</th><th>Signal</th><th>ESP32 GPIO</th></tr>
+<tr><td>Row 1</td><td>GPIO 13</td><td>Col 1</td><td>GPIO 26</td></tr>
+<tr><td>Row 2</td><td>GPIO 12</td><td>Col 2</td><td>GPIO 25</td></tr>
+<tr><td>Row 3</td><td>GPIO 14</td><td>Col 3</td><td>GPIO 33</td></tr>
+<tr><td>Row 4</td><td>GPIO 27</td><td>Relay IN1 (strike)</td><td>GPIO 32</td></tr>
+<tr><td>Status LED</td><td>GPIO 4</td><td>Buzzer</td><td>GPIO 2</td></tr>
+<tr><td>Exit switch (REX) in</td><td>GPIO 35 (input-only)</td><td>Spare relay IN2 (roller door)</td><td>GPIO 19</td></tr>
+</table>
+<p><strong>Power/strike path:</strong> 12V PSU → relay common/NO contacts → door strike → back to PSU, with the 1N4004 flyback diode across the strike coil (band/cathode to +12V). 12V PSU → XC4514 buck → 5V → ESP32. Common ground between ESP32, relay board and buck.</p>
+<div class="callout"><strong>Mains/12V isolation:</strong> the relay <em>contacts</em> switch the 12V strike circuit; the relay <em>coil</em> side is opto-isolated from the ESP32. Keep the 12V door circuit physically separated from logic wiring. Do not switch mains with this board.</div>
+
+<h2>5. ESPHome firmware (edge)</h2>
+<p>Representative ESPHome config — scans the keypad, collects a code, exposes it to Home Assistant, and exposes the strike as a switch HA can pulse:</p>
+<pre>esphome:
+  name: door-keypad-entry
+
+esp32:
+  board: esp32dev
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # static IP recommended for a fixed door device
+
+api:                 # native HA connection (encrypted)
+  encryption:
+    key: !secret api_key
+logger:
+ota:
+
+matrix_keypad:
+  id: kpad
+  rows: { pins: [13, 12, 14, 27] }
+  columns: { pins: [26, 25, 33] }
+  keys: "123456789*0#"
+
+key_collector:
+  - id: code_entry
+    source_id: kpad
+    min_length: 4
+    max_length: 6
+    end_key: "#"
+    clear_key: "*"
+    on_result:
+      - homeassistant.event:           # hand the code to HA for validation
+          event: esphome.door_code_entered
+          data: { code: !lambda 'return x;' }
+
+switch:
+  - platform: gpio
+    pin: 32
+    id: door_strike
+    name: "Door Strike"
+
+# HA calls this to release the door for ~4s
+button:
+  - platform: template
+    name: "Release Door"
+    on_press:
+      - switch.turn_on: door_strike
+      - delay: 4s
+      - switch.turn_off: door_strike</pre>
+<p class="small">Validation deliberately happens on HA/Convex, not on the ESP32 — the door device never holds the booking logic, so it can't be reverse-engineered for codes and stays trivially simple.</p>
+
+<h2>6. Home Assistant logic (core)</h2>
+<ol>
+  <li>HA listens for <code>esphome.door_code_entered</code>.</li>
+  <li>HA calls Convex <code>/door/validate</code> with the code (and device auth). On network failure, HA falls back to its <strong>local cache of today's valid codes</strong>.</li>
+  <li>If valid &amp; within the booking window → HA presses <em>Release Door</em> on the ESP32 and powers up the booked bay (reuse the calendar-driven bay automations).</li>
+  <li>Every attempt (allow/deny) is logged with timestamp and code masked.</li>
+</ol>
+
+<h2>7. Backend — <span class="mono">/door/validate</span> endpoint (Convex)</h2>
+<p>This endpoint does not exist yet (your <code>http.ts</code> only has health/auth/Stripe). It must be added. Behaviour:</p>
+<pre>POST /door/validate
+Headers: X-Door-Token: &lt;shared secret per device&gt;
+Body:    { "code": "4821" }
+
+→ 200 { "allow": true,  "bay": "bay_4", "bookingId": "..." }
+→ 200 { "allow": false, "reason": "no_active_booking" }
+→ 429 { "allow": false, "reason": "rate_limited" }
+
+Server checks:
+  • booking exists with this code
+  • now ∈ [start − preGrace, end + postGrace]
+  • booking is paid &amp; not cancelled
+  • device token valid
+  • rate-limit / lockout counters OK</pre>
+
+<h2>8. ⚠️ Backend defects to fix first (security &amp; reliability)</h2>
+<div class="danger">
+A keypad is only as trustworthy as what it validates against. <code>src/lib/access-code.ts</code> currently has issues that make it unsafe to drive a physical door as-is:
+<ul>
+  <li><strong>Codes live in an in-memory <code>Set</code> (<code>activeCodes</code>).</strong> This resets on every redeploy and isn't shared across serverless instances — <code>invalidateAccessCode()</code> and the 24h <code>setTimeout</code> cleanup won't reliably work. <em>Fix:</em> store the code on the <strong>booking row in the Convex DB</strong>, indexed, validated server-side against the booking's time window.</li>
+  <li><strong>4-digit codes = 9,000 combinations</strong> → brute-forceable for physical entry. <em>Fix:</em> enforce <strong>rate-limiting + lockout</strong> at the keypad/endpoint (e.g. 5 tries → 60&nbsp;s cooldown), keep codes valid <strong>only during the booking window + grace</strong>, and consider 6-digit for new bookings.</li>
+  <li><strong>No time-binding at validation.</strong> A code must never open the door outside its booking window — enforce this server-side, not just by code uniqueness.</li>
+  <li><strong>Log &amp; alert</strong> on repeated failures (possible tampering).</li>
+</ul>
+These are prerequisites, not polish — schedule them before go-live.
+</div>
+
+<h2>9. Offline / fail-safe behaviour <span class="tag">DECISION</span></h2>
+<ul>
+  <li><strong>Internet down:</strong> HA validates against its local cache of today's codes → entry still works. Cache refreshes from Convex every few minutes.</li>
+  <li><strong>HA down:</strong> decide whether the door fails locked (secure) or has an attendant override. A small 12V battery on the controller keeps the ESP32 + strike alive through brief outages.</li>
+  <li><strong>Power-on behaviour:</strong> on restore, ESP32 boots in &lt;1&nbsp;s; relay defaults de-energised (door locked for fail-secure strike).</li>
+</ul>
+
+<h2>10. 🔒 Egress &amp; fire-safety compliance — must confirm</h2>
+<div class="danger">
+A powered entry on an occupied facility carries <strong>life-safety/building-code obligations (NCC/BCA, AS&nbsp;1428, fire egress)</strong>. People inside must <strong>always be able to exit</strong> regardless of power or network state.
+<ul>
+  <li><strong>Fail-secure vs fail-safe</strong> is a safety decision, not just security — confirm against local code. Fail-safe strikes (LA5079/LA5081) unlock on power loss; fail-secure (LA5077) stays locked.</li>
+  <li>Provide <strong>free mechanical egress</strong> (handle/push-bar) and/or a fail-safe exit path independent of the electronics. The IR exit switch / your green exit button supports request-to-exit but must not be the <em>only</em> way out.</li>
+  <li>Have a <strong>licensed installer / building surveyor sign off</strong> before commissioning.</li>
+</ul>
+</div>
+
+<h2>11. Power &amp; UPS</h2>
+<p>Tie the door controller into the facility UPS plan. The 12V door rail can run from the UPS-backed supply (or its own small 12V battery + charger) so a mains blip never locks the door. The HA server should be on the UPS with BIOS “restore on AC power loss = On” so the core recovers automatically after an outage.</p>
+
+<h2>12. Installation steps</h2>
+<ol>
+  <li>Bench-build: wire keypad + relay + buck to ESP32 in the enclosure; flash ESPHome; confirm it appears in HA.</li>
+  <li>Bench-test the full chain (code → HA → validate → relay pulse) before touching the door.</li>
+  <li>Fit the strike to the door jamb; wire the 12V strike circuit with flyback diode; verify fail-secure/fail-safe behaviour matches the egress decision.</li>
+  <li>Mount keypad on the door face, controller enclosure inside, exit switch on the egress side.</li>
+  <li>Set ESP32 to a static IP; lock down the device token; enable HA logging.</li>
+  <li>Deploy backend <code>/door/validate</code> + DB code storage + rate-limiting (§7–8).</li>
+  <li>Installer/surveyor egress sign-off → go live.</li>
+</ol>
+
+<h2>13. Commissioning test checklist</h2>
+<table>
+<tr><th>Test</th><th>Expected</th></tr>
+<tr><td>Valid code, within booking window</td><td>Door releases ~4s; bay powers up; entry logged</td></tr>
+<tr><td>Valid code, outside booking window</td><td>Denied; logged</td></tr>
+<tr><td>Wrong code ×5</td><td>Lockout/cooldown triggers; alert raised</td></tr>
+<tr><td>Internet pulled</td><td>Valid code still works via local cache</td></tr>
+<tr><td>Mains pulled to controller</td><td>Strike behaves per egress decision; ESP32 recovers on restore</td></tr>
+<tr><td>Exit switch / mechanical egress</td><td>Always opens from inside, powered or not</td></tr>
+<tr><td>Cancelled booking code</td><td>Denied immediately after cancellation propagates</td></tr>
+</table>
+
+<h2>14. Open decisions before ordering</h2>
+<ol>
+  <li><span class="tag">DECISION</span> Door hardware: electric <strong>strike</strong> on a personnel door (this plan) vs triggering the existing <strong>roller-door</strong> operator — or both (spare relay channel is reserved for it).</li>
+  <li><span class="tag">DECISION</span> Single shared entry vs a keypad per bay.</li>
+  <li><span class="tag">DECISION</span> Fail-secure vs fail-safe (driven by §10 egress/compliance).</li>
+  <li><span class="tag">DECISION</span> Full offline operation vs brief ride-through only.</li>
+  <li><span class="tag">DECISION</span> Reuse existing green exit button vs new IR exit switch (LA5187).</li>
+</ol>
+
+<p class="small" style="margin-top:18pt; border-top:1px solid #ccc; padding-top:6pt;">Krickora keypad entry build plan — draft for review. Verify all Jaycar cat. numbers, pricing and stock, and obtain licensed installer / building-surveyor sign-off on egress and fire compliance before installation. Indicative pricing only.</p>
+
+</body>
+</html>
