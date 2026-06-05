@@ -11,21 +11,25 @@ import { type DateRange, DateRangePicker, daysAgoKey, todayKey } from './analyti
 const OverviewTab = lazy(() => import('./analytics/OverviewTab'))
 const BookingsTab = lazy(() => import('./analytics/BookingsTab'))
 const RevenueTab = lazy(() => import('./analytics/RevenueTab'))
+const CompareTab = lazy(() => import('./analytics/CompareTab'))
 const UsageTab = lazy(() => import('./analytics/UsageTab'))
 const FunnelTab = lazy(() => import('./analytics/FunnelTab'))
 const PushTab = lazy(() => import('./analytics/PushTab'))
 const OccupancyTab = lazy(() => import('./analytics/OccupancyTab'))
 const CustomersTab = lazy(() => import('./analytics/CustomersTab'))
+const MapTab = lazy(() => import('./analytics/MapTab'))
 
 const TABS = [
   { id: 'overview', label: 'Overview', icon: '📊', range: false },
   { id: 'bookings', label: 'Bookings', icon: '📋', range: true },
   { id: 'revenue', label: 'Revenue', icon: '💰', range: true },
+  { id: 'compare', label: 'Compare', icon: '📈', range: false },
   { id: 'usage', label: 'Usage', icon: '👥', range: true },
   { id: 'funnel', label: 'Funnel', icon: '🛒', range: true },
   { id: 'push', label: 'Push & Waitlist', icon: '🔔', range: true },
   { id: 'occupancy', label: 'Occupancy', icon: '🏟️', range: true },
   { id: 'customers', label: 'Customers', icon: '💎', range: true },
+  { id: 'map', label: 'Map', icon: '🗺️', range: true },
 ] as const
 
 type TabId = (typeof TABS)[number]['id']
@@ -65,11 +69,13 @@ export default function AdminAnalyticsDashboard() {
         {tab === 'overview' && <OverviewTab />}
         {tab === 'bookings' && <BookingsTab range={range} />}
         {tab === 'revenue' && <RevenueTab range={range} />}
+        {tab === 'compare' && <CompareTab />}
         {tab === 'usage' && <UsageTab range={range} />}
         {tab === 'funnel' && <FunnelTab range={range} />}
         {tab === 'push' && <PushTab range={range} />}
         {tab === 'occupancy' && <OccupancyTab range={range} />}
         {tab === 'customers' && <CustomersTab range={range} />}
+        {tab === 'map' && <MapTab range={range} />}
       </Suspense>
     </div>
   )

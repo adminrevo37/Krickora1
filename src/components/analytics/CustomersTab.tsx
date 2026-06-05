@@ -2,7 +2,40 @@
 // referral attribution, discount-code performance.
 import { useQuery } from 'convex/react'
 import { api } from '../../../convex/_generated/api'
-import { type DateRange, KpiCard, Section, Loading, Empty, downloadCsv, fmtMoney } from './shared'
+import { type DateRange, KpiCard, Section, Loading, Empty, fmtMoney } from './shared'
+
+function TopList({ title, rows, accent }: { title: string; rows: any[]; accent: 'emerald' | 'indigo' }) {
+  const badge = accent === 'indigo' ? 'bg-indigo-100 text-indigo-700' : 'bg-emerald-100 text-emerald-700'
+  return (
+    <div className="min-w-0">
+      <div className="px-5 py-3 border-b border-gray-100"><h4 className="text-sm font-semibold text-gray-700">{title}</h4></div>
+      {rows.length === 0 ? <div className="p-6 text-sm text-gray-400 italic">No bookings.</div> : (
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 border-b border-gray-200">
+            <tr>
+              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase w-8">#</th>
+              <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase">Customer</th>
+              <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-gray-500 uppercase">Bookings</th>
+              <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-gray-500 uppercase">Revenue</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {rows.map((c, i) => (
+              <tr key={c.name + i} className="hover:bg-gray-50">
+                <td className="px-4 py-2 text-gray-400">{i + 1}</td>
+                <td className="px-4 py-2 font-medium text-gray-900">{c.name}</td>
+                <td className="px-4 py-2 text-right">
+                  <span className={`inline-flex items-center justify-center ${badge} text-xs font-bold rounded-full min-w-7 h-7 px-2`}>{c.bookings}</span>
+                </td>
+                <td className="px-4 py-2 text-right font-medium text-gray-900">{fmtMoney(c.revenue)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
 
 function cohortColor(pct: number): string {
   if (pct >= 60) return 'bg-emerald-600 text-white'
@@ -15,15 +48,9 @@ function cohortColor(pct: number): string {
 export default function CustomersTab({ range }: { range: DateRange }) {
   const cohorts = useQuery(api.analyticsAdmin.getRetentionCohorts, { weeks: 8 })
   const value = useQuery(api.analyticsAdmin.getCustomerValue, { from: range.from || undefined, to: range.to || undefined, limit: 25 })
+  const topcmp = useQuery(api.analyticsAdmin.getTopCustomersComparison, { limit: 10 })
   const referral = useQuery(api.analyticsAdmin.getReferralBreakdown, { from: range.from || undefined, to: range.to || undefined })
   const discount = useQuery(api.analyticsAdmin.getDiscountPerformance, { from: range.from || undefined, to: range.to || undefined })
-
-  const exportValue = () => {
-    if (!value) return
-    downloadCsv(`customer_value_${range.from}_${range.to}.csv`,
-      [['Name', 'Email', 'Bookings', 'Revenue', 'FirstBooking', 'LastBooking'],
-        ...value.top.map((c: any) => [c.name, c.email, c.bookings, c.revenue, c.firstDate, c.lastDate])])
-  }
 
   return (
     <div className="space-y-5">
@@ -37,36 +64,18 @@ export default function CustomersTab({ range }: { range: DateRange }) {
             <KpiCard icon="🧾" label="Avg revenue / booking" value={fmtMoney(value.avgRevenuePerBooking)} />
           </div>
 
-          <Section title="Top customers by revenue" subtitle="In the selected range"
-            action={<button onClick={exportValue} disabled={value.top.length === 0}
-              className="px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">CSV</button>}>
-            {value.top.length === 0 ? <Empty /> : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-200">
-                    <tr>
-                      <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase w-8">#</th>
-                      <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase">Customer</th>
-                      <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-gray-500 uppercase">Bookings</th>
-                      <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-gray-500 uppercase">Revenue</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {value.top.map((c: any, i: number) => (
-                      <tr key={c.email} className="hover:bg-gray-50">
-                        <td className="px-4 py-2 text-gray-400">{i + 1}</td>
-                        <td className="px-4 py-2"><div className="font-medium text-gray-900">{c.name}</div><div className="text-[11px] text-gray-400">{c.email}</div></td>
-                        <td className="px-4 py-2 text-right text-gray-700">{c.bookings}</td>
-                        <td className="px-4 py-2 text-right font-medium text-gray-900">{fmtMoney(c.revenue)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Section>
         </>
       )}
+
+      {/* Top customers — this month vs all time, side by side (no email) */}
+      <Section title="Top customers" subtitle="This month and all-time, ranked by bookings">
+        {topcmp === undefined ? <Loading /> : topcmp === null ? <Empty label="Unavailable." /> : (
+          <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-gray-100">
+            <TopList title={`This month (${topcmp.monthKey})`} rows={topcmp.thisMonth} accent="emerald" />
+            <TopList title="All time" rows={topcmp.allTime} accent="indigo" />
+          </div>
+        )}
+      </Section>
 
       {/* Retention cohorts */}
       <Section title="Weekly retention cohorts" subtitle="Of customers who first booked in a week, the % booking again in later weeks">

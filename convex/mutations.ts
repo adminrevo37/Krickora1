@@ -828,26 +828,12 @@ export const createBooking = mutation({
         );
       }
 
-      // SEC decision #4: a verified email is required to COMPLETE the FIRST
-      // booking, so the door-code email (email-only delivery) reliably lands.
-      // Exempt admins and coach/manual bookings. Later bookings are unaffected.
-      if (!isAdminCaller && !args.isCoachBooking) {
-        const authUser = await getAuthUserSafe(ctx);
-        const verified = (authUser as any)?.emailVerified === true;
-        if (!verified) {
-          const bookerEmail = args.customerEmail.toLowerCase().trim();
-          const priorByEmail = await ctx.db
-            .query("bookings")
-            .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", bookerEmail))
-            .collect();
-          const hasPrior = priorByEmail.some((b: any) => b.status !== "cancelled");
-          if (!hasPrior) {
-            throw new ConvexError(
-              "Please verify your email address before making your first booking. Check your inbox for the verification link."
-            );
-          }
-        }
-      }
+      // SIGNUP-NO-LOCKDOWN (2026-06): the first-booking email-verification gate
+      // (former SEC decision #4) is DISABLED by request — a new account can book
+      // immediately after signing up, without waiting for an email-verification
+      // link. The door code is now delivered by push (Push v2, door-code-first) as
+      // well as email, so an unverified email no longer blocks code delivery.
+      // Admins and coach/manual bookings were already exempt.
     }
 
     const siteSettings = await ctx.db

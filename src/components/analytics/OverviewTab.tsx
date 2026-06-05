@@ -23,6 +23,7 @@ const LANE_COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444']
 
 export default function OverviewTab() {
   const [months, setMonths] = useState<3 | 6 | 12>(12)
+  const [peakMode, setPeakMode] = useState<'all' | 'weekday' | 'weekend'>('all')
   const data = useQuery(api.analytics.getAdminAnalytics, { months })
 
   if (!data) {
@@ -37,6 +38,9 @@ export default function OverviewTab() {
   }
 
   const { kpis, byMonth, lanes, timeSlots, byDayOfWeek, topCustomers } = data
+  const timeSlotsWeekday = (data as any).timeSlotsWeekday ?? []
+  const timeSlotsWeekend = (data as any).timeSlotsWeekend ?? []
+  const peakData = peakMode === 'weekday' ? timeSlotsWeekday : peakMode === 'weekend' ? timeSlotsWeekend : timeSlots
 
   const pct = (cur: number, prev: number): string => {
     if (prev === 0) return cur > 0 ? '+100%' : '—'
@@ -55,7 +59,7 @@ export default function OverviewTab() {
   const coachPct = totalBookingTypes > 0 ? Math.round((kpis.coachBookingsCount / totalBookingTypes) * 100) : 0
   const customerPct = 100 - coachPct
 
-  const maxBookings = timeSlots.length > 0 ? Math.max(...timeSlots.map((s) => s.bookings)) : 0
+  const maxBookings = peakData.length > 0 ? Math.max(...peakData.map((s: any) => s.bookings)) : 0
   const maxDayBookings = byDayOfWeek.length > 0 ? Math.max(...byDayOfWeek.map((d) => d.bookings)) : 0
 
   return (
@@ -309,34 +313,40 @@ export default function OverviewTab() {
         </div>
 
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
-          <h3 className="text-base font-semibold text-gray-800 mb-4">Peak Booking Times</h3>
-          {timeSlots.length === 0 ? (
-            <div className="flex items-center justify-center h-40 text-gray-400 text-sm">No booking data</div>
+          <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+            <h3 className="text-base font-semibold text-gray-800">Peak Booking Times</h3>
+            <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+              {(['all', 'weekday', 'weekend'] as const).map((m) => (
+                <button key={m} onClick={() => setPeakMode(m)}
+                  className={`px-2.5 py-1 rounded-md text-xs font-semibold capitalize ${peakMode === m ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>{m}</button>
+              ))}
+            </div>
+          </div>
+          {peakData.length === 0 ? (
+            <div className="flex items-center justify-center h-40 text-gray-400 text-sm">No {peakMode === 'all' ? '' : peakMode + ' '}booking data</div>
           ) : (
             <>
               <ResponsiveContainer width="100%" height={200}>
-                <BarChart data={timeSlots} margin={{ top: 0, right: 8, left: 0, bottom: 0 }}>
+                <BarChart data={peakData} margin={{ top: 0, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 11 }} allowDecimals={false} width={28} />
                   <Tooltip formatter={(v: number) => [v, 'Bookings']} />
                   <Bar dataKey="bookings" radius={[4, 4, 0, 0]}>
-                    {timeSlots.map((slot, i) => (
+                    {peakData.map((slot: any, i: number) => (
                       <Cell
                         key={i}
-                        fill={slot.bookings === maxBookings && maxBookings > 0 ? '#d97706' : '#fde68a'}
+                        fill={slot.bookings === maxBookings && maxBookings > 0 ? (peakMode === 'weekend' ? '#7c3aed' : '#d97706') : (peakMode === 'weekend' ? '#ddd6fe' : '#fde68a')}
                       />
                     ))}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-              {timeSlots.length > 0 && (
-                <p className="text-xs text-gray-400 mt-2 text-center">
-                  Peak: <span className="font-semibold text-gray-600">
-                    {timeSlots.find((s) => s.bookings === maxBookings)?.label}
-                  </span> ({maxBookings} bookings)
-                </p>
-              )}
+              <p className="text-xs text-gray-400 mt-2 text-center">
+                Peak ({peakMode}): <span className="font-semibold text-gray-600">
+                  {peakData.find((s: any) => s.bookings === maxBookings)?.label}
+                </span> ({maxBookings} bookings)
+              </p>
             </>
           )}
         </div>
@@ -388,9 +398,10 @@ export default function OverviewTab() {
 
 // ── Catchment sub-components (unchanged from the original dashboard) ──────────
 type CatchmentData = {
-  bySuburb: { suburb: string; postcode: string; bookings: number }[]
+  bySuburb: { suburb: string; postcode: string; bookings: number; customers?: number }[]
   unknown: number
   total: number
+  uniqueCustomers?: number
 } | null | undefined
 
 function CatchmentReports() {
@@ -433,10 +444,11 @@ function CatchmentReports() {
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-gray-100">
         <CatchmentTable
-          title="Customers — sessions by suburb"
-          subtitle="Lane-hire customers (excludes coach bookings)."
+          title="Customers — unique customers by suburb"
+          subtitle="Distinct lane-hire customers per suburb (unique-user bookings; excludes coach bookings)."
           data={customerData}
           accent="emerald"
+          showCustomers
           csvName={`catchment-customers${from ? `_${from}` : ''}${to ? `_${to}` : ''}.csv`}
           csvHeader="customerSessions"
         />
@@ -460,6 +472,7 @@ function CatchmentTable({
   accent,
   csvName,
   csvHeader,
+  showCustomers = false,
 }: {
   title: string
   subtitle: string
@@ -467,6 +480,7 @@ function CatchmentTable({
   accent: 'emerald' | 'indigo'
   csvName: string
   csvHeader: string
+  showCustomers?: boolean
 }) {
   const rows = data?.bySuburb ?? []
   const counted = (data?.total ?? 0) - (data?.unknown ?? 0)
@@ -476,9 +490,13 @@ function CatchmentTable({
 
   const exportCsv = () => {
     if (!data) return
-    const lines = [['Suburb', 'Postcode', csvHeader]]
-    for (const r of rows) lines.push([r.suburb, r.postcode, String(r.bookings)])
-    if (data.unknown > 0) lines.push(['Unknown', '', String(data.unknown)])
+    const lines = showCustomers
+      ? [['Suburb', 'Postcode', 'uniqueCustomers', csvHeader]]
+      : [['Suburb', 'Postcode', csvHeader]]
+    for (const r of rows) lines.push(showCustomers
+      ? [r.suburb, r.postcode, String(r.customers ?? 0), String(r.bookings)]
+      : [r.suburb, r.postcode, String(r.bookings)])
+    if (data.unknown > 0) lines.push(showCustomers ? ['Unknown', '', '', String(data.unknown)] : ['Unknown', '', String(data.unknown)])
     const csv = lines
       .map((cols) => cols.map((c) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(','))
       .join('\n')
@@ -515,6 +533,7 @@ function CatchmentTable({
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide w-8">#</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Suburb</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide">Postcode</th>
+                {showCustomers && <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Customers</th>}
                 <th className="px-4 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wide">Sessions</th>
               </tr>
             </thead>
@@ -524,11 +543,14 @@ function CatchmentTable({
                   <td className="px-4 py-3 text-gray-400 font-medium">{i + 1}</td>
                   <td className="px-4 py-3 font-medium text-gray-900">{r.suburb}</td>
                   <td className="px-4 py-3 text-gray-500">{r.postcode || '—'}</td>
-                  <td className="px-4 py-3 text-right">
-                    <span className={`inline-flex items-center justify-center ${badge} text-xs font-bold rounded-full min-w-8 h-8 px-2`}>
-                      {r.bookings}
-                    </span>
-                  </td>
+                  {showCustomers && (
+                    <td className="px-4 py-3 text-right">
+                      <span className={`inline-flex items-center justify-center ${badge} text-xs font-bold rounded-full min-w-8 h-8 px-2`}>
+                        {r.customers ?? 0}
+                      </span>
+                    </td>
+                  )}
+                  <td className="px-4 py-3 text-right text-gray-600 font-medium">{r.bookings}</td>
                 </tr>
               ))}
               {data.unknown > 0 && (
@@ -537,6 +559,7 @@ function CatchmentTable({
                   <td className="px-4 py-3 font-medium text-amber-700" colSpan={2}>
                     Unknown <span className="text-xs font-normal text-amber-600">(no postcode captured yet)</span>
                   </td>
+                  {showCustomers && <td className="px-4 py-3 text-right text-amber-700">—</td>}
                   <td className="px-4 py-3 text-right text-amber-700 font-bold">{data.unknown}</td>
                 </tr>
               )}
@@ -544,7 +567,8 @@ function CatchmentTable({
             <tfoot className="bg-gray-50 border-t border-gray-200">
               <tr>
                 <td className="px-4 py-3" />
-                <td className="px-4 py-3 font-semibold text-gray-700" colSpan={2}>Total confirmed sessions</td>
+                <td className="px-4 py-3 font-semibold text-gray-700" colSpan={2}>{showCustomers ? 'Totals' : 'Total confirmed sessions'}</td>
+                {showCustomers && <td className="px-4 py-3 text-right font-bold text-gray-900">{data.uniqueCustomers ?? counted}</td>}
                 <td className="px-4 py-3 text-right font-bold text-gray-900">{data.total}{data.unknown > 0 ? ` (${counted} mapped)` : ''}</td>
               </tr>
             </tfoot>

@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '../../../convex/_generated/api'
-import { type DateRange, downloadCsv, Loading, Empty } from './shared'
+import { type DateRange, downloadCsv, Loading, Empty, Section, KpiCard, BarRow } from './shared'
 
 const LANES = [
   { id: '', name: 'All lanes' },
@@ -36,6 +36,7 @@ export default function BookingsTab({ range }: { range: DateRange }) {
     search: search.trim() || undefined,
     sortBy, sortDir, page, pageSize,
   })
+  const cancel = useQuery(api.analyticsAdmin.getCancellationAnalytics, { from: range.from || undefined, to: range.to || undefined })
 
   const toggleSort = (col: string) => {
     if (sortBy === col) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -64,6 +65,9 @@ export default function BookingsTab({ range }: { range: DateRange }) {
 
   return (
     <div className="space-y-4">
+      {/* Cancellation timing */}
+      <CancellationPanel cancel={cancel} />
+
       {/* Filters */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-4 flex flex-wrap items-end gap-3">
         <label className="text-xs text-gray-500">Lane
@@ -159,5 +163,37 @@ export default function BookingsTab({ range }: { range: DateRange }) {
         )}
       </div>
     </div>
+  )
+}
+
+function CancellationPanel({ cancel }: { cancel: any }) {
+  const fmtH = (h: number) => (Math.abs(h) >= 24 ? `${(h / 24).toFixed(1)} days` : `${h.toFixed(1)} h`)
+  const rows = cancel ? [
+    { label: '> 48h before', value: cancel.buckets.gt48h, color: 'bg-emerald-600' },
+    { label: '24–48h before', value: cancel.buckets.h24_48, color: 'bg-emerald-500' },
+    { label: '6–24h before', value: cancel.buckets.h6_24, color: 'bg-blue-500' },
+    { label: '2–6h before', value: cancel.buckets.h2_6, color: 'bg-amber-500' },
+    { label: '< 2h before', value: cancel.buckets.lt2h, color: 'bg-red-500' },
+    { label: 'after start', value: cancel.buckets.after_start, color: 'bg-gray-500' },
+  ] : []
+  const max = rows.reduce((m, r) => Math.max(m, r.value), 0)
+  return (
+    <Section title="Cancellation timing" subtitle="How early or late people cancel, relative to the session start">
+      {cancel === undefined ? <Loading /> : cancel === null ? <Empty label="Unavailable." /> : cancel.cancelled === 0 ? (
+        <Empty label="No cancellations in range." />
+      ) : (
+        <div className="p-5 space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <KpiCard label="Cancellations" value={String(cancel.cancelled)} sub={`${cancel.cancellationRatePct}% of bookings`} tone="red" />
+            <KpiCard label="Median notice" value={fmtH(cancel.medianLeadHours)} sub="before session start" tone="blue" />
+            <KpiCard label={`Late (< ${cancel.lateWindowHours}h)`} value={`${cancel.lateCancelPct}%`} sub={`${cancel.withinLateWindow} inside window`} tone="amber" />
+            <KpiCard label="Coach late-charged" value={String(cancel.coachLateCharged)} sub="charged in full" tone="violet" />
+          </div>
+          <div className="space-y-2">
+            {rows.map((r) => <BarRow key={r.label} label={r.label} value={r.value} max={max} color={r.color} />)}
+          </div>
+        </div>
+      )}
+    </Section>
   )
 }

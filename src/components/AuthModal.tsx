@@ -60,8 +60,9 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
   const [email, setEmail] = useState(prefillEmail ?? '')
   const [phone, setPhone] = useState('')
   const [password, setPassword] = useState('')
-  // SPEC_SIGNUP_UPDATES_2026-06 G2 — coaching capture.
-  const [coachingYes, setCoachingYes] = useState(false)
+  // SPEC_SIGNUP_UPDATES_2026-06 G2 — coaching capture. Defaults to YES (most
+  // signups are coached athletes/parents linking their coach at signup).
+  const [coachingYes, setCoachingYes] = useState(true)
   const [selfCoached, setSelfCoached] = useState(false)
   const [selfCoachIds, setSelfCoachIds] = useState<string[]>([])
   const [children, setChildren] = useState<ChildRow[]>([])
@@ -381,11 +382,14 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
 
           {/* G2 — coaching capture (sits directly below Mobile) */}
           {mode === 'signup' && (
-            <div className="rounded-xl border border-gray-200 dark:border-gray-700 p-3 space-y-3">
+            <div className="rounded-xl border border-emerald-200 dark:border-emerald-800/50 bg-emerald-50/40 dark:bg-emerald-900/10 p-3 space-y-3">
+              <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400 font-bold text-sm">
+                <span>🏏</span> Link your Coaches
+              </div>
               <div>
                 <span className={labelCls}>Are you or any children being coached?</span>
                 <div className="flex gap-2">
-                  {[{ label: 'No', val: false }, { label: 'Yes', val: true }].map((opt) => (
+                  {[{ label: 'Yes', val: true }, { label: 'No', val: false }].map((opt) => (
                     <button
                       key={opt.label}
                       type="button"

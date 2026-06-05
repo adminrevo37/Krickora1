@@ -188,6 +188,8 @@ export const getAdminAnalytics = query({
 
     const laneMap = new Map<string, { name: string; bookings: number; hours: number }>();
     const hourMap = new Map<number, number>();
+    const hourMapWeekday = new Map<number, number>();
+    const hourMapWeekend = new Map<number, number>();
     const dowAgg = DOW_LABELS.map((day) => ({ day, bookings: 0, hours: 0 }));
     const custAgg = new Map<string, { email: string; name: string; bookings: number; hours: number }>();
 
@@ -258,6 +260,10 @@ export const getAdminAnalytics = query({
       const dow = new Date(yy, mm - 1, dd).getDay();
       dowAgg[dow].bookings++;
       dowAgg[dow].hours += hours;
+
+      // Peak times split weekday vs weekend (SPEC_ANALYTICS_BUILD addendum).
+      const wkMap = dow === 0 || dow === 6 ? hourMapWeekend : hourMapWeekday;
+      wkMap.set(hourBucket, (wkMap.get(hourBucket) ?? 0) + 1);
     }
 
     // Customer return / new metrics (period customers).
@@ -277,9 +283,11 @@ export const getAdminAnalytics = query({
     const byMonth = monthKeys.map((k) => byMonthMap.get(k)!);
     const lanes = Array.from(laneMap.values()).sort((a, b) => b.bookings - a.bookings)
       .map((l) => ({ ...l, hours: Math.round(l.hours * 10) / 10 }));
-    const timeSlots = Array.from(hourMap.entries())
-      .sort((a, b) => a[0] - b[0])
-      .map(([h, bookings]) => ({ label: hourLabel(h), bookings }));
+    const slotsFrom = (m: Map<number, number>) =>
+      Array.from(m.entries()).sort((a, b) => a[0] - b[0]).map(([h, bookings]) => ({ label: hourLabel(h), bookings }));
+    const timeSlots = slotsFrom(hourMap);
+    const timeSlotsWeekday = slotsFrom(hourMapWeekday);
+    const timeSlotsWeekend = slotsFrom(hourMapWeekend);
     const byDayOfWeek = dowAgg.map((d) => ({ ...d, hours: Math.round(d.hours * 10) / 10 }));
     const topCustomers = Array.from(custAgg.values())
       .sort((a, b) => b.bookings - a.bookings)
@@ -306,6 +314,8 @@ export const getAdminAnalytics = query({
       byMonth,
       lanes,
       timeSlots,
+      timeSlotsWeekday,
+      timeSlotsWeekend,
       byDayOfWeek,
       topCustomers,
     };
@@ -329,7 +339,10 @@ export const getCatchmentReport = query({
     const to = args.to?.trim() || undefined;
     const all = await ctx.db.query("bookings").collect();
 
-    const agg = new Map<string, { suburb: string; postcode: string; bookings: number }>();
+    // bookings = session count; customers = DISTINCT account (by email) per suburb,
+    // i.e. unique-user bookings — so 10 sessions from one family count as 1 customer.
+    const agg = new Map<string, { suburb: string; postcode: string; bookings: number; emails: Set<string> }>();
+    const allEmails = new Set<string>();
     let unknown = 0; // confirmed non-coach booking with no snapshot (backfill gap)
     let total = 0;
     for (const b of all) {
@@ -338,18 +351,28 @@ export const getCatchmentReport = query({
       if (from && b.date < from) continue;
       if (to && b.date > to) continue;
       total++;
+      const email = ((b as any).customerEmail || "").toLowerCase().trim();
+      if (email) allEmails.add(email);
       const suburb = ((b as any).bookingSuburb || "").trim();
       const postcode = ((b as any).bookingPostcode || "").trim();
       if (!suburb) { unknown++; continue; }
       const key = `${suburb}|${postcode}`;
-      const row = agg.get(key) ?? { suburb, postcode, bookings: 0 };
+      const row = agg.get(key) ?? { suburb, postcode, bookings: 0, emails: new Set<string>() };
       row.bookings++;
+      if (email) row.emails.add(email);
       agg.set(key, row);
     }
-    const bySuburb = Array.from(agg.values()).sort(
-      (a, b) => b.bookings - a.bookings || a.suburb.localeCompare(b.suburb)
-    );
-    return { bySuburb, unknown, total, from: from ?? null, to: to ?? null };
+    const bySuburb = Array.from(agg.values())
+      .map((r) => ({ suburb: r.suburb, postcode: r.postcode, bookings: r.bookings, customers: r.emails.size }))
+      .sort((a, b) => b.customers - a.customers || b.bookings - a.bookings || a.suburb.localeCompare(b.suburb));
+    return {
+      bySuburb,
+      unknown,
+      total,
+      uniqueCustomers: allEmails.size,
+      from: from ?? null,
+      to: to ?? null,
+    };
   },
 });
 

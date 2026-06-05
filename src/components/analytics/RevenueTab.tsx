@@ -6,7 +6,7 @@ import { api } from '../../../convex/_generated/api'
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
-import { type DateRange, KpiCard, Section, Loading, Empty, downloadCsv, fmtMoney } from './shared'
+import { type DateRange, KpiCard, Section, Loading, Empty, downloadCsv, fmtMoney, fmtMins, BarRow } from './shared'
 
 type Gran = 'hour' | 'day' | 'week' | 'month'
 
@@ -46,6 +46,10 @@ export default function RevenueTab({ range }: { range: DateRange }) {
   const credit = useQuery(api.analyticsAdmin.getCreditAnalytics, {
     from: range.from || undefined, to: range.to || undefined,
   })
+  const period = useQuery(api.analyticsAdmin.getPeriodSummary, {})
+  const lead = useQuery(api.analyticsAdmin.getBookingLeadTime, {
+    from: range.from || undefined, to: range.to || undefined,
+  })
 
   const shift = (dir: -1 | 1) => {
     // For 'hour' the window aggregates a date range; nudge by the span too.
@@ -68,6 +72,9 @@ export default function RevenueTab({ range }: { range: DateRange }) {
 
   return (
     <div className="space-y-5">
+      {/* Today / this week / next week snapshot */}
+      <PeriodSummary period={period} />
+
       {/* Controls */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex gap-1 bg-gray-100 rounded-xl p-1">
@@ -123,9 +130,72 @@ export default function RevenueTab({ range }: { range: DateRange }) {
         </div>
       </Section>
 
+      {/* Booking lead time — how far ahead people book */}
+      <LeadTimePanel lead={lead} />
+
       {/* Credit analytics (C2.9) */}
       <CreditPanel credit={credit} />
     </div>
+  )
+}
+
+function PeriodSummary({ period }: { period: any }) {
+  if (period === undefined) return <Loading label="Loading today…" />
+  if (period === null) return null
+  const Card = ({ title, b, tone, extra }: { title: string; b: any; tone: any; extra?: string }) => (
+    <div className={`rounded-2xl border border-gray-200 shadow-sm p-5 ${tone}`}>
+      <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{title}</div>
+      <div className="text-2xl font-bold text-gray-900 mt-1">{fmtMoney(b.custRevenue)}</div>
+      <div className="text-xs text-gray-500 mt-0.5">customer revenue</div>
+      <div className="mt-2 text-sm text-gray-700">{b.bookings} booking{b.bookings !== 1 ? 's' : ''} · {b.hours} hrs</div>
+      {b.coachCharges > 0 && <div className="text-xs text-violet-600 mt-0.5">+ {fmtMoney(b.coachCharges)} coach charges</div>}
+      {extra && <div className="text-[11px] text-gray-400 mt-1">{extra}</div>}
+    </div>
+  )
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+      <Card title="Today" b={period.today} tone="bg-emerald-50" extra={`${period.createdToday.count} booking${period.createdToday.count !== 1 ? 's' : ''} created today (${fmtMoney(period.createdToday.custRevenue)})`} />
+      <Card title="This week" b={period.thisWeek} tone="bg-blue-50" extra={`${period.ranges.thisMon} → ${period.ranges.thisSun}`} />
+      <Card title="Next week" b={period.nextWeek} tone="bg-violet-50" extra={`${period.ranges.nextMon} → ${period.ranges.nextSun}`} />
+      <div className="rounded-2xl border border-gray-200 shadow-sm p-5 bg-amber-50">
+        <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Created today</div>
+        <div className="text-2xl font-bold text-gray-900 mt-1">{period.createdToday.count}</div>
+        <div className="text-xs text-gray-500 mt-0.5">new bookings made today</div>
+        <div className="mt-2 text-sm text-gray-700">{fmtMoney(period.createdToday.custRevenue)} value</div>
+      </div>
+    </div>
+  )
+}
+
+function LeadTimePanel({ lead }: { lead: any }) {
+  const rows = lead ? [
+    { label: '> 2 weeks', value: lead.buckets.gt14, color: 'bg-emerald-600' },
+    { label: '1–2 weeks', value: lead.buckets.d7_14, color: 'bg-emerald-500' },
+    { label: '3–7 days', value: lead.buckets.d3_7, color: 'bg-blue-500' },
+    { label: '1–3 days', value: lead.buckets.d1_3, color: 'bg-blue-400' },
+    { label: '2–24 hours', value: lead.buckets.h2_24, color: 'bg-amber-500' },
+    { label: '< 2 hours', value: lead.buckets.lt2h, color: 'bg-red-500' },
+    { label: 'walk-in / after start', value: lead.buckets.walk_in, color: 'bg-gray-400' },
+  ] : []
+  const max = rows.reduce((m, r) => Math.max(m, r.value), 0)
+  return (
+    <Section title="Booking lead time" subtitle="How far ahead people book — gap between when the booking was made and the session start">
+      {lead === undefined ? <Loading /> : !lead || lead.counted === 0 ? (
+        <Empty label="No bookings with a creation timestamp in range yet (tracked on bookings made from June 2026 on)." />
+      ) : (
+        <div className="p-5 space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <KpiCard label="Median lead" value={fmtMins(lead.medianLeadHours * 60)} sub={`${lead.medianLeadDays} days`} tone="emerald" />
+            <KpiCard label="Avg lead" value={`${lead.avgLeadDays} days`} />
+            <KpiCard label="Customer median" value={`${lead.custMedianLeadDays} days`} sub="customers only" tone="blue" />
+            <KpiCard label="Bookings analysed" value={String(lead.counted)} />
+          </div>
+          <div className="space-y-2">
+            {rows.map((r) => <BarRow key={r.label} label={r.label} value={r.value} max={max} color={r.color} />)}
+          </div>
+        </div>
+      )}
+    </Section>
   )
 }
 

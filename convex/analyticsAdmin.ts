@@ -11,7 +11,10 @@ import { getCallerContext } from "./lib/adminGuard";
 import { defaultLaneName } from "./lib/lanes";
 import {
   DOW_LABELS,
+  HOUR_MS,
+  DAY_MS,
   awstDateKey,
+  awstDateKeyToMs,
   dayLabel,
   isoWeekKey,
   monthKey,
@@ -274,6 +277,8 @@ export const getOccupancy = query({
     const byDate = new Map<string, number>(); // booked lane-hours per day
     const byLane = new Map<string, number>();
     const byHour = new Map<number, number>(); // booked count per hour-of-day
+    const byHourWeekday = new Map<number, number>();
+    const byHourWeekend = new Map<number, number>();
     for (const b of all as any[]) {
       const laneIds = [b.laneId, ...(b.additionalLaneIds ?? [])];
       const hours = (b.duration ?? 0) / 60;
@@ -281,6 +286,11 @@ export const getOccupancy = query({
       for (const lid of laneIds) byLane.set(lid, (byLane.get(lid) ?? 0) + hours);
       const hb = Math.floor(b.startHour ?? 0);
       byHour.set(hb, (byHour.get(hb) ?? 0) + 1);
+      const [yy, mm, dd] = b.date.split("-").map(Number);
+      const dow = new Date(Date.UTC(yy, (mm || 1) - 1, dd || 1)).getUTCDay();
+      const isWeekend = dow === 0 || dow === 6;
+      const target = isWeekend ? byHourWeekend : byHourWeekday;
+      target.set(hb, (target.get(hb) ?? 0) + 1);
     }
 
     let totalBooked = 0;
@@ -303,9 +313,9 @@ export const getOccupancy = query({
       name: defaultLaneName(lid),
       hours: round2(byLane.get(lid) ?? 0),
     }));
-    const byHourOfDay = Array.from(byHour.entries())
-      .sort((a, b) => a[0] - b[0])
-      .map(([h, count]) => ({ hour: h, count }));
+    const hourSeries = (m: Map<number, number>) =>
+      Array.from(m.entries()).sort((a, b) => a[0] - b[0]).map(([h, count]) => ({ hour: h, count }));
+    const byHourOfDay = hourSeries(byHour);
 
     return {
       overallPct: totalCapacity > 0 ? Math.round((totalBooked / totalCapacity) * 100) : 0,
@@ -315,6 +325,8 @@ export const getOccupancy = query({
       daily,
       lanes,
       byHourOfDay,
+      byHourWeekday: hourSeries(byHourWeekday),
+      byHourWeekend: hourSeries(byHourWeekend),
     };
   },
 });
@@ -576,5 +588,231 @@ export const getDiscountPerformance = query({
       })
       .sort((a, b) => b.redemptions - a.redemptions);
     return { rows, totalRedemptions: rows.reduce((s, r) => s + r.redemptions, 0) };
+  },
+});
+
+// ============================================================================
+// Today / this week / next week revenue + bookings, plus bookings created today.
+// ============================================================================
+type PeriodBucket = {
+  custRevenue: number; coachCharges: number; bookings: number;
+  customerBookings: number; coachBookings: number; hours: number;
+};
+const blankBucket = (): PeriodBucket => ({
+  custRevenue: 0, coachCharges: 0, bookings: 0, customerBookings: 0, coachBookings: 0, hours: 0,
+});
+
+export const getPeriodSummary = query({
+  args: {},
+  handler: async (ctx) => {
+    if (!(await isAdmin(ctx))) return null;
+    const all = await ctx.db.query("bookings").collect();
+    const today = awstDateKey(Date.now());
+    const wk = isoWeekKey(today);
+    const thisMon = wk.key;
+    const thisSun = awstDateKey(wk.mondayMs + 6 * DAY_MS);
+    const nextMon = awstDateKey(wk.mondayMs + 7 * DAY_MS);
+    const nextSun = awstDateKey(wk.mondayMs + 13 * DAY_MS);
+    const todayStartMs = awstDateKeyToMs(today);
+    const todayEndMs = todayStartMs + DAY_MS;
+
+    const todayB = blankBucket();
+    const thisWeek = blankBucket();
+    const nextWeek = blankBucket();
+    let createdTodayCount = 0;
+    let createdTodayRevenue = 0;
+
+    for (const b of all as any[]) {
+      if (b.status !== "confirmed") continue;
+      const h = (b.duration ?? 0) / 60;
+      const rev = b.priceInCents != null ? b.priceInCents / 100 : 0;
+      const coach = b.isCoachBooking ? (b.coachPrice ?? 0) : 0;
+      const add = (bk: PeriodBucket) => {
+        bk.bookings++; bk.hours += h;
+        if (b.isCoachBooking) { bk.coachBookings++; bk.coachCharges += coach; }
+        else { bk.customerBookings++; bk.custRevenue += rev; }
+      };
+      if (b.date === today) add(todayB);
+      if (b.date >= thisMon && b.date <= thisSun) add(thisWeek);
+      if (b.date >= nextMon && b.date <= nextSun) add(nextWeek);
+      if (typeof b.createdAt === "number" && b.createdAt >= todayStartMs && b.createdAt < todayEndMs) {
+        createdTodayCount++;
+        if (!b.isCoachBooking) createdTodayRevenue += rev;
+      }
+    }
+    const fin = (bk: PeriodBucket) => ({
+      ...bk, custRevenue: round2(bk.custRevenue), coachCharges: round2(bk.coachCharges), hours: round2(bk.hours),
+    });
+    return {
+      today: fin(todayB),
+      thisWeek: fin(thisWeek),
+      nextWeek: fin(nextWeek),
+      createdToday: { count: createdTodayCount, custRevenue: round2(createdTodayRevenue) },
+      ranges: { today, thisMon, thisSun, nextMon, nextSun },
+    };
+  },
+});
+
+// ============================================================================
+// Booking lead time — how far ahead people book (createdAt → session start).
+// ============================================================================
+export const getBookingLeadTime = query({
+  args: { from: v.optional(v.string()), to: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    if (!(await isAdmin(ctx))) return null;
+    const all = await ctx.db.query("bookings").collect();
+    const leadsH: number[] = []; // hours ahead
+    const custLeadsH: number[] = [];
+    const buckets = { walk_in: 0, lt2h: 0, h2_24: 0, d1_3: 0, d3_7: 0, d7_14: 0, gt14: 0 };
+    let counted = 0;
+    for (const b of all as any[]) {
+      if (b.status !== "confirmed") continue;
+      if (typeof b.createdAt !== "number") continue; // legacy rows have no createdAt
+      if (!inRange(b.date, args.from, args.to)) continue;
+      const startMs = awstDateKeyToMs(b.date) + (b.startHour ?? 0) * HOUR_MS;
+      const leadH = (startMs - b.createdAt) / HOUR_MS;
+      counted++;
+      leadsH.push(leadH);
+      if (!b.isCoachBooking) custLeadsH.push(leadH);
+      if (leadH < 0) buckets.walk_in++;
+      else if (leadH < 2) buckets.lt2h++;
+      else if (leadH < 24) buckets.h2_24++;
+      else if (leadH < 72) buckets.d1_3++;
+      else if (leadH < 168) buckets.d3_7++;
+      else if (leadH < 336) buckets.d7_14++;
+      else buckets.gt14++;
+    }
+    return {
+      counted,
+      medianLeadHours: leadsH.length ? round2(median(leadsH)) : 0,
+      medianLeadDays: leadsH.length ? round2(median(leadsH) / 24) : 0,
+      avgLeadDays: leadsH.length ? round2(leadsH.reduce((s, x) => s + x, 0) / leadsH.length / 24) : 0,
+      custMedianLeadDays: custLeadsH.length ? round2(median(custLeadsH) / 24) : 0,
+      buckets,
+    };
+  },
+});
+
+// ============================================================================
+// Cancellation timing — how early/late people cancel relative to session start.
+// ============================================================================
+export const getCancellationAnalytics = query({
+  args: { from: v.optional(v.string()), to: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    if (!(await isAdmin(ctx))) return null;
+    const settings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    const lateWindowH = settings?.customerCancellationHours ?? settings?.cancellationHoursBefore ?? 2;
+
+    const all = await ctx.db.query("bookings").collect();
+    const leadsH: number[] = [];
+    const buckets = { gt48h: 0, h24_48: 0, h6_24: 0, h2_6: 0, lt2h: 0, after_start: 0 };
+    let cancelled = 0;
+    let withinLateWindow = 0; // cancelled inside the customer cancellation window
+    let coachLateCharged = 0;
+    let confirmedOrCancelled = 0;
+    for (const b of all as any[]) {
+      if (b.status === "confirmed") confirmedOrCancelled++;
+      if (b.status !== "cancelled") continue;
+      if (!inRange(b.date, args.from, args.to)) continue;
+      cancelled++;
+      confirmedOrCancelled++;
+      if (b.coachLateCancelCharged) coachLateCharged++;
+      const cancelledAtMs = b.cancelledAt ? Date.parse(b.cancelledAt) : NaN;
+      if (!Number.isFinite(cancelledAtMs)) continue;
+      const startMs = awstDateKeyToMs(b.date) + (b.startHour ?? 0) * HOUR_MS;
+      const leadH = (startMs - cancelledAtMs) / HOUR_MS; // +ve = before start
+      leadsH.push(leadH);
+      if (leadH < 0) buckets.after_start++;
+      else if (leadH < 2) buckets.lt2h++;
+      else if (leadH < 6) buckets.h2_6++;
+      else if (leadH < 24) buckets.h6_24++;
+      else if (leadH < 48) buckets.h24_48++;
+      else buckets.gt48h++;
+      if (leadH >= 0 && leadH < lateWindowH) withinLateWindow++;
+    }
+    return {
+      cancelled,
+      cancellationRatePct: confirmedOrCancelled > 0 ? Math.round((cancelled / confirmedOrCancelled) * 100) : 0,
+      medianLeadHours: leadsH.length ? round2(median(leadsH)) : 0,
+      avgLeadHours: leadsH.length ? round2(leadsH.reduce((s, x) => s + x, 0) / leadsH.length) : 0,
+      lateWindowHours: lateWindowH,
+      withinLateWindow,
+      lateCancelPct: cancelled > 0 ? Math.round((withinLateWindow / cancelled) * 100) : 0,
+      coachLateCharged,
+      buckets,
+    };
+  },
+});
+
+// ============================================================================
+// Top customers — this month vs all time, side by side (no email/PII).
+// ============================================================================
+export const getTopCustomersComparison = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    if (!(await isAdmin(ctx))) return null;
+    const limit = Math.min(Math.max(args.limit ?? 10, 1), 50);
+    const all = (await ctx.db.query("bookings").collect()).filter(
+      (b: any) => !b.isCoachBooking && b.status === "confirmed" && b.customerEmail
+    );
+    const thisMonthKey = awstDateKey(Date.now()).slice(0, 7); // YYYY-MM
+
+    type Agg = { name: string; bookings: number; revenue: number };
+    const allTime = new Map<string, Agg>();
+    const month = new Map<string, Agg>();
+    for (const b of all as any[]) {
+      const email = b.customerEmail.toLowerCase();
+      const rev = b.priceInCents != null ? b.priceInCents / 100 : 0;
+      const a = allTime.get(email) ?? { name: b.customerName ?? email, bookings: 0, revenue: 0 };
+      a.bookings++; a.revenue += rev; allTime.set(email, a);
+      if (b.date.slice(0, 7) === thisMonthKey) {
+        const m = month.get(email) ?? { name: b.customerName ?? email, bookings: 0, revenue: 0 };
+        m.bookings++; m.revenue += rev; month.set(email, m);
+      }
+    }
+    const top = (m: Map<string, Agg>) =>
+      Array.from(m.values())
+        .sort((a, b) => b.bookings - a.bookings || b.revenue - a.revenue)
+        .slice(0, limit)
+        .map((c) => ({ name: c.name, bookings: c.bookings, revenue: round2(c.revenue) }));
+    return { thisMonth: top(month), allTime: top(allTime), monthKey: thisMonthKey };
+  },
+});
+
+// ============================================================================
+// Weekly lane utilisation (booked hours per physical lane per week). Scrollable
+// week-by-week to monitor carpet wear. Includes additional lanes per booking.
+// ============================================================================
+export const getLaneWeekly = query({
+  args: { from: v.optional(v.string()), to: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    if (!(await isAdmin(ctx))) return null;
+    const all = (await ctx.db.query("bookings").collect()).filter(
+      (b: any) => b.status === "confirmed" && inRange(b.date, args.from, args.to)
+    );
+    // weekKey -> { label, mondayMs, lanes: {laneId: hours}, total }
+    const weeks = new Map<string, { label: string; mondayMs: number; lanes: Record<string, number>; total: number }>();
+    for (const b of all as any[]) {
+      const w = isoWeekKey(b.date);
+      const entry = weeks.get(w.key) ?? { label: w.label, mondayMs: w.mondayMs, lanes: {}, total: 0 };
+      const h = (b.duration ?? 0) / 60;
+      for (const lid of [b.laneId, ...((b.additionalLaneIds as string[]) ?? [])]) {
+        entry.lanes[lid] = (entry.lanes[lid] ?? 0) + h;
+        entry.total += h;
+      }
+      weeks.set(w.key, entry);
+    }
+    const series = Array.from(weeks.entries())
+      .sort((a, b) => a[1].mondayMs - b[1].mondayMs)
+      .map(([weekKey, e]) => ({
+        weekKey,
+        label: e.label,
+        total: round2(e.total),
+        lanes: Object.fromEntries(LANE_IDS.map((lid) => [lid, round2(e.lanes[lid] ?? 0)])),
+      }));
+    return { laneIds: LANE_IDS, laneNames: LANE_IDS.map((l) => defaultLaneName(l)), series };
   },
 });
