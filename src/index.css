@@ -5,6 +5,17 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* iOS auto-zooms the page whenever a form control with font-size < 16px is
+   focused. Force every control to ≥16px on phones so the app width stays fixed
+   on focus (Inspector request) — without disabling pinch-zoom. */
+@media (max-width: 640px) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);

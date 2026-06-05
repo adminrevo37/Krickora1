@@ -7,6 +7,7 @@ import PostcodeRequiredModal from '../components/PostcodeRequiredModal'
 import PwaUpdater from '../components/PwaUpdater'
 import InstallPrompt, { openInstallHelp } from '../components/InstallPrompt'
 import AnnouncementHost from '../components/AnnouncementHost'
+import PushReminderBanners from '../components/PushReminderBanners'
 import { useImpersonation } from '../hooks/useImpersonation'
 import { useLaneConfig } from '../hooks/useLaneConfig'
 
@@ -138,6 +139,10 @@ function RootComponent() {
           </div>
         </div>
       </header>
+
+      {/* Install-app / push reminder banners (red). Browser → permanent install nag;
+          installed PWA → dismissable push-test helper. Authenticated users, all pages. */}
+      <PushReminderBanners />
 
       {/* SPEC_INAPP_BANNERS — admin-managed in-app banner strip + pop-up modal.
           Self-gates on auth resolving (no flash); renders nothing when there's

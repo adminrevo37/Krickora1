@@ -48,10 +48,11 @@ export default function CoachMultiSelect({
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase()
+    // No cap — the full filtered list is shown in a scrollable box (the old
+    // slice(0,8) meant longer lists silently couldn't be reached).
     return coaches
       .filter((c) => !value.includes(c._id))
       .filter((c) => (q ? c.name.toLowerCase().includes(q) : true))
-      .slice(0, 8)
   }, [coaches, value, query])
 
   const add = (id: string) => {
@@ -114,12 +115,16 @@ export default function CoachMultiSelect({
         onFocus={() => setOpen(true)}
         onBlur={() => { blurTimer.current = setTimeout(() => setOpen(false), 120) }}
         placeholder={placeholder}
-        className={`w-full px-3 py-2 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:border-transparent transition-all disabled:opacity-50 ${inputCls}`}
+        className={`w-full px-3 py-2 rounded-lg border text-base focus:outline-none focus:ring-2 focus:border-transparent transition-all disabled:opacity-50 ${inputCls}`}
       />
 
+      {/* Results render INLINE (not absolute): the parent card uses overflow-hidden,
+          which clipped the old absolute dropdown so longer lists couldn't be scrolled.
+          In-flow + max-h + overflow-y-auto makes the full list reliably scrollable on
+          mobile, while overscroll-contain stops the scroll chaining to the page. */}
       {open && results.length > 0 && (
         <div
-          className={`absolute z-20 mt-1 w-full max-h-52 overflow-auto rounded-lg border shadow-lg ${menuCls}`}
+          className={`mt-1 w-full max-h-60 overflow-y-auto overscroll-contain rounded-lg border shadow-sm ${menuCls}`}
           onMouseDown={() => { if (blurTimer.current) clearTimeout(blurTimer.current) }}
         >
           {results.map((c) => (
@@ -127,7 +132,7 @@ export default function CoachMultiSelect({
               key={c._id}
               type="button"
               onClick={() => add(c._id)}
-              className={`block w-full text-left px-3 py-2 text-sm ${itemCls}`}
+              className={`block w-full text-left px-3 py-2.5 text-base ${itemCls}`}
             >
               {c.name}
             </button>
@@ -135,7 +140,7 @@ export default function CoachMultiSelect({
         </div>
       )}
       {open && query.trim() && results.length === 0 && (
-        <div className={`absolute z-20 mt-1 w-full rounded-lg border shadow-lg px-3 py-2 text-sm ${menuCls} ${dark ? 'text-gray-400' : 'text-gray-400'}`}>
+        <div className={`mt-1 w-full rounded-lg border shadow-sm px-3 py-2 text-sm ${menuCls} ${dark ? 'text-gray-400' : 'text-gray-400'}`}>
           No coaches match “{query.trim()}”.
         </div>
       )}
