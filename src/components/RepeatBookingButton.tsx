@@ -42,7 +42,7 @@ function fmtLongDate(key: string): string {
   })
 }
 
-export default function RepeatBookingButton({ booking }: { booking: Booking }) {
+export default function RepeatBookingButton({ booking, compact }: { booking: Booking; compact?: boolean }) {
   const { customerRecord } = useAuth()
   const settings = useSettings()
   const [open, setOpen] = useState(false)
@@ -80,13 +80,22 @@ export default function RepeatBookingButton({ booking }: { booking: Booking }) {
         onClick={(e) => { e.stopPropagation(); if (enabled) setOpen(true) }}
         disabled={!enabled}
         title={reason ?? `Repeat this session next week (${fmtLongDate(target.toISOString().slice(0, 10))})`}
-        className={`text-[11px] px-2.5 py-1 rounded-lg border transition-colors ${
-          enabled
-            ? 'border-sky-200 dark:border-sky-800 text-sky-600 dark:text-sky-400 hover:bg-sky-50 dark:hover:bg-sky-900/20'
-            : 'border-gray-200 dark:border-gray-700 text-gray-400 cursor-not-allowed'
-        }`}
+        className={
+          compact
+            ? `flex items-center justify-center w-6 h-6 rounded-md border text-[12px] leading-none transition-colors ${
+                enabled
+                  ? 'border-sky-300 bg-white/90 text-sky-600 hover:bg-sky-50 shadow-sm'
+                  : 'border-gray-200 bg-white/70 text-gray-300 cursor-not-allowed'
+              }`
+            : `text-[11px] px-2.5 py-1 rounded-lg border transition-colors ${
+                enabled
+                  ? 'border-sky-200 dark:border-sky-800 text-sky-600 dark:text-sky-400 hover:bg-sky-50 dark:hover:bg-sky-900/20'
+                  : 'border-gray-200 dark:border-gray-700 text-gray-400 cursor-not-allowed'
+              }`
+        }
+        aria-label={compact ? 'Repeat this session next week' : undefined}
       >
-        ↻ Repeat
+        {compact ? '↻' : '↻ Repeat'}
       </button>
       {open && <RepeatConfirmModal booking={booking} onClose={() => setOpen(false)} />}
     </>

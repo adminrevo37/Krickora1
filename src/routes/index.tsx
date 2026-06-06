@@ -1,12 +1,16 @@
-import { useState } from 'react'
+import { useState, lazy, Suspense } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import BookingCalendar from '../components/BookingCalendar'
-import AdminBookingCalendar from '../components/AdminBookingCalendar'
 import AuthModal from '../components/AuthModal'
 import { useAuth } from '../hooks/useAuth'
 import { useImpersonation } from '../hooks/useImpersonation'
+
+// Batch 5: the admin calendar (~75 KB) is only ever rendered for admins, but a
+// static import shipped it in the customer home-route chunk. Lazy-load it so the
+// default booking experience doesn't pay for it.
+const AdminBookingCalendar = lazy(() => import('../components/AdminBookingCalendar'))
 
 export const Route = createFileRoute('/')({
   component: HomePage,
@@ -57,7 +61,13 @@ function HomePage() {
             <h1 className="text-3xl font-bold text-gray-900">Booking Calendar</h1>
             <p className="text-gray-500 mt-1">Admin view — full 12-month history and forward bookings</p>
           </div>
-          <AdminBookingCalendar />
+          <Suspense fallback={
+            <div className="flex items-center justify-center min-h-[40vh]">
+              <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          }>
+            <AdminBookingCalendar />
+          </Suspense>
         </div>
       )
     }

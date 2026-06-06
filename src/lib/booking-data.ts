@@ -148,7 +148,7 @@ export interface Booking {
   customerEmail: string
   customerPhone?: string
   userId?: string
-  status: 'confirmed' | 'pending' | 'pending_payment' | 'cancelled' | 'tentative'
+  status: 'confirmed' | 'pending' | 'pending_payment' | 'cancelled'
   paymentStatus?: 'paid' | 'pending' | 'failed'
   priceInCents?: number
   stripeSessionId?: string
@@ -162,9 +162,6 @@ export interface Booking {
   // Coach cancellation refill tracking
   refilledMinutes?: number
   originalCoachId?: string
-  // Tentative booking reference
-  tentativeSourceId?: string
-  tentativeForDate?: string
   // Door access code for facility entry
   accessCode?: string
   // Discount code applied to this booking
@@ -666,6 +663,24 @@ export function getVisibleWeekDays(role: ReleaseRole, tier: ReleaseTier, s?: Rel
   const start = new Date(now); start.setHours(0, 0, 0, 0)
   const offset = (start.getDay() - weekStartDow + 7) % 7
   start.setDate(start.getDate() - offset)
+  const days: Date[] = []
+  for (let i = 0; i < 7; i++) { const d = new Date(start); d.setDate(start.getDate() + i); days.push(d) }
+  return days
+}
+
+/**
+ * SPEC_COACH_CALENDAR §1E — the Mon–Sun week `weeksBack` weeks before the current
+ * one, for coach back-navigation (read-only review of past sessions). `weeksBack` is
+ * a positive integer (1 = last week, 2 = two weeks ago). Uses the same release-anchored
+ * week start as getVisibleWeekDays so the columns line up with the live view.
+ */
+export function getPastWeekDays(weeksBack: number, role: ReleaseRole, tier: ReleaseTier, s?: ReleaseSettings, now: Date = getAWSTNow()): Date[] {
+  const { day } = releaseFor(role, tier, s)
+  const releaseDow = DAY_INDEX[day] ?? 0
+  const weekStartDow = (releaseDow + 1) % 7 // day after release = week start (Mon for Sun release)
+  const start = new Date(now); start.setHours(0, 0, 0, 0)
+  const offset = (start.getDay() - weekStartDow + 7) % 7
+  start.setDate(start.getDate() - offset - weeksBack * 7)
   const days: Date[] = []
   for (let i = 0; i < 7; i++) { const d = new Date(start); d.setDate(start.getDate() + i); days.push(d) }
   return days

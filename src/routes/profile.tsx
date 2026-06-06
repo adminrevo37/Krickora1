@@ -78,7 +78,10 @@ function ProfilePage() {
       setMessage({ type: 'error', text: 'First name cannot be empty' })
       return
     }
-    if (!isLocationComplete(location)) {
+    // Bug 5: coaches have no postcode requirement — gating the WHOLE save on a
+    // complete location silently blocked a coach from saving their session length
+    // (the "doom loop"). Only enforce the location for non-coaches.
+    if (!isCoach && !isLocationComplete(location)) {
       setMessage({ type: 'error', text: 'Please enter a valid WA postcode and select your suburb.' })
       return
     }
@@ -247,9 +250,7 @@ function ProfilePage() {
           <MyMatesCard />
         </div>
       )}
-      <div className="mt-6">
-        <PushNotificationsCard />
-      </div>
+      {/* Bug 6: email notifications sit ABOVE push notifications. */}
       <div className="mt-6">
         <EmailNotificationsCard
           customerRecord={customerRecord}
@@ -257,6 +258,9 @@ function ProfilePage() {
           userName={user.name}
           updateCustomerByEmail={updateCustomerByEmail}
         />
+      </div>
+      <div className="mt-6">
+        <PushNotificationsCard />
       </div>
     </div>
   )

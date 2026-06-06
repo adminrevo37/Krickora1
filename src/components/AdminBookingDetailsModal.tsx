@@ -15,7 +15,7 @@ interface Props {
 }
 
 const ALL_DURATION_OPTIONS = [30, 60, 90, 120, 150, 180, 240, 300, 360]
-const STATUS_OPTIONS = ['confirmed', 'tentative', 'cancelled']
+const STATUS_OPTIONS = ['confirmed', 'cancelled']
 
 /** Convert an ISO timestamp to a relative string like "2h ago" or "3d ago". */
 function relativeTime(isoStr: string): string {
@@ -247,7 +247,6 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                 <Field label="Status" value={
                   <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
                     status === 'confirmed' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' :
-                    status === 'tentative' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
                     'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400'
                   }`}>{status}</span>
                 } />

@@ -21,3 +21,9 @@ export const DEFAULT_COACH_COLOR = '#dc2626' // rose-600 (matches the legacy red
 export const AMBER_HATCH =
   'repeating-linear-gradient(45deg,#fef3c7,#fef3c7 5px,#fde68a 5px,#fde68a 10px)'
 export const AMBER_TEXT = '#92400e'
+
+// SPEC_COACH_CALENDAR §1A — a user's OWN bookings are BLUE everywhere (calendar +
+// My Bookings), unifying customer blue with the coach's allocated coverage. Replaces
+// the coach colour (#dc2626) on the coach's OWN views only; the ADMIN calendar keeps
+// per-coach colours. blue-500 matches the customer "Your booking" tint.
+export const OWN_BLUE = '#3b82f6'

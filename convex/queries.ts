@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { requireAdmin, getCallerContext, stripBookingPII } from "./lib/adminGuard";
 import { validateDiscount } from "./lib/discounts";
+import { resolveCanonicalCustomerByEmail, customerIdsForEmail } from "./lib/identity";
 
 // Scope a list of bookings to the caller: full PII for own bookings (or admin),
 // sanitised "Booked"/stripped for everyone else (SEC-1, decision #1).
@@ -42,10 +43,8 @@ export const listBookings = query({
     }
 
     const callerEmail = identity.email?.toLowerCase().trim() ?? "";
-    const callerCustomer = await ctx.db
-      .query("customers")
-      .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
-      .first();
+    // Batch 2B: canonical resolution so a drifted row can't mis-detect an admin.
+    const callerCustomer = await resolveCanonicalCustomerByEmail(ctx, callerEmail);
 
     if (callerCustomer?.role === "admin") {
       return bookings; // Admins see full PII for all bookings
@@ -317,12 +316,8 @@ export const listAthletesByCoach = query({
     const caller = await getCallerContext(ctx);
     if (!caller.identity) return [];
     if (!caller.isAdmin) {
-      const callerCustomer = caller.email
-        ? await ctx.db
-            .query("customers")
-            .withIndex("by_email", (q: any) => q.eq("email", caller.email))
-            .first()
-        : null;
+      // Batch 2B: resolve the CANONICAL coach row (prefer coach/admin), not .first().
+      const callerCustomer = await resolveCanonicalCustomerByEmail(ctx, caller.email);
       const matchesCoach =
         callerCustomer &&
         callerCustomer.role === "coach" &&
@@ -331,23 +326,29 @@ export const listAthletesByCoach = query({
       if (!matchesCoach) return [];
     }
 
-    // Resolve the coach to their _id (callers may pass an email).
-    let coachId = args.coachId;
-    const coachByEmail = await ctx.db
-      .query("customers")
-      .withIndex("by_email", (q: any) =>
-        q.eq("email", args.coachId.toLowerCase().trim())
-      )
-      .first();
-    if (coachByEmail && coachByEmail.role === "coach") coachId = coachByEmail._id;
+    // Batch 2C: gather EVERY id form this coach has been known by — the canonical
+    // customers _id PLUS any duplicate rows sharing the coach's email — so athletes
+    // pointing at a historical/duplicate id still match (the broken Dean↔Bree link).
+    // args.coachId may be an email or an id; resolve the email either way.
+    const idForms = new Set<string>([args.coachId]);
+    let coachEmail: string | null = args.coachId.includes("@")
+      ? args.coachId.toLowerCase().trim()
+      : null;
+    if (!coachEmail) {
+      let coachRow: any = null;
+      try { coachRow = await ctx.db.get(args.coachId as any); } catch { coachRow = null; }
+      if (coachRow?.email) coachEmail = String(coachRow.email).toLowerCase().trim();
+    }
+    if (coachEmail) {
+      for (const id of await customerIdsForEmail(ctx, coachEmail)) idForms.add(id);
+    }
 
-    // Athletes whose assignedCoachIds include this coach (either id form).
+    // Athletes whose assignedCoachIds include ANY of the coach's id forms.
     const allAthletes = await ctx.db.query("athletes").collect();
     const matched = allAthletes.filter(
       (a: any) =>
         a.assignedCoachIds &&
-        (a.assignedCoachIds.includes(coachId) ||
-          a.assignedCoachIds.includes(args.coachId))
+        a.assignedCoachIds.some((cid: string) => idForms.has(cid))
     );
 
     // Enrich with the owning account's contact details.

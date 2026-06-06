@@ -201,7 +201,7 @@ export const getAllActiveBookings = internalQuery({
   args: {},
   handler: async (ctx) => {
     const all = await ctx.db.query("bookings").collect();
-    return all.filter(b => b.status === "confirmed" || b.status === "tentative");
+    return all.filter(b => b.status === "confirmed");
   },
 });
 

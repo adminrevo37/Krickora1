@@ -22,6 +22,7 @@ import { composeName, splitName } from "./lib/names";
 import { validateLocationIfProvided, normalizePostcode, normalizeSuburb } from "./lib/locations";
 import { normalizeAuMobile } from "./lib/phone";
 import { requireAdmin, requireAdminUnlocked, getCallerContext, writeRoleAudit } from "./lib/adminGuard";
+import { resolveCanonicalCustomerByEmail } from "./lib/identity";
 
 const siteUrl = process.env.SITE_URL || "";
 
@@ -450,13 +451,10 @@ export const getCurrentUser = query({
       // Guarded separately so a customers-lookup failure can never null out identity.
       let customer: any = null;
       try {
-        const normalized = (user.email ?? "").toLowerCase().trim();
-        if (normalized) {
-          customer = await ctx.db
-            .query("customers")
-            .withIndex("by_email", (q: any) => q.eq("email", normalized))
-            .first();
-        }
+        // Batch 2B: resolve the CANONICAL customers row (prefer coach/admin) so a
+        // duplicate/role-drifted row can't demote a coach to a customer in the client
+        // identity — the source of the no-blue / customer-pay-modal coach bugs.
+        customer = await resolveCanonicalCustomerByEmail(ctx, user.email);
       } catch {
         customer = null;
       }

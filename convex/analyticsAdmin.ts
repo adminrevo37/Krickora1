@@ -167,7 +167,7 @@ export const getBookingRevenueSeries = query({
 
     for (const b of all as any[]) {
       if (!inRange(b.date, args.from, args.to)) continue;
-      if (b.status === "cancelled" || b.status === "tentative") continue;
+      if (b.status === "cancelled") continue;
       if (b.status !== "confirmed" && b.status !== "pending" && b.status !== "pending_payment") {
         // Only count realised/active bookings; skip unknown statuses.
       }

@@ -7,7 +7,21 @@
 import { formatTime } from '../lib/booking-data'
 import type { Booking } from '../lib/booking-data'
 import { coverageSegments, allocationRows } from '../lib/coverage'
-import { getContrastText, AMBER_HATCH, AMBER_TEXT, DEFAULT_COACH_COLOR } from '../lib/colour'
+import { getContrastText, AMBER_HATCH, AMBER_TEXT, DEFAULT_COACH_COLOR, OWN_BLUE } from '../lib/colour'
+
+// SPEC_COACH_CALENDAR §1B — condense an athlete's full name to "First L." for the
+// tight in-cell calendar summary. Merged sibling segments collapse to "First L. +N".
+function shortAthleteName(full: string): string {
+  const parts = full.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return ''
+  if (parts.length === 1) return parts[0]
+  return `${parts[0]} ${parts[parts.length - 1][0]}.`
+}
+function segmentLabel(names: string[]): string {
+  if (names.length === 0) return ''
+  const first = shortAthleteName(names[0])
+  return names.length > 1 ? `${first} +${names.length - 1}` : first
+}
 
 export interface SegmentTapTarget {
   startHour: number
@@ -93,7 +107,7 @@ export function AllocationTimeline({
               style={{ background: AMBER_HATCH, color: AMBER_TEXT, minHeight: height }}
               className="w-full flex items-center justify-between px-2.5 py-1 text-left"
             >
-              <span className="text-xs font-semibold">{durMin} min free</span>
+              <span className="text-xs font-semibold">{durMin} min</span>
               <span className="text-[10px] opacity-90 ml-2 shrink-0">{range}</span>
             </div>
           )
@@ -111,6 +125,53 @@ export function AllocationTimeline({
           </button>
         )
       })}
+    </div>
+  )
+}
+
+// SPEC_COACH_CALENDAR §1B — the coach's OWN booking block on THEIR calendar: blue
+// allocated bands + amber-hatch gaps, each labelled with a time-proportional
+// "First L. · bracket" summary, plus the 🏅 marker. Blocks stay sized by duration
+// (the grid's Y axis IS time — no vertical auto-expand); a segment too short to fit
+// a name collapses to "+1" (tap-through to My Bookings for full detail). heightPx is
+// the block's rendered pixel height so we can decide what text fits each segment.
+export function CoachCalendarBlock({ booking, heightPx }: { booking: Booking; heightPx: number }) {
+  const segs = coverageSegments(booking)
+  const start = booking.startHour
+  const total = booking.duration / 60
+  if (total <= 0) return null
+  return (
+    <div className="absolute inset-0 rounded-md overflow-hidden">
+      {segs.map((s, i) => {
+        const topPct = ((s.startHour - start) / total) * 100
+        const heightPct = ((s.endHour - s.startHour) / total) * 100
+        const segPx = (heightPct / 100) * heightPx
+        const bracket = `${formatTime(s.startHour)}–${formatTime(s.endHour)}`
+        const label = s.allocated ? segmentLabel(s.athleteNames) : '＋ add athlete'
+        const tiny = segPx < 17 // no room for any text → marker only
+        const noBracket = segPx < 30 // room for a name but not the time bracket
+        return (
+          <div
+            key={i}
+            className="absolute inset-x-0 flex flex-col justify-center px-1.5 leading-none overflow-hidden"
+            style={
+              s.allocated
+                ? { top: `${topPct}%`, height: `${heightPct}%`, backgroundColor: OWN_BLUE, color: '#fff' }
+                : { top: `${topPct}%`, height: `${heightPct}%`, background: AMBER_HATCH, color: AMBER_TEXT }
+            }
+          >
+            {tiny ? (
+              s.allocated ? <span className="text-[8px] font-bold">+1</span> : null
+            ) : (
+              <>
+                <span className="text-[9px] font-bold truncate">{label}</span>
+                {!noBracket && <span className="text-[7px] opacity-85 mt-0.5">{bracket}</span>}
+              </>
+            )}
+          </div>
+        )
+      })}
+      <span className="absolute top-0.5 right-1 text-[9px] z-10 pointer-events-none">🏅</span>
     </div>
   )
 }

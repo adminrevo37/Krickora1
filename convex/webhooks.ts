@@ -108,7 +108,7 @@ export const confirmBookingPayment = internalMutation({
       stripeSessionId: args.stripeSessionId,
     };
 
-    if (b.status === "tentative" || b.status === "pending_payment" || b.status === "pending") {
+    if (b.status === "pending_payment" || b.status === "pending") {
       patch.status = "confirmed";
       patch.priceInCents = args.amountPaid; // store Stripe-confirmed amount for future edit calculations
     }

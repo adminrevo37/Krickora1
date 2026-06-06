@@ -157,7 +157,7 @@ export const getAdminAnalytics = query({
       if (!prev || b.date < prev) firstBookingByEmail.set(email, b.date);
     }
 
-    const inPeriod = allBookings.filter((b) => b.date >= cutoffKey && b.status !== "tentative");
+    const inPeriod = allBookings.filter((b) => b.date >= cutoffKey);
 
     // Month buckets (oldest → newest).
     const monthKeys: string[] = [];
@@ -347,7 +347,7 @@ export const getCatchmentReport = query({
     let total = 0;
     for (const b of all) {
       if ((b as any).isCoachBooking) continue;     // A2: coach own-bookings excluded
-      if (b.status !== "confirmed") continue;        // A4: cancelled/pending/tentative excluded
+      if (b.status !== "confirmed") continue;        // A4: cancelled/pending excluded
       if (from && b.date < from) continue;
       if (to && b.date > to) continue;
       total++;
@@ -398,7 +398,7 @@ export const getAthleteCatchmentReport = query({
     let total = 0;
     for (const b of all) {
       if (!(b as any).isCoachBooking) continue;      // coach bookings only
-      if (b.status !== "confirmed") continue;        // exclude cancelled/pending/tentative (Q2)
+      if (b.status !== "confirmed") continue;        // exclude cancelled/pending (Q2)
       if (from && b.date < from) continue;
       if (to && b.date > to) continue;
       const slots = (b as any).athleteSlots as any[] | undefined;

@@ -1,6 +1,7 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute, Link, Navigate } from '@tanstack/react-router'
 import { useQuery } from 'convex/react'
 import { useAuth } from '../hooks/useAuth'
+import { useImpersonation } from '../hooks/useImpersonation'
 import { api } from '../../convex/_generated/api'
 
 export const Route = createFileRoute('/payments')({
@@ -34,7 +35,12 @@ const REASON_LABEL: Record<string, string> = {
 }
 
 function PaymentsPage() {
-  const { user, isLoading } = useAuth()
+  const { user, isLoading, isCoach, isAdmin } = useAuth()
+  const { isImpersonating, impersonatedUser } = useImpersonation()
+  // Bug 8: Payments & Credit is a customer surface — coaches don't pay. Block both
+  // real coaches and an admin impersonating a coach (role-based → covers future
+  // coaches too); send them to Statements instead.
+  const actingAsCoach = (isCoach && !isAdmin) || (isImpersonating && impersonatedUser?.role === 'coach')
 
   const customer = useQuery(
     api.queries.getCustomerByEmail,
@@ -71,6 +77,9 @@ function PaymentsPage() {
       </div>
     )
   }
+
+  // Bug 8: coaches (and admins impersonating one) get redirected to Statements.
+  if (actingAsCoach) return <Navigate to="/statements" replace />
 
   const creditBalance = customer?.creditBalance ?? 0
 

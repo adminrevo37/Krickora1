@@ -136,7 +136,13 @@ export const sendOne = internalAction({
     weekRange: v.string(),
     bookingsHtml: v.string(),
   },
-  handler: async (_ctx, args): Promise<{ success: boolean; reason?: string }> => {
+  handler: async (ctx, args): Promise<{ success: boolean; reason?: string }> => {
+    // Bug 7: the weekly summary sends DIRECTLY (bypassing emailEnabledForUser), so
+    // gate it on the master switch + any per-template opt-out explicitly here.
+    const allowed = await ctx
+      .runQuery(internal.emails.getEmailPrefInternal, { email: args.to, templateSlug: "weekly-booking-summary" })
+      .catch(() => true);
+    if (!allowed) return { success: false, reason: "opted_out" };
     const result = await sendTemplateEmail("weekly-booking-summary", args.to, {
       customerName: args.customerName,
       firstName: args.firstName ?? "",

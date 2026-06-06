@@ -176,7 +176,7 @@ function buildEventBody(booking: {
   const additionalLabel = booking.additionalLanes && booking.additionalLanes.length > 0
     ? ` + ${booking.additionalLanes.join(", ")}` : "";
   const typeLabel = booking.isCoachBooking ? "🏏 Coach Session" : "🎯 Net Session";
-  const statusEmoji = booking.status === "confirmed" ? "✅" : booking.status === "tentative" ? "⏳" : booking.status === "cancelled" ? "❌" : "📋";
+  const statusEmoji = booking.status === "confirmed" ? "✅" : booking.status === "cancelled" ? "❌" : "📋";
   const summary = `${statusEmoji} ${booking.customerName} - ${booking.laneName}${variantLabel}${additionalLabel}`;
 
   let description = `${typeLabel}\n\n`;
@@ -198,7 +198,6 @@ function buildEventBody(booking: {
   let colorId: string;
   switch (booking.status) {
     case "confirmed": colorId = "10"; break;
-    case "tentative": colorId = "5"; break;
     case "cancelled": colorId = "11"; break;
     default: colorId = "7"; break;
   }
@@ -208,7 +207,7 @@ function buildEventBody(booking: {
     start: { dateTime: startDateTime, timeZone: "Australia/Perth" },
     end: { dateTime: endDateTime, timeZone: "Australia/Perth" },
     colorId,
-    status: booking.status === "tentative" ? "tentative" : "confirmed",
+    status: "confirmed",
   };
 }
 
@@ -500,7 +499,7 @@ export const listCalendars = action({
 });
 
 /**
- * Bulk sync all confirmed/tentative bookings to Google Calendar
+ * Bulk sync all confirmed bookings to Google Calendar
  */
 export const bulkSyncBookings = action({
   args: {},

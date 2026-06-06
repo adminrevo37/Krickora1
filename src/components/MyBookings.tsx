@@ -25,6 +25,8 @@ import AthleteAllocationEditor from './AthleteAllocationEditor'
 import { AllocationTimeline, type SegmentTapTarget } from './CoverageTimeline'
 // SPEC_SCHEDULE_DAY_VIEW §3: per-day status dot.
 import { coverageSummary, dayDotState } from '../lib/coverage'
+// SPEC_COACH_CALENDAR §1A: own bookings render BLUE everywhere.
+import { OWN_BLUE } from '../lib/colour'
 // SPEC_COACH_PLANNER_RETIRE_AND_VIEW §5: per-booking release-gated Repeat.
 import RepeatBookingButton from './RepeatBookingButton'
 // SPEC_MODIFY_BOOKING_UPGRADE: the split Edit (duration) + Reschedule flows are
@@ -195,12 +197,9 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
 
   const userBookings = useMemo(() => (user || impersonatedEmail)
     ? bookings.filter(b =>
-        (
-          (effectiveEmail && b.customerEmail.toLowerCase() === effectiveEmail.toLowerCase()) ||
-          (!impersonatedEmail && b.userId === user?.id) ||
-          (!impersonatedEmail && isAthleteInBooking(b))
-        ) &&
-        b.status !== 'tentative',
+        (effectiveEmail && b.customerEmail.toLowerCase() === effectiveEmail.toLowerCase()) ||
+        (!impersonatedEmail && b.userId === user?.id) ||
+        (!impersonatedEmail && isAthleteInBooking(b))
       ).sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour)
     : [],
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -386,14 +385,17 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     const body =
       `${childName} — your cricket session 🏏\n${FACILITY.name}, ${FACILITY.address}\n` +
       `${dateLabel} · ${timeRange}\nLane: ${laneName} · Coach: ${booking.customerName}\n🔑 Door code: ${code}`
+    // §1G (Option B): no child phone number is stored, so we can't pre-address the
+    // SMS. Copy the message to the clipboard (so the parent can paste if their SMS
+    // app drops the body) AND open the device SMS app with an EMPTY recipient + the
+    // body pre-filled. Desktop has no SMS app → just copy.
     const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+    navigator.clipboard?.writeText(body).then(
+      () => setToast(isMobile ? 'Details copied — opening Messages. Add your athlete\'s number.' : 'Details copied — paste into a message to your athlete.'),
+      () => { if (!isMobile) setToast('Could not copy details.') },
+    )
     if (isMobile) {
       window.location.href = `sms:?body=${encodeURIComponent(body)}`
-    } else {
-      navigator.clipboard?.writeText(body).then(
-        () => setToast('Details copied — paste into a message to your athlete.'),
-        () => setToast('Could not copy details.'),
-      )
     }
   }
 
@@ -461,16 +463,17 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     const lane = getLane(booking.laneId)
     const variantName = getVariantName(booking)
     const cancelCheck = canCancel(booking.id)
-    // §6: allocation-coverage. amber border unless fully allocated.
+    // §6: allocation-coverage. §1D — card shell tints by coverage state.
     const cov = coverageSummary(booking)
-    const coachColor = (customerRecord as any)?.color as string | undefined
     // §2.13: an admin-managed coach booking is view+allocate only — hide
     // Modify/Repeat/Cancel for non-admins (allocation stays available).
     const adminLocked = !!booking.createdByAdmin && !isAdmin
 
-    const cardBg = cov.state !== 'full'
-      ? 'bg-orange-50 dark:bg-orange-900/10 border-orange-300 dark:border-orange-700/60'
-      : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800'
+    // §1D — own coach booking shell: BLUE when fully allocated (incl. a ≤15-min
+    // remainder), ORANGE when a ≥30-min gap still needs an athlete.
+    const cardBg = cov.state === 'full'
+      ? 'bg-blue-50 dark:bg-blue-900/10 border-blue-200 dark:border-blue-800/60'
+      : 'bg-orange-50 dark:bg-orange-900/10 border-orange-300 dark:border-orange-700/60'
 
     return (
       <div
@@ -506,7 +509,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             athlete names; amber gaps are "＋ Add athlete" (tap → seeded editor). */}
         <AllocationTimeline
           booking={booking}
-          coachColor={coachColor}
+          coachColor={OWN_BLUE}
           onSegment={(seg) => openAthleteEditor(booking, seg)}
         />
 
@@ -607,8 +610,11 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             </div>
           )}
           <div className="mt-2 flex gap-1.5 flex-wrap">
-            {/* §2.11: SMS the child their session details + door code. */}
-            <button onClick={() => handleSmsDetails(childName, mySlot, booking)} className="text-[11px] px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors">📱 SMS Details</button>
+            {/* §2.11/§1G: SMS the child their session details + door code. Gated on
+                the per-slot access code so we never send "🔑 Door code: —". */}
+            {mySlot.accessCode && (
+              <button onClick={() => handleSmsDetails(childName, mySlot, booking)} className="text-[11px] px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors">📱 SMS Details</button>
+            )}
             <a href={generateGoogleCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">📅 Google</a>
             <a href={generateOutlookCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors">📆 Outlook</a>
           </div>
@@ -729,7 +735,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       booking.userId === user.id
     )
     if (!isOwner && isAthleteInBooking(booking)) return renderAthleteSlotCard(booking)
-    if (booking.isCoachBooking || booking.status === 'tentative') return renderCoachBookingCard(booking)
+    if (booking.isCoachBooking) return renderCoachBookingCard(booking)
     return renderCustomerBookingCard(booking)
   }
 

@@ -159,6 +159,16 @@ export function stripBookingPII<T extends Record<string, any>>(booking: T): T {
     bookingSuburb: undefined,
     notes: undefined,
     discountCode: undefined,
+    // Batch 5 (data-min): financial / internal fields must never reach other
+    // customers' clients — the denylist previously left these on non-owner rows.
+    coachPrice: undefined,
+    priceInCents: undefined,
+    stripeSessionId: undefined,
+    paymentStatus: undefined,
+    creditApplied: undefined,
+    mates: undefined,
+    modificationHistory: undefined,
+    cancelledByUserId: undefined,
   };
 }
 

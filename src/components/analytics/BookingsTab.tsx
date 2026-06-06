@@ -83,7 +83,6 @@ export default function BookingsTab({ range }: { range: DateRange }) {
             <option value="confirmed">Confirmed</option>
             <option value="cancelled">Cancelled</option>
             <option value="pending_payment">Pending payment</option>
-            <option value="tentative">Tentative</option>
           </select>
         </label>
         <label className="text-xs text-gray-500">Type

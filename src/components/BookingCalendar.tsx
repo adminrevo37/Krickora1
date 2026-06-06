@@ -3,6 +3,7 @@ import {
   LANES,
   getCoachRolling7Days,
   getVisibleWeekDays,
+  getPastWeekDays,
   isNextWeekOpen,
   getNextReleaseDate,
   getAWSTNow,
@@ -25,8 +26,9 @@ import {
 import { getHoursForDate } from '../lib/settings-store'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
 import { LaneHeaderInner, LaneLegend, bandClassForSlot, bandStart, bandTagText } from './laneDisplay'
-import { CoverageBlockBg } from './CoverageTimeline'
-import { getContrastText } from '../lib/colour'
+import { CoachCalendarBlock } from './CoverageTimeline'
+import { dayDotState } from '../lib/coverage'
+import RepeatBookingButton from './RepeatBookingButton'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { useBookings } from '../hooks/useBookingStore'
@@ -56,10 +58,14 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   const isL1Coach = userIsCoach && coachTierLoaded && coachTierNorm !== 'L2'
   const releaseRole: 'coach' | 'customer' = userIsCoach ? 'coach' : 'customer'
   const coachWindowDays = settings.coachBookingWindowDays ?? 8
+  // SPEC_COACH_CALENDAR §1E — coach back-navigation. 0 = live view; -1/-2 = past
+  // weeks (read-only review, own bookings only). Customers never leave 0.
+  const [weekOffset, setWeekOffset] = useState(0)
   const weekDays = useMemo(() => {
+    if (userIsCoach && weekOffset < 0) return getPastWeekDays(-weekOffset, releaseRole, coachTierNorm, settings)
     if (isL1Coach) return getCoachRolling7Days(coachWindowDays)
     return getVisibleWeekDays(releaseRole, coachTierNorm, settings)
-  }, [isL1Coach, coachWindowDays, releaseRole, coachTierNorm, settings])
+  }, [userIsCoach, weekOffset, isL1Coach, coachWindowDays, releaseRole, coachTierNorm, settings])
 
   const [selectedDay, setSelectedDay] = useState<Date>(() => {
     // SPEC_SCHEDULE_DAY_VIEW §4: a "Book Now → that day" deep-link (?date=) selects
@@ -78,6 +84,15 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     const firstFuture = weekDays.find(d => d >= awstNow)
     return firstFuture ?? weekDays[0]
   })
+
+  // §1E — when the visible week changes (coach back/forward nav), keep selectedDay
+  // inside it: jump to the first day of a past week, or back to today on the live week.
+  useEffect(() => {
+    if (weekDays.some(d => formatDateKey(d) === formatDateKey(selectedDay))) return
+    if (weekOffset < 0) setSelectedDay(weekDays[0])
+    else setSelectedDay(weekDays.find(d => isToday(d)) ?? weekDays[0])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekDays])
 
   const allTimeSlots = useMemo(() => {
     const { open, close } = getHoursForDate(settings, selectedDay)
@@ -98,6 +113,36 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   const [waitlistModalOpen, setWaitlistModalOpen] = useState(false)
 
   const dateKey = formatDateKey(selectedDay)
+
+  // SPEC_COACH_CALENDAR §1D/§1E — past-session review for coaches.
+  const ownerMatch = (b: Booking) =>
+    !!user && ((b.customerEmail?.toLowerCase() === user.email?.toLowerCase()) || b.userId === user.id)
+  const dayIsPast = useMemo(() => {
+    const m = getAWSTNow(); m.setHours(0, 0, 0, 0)
+    return selectedDay < m && !isToday(selectedDay)
+  }, [selectedDay])
+  // On a past day a coach reviews ONLY their own bookings (centre-wide data hidden),
+  // read-only. On live/future days everyone sees the full grid as before.
+  const reviewingPast = userIsCoach && dayIsPast
+  const displayBookings = useMemo(
+    () => (reviewingPast ? bookings.filter(ownerMatch) : bookings),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [reviewingPast, bookings, user]
+  )
+  // §1D — 3-colour allocation dots on the coach week strip (own coach bookings/day).
+  const myBookingsByDay = useMemo(() => {
+    const m = new Map<string, Booking[]>()
+    if (!userIsCoach) return m
+    for (const b of bookings) {
+      if (b.status === 'cancelled' || !ownerMatch(b)) continue
+      const arr = m.get(b.date) ?? []
+      arr.push(b)
+      m.set(b.date, arr)
+    }
+    return m
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookings, userIsCoach, user])
+
   // N-11: surface admin facility closures in the customer calendar (server also
   // rejects in createBooking, but the calendar should grey closed dates, not only
   // fail at confirm).
@@ -165,9 +210,9 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
 
   const laneActiveHalfHours = useMemo(() => {
     const map = new Map<string, Set<number>>()
-    for (const lane of LANES) map.set(lane.id, getActiveHalfHoursForLane(bookings, lane.id, dateKey))
+    for (const lane of LANES) map.set(lane.id, getActiveHalfHoursForLane(displayBookings, lane.id, dateKey))
     return map
-  }, [bookings, dateKey])
+  }, [displayBookings, dateKey])
 
   const visibleTimeSlots = useMemo(() => {
     const base = allTimeSlots.filter(slot => {
@@ -200,9 +245,9 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
 
   const laneStartTimes = useMemo(() => {
     const map = new Map<string, number[]>()
-    for (const lane of LANES) map.set(lane.id, getAvailableStartTimes(bookings, lane.id, dateKey))
+    for (const lane of LANES) map.set(lane.id, getAvailableStartTimes(displayBookings, lane.id, dateKey))
     return map
-  }, [bookings, dateKey])
+  }, [displayBookings, dateKey])
 
   // Valid start times for coaches on the selected day (every open hour + 3:30pm on weekdays)
   const validCoachStartsForDay = useMemo(
@@ -250,7 +295,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     return LANES.every(lane => {
       const laneActiveSet = laneActiveHalfHours.get(lane.id) ?? new Set()
       const isHalf = hour !== Math.floor(hour)
-      const booked = isSlotBooked(bookings, lane.id, date, hour)
+      const booked = isSlotBooked(displayBookings, lane.id, date, hour)
       if (booked) return true
       if (isHalf && !laneActiveSet.has(hour)) return true // lane inactive at this half-hour
       return false
@@ -352,6 +397,16 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
             <span className="text-sm text-gray-500">{weekDays[0].toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} &middot; AWST</span>
           </div>
         </div>
+        {/* §1E — coach back/forward week navigation (read-only review of past weeks). */}
+        {userIsCoach && (
+          <div className="flex items-center justify-between mb-3">
+            <button type="button" onClick={() => setWeekOffset((o) => Math.max(-2, o - 1))} disabled={weekOffset <= -2}
+              className={`text-xs font-semibold px-2.5 py-1 rounded-lg border transition-colors ${weekOffset <= -2 ? 'border-gray-200 text-gray-300 cursor-not-allowed' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>← Prev week</button>
+            <span className="text-[11px] font-medium text-gray-500">{weekOffset === 0 ? 'This week' : weekOffset === -1 ? 'Last week' : `${-weekOffset} weeks ago`}</span>
+            <button type="button" onClick={() => setWeekOffset((o) => Math.min(0, o + 1))} disabled={weekOffset >= 0}
+              className={`text-xs font-semibold px-2.5 py-1 rounded-lg border transition-colors ${weekOffset >= 0 ? 'border-gray-200 text-gray-300 cursor-not-allowed' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>Next week →</button>
+          </div>
+        )}
         <div className={`grid ${weekDays.length === 8 ? 'grid-cols-8' : 'grid-cols-7'} gap-2`}>
           {weekDays.map((day) => {
             const active = formatDateKey(day) === formatDateKey(selectedDay)
@@ -361,18 +416,42 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
             const pastDay = day < awstNow && !today
             const dk = formatDateKey(day)
             const hasOverride = laneConfig.overrides.some((o) => dk >= o.startDate && dk <= o.endDate)
+            // §1E — coaches may open past days (read-only review); customers cannot.
+            const dayDisabled = pastDay && !userIsCoach
+            // §1D — coach allocation dot for that day's OWN coach bookings.
+            const allocDot = userIsCoach ? dayDotState(myBookingsByDay.get(dk) ?? [], true) : null
             return (
-              <button key={formatDateKey(day)} onClick={() => setSelectedDay(day)} disabled={pastDay}
-                className={`relative flex flex-col items-center py-2.5 px-1 rounded-xl transition-all duration-200 text-center ${active ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 scale-105' : pastDay ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gray-50 text-gray-700 hover:bg-emerald-50 cursor-pointer'}`}>
+              <button key={formatDateKey(day)} onClick={() => setSelectedDay(day)} disabled={dayDisabled}
+                className={`relative flex flex-col items-center py-2.5 px-1 rounded-xl transition-all duration-200 text-center ${active ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 scale-105' : dayDisabled ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : pastDay ? 'bg-gray-100 text-gray-500 hover:bg-emerald-50 cursor-pointer' : 'bg-gray-50 text-gray-700 hover:bg-emerald-50 cursor-pointer'}`}>
                 {hasOverride && <span title="Custom lane layout" className="absolute top-1 right-1 text-[9px] leading-none text-amber-500">⚙</span>}
                 <span className={`text-xs font-medium ${active ? 'text-emerald-100' : 'text-gray-500'}`}>{formatDayLabel(day)}</span>
                 <span className={`text-lg font-bold mt-0.5 ${active ? 'text-white' : ''}`}>{day.getDate()}</span>
-                {today && <div className={`w-1.5 h-1.5 rounded-full mt-1 ${active ? 'bg-white' : 'bg-emerald-500'}`} />}
+                {allocDot ? (
+                  <div className={`w-1.5 h-1.5 rounded-full mt-1 ${allocDot === 'green' ? 'bg-emerald-400' : allocDot === 'amber' ? 'bg-amber-400' : 'bg-red-500'}`} />
+                ) : today ? (
+                  <div className={`w-1.5 h-1.5 rounded-full mt-1 ${active ? 'bg-white' : 'bg-emerald-500'}`} />
+                ) : null}
               </button>
             )
           })}
         </div>
+        {/* §1D — dot key (coach only). */}
+        {userIsCoach && (
+          <div className="flex items-center gap-3 flex-wrap text-[10px] text-gray-500 mt-2.5">
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Fully allocated</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Partly</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" />Needs athletes</span>
+          </div>
+        )}
       </div>
+
+      {/* §1E — read-only review banner when a coach opens a past day. */}
+      {reviewingPast && (
+        <div className="bg-gray-100 border border-gray-300 rounded-2xl px-4 py-2.5 flex items-center gap-2">
+          <span className="text-base">🕓</span>
+          <p className="text-sm font-medium text-gray-600">Reviewing past sessions — read only. Showing your bookings only.</p>
+        </div>
+      )}
 
       {/* Date Header + Legend — DESKTOP ONLY. On mobile the full date and the
           legends are removed entirely (the selected day is obvious from the day
@@ -457,11 +536,10 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                 <>
                 {LANES.map((lane) => {
                   const laneActiveSet = laneActiveHalfHours.get(lane.id) ?? new Set()
-                  const booked = isSlotBooked(bookings, lane.id, dateKey, slot.hour)
+                  const booked = isSlotBooked(displayBookings, lane.id, dateKey, slot.hour)
                   const blocked = !booked ? isLaneBlocked(lane.id, dateKey, slot.hour) : null
                   const past = isPast(selectedDay, slot.hour)
                   const isLaneInactiveAtHalfHour = isHalfHour && !laneActiveSet.has(slot.hour) && !booked && !blocked
-                  const isTentative = booked?.status === 'tentative'
                   // SPEC_RECONFIGURABLE_LANES: per-segment colour band + band-start tag
                   const band = bandClassForSlot(lane.id, dateKey, slot.hour)
                   const bs = bandStart(lane.id, dateKey, slot.hour)
@@ -484,18 +562,21 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   }
                   const visualSpan = getBookingVisualHeight()
 
-                  // §6: show allocation coverage on the coach's OWN coach bookings.
+                  // §1A/§1B: BLUE allocation coverage on the coach's OWN coach bookings.
                   const ownCoachBooking = !!booked && !!booked.isCoachBooking && !!userIsCoach && !!user && (
                     (booked.customerEmail?.toLowerCase() === user.email?.toLowerCase()) || booked.userId === user.id
                   )
-                  const myCoachColor = (customerRecord as any)?.color as string | undefined
+                  // §1F — compact ↻ Repeat sits on the coach's OWN COMPLETED sessions in
+                  // the LIVE week only (never on back-nav past weeks).
+                  const sessionEnded = !!booked && isPast(selectedDay, booked.startHour + booked.duration / 60)
+                  const canRepeatHere = !!booked && ownCoachBooking && isStartOfBooking && weekOffset === 0 && sessionEnded && booked.status !== 'cancelled'
                   // SPEC_MOBILE_BOOKING_UPDATES §3 — the user's OWN (non-coach) booking
                   // renders BLUE "Your booking" so they spot it instantly. Precedence:
-                  // admin-name view → own-coach coverage → own → tentative → booked.
+                  // admin-name view → own-coach coverage → own → booked.
                   const isOwnBooking = !!booked && !!user && !isAdmin && !ownCoachBooking && !booked.isCoachBooking && (
                     (booked.customerEmail?.toLowerCase() === user.email?.toLowerCase()) || booked.userId === user.id
                   )
-                  const useBlueBlock = isTentative || isOwnBooking
+                  const useBlueBlock = isOwnBooking
 
                   if (isLaneInactiveAtHalfHour) {
                     return (
@@ -539,24 +620,22 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                         </div>
                       )}
                       {isStartOfBooking && booked && ownCoachBooking && (
-                        <div className="absolute inset-x-0.5 top-0.5 z-10 rounded-md overflow-hidden border border-black/10"
+                        <div className="absolute inset-x-0.5 top-0.5 z-10 rounded-md overflow-hidden border border-blue-300"
                           style={{ height: `${visualSpan * 32 - 4}px` }}>
-                          <CoverageBlockBg booking={booked} coachColor={myCoachColor} />
-                          <div className="relative z-10 px-1.5 py-0.5">
-                            <div className="text-[8px] font-semibold drop-shadow" style={{ color: getContrastText(myCoachColor) }}>
-                              {formatTime(booked.startHour)}-{formatTime(booked.startHour + booked.duration / 60)} 🏅
-                              {booked.status === 'cancelled' && <span className="ml-1">(cancelled)</span>}
+                          <CoachCalendarBlock booking={booked} heightPx={visualSpan * 32 - 4} />
+                          {canRepeatHere && (
+                            <div className="absolute bottom-0.5 right-0.5 z-20" onClick={(e) => e.stopPropagation()}>
+                              <RepeatBookingButton booking={booked} compact />
                             </div>
-                          </div>
+                          )}
                         </div>
                       )}
                       {isStartOfBooking && booked && !ownCoachBooking && (
                         <div className={`absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border ${useBlueBlock ? 'bg-gradient-to-br from-blue-100 to-blue-50 border-blue-200' : 'bg-gradient-to-br from-red-100 to-red-50 border-red-200'}`}
                           style={{ height: `${visualSpan * 32 - 4}px` }}>
                           <div className={`text-[9px] font-semibold truncate ${useBlueBlock ? 'text-blue-700' : 'text-red-700'}`}>
-                            {isAdmin ? booked.customerName : isOwnBooking ? 'Your booking' : isTentative ? 'Tentative' : 'Booked'}
+                            {isAdmin ? booked.customerName : isOwnBooking ? 'Your booking' : 'Booked'}
                             {booked.status === 'cancelled' && <span className="ml-1 text-orange-500">(cancelled)</span>}
-                            {isTentative && !isOwnBooking && <span className="ml-1">⏳</span>}
                           </div>
                           <div className={`text-[8px] ${useBlueBlock ? 'text-blue-500' : 'text-red-500'}`}>
                             {formatTime(booked.startHour)}-{formatTime(booked.startHour + booked.duration / 60)}

@@ -205,7 +205,7 @@ export const advanceWaitlistOffer = internalMutation({
         .withIndex("by_date", (q: any) => q.eq("date", date))
         .collect()
     ).filter((b: any) => b.status !== "cancelled" && overlaps(b));
-    const IN_FLIGHT = ["pending_payment", "pending", "pending_edit_payment", "tentative"];
+    const IN_FLIGHT = ["pending_payment", "pending", "pending_edit_payment"];
     const laneConfirmed = (lid: string) =>
       dayBookings.some((b: any) => b.status === "confirmed" && occupiesLane(b, lid));
     const laneInFlight = (lid: string) =>

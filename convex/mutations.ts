@@ -27,6 +27,7 @@ import { validateAndSnapshotLane, resolveLaneSnapshot } from "./lanes";
 import { defaultLaneName } from "./lib/lanes";
 import { PRICE_DEFAULTS } from "./lib/priceDefaults";
 import { composeName, splitName } from "./lib/names";
+import { resolveCanonicalCustomerByEmail } from "./lib/identity";
 import { assertValidLocation, validateLocationIfProvided, normalizePostcode, normalizeSuburb } from "./lib/locations";
 import { notifyMatesOnCancel, notifyMatesOnModify } from "./mates";
 
@@ -771,8 +772,6 @@ export const createBooking = mutation({
     creditApplied: v.optional(v.number()),
     accessCode: v.optional(v.string()),
     discountCode: v.optional(v.string()),
-    tentativeSourceId: v.optional(v.string()),
-    tentativeForDate: v.optional(v.string()),
     notes: v.optional(v.string()),
     // Admin manual booking (SPEC_ADMIN_AND_SETTINGS #2): comp / paid-offline record
     // a price + paid status with no Stripe; send-payment-request creates a pending
@@ -799,12 +798,9 @@ export const createBooking = mutation({
       const isForSelf =
         (args.userId != null && args.userId === createIdentity.subject) ||
         args.customerEmail.toLowerCase() === callerEmail;
-      callerCustomer = callerEmail
-        ? await ctx.db
-            .query("customers")
-            .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
-            .first()
-        : null;
+      // Batch 2B: resolve the CANONICAL customers row (prefer coach/admin), so a
+      // duplicate/role-drifted row can't make `.first()` demote a coach to a customer.
+      callerCustomer = await resolveCanonicalCustomerByEmail(ctx, callerEmail);
       isAdminCaller = callerCustomer?.role === "admin";
       if (!isForSelf && !isAdminCaller) {
         throw new ConvexError("You can only create bookings for yourself.");
@@ -860,8 +856,9 @@ export const createBooking = mutation({
     }
     // SPEC_MOBILE_BOOKING_UPDATES §7.2 — L1 coaches may book a pre-open 6:30am slot
     // (an explicit early coaching slot allowed below the public opening hour).
+    // Batch 2A: an L1 coach's booking is always a coach booking — gate the early
+    // 6:30am slot on the resolved role/tier, not the (now-untrusted) client flag.
     const callerIsL1Coach =
-      !!args.isCoachBooking &&
       callerCustomer?.role === "coach" &&
       !(callerCustomer?.coachTier === "L2" || callerCustomer?.coachTier === "BowlingL2");
     const allowEarlyCoachSlot = callerIsL1Coach && args.startHour === 6.5;
@@ -884,6 +881,19 @@ export const createBooking = mutation({
       callerCustomer?.coachTier === "L2" || callerCustomer?.coachTier === "BowlingL2"
         ? "L2"
         : "L1";
+
+    // Batch 2A — SERVER-AUTHORITATIVE coach-booking flag. A coach's own booking is
+    // ALWAYS a coach booking (a drifted identity row can no longer demote it to a
+    // paid customer booking); an admin may explicitly create one; a CUSTOMER can
+    // never forge one (this also closes a payment-skip hole — the client flag was
+    // previously trusted at insert time). Everything below keys off this.
+    const effectiveIsCoachBooking = callerRole === "coach" || (isAdminCaller && !!args.isCoachBooking);
+    // Server-owned coach price (coaches billed separately, no Stripe): derive from the
+    // admin coachPerHour rate rather than trusting the client amount.
+    const coachPerHourRate = (siteSettings as any)?.coachPerHour ?? PRICE_DEFAULTS.coachPerHour;
+    const effectiveCoachPrice = effectiveIsCoachBooking
+      ? Math.round((args.duration / 60) * coachPerHourRate * 100) / 100
+      : undefined;
     const awstNow = getAWSTNow();
 
     const horizonError = checkBookingHorizon(
@@ -906,7 +916,7 @@ export const createBooking = mutation({
     }
 
     // Multi-lane cap — customers only; coaches/admin uncapped.
-    if (callerRole === "customer" && !args.isCoachBooking) {
+    if (callerRole === "customer" && !effectiveIsCoachBooking) {
       const maxLanes = siteSettings?.customerMaxLanesPerBooking ?? 3;
       const totalLanes = 1 + (args.additionalLaneIds?.length ?? 0);
       if (totalLanes > maxLanes) {
@@ -990,7 +1000,7 @@ export const createBooking = mutation({
     // the amount deliberately, carried by paymentStatus) keep their passed price.
     const isAdminManual = isAdminCaller && args.paymentStatus !== undefined;
     let serverPriceCents: number | undefined = args.priceInCents;
-    if (!args.isCoachBooking && !isAdminManual) {
+    if (!effectiveIsCoachBooking && !isAdminManual) {
       let grossCents = computeCustomerPriceCents(
         siteSettings as any,
         args.variantId,
@@ -1018,7 +1028,7 @@ export const createBooking = mutation({
     // deliberately / billed separately). The applied credit is server-clamped to
     // the booker's real balance so an inflated `creditApplied` can't fake $0 due.
     let effectiveStatus = args.status;
-    if (!args.isCoachBooking && !isAdminManual && args.status === "confirmed") {
+    if (!effectiveIsCoachBooking && !isAdminManual && args.status === "confirmed") {
       const realBalCents = Math.max(0, Math.round(((callerCustomer as any)?.creditBalance ?? 0) * 100));
       const wantCreditCents = Math.max(0, Math.round((args.creditApplied ?? 0) * 100));
       const clampedCreditCents = Math.min(wantCreditCents, realBalCents);
@@ -1042,7 +1052,7 @@ export const createBooking = mutation({
     }
 
     // For coach bookings, all assigned athletes share the coach's access code
-    const codedAthleteSlots = args.athleteSlots && args.isCoachBooking
+    const codedAthleteSlots = args.athleteSlots && effectiveIsCoachBooking
       ? args.athleteSlots.map((s) => ({
           ...s,
           accessCode: bookingAccessCode,
@@ -1059,7 +1069,7 @@ export const createBooking = mutation({
     // by customerEmail. Stored as a snapshot so a later move doesn't rewrite history.
     let bookingPostcode: string | undefined;
     let bookingSuburb: string | undefined;
-    if (!args.isCoachBooking) {
+    if (!effectiveIsCoachBooking) {
       const targetEmail = args.customerEmail.toLowerCase().trim();
       const targetCustomer =
         callerCustomer && (callerCustomer as any).email === targetEmail
@@ -1084,7 +1094,7 @@ export const createBooking = mutation({
       date: args.date,
       startHour: args.startHour,
       durationMinutes: args.duration,
-      skipVariantCheck: !!args.isCoachBooking || isAdminManual,
+      skipVariantCheck: effectiveIsCoachBooking || isAdminManual,
     });
 
     const id = await ctx.db.insert("bookings", {
@@ -1099,15 +1109,13 @@ export const createBooking = mutation({
       userId: args.userId,
       status: effectiveStatus,
       stripeSessionId: args.stripeSessionId,
-      isCoachBooking: args.isCoachBooking,
-      coachPrice: args.coachPrice,
+      isCoachBooking: effectiveIsCoachBooking,
+      coachPrice: effectiveCoachPrice,
       additionalLaneIds: args.additionalLaneIds,
       athleteSlots: normalizedAthleteSlots,
       creditApplied: args.creditApplied,
       accessCode: bookingAccessCode,
       discountCode: args.discountCode,
-      tentativeSourceId: args.tentativeSourceId,
-      tentativeForDate: args.tentativeForDate,
       notes: args.notes,
       paymentStatus: args.paymentStatus,
       priceInCents: serverPriceCents,
@@ -1117,7 +1125,7 @@ export const createBooking = mutation({
       variantLabelSnapshot: laneSnap.variantLabelSnapshot,
       // §2.13: only an admin can mark a COACH booking as admin-managed. Ignore the
       // flag on customer bookings or from non-admin callers.
-      createdByAdmin: isAdminCaller && args.isCoachBooking && args.createdByAdmin ? true : undefined,
+      createdByAdmin: isAdminCaller && effectiveIsCoachBooking && args.createdByAdmin ? true : undefined,
       createdAt: Date.now(), // §6.2 admin digest windowing
     });
 
@@ -1194,13 +1202,13 @@ export const createBooking = mutation({
           startHour: args.startHour,
           duration: args.duration,
           accessCode: bookingAccessCode,
-          coachPrice: args.coachPrice,
+          coachPrice: effectiveCoachPrice,
           creditApplied: args.creditApplied,
         }),
       );
       // SPEC_PWA_PUSH §5.1 — booking confirmation push (customer bookings only;
       // coach bookings get a coach-allocation push instead, below).
-      if (!args.isCoachBooking) {
+      if (!effectiveIsCoachBooking) {
         await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
           email: args.customerEmail,
           category: "booking-confirmation",
@@ -1225,7 +1233,7 @@ export const createBooking = mutation({
     // Send athlete allocation emails for coach bookings with initial athlete
     // slots — resolved to the parent account email + child name, grouped per
     // account (SPEC_PARENT_ATHLETE_MODEL).
-    if (args.isCoachBooking && normalizedAthleteSlots && normalizedAthleteSlots.length > 0 && (effectiveStatus === "confirmed" || effectiveStatus === "tentative")) {
+    if (effectiveIsCoachBooking && normalizedAthleteSlots && normalizedAthleteSlots.length > 0 && effectiveStatus === "confirmed") {
       await scheduleAllocationEmails(ctx, {
         slots: normalizedAthleteSlots,
         laneId: args.laneId,
@@ -1235,8 +1243,8 @@ export const createBooking = mutation({
       });
     }
 
-    // Trigger Google Calendar sync for confirmed/tentative bookings
-    if (effectiveStatus === "confirmed" || effectiveStatus === "tentative") {
+    // Trigger Google Calendar sync for confirmed bookings
+    if (effectiveStatus === "confirmed") {
       await ctx.scheduler.runAfter(0, internal.googleCalendar.createCalendarEvent, {
         bookingId: id.toString(),
         laneId: args.laneId,
@@ -1248,7 +1256,7 @@ export const createBooking = mutation({
         customerEmail: args.customerEmail,
         customerPhone: args.customerPhone,
         status: effectiveStatus,
-        isCoachBooking: args.isCoachBooking,
+        isCoachBooking: effectiveIsCoachBooking,
         accessCode: bookingAccessCode,
         additionalLaneIds: args.additionalLaneIds,
         athleteSlots: normalizedAthleteSlots,
@@ -1296,8 +1304,6 @@ export const updateBooking = mutation({
     cancelledByUserId: v.optional(v.string()),
     refilledMinutes: v.optional(v.number()),
     originalCoachId: v.optional(v.string()),
-    tentativeSourceId: v.optional(v.string()),
-    tentativeForDate: v.optional(v.string()),
     accessCode: v.optional(v.string()),
     discountCode: v.optional(v.string()),
     notes: v.optional(v.string()),
@@ -1537,7 +1543,7 @@ export const cancelBooking = mutation({
     const hoursUntil = (bookingStart.getTime() - awstNow.getTime()) / (1000 * 60 * 60);
 
     // Time-based policy enforcement for customer bookings
-    if (booking.status !== "tentative" && !booking.isCoachBooking) {
+    if (!booking.isCoachBooking) {
       const customerCancellationHours = (cancelSettings as any)?.customerCancellationHours ?? cancelSettings?.cancellationHoursBefore ?? 2;
       if (hoursUntil < customerCancellationHours) {
         // Admin bypass — admins can always cancel
@@ -1557,7 +1563,7 @@ export const cancelBooking = mutation({
     // (and admins acting on coach bookings) may cancel, but if it's inside the
     // late-cancel window the slot stays on the coach statement as a charge.
     let coachLateCancelCharged = false;
-    if (booking.isCoachBooking && booking.status !== "tentative") {
+    if (booking.isCoachBooking) {
       const coachLateHours = (cancelSettings as any)?.coachLateCancellationHours ?? 24;
       if (hoursUntil < coachLateHours) {
         coachLateCancelCharged = true;
@@ -1791,7 +1797,6 @@ export const modifyBooking = mutation({
     const booking = await ctx.db.get(args.id);
     if (!booking) throw new ConvexError("Booking not found.");
     if (booking.status === "cancelled") throw new ConvexError("Cannot modify a cancelled booking.");
-    if (booking.status === "tentative") throw new ConvexError("Confirm the tentative booking first, then modify it.");
     if ((booking as any).status === "pending_edit_payment") {
       throw new ConvexError("A payment for a previous change is still pending. Complete or cancel it first.");
     }
@@ -2885,6 +2890,7 @@ export const updateCustomerByEmail = mutation({
     defaultSessionDuration: v.optional(v.number()),
     athleteCapacity: v.optional(v.number()),
     bookingEmailsEnabled: v.optional(v.boolean()),
+    emailNotificationsEnabled: v.optional(v.boolean()), // Bug 7: master email switch
     emailPrefs: v.optional(v.array(v.object({ slug: v.string(), enabled: v.boolean() }))),
     postcode: v.optional(v.string()),
     suburb: v.optional(v.string()),

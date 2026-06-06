@@ -31,8 +31,6 @@ function toBooking(doc: any): Booking {
     cancelledByUserId: doc.cancelledByUserId,
     refilledMinutes: doc.refilledMinutes,
     originalCoachId: doc.originalCoachId,
-    tentativeSourceId: doc.tentativeSourceId,
-    tentativeForDate: doc.tentativeForDate,
     accessCode: doc.accessCode,
     discountCode: doc.discountCode,
     modificationHistory: doc.modificationHistory,
@@ -110,8 +108,6 @@ export function useBookings() {
         creditApplied: booking.creditApplied,
         accessCode: booking.accessCode,
         discountCode: booking.discountCode,
-        tentativeSourceId: booking.tentativeSourceId,
-        tentativeForDate: booking.tentativeForDate,
         notes: booking.notes,
         paymentStatus: booking.paymentStatus,
         priceInCents: booking.priceInCents,
@@ -143,7 +139,6 @@ export function useBookings() {
       if (!booking) return { allowed: false, reason: 'Booking not found.' }
       if (booking.status === 'cancelled')
         return { allowed: false, reason: 'Already cancelled.' }
-      if (booking.status === 'tentative') return { allowed: true }
       const [year, month, day] = booking.date.split('-').map(Number)
       const whole = Math.floor(booking.startHour)
       const mins = Math.round((booking.startHour - whole) * 60)

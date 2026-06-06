@@ -92,6 +92,13 @@ export const getEmailPrefInternal = internalQuery({
       .withIndex("by_email", (q: any) => q.eq("email", normalized))
       .first();
     if (!customer) return true;
+    // Bug 7: master email switch. When explicitly off, silence every
+    // preference-gated email (regular notifications + the weekly summary, which
+    // routes through here too). Strict === false so legacy/absent = ON. Mandatory
+    // transactional/athlete/mate emails short-circuit BEFORE this query is called
+    // (emailEnabledForUser), and admin broadcasts/announcements send via
+    // sendTemplateEmail directly — so neither is affected by this switch.
+    if (customer.emailNotificationsEnabled === false) return false;
     const prefs: Array<{ slug: string; enabled: boolean }> = customer.emailPrefs ?? [];
     const pref = prefs.find((p) => p.slug === args.templateSlug);
     if (pref) return pref.enabled;

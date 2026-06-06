@@ -93,6 +93,10 @@ export default defineSchema({
     defaultSessionDuration: v.optional(v.number()), // coach default athlete slot duration in minutes
     athleteCapacity: v.optional(v.number()), // coach max athletes per session (1-4); drives auto-populate
     bookingEmailsEnabled: v.optional(v.boolean()),
+    // Bug 7: master email switch. Strict === false silences ALL preference-gated
+    // emails (regular notifications + the weekly summary); legacy/absent = ON. Does
+    // NOT affect mandatory transactional/athlete/mate emails or admin broadcasts.
+    emailNotificationsEnabled: v.optional(v.boolean()),
     emailPrefs: v.optional(
       v.array(
         v.object({
@@ -227,7 +231,7 @@ export default defineSchema({
     customerEmail: v.string(),
     customerPhone: v.optional(v.string()),
     userId: v.optional(v.string()),
-    status: v.string(), // 'confirmed' | 'pending' | 'cancelled' | 'tentative'
+    status: v.string(), // 'confirmed' | 'pending' | 'pending_payment' | 'cancelled'
     stripeSessionId: v.optional(v.string()),
     isCoachBooking: v.optional(v.boolean()),
     coachPrice: v.optional(v.number()),
@@ -272,8 +276,6 @@ export default defineSchema({
     cancelledByUserId: v.optional(v.string()),
     refilledMinutes: v.optional(v.number()),
     originalCoachId: v.optional(v.string()),
-    tentativeSourceId: v.optional(v.string()),
-    tentativeForDate: v.optional(v.string()),
     accessCode: v.optional(v.string()),
     discountCode: v.optional(v.string()),
     // SPEC_PROFILE_POSTCODE_SUBURB Addendum A: snapshot of the booker's postcode/suburb
