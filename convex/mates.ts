@@ -502,7 +502,7 @@ export const createBookingInvite = mutation({
       expiresAt: bookingStartMs(booking.date, booking.startHour),
       createdAt: new Date().toISOString(),
     });
-    return { token, link: `https://krickora.com/join?token=${token}` };
+    return { token, link: `https://cricketrevolution.au/join?token=${token}` };
   },
 });
 

@@ -33,7 +33,7 @@ const SECURITY_HEADERS: Record<string, string> = {
 
 // ── Allowed origins for CORS with credentials ─────────────────────────
 // SITE_URL is the deployed frontend origin (e.g. https://krickora-prod.vercel.app
-// or, later, https://krickora.com). Including it here keeps the preflight CORS in
+// or, later, https://cricketrevolution.au). Including it here keeps the preflight CORS in
 // step with Better Auth's own trustedOrigins (which already honours SITE_URL).
 // SEC Phase 4 (2026-06-03): PINNED credentialed-CORS allowlist. Dropped the
 // stale Shipper origin, the old Shipper Convex deployment, and the

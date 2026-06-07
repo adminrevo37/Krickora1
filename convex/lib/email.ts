@@ -1,5 +1,10 @@
 /**
- * Krickora email — Resend transport + code-owned template registry.
+ * Cricket Revolution email — Resend transport + code-owned template registry.
+ *
+ * Style: plain text, no fluff (SPEC: Inspector 2026-06-08). No coloured header
+ * bars, card shells, filled buttons or banners — just a brand line, a hairline
+ * rule, label/value detail rows, a boxed door code, and links shown as plain
+ * visible URLs.
  *
  * Replaces the previous Shipper-hosted template service. Shipper hosted the
  * email HTML by `templateSlug`; Resend has no server-side templates, so every
@@ -15,30 +20,28 @@
  *                      gracefully (returns {success:false, reason:"Email not
  *                      configured"}) — same behaviour as the old Shipper path,
  *                      so nothing throws before the key is added.
- *   - EMAIL_FROM       From header, e.g. `Krickora <onboarding@resend.dev>` or
- *                      `Krickora <noreply@krickora.com>` once the domain is
- *                      verified in Resend. Defaults to the Resend shared sender.
+ *   - EMAIL_FROM       From header, e.g.
+ *                      `Cricket Revolution <noreply@cricketrevolution.au>`.
+ *                      Defaults to the Resend shared sender when unset.
  */
 
-// ── Brand ────────────────────────────────────────────────────────────────────
-const BRAND = {
-  navy: "#1e3a5f",
-  navyDark: "#162d49",
-  amber: "#f59e0b",
-  amberSoft: "#fef3c7",
-  amberText: "#92400e",
-  ink: "#1a1a1a",
-  sub: "#64748b",
-  line: "#e2e8f0",
-  bg: "#f1f5f9",
-  card: "#ffffff",
+// ── Palette (plain) ──────────────────────────────────────────────────────────
+const C = {
+  ink: "#23292f",        // body text
+  strong: "#10151c",     // headings / detail values
+  sub: "#6a7480",        // labels / muted text
+  faint: "#8a949f",      // footer
+  rule: "#e2e6ea",       // hairlines
+  link: "#1554b8",       // links
+  codeBorder: "#c4ccd5", // door-code box
+  bg: "#ffffff",
 };
+const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+const MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,'Courier New',monospace";
 
 // Public site base (links in emails). Door codes / calendar already default to
-// this elsewhere in the codebase. Facility instructions page (#14) is pending —
-// the link points at the site root until that page ships.
-const SITE = "https://krickora.com";
-const FACILITY_URL = `${SITE}/facility-instructions`;
+// this elsewhere in the codebase.
+const SITE = "https://cricketrevolution.au";
 
 // ── HTML helpers ─────────────────────────────────────────────────────────────
 /** HTML-escape a text value. Use for ALL caller-supplied text. */
@@ -51,48 +54,45 @@ function esc(s: string | undefined | null): string {
     .replace(/'/g, "&#39;");
 }
 
-function button(label: string, url: string): string {
-  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 4px;"><tr><td style="border-radius:8px;background-color:${BRAND.amber};">
-<a href="${esc(url)}" style="display:inline-block;padding:13px 28px;font-size:15px;font-weight:700;color:${BRAND.navyDark};text-decoration:none;border-radius:8px;">${esc(label)}</a>
-</td></tr></table>`;
+/** A labelled link shown as a plain, fully-visible URL (anti-phishing, old-school). */
+function linkLine(label: string, url: string): string {
+  return `<p style="margin:0 0 16px;font-family:${FONT};font-size:14.5px;line-height:1.5;color:${C.ink};">${esc(label)}<br><a href="${esc(url)}" style="color:${C.link};word-break:break-all;">${esc(url)}</a></p>`;
 }
 
-/** Label/value detail table. Values are escaped. */
+/** Borderless label/value detail table. Values are escaped. */
 function detailRows(rows: Array<[string, string]>): string {
   const body = rows
     .map(
       ([label, value]) =>
         `<tr>
-<td style="padding:8px 0;color:${BRAND.sub};font-size:13px;vertical-align:top;width:40%;">${esc(label)}</td>
-<td style="padding:8px 0;color:${BRAND.ink};font-size:14px;font-weight:600;vertical-align:top;">${esc(value)}</td>
+<td style="padding:3px 24px 3px 0;font-family:${FONT};color:${C.sub};font-size:14px;vertical-align:top;white-space:nowrap;">${esc(label)}</td>
+<td style="padding:3px 0;font-family:${FONT};color:${C.strong};font-size:14.5px;font-weight:600;vertical-align:top;">${esc(value)}</td>
 </tr>`
     )
     .join("");
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:6px 0 14px;border-top:1px solid ${BRAND.line};border-bottom:1px solid ${BRAND.line};">${body}</table>`;
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:6px 0 16px;">${body}</table>`;
 }
 
-/** Big door-code display block. */
+/** Boxed door-code display (outlined, not filled). */
 function codeBox(code: string): string {
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:14px 0;"><tr>
-<td align="center" style="padding:16px;background-color:${BRAND.amberSoft};border-radius:10px;">
-<p style="margin:0 0 4px;color:${BRAND.amberText};font-size:12px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">Door access code</p>
-<p style="margin:0;color:${BRAND.navyDark};font-size:30px;font-weight:800;letter-spacing:6px;font-family:'Courier New',monospace;">${esc(code)}</p>
-</td></tr></table>`;
-}
-
-function facilityBanner(): string {
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 16px;"><tr>
-<td style="padding:10px 14px;background-color:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;">
-<a href="${FACILITY_URL}" style="color:${BRAND.navy};font-size:13px;font-weight:700;text-decoration:none;">&#128205; Facility access &amp; instructions &rarr;</a>
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:6px 0 18px;"><tr>
+<td style="border:1.5px solid ${C.codeBorder};border-radius:9px;padding:9px 22px 10px;text-align:center;">
+<p style="margin:0 0 3px;font-family:${FONT};font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:${C.sub};">Door access code</p>
+<p style="margin:0;font-family:${MONO};font-size:26px;font-weight:700;letter-spacing:6px;color:${C.strong};">${esc(code)}</p>
 </td></tr></table>`;
 }
 
 function p(text: string): string {
-  return `<p style="margin:0 0 14px;color:${BRAND.ink};font-size:15px;line-height:1.55;">${text}</p>`;
+  return `<p style="margin:0 0 14px;font-family:${FONT};color:${C.ink};font-size:15px;line-height:1.6;">${text}</p>`;
 }
 
 function muted(text: string): string {
-  return `<p style="margin:0 0 8px;color:${BRAND.sub};font-size:13px;line-height:1.5;">${text}</p>`;
+  return `<p style="margin:0 0 10px;font-family:${FONT};color:${C.sub};font-size:13.5px;line-height:1.5;">${text}</p>`;
+}
+
+/** A small bold section label (e.g. "Details"). */
+function heading(text: string): string {
+  return `<p style="margin:16px 0 6px;font-family:${FONT};color:${C.strong};font-size:14px;font-weight:700;">${esc(text)}</p>`;
 }
 
 /** Render free-text (admin-typed) into escaped paragraphs, preserving line breaks. */
@@ -106,7 +106,7 @@ function paragraphs(text: string): string {
   return blocks
     .map(
       (b) =>
-        `<p style="margin:0 0 14px;color:${BRAND.ink};font-size:15px;line-height:1.6;">${esc(b).replace(/\n/g, "<br>")}</p>`
+        `<p style="margin:0 0 14px;font-family:${FONT};color:${C.ink};font-size:15px;line-height:1.6;">${esc(b).replace(/\n/g, "<br>")}</p>`
     )
     .join("");
 }
@@ -136,23 +136,22 @@ function layout(opts: { title: string; preheader: string; bodyHtml: string }): s
 <meta name="x-apple-disable-message-reformatting">
 <title>${esc(opts.title)}</title>
 </head>
-<body style="margin:0;padding:0;background-color:${BRAND.bg};-webkit-text-size-adjust:100%;">
+<body style="margin:0;padding:0;background-color:${C.bg};color:${C.ink};-webkit-text-size-adjust:100%;">
 <span style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden;mso-hide:all;">${esc(opts.preheader)}</span>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:${BRAND.bg};">
-<tr><td align="center" style="padding:24px 12px;">
-<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;">
-<!-- header -->
-<tr><td style="padding:6px 4px 16px;">
-<span style="font-size:22px;font-weight:800;color:${BRAND.navy};letter-spacing:0.5px;">Krickora</span>
-</td></tr>
-<!-- card -->
-<tr><td style="background-color:${BRAND.card};border:1px solid ${BRAND.line};border-radius:12px;padding:28px 26px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:${C.bg};">
+<tr><td align="center" style="padding:28px 16px;">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;">
+<tr><td>
+<!-- brand -->
+<p style="margin:0;font-family:${FONT};font-size:13px;font-weight:800;letter-spacing:2px;text-transform:uppercase;color:${C.strong};">Cricket Revolution</p>
+<hr style="border:0;border-top:1px solid ${C.rule};margin:11px 0 18px;">
+<!-- body -->
 ${opts.bodyHtml}
-</td></tr>
 <!-- footer -->
-<tr><td style="padding:18px 6px;">
-<p style="margin:0 0 4px;color:${BRAND.sub};font-size:12px;line-height:1.5;">Krickora &middot; Cricket Revolution, 78 Jones St, Stirling WA</p>
-<p style="margin:0;color:${BRAND.sub};font-size:12px;line-height:1.5;"><a href="${SITE}" style="color:${BRAND.sub};">krickora.com</a></p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;"><tr><td style="border-top:1px solid ${C.rule};padding-top:14px;">
+<p style="margin:0 0 3px;font-family:${FONT};color:${C.faint};font-size:12px;line-height:1.55;">Cricket Revolution &middot; 78 Jones St, Stirling WA</p>
+<p style="margin:0;font-family:${FONT};color:${C.faint};font-size:12px;"><a href="${SITE}" style="color:${C.faint};">cricketrevolution.au</a></p>
+</td></tr></table>
 </td></tr>
 </table>
 </td></tr></table>
@@ -173,41 +172,40 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
     // ── Auth ────────────────────────────────────────────────────────────────
     case "password-reset":
       return {
-        subject: "Reset your Krickora password",
+        subject: "Reset your Cricket Revolution password",
         html: layout({
           title: "Reset your password",
-          preheader: "Reset your Krickora password.",
+          preheader: "Reset your Cricket Revolution password.",
           bodyHtml:
             p(`Hi ${greetFirst(d, "name")},`) +
-            p(`We received a request to reset your Krickora password. Click below to choose a new one — this link expires shortly.`) +
-            button("Reset password", d.resetUrl) +
-            muted(`If you didn't request this, you can safely ignore this email — your password won't change.`),
+            p(`We received a request to reset your password. Open the link below to choose a new one — it expires shortly.`) +
+            linkLine("Reset your password:", d.resetUrl) +
+            muted(`If you didn't request this, ignore this email — your password won't change.`),
         }),
       };
     case "email-verification":
       return {
-        subject: "Verify your email for Krickora",
+        subject: "Verify your email for Cricket Revolution",
         html: layout({
           title: "Verify your email",
-          preheader: "Confirm your email to finish setting up Krickora.",
+          preheader: "Confirm your email to finish setting up your account.",
           bodyHtml:
             p(`Hi ${greetFirst(d, "name")},`) +
-            p(`Welcome to Krickora. Please confirm your email address to activate your account.`) +
-            button("Verify email", d.verificationUrl) +
-            muted(`If you didn't create a Krickora account, you can ignore this email.`),
+            p(`Welcome to Cricket Revolution. Please confirm your email address to activate your account.`) +
+            linkLine("Verify your email:", d.verificationUrl) +
+            muted(`If you didn't create an account, you can ignore this email.`),
         }),
       };
 
     // ── Payment ───────────────────────────────────────────────────────────────
     case "payment-confirmation":
       return {
-        subject: "Payment received — Krickora",
+        subject: "Payment received — Cricket Revolution",
         html: layout({
           title: "Payment received",
           preheader: `Payment of ${esc(d.amount)} received.`,
           bodyHtml:
-            p(`Hi ${greetFirst(d, "customerName")},`) +
-            p(`Thanks — your payment has been received.`) +
+            p(`Hi ${greetFirst(d, "customerName")}, thanks — your payment has been received.`) +
             detailRows([
               ["Amount", d.amount],
               ["For", d.description],
@@ -225,7 +223,6 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           title: "Booking confirmed",
           preheader: `${esc(d.laneName)} on ${esc(d.date)} at ${esc(d.timeSlot)}.`,
           bodyHtml:
-            facilityBanner() +
             p(`Hi ${greetFirst(d, "customerName")}, your session is confirmed.`) +
             detailRows([
               ["Lane", d.laneName],
@@ -235,7 +232,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
               ["Paid", d.amount],
             ]) +
             codeBox(d.accessCode) +
-            button("View / add to calendar", d.calendarUrl || SITE),
+            linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),
       };
     case "booking-cancellation":
@@ -254,7 +251,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
             ]) +
             (d.cancellationReason ? muted(`Reason: ${esc(d.cancellationReason)}`) : "") +
             p(`Any payment has been returned to your account as credit, ready to use on your next booking.`) +
-            button("Book again", d.bookingUrl || SITE),
+            linkLine("Book again:", d.bookingUrl || SITE),
         }),
       };
     case "booking-rescheduled":
@@ -264,7 +261,6 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           title: "Booking updated",
           preheader: `Your session is now ${esc(d.newLaneName)} on ${esc(d.newDate)} at ${esc(d.newTimeSlot)}.`,
           bodyHtml:
-            facilityBanner() +
             p(`Hi ${greetFirst(d, "customerName")}, your booking has been updated.`) +
             muted(`Previously: ${esc(d.oldLaneName)} &middot; ${esc(d.oldDate)} &middot; ${esc(d.oldTimeSlot)}`) +
             detailRows([
@@ -274,7 +270,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
               ["Duration", d.newDuration],
             ]) +
             codeBox(d.accessCode) +
-            button("View / add to calendar", d.calendarUrl || SITE),
+            linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),
       };
     case "booking-reminder":
@@ -284,7 +280,6 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           title: "Session reminder",
           preheader: `${esc(d.laneName)} at ${esc(d.timeSlot)}.`,
           bodyHtml:
-            facilityBanner() +
             p(`Hi ${greetFirst(d, "customerName")}, this is a reminder of your upcoming session.`) +
             detailRows([
               ["Lane", d.laneName],
@@ -293,14 +288,14 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
               ["Duration", d.duration],
             ]) +
             codeBox(d.accessCode) +
-            button("View / add to calendar", d.calendarUrl || SITE),
+            linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),
       };
 
     // ── Waitlist ──────────────────────────────────────────────────────────────
     case "waitlist-confirmation":
       return {
-        subject: "You're on the waitlist — Krickora",
+        subject: "You're on the waitlist — Cricket Revolution",
         html: layout({
           title: "You're on the waitlist",
           preheader: `We'll email you if a spot opens for your ${esc(d.slotCount)} requested time(s).`,
@@ -327,7 +322,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
             (d.offerDeadline
               ? p(`This spot is held for you until <strong>${esc(d.offerDeadline)}</strong>. After that it's offered to the next person in line, so book soon to keep it.`)
               : p(`Book soon to secure it — spots are offered on a first-come basis.`)) +
-            button("Book this spot", d.bookingUrl || SITE) +
+            linkLine("Book this spot:", d.bookingUrl || SITE) +
             (Number(d.otherWaitlistCount) > 0
               ? muted(`${esc(d.otherWaitlistCount)} other ${Number(d.otherWaitlistCount) === 1 ? "person is" : "people are"} waiting for this time.`)
               : ""),
@@ -342,7 +337,6 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           title: "Session allocated",
           preheader: `${esc(d.athleteName)} with ${esc(d.coachName)} on ${esc(d.date)}.`,
           bodyHtml:
-            facilityBanner() +
             p(`${esc(d.coachName)} has allocated <strong>${esc(d.athleteName)}</strong> to a coaching session.`) +
             detailRows([
               ["Athlete", d.athleteName],
@@ -353,7 +347,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
               ["Duration", d.duration],
             ]) +
             codeBox(d.accessCode) +
-            button("View / add to calendar", d.calendarUrl || SITE),
+            linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),
       };
     case "athlete-added":
@@ -365,19 +359,19 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           bodyHtml:
             p(`Hi ${greetFirst(d, "parentName")},`) +
             p(`<strong>${esc(d.coachName)}</strong> has added <strong>${esc(d.childName)}</strong> to their athlete roster. They can now book and allocate coaching sessions for ${esc(d.childName)}, and you'll be notified each time.`) +
-            button("Manage athletes", `${SITE}`),
+            linkLine("Manage athletes:", SITE),
         }),
       };
     case "athlete-invite":
       return {
-        subject: `${esc(d.coachName)} invited you to Krickora`,
+        subject: `${esc(d.coachName)} invited you to Cricket Revolution`,
         html: layout({
-          title: "You're invited to Krickora",
+          title: "You're invited to Cricket Revolution",
           preheader: `${esc(d.coachName)} wants to coach ${esc(d.childName)} — create your free account.`,
           bodyHtml:
             p(`<strong>${esc(d.coachName)}</strong> would like to coach <strong>${esc(d.childName)}</strong> at Cricket Revolution.`) +
-            p(`Create a free Krickora account to manage ${esc(d.childName)}'s sessions, see booking details and door codes, and stay in the loop.`) +
-            button("Create your account", d.signUpUrl || SITE),
+            p(`Create a free account to manage ${esc(d.childName)}'s sessions, see booking details and door codes, and stay in the loop.`) +
+            linkLine("Create your account:", d.signUpUrl || SITE),
         }),
       };
     case "athlete-cancellation":
@@ -423,7 +417,6 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           title: "Session rescheduled",
           preheader: `${esc(d.athleteName)} is now on ${esc(d.newDate)} at ${esc(d.timeSlot)}.`,
           bodyHtml:
-            facilityBanner() +
             p(`<strong>${esc(d.coachName)}</strong> has moved <strong>${esc(d.athleteName)}</strong>'s session.`) +
             (d.oldDate ? muted(`Previously: ${esc(d.oldDate)}`) : "") +
             detailRows([
@@ -435,7 +428,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
               ["Duration", d.duration],
             ]) +
             codeBox(d.accessCode) +
-            button("View / add to calendar", d.calendarUrl || SITE),
+            linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),
       };
 
@@ -447,7 +440,6 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           title: "You're in",
           preheader: `${esc(d.ownerName)} added you to ${esc(d.laneName)} on ${esc(d.date)}.`,
           bodyHtml:
-            facilityBanner() +
             p(`<strong>${esc(d.ownerName)}</strong> has added you to their session — here are the details and your door code.`) +
             detailRows([
               ["Lane", d.laneName],
@@ -456,7 +448,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
               ["Duration", d.duration],
             ]) +
             codeBox(d.accessCode) +
-            button("View / add to calendar", d.calendarUrl || SITE),
+            linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),
       };
     case "mate-removed":
@@ -514,7 +506,6 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           title: "Session updated",
           preheader: `New details: ${esc(d.newLaneName)} on ${esc(d.newDate)} at ${esc(d.newTimeSlot)}.`,
           bodyHtml:
-            facilityBanner() +
             p(`<strong>${esc(d.ownerName)}</strong> updated the session you're part of. Here are the new details and door code.`) +
             detailRows([
               ["Lane", d.newLaneName],
@@ -523,14 +514,14 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
               ["Duration", d.newDuration],
             ]) +
             codeBox(d.accessCode) +
-            button("View / add to calendar", d.calendarUrl || SITE),
+            linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),
       };
 
     // ── Weekly summary ────────────────────────────────────────────────────────
     case "weekly-booking-summary":
       return {
-        subject: `Your week at Krickora — ${esc(d.weekRange)}`,
+        subject: `Your week at Cricket Revolution — ${esc(d.weekRange)}`,
         html: layout({
           title: "Your week ahead",
           preheader: `You have ${esc(d.bookingCount)} session(s) booked this week.`,
@@ -538,13 +529,13 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
             p(`Hi ${greetFirst(d, "customerName")}, here's your week ahead — <strong>${esc(d.bookingCount)}</strong> session(s) booked for ${esc(d.weekRange)}.`) +
             // bookingsHtml is pre-rendered HTML (raw, not escaped)
             (d.bookingsHtml || "") +
-            button("Manage bookings", d.bookingUrl || SITE),
+            linkLine("Manage bookings:", d.bookingUrl || SITE),
         }),
       };
 
     // ── Admin broadcast / announcement (SPEC_ADMIN_BROADCAST) ─────────────────
     // Generic admin-composed message. `title` = subject + heading, `body` =
-    // free-text (multi-line). Optional `link` becomes a CTA button. `childRef` is
+    // free-text (multi-line). Optional `link` becomes a labelled URL. `childRef` is
     // set when the recipient is a parent of allocated athlete(s) ("Re: <names>").
     // `unsubscribeUrl` is present only for PROMOTIONAL sends (Spam Act).
     case "announcement":
@@ -555,22 +546,20 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
           preheader: (d.body || "").replace(/\s+/g, " ").slice(0, 120),
           bodyHtml:
             (d.childRef ? muted(`Re: ${esc(d.childRef)}`) : "") +
-            `<p style="margin:0 0 12px;color:${BRAND.navy};font-size:19px;font-weight:800;line-height:1.3;">${esc(d.title)}</p>` +
+            `<p style="margin:0 0 12px;font-family:${FONT};font-size:18px;font-weight:800;line-height:1.3;color:${C.strong};">${esc(d.title)}</p>` +
             paragraphs(d.body) +
-            (d.link ? button(d.ctaLabel || "View details", d.link) : "") +
+            (d.link ? linkLine(`${d.ctaLabel || "View details"}:`, d.link) : "") +
             (d.unsubscribeUrl
-              ? `<p style="margin:18px 0 0;padding-top:14px;border-top:1px solid ${BRAND.line};color:${BRAND.sub};font-size:12px;line-height:1.5;">You're receiving this because you're a Cricket Revolution customer. <a href="${esc(d.unsubscribeUrl)}" style="color:${BRAND.sub};text-decoration:underline;">Unsubscribe from promotional emails</a>.</p>`
+              ? `<p style="margin:18px 0 0;padding-top:14px;border-top:1px solid ${C.rule};font-family:${FONT};color:${C.sub};font-size:12px;line-height:1.5;">You're receiving this because you're a Cricket Revolution customer. <a href="${esc(d.unsubscribeUrl)}" style="color:${C.sub};text-decoration:underline;">Unsubscribe from promotional emails</a>.</p>`
               : ""),
         }),
       };
 
     // ── Fault / service report (admin ops alert) ──────────────────────────────
     // Internal operations email to the ops inbox when a user reports an issue.
-    // Reporter details, session context, full description, and a link to the
-    // attached photo (served Convex storage URL). Not customer-facing.
     case "fault-report":
       return {
-        subject: `🛠️ New fault report${d.where ? ` — ${esc(d.where)}` : ""}`,
+        subject: `New fault report${d.where ? ` — ${esc(d.where)}` : ""}`,
         html: layout({
           title: "New fault report",
           preheader: (d.details || "").replace(/\s+/g, " ").slice(0, 120),
@@ -587,9 +576,9 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
                 ["Reported", d.createdAtLabel],
               ] as [string, string][]).filter((r) => r[1]),
             ) +
-            `<p style="margin:16px 0 6px;color:${BRAND.navy};font-size:14px;font-weight:700;">Details</p>` +
+            heading("Details") +
             paragraphs(d.details) +
-            (d.photoUrl ? button("View attached photo", d.photoUrl) : "") +
+            (d.photoUrl ? linkLine("View attached photo:", d.photoUrl) : "") +
             muted("Automated operations alert — triage this in the admin panel."),
         }),
       };
@@ -617,7 +606,7 @@ export async function sendTemplateEmail(
     console.warn(`[email] RESEND_API_KEY unset — skipped "${slug}" to ${to}`);
     return { success: false, reason: "Email not configured" };
   }
-  const from = process.env.EMAIL_FROM || "Krickora <onboarding@resend.dev>";
+  const from = process.env.EMAIL_FROM || "Cricket Revolution <onboarding@resend.dev>";
 
   const rendered = renderTemplate(slug, data);
   if (!rendered) {

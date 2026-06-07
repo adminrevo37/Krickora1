@@ -309,7 +309,7 @@ export const advanceWaitlistOffer = internalMutation({
       laneName,
       date: fmtAwstDateLabel(date),
       timeSlot: `${fmtHour12(hour)} - ${fmtHour12(hour + 1)}`,
-      bookingUrl: `https://krickora.com/?book=${offerLane}&date=${date}&hour=${hour}`,
+      bookingUrl: `https://cricketrevolution.au/?book=${offerLane}&date=${date}&hour=${hour}`,
       otherWaitlistCount: "0",
       offerDeadline: `${fmtAwstTime(expiresAtMs)} AWST`,
     });

@@ -103,7 +103,7 @@ export const sendWeeklyBookingSummaries = internalAction({
         .map((b) => {
           const start = formatHour(b.startHour);
           const end = formatHour(b.startHour + b.duration / 60);
-          return `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:12px;"><tr><td style="padding:12px 14px;background-color:#ffffff;border:1px solid #e2e8f0;border-radius:6px;"><p style="margin:0 0 4px;color:#1e3a5f;font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">${formatDateLong(b.date)}</p><p style="margin:0;color:#1a1a1a;font-size:14px;font-weight:600;">${laneName(b.laneId)} · ${start} – ${end}</p></td></tr></table>`;
+          return `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:2px;"><tr><td style="padding:8px 0;border-bottom:1px solid #e2e6ea;"><p style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#6a7480;font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">${formatDateLong(b.date)}</p><p style="margin:2px 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#10151c;font-size:14.5px;font-weight:600;">${laneName(b.laneId)} · ${start} – ${end}</p></td></tr></table>`;
         })
         .join("");
 
@@ -149,7 +149,7 @@ export const sendOne = internalAction({
       bookingCount: args.bookingCount,
       weekRange: args.weekRange,
       bookingsHtml: args.bookingsHtml,
-      bookingUrl: "https://krickora.com",
+      bookingUrl: "https://cricketrevolution.au",
     });
     return { success: result.success, reason: result.reason };
   },

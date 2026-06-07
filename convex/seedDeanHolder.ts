@@ -98,7 +98,11 @@ const RESERVED = new Set(["0000", "1234", "1111", "9999", "0123"]);
 
 function makeCode(used: Set<string>): string {
   for (let i = 0; i < 9999; i++) {
-    const c = String(Math.floor(1000 + Math.random() * 9000));
+    // CSPRNG (Web Crypto) — same approach as the production door-code path
+    // (mutations.ts generateServerAccessCode), not the guessable Math.random.
+    const arr = new Uint32Array(1);
+    crypto.getRandomValues(arr);
+    const c = String(1000 + (arr[0] % 9000)); // 4-digit (1000-9999)
     if (!used.has(c) && !RESERVED.has(c)) { used.add(c); return c; }
   }
   // Fallback (effectively unreachable on this dataset size)

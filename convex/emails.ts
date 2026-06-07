@@ -274,7 +274,7 @@ export const sendBookingConfirmation = internalAction({
       duration: args.duration,
       amount: args.amount,
       accessCode: args.accessCode,
-      calendarUrl: args.calendarUrl ?? "https://krickora.com",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
     });
   },
 });
@@ -309,8 +309,8 @@ export const sendBookingCancellation = internalAction({
       timeSlot: args.timeSlot,
       duration: args.duration,
       cancellationReason: args.reason ?? "",
-      bookingUrl: "https://krickora.com",
-      calendarUrl: args.calendarUrl ?? "https://krickora.com",
+      bookingUrl: "https://cricketrevolution.au",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
     });
   },
 });
@@ -349,7 +349,7 @@ export const sendBookingRescheduled = internalAction({
       newTimeSlot: args.newTimeSlot,
       newDuration: args.newDuration,
       accessCode: args.accessCode,
-      calendarUrl: args.calendarUrl ?? "https://krickora.com",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
     });
   },
 });
@@ -382,7 +382,7 @@ export const sendBookingReminder = internalAction({
       timeSlot: args.timeSlot,
       duration: args.duration,
       accessCode: args.accessCode,
-      calendarUrl: args.calendarUrl ?? "https://krickora.com",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
     });
   },
 });
@@ -426,10 +426,10 @@ export const sendWaitlistConfirmation = internalAction({
       const formattedDate = new Date(date + "T00:00:00").toLocaleDateString("en-US", {
         weekday: "long", year: "numeric", month: "long", day: "numeric",
       });
-      const timeChips = hours.map((h) => `<span style=\"display:inline-block;background-color:#fef3c7;color:#92400e;padding:4px 10px;border-radius:12px;font-size:13px;font-weight:600;margin:2px 4px 2px 0;\">${fmtHour(h)} - ${fmtHour(h + 1)}</span>`).join("");
-      return `<div style=\"margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid #fde68a;\"><p style=\"margin:0 0 6px;color:#1a1a1a;font-size:14px;font-weight:600;\">📅 ${formattedDate}</p><div>${timeChips}</div></div>`;
+      const times = hours.map((h) => `${fmtHour(h)} – ${fmtHour(h + 1)}`).join(", ");
+      return `<div style=\"margin-bottom:10px;\"><p style=\"margin:0 0 2px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#10151c;font-size:14px;font-weight:600;\">${formattedDate}</p><p style=\"margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#23292f;font-size:14px;\">${times}</p></div>`;
     }).join("");
-    const cleanedHtml = slotsHtml.replace(/border-bottom:1px solid #fde68a;(?=[^<]*$)/, "");
+    const cleanedHtml = slotsHtml;
     const result = await sendEmail("waitlist-confirmation", recipient, {
       customerName: args.customerName,
       firstName: await resolveFirstName(ctx, recipient),
@@ -509,7 +509,7 @@ export const sendAthleteAllocation = internalAction({
       timeSlot: args.timeSlot,
       duration: args.duration,
       accessCode: args.accessCode,
-      calendarUrl: args.calendarUrl ?? "https://krickora.com",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
     });
   },
 });
@@ -546,7 +546,7 @@ export const sendAthleteInvite = internalAction({
     return await sendEmail("athlete-invite", args.to, {
       childName: args.childName,
       coachName: args.coachName,
-      signUpUrl: "https://krickora.com",
+      signUpUrl: "https://cricketrevolution.au",
     });
   },
 });
@@ -623,7 +623,7 @@ export const sendAthleteReschedule = internalAction({
       timeSlot: args.timeSlot,
       duration: args.duration,
       accessCode: args.accessCode,
-      calendarUrl: args.calendarUrl ?? "https://krickora.com",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
     });
   },
 });
@@ -659,7 +659,7 @@ export const sendMateAdded = internalAction({
       timeSlot: args.timeSlot,
       duration: args.duration,
       accessCode: args.accessCode,
-      calendarUrl: args.calendarUrl ?? "https://krickora.com",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
     });
   },
 });
@@ -754,7 +754,7 @@ export const sendMateModified = internalAction({
       newTimeSlot: args.newTimeSlot,
       newDuration: args.newDuration,
       accessCode: args.accessCode,
-      calendarUrl: args.calendarUrl ?? "https://krickora.com",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
     });
   },
 });
