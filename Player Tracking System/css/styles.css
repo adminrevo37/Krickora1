@@ -1,0 +1,177 @@
+:root {
+  --bg: #0b1220;
+  --panel: #111a2b;
+  --panel-2: #16213a;
+  --line: #243246;
+  --text: #e6edf6;
+  --muted: #8da2bd;
+  --accent: #22d3ee;
+  --teamA: #3b82f6;
+  --teamB: #f97316;
+  --ball: #fde047;
+  --good: #34d399;
+  --radius: 10px;
+  --shadow: 0 6px 20px rgba(0,0,0,.35);
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: radial-gradient(1200px 800px at 70% -10%, #16243f 0%, var(--bg) 55%);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+
+/* Topbar */
+.topbar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 16px; border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #0f1830, #0c1322);
+}
+.brand { display: flex; align-items: baseline; gap: 8px; }
+.brand-mark {
+  font-weight: 800; letter-spacing: 1px; color: var(--bg);
+  background: var(--accent); padding: 3px 8px; border-radius: 6px;
+}
+.brand-sub { color: var(--muted); font-weight: 600; }
+.session-meta { display: flex; align-items: center; gap: 10px; margin-left: 8px; flex: 1; flex-wrap: wrap; }
+.session-meta label { color: var(--muted); font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.meta-chip {
+  font-size: 12px; color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--line);
+  padding: 4px 8px; border-radius: 999px;
+}
+.meta-chip.clock { font-variant-numeric: tabular-nums; color: var(--text); }
+.topbar-actions { display: flex; gap: 8px; }
+
+/* Buttons / inputs */
+.btn {
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 7px 12px; cursor: pointer; font-size: 13px;
+  transition: background .15s, border-color .15s, transform .05s;
+}
+.btn:hover { background: #1d2c49; border-color: #324563; }
+.btn:active { transform: translateY(1px); }
+.btn.ghost { background: transparent; }
+.btn.icon { min-width: 44px; font-size: 14px; }
+select, input[type="range"], input[type="file"] {
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font-size: 13px;
+}
+select:focus, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Layout */
+.layout {
+  flex: 1; min-height: 0;
+  display: grid; grid-template-columns: 240px 1fr 320px; gap: 12px; padding: 12px;
+}
+.panel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  display: flex; flex-direction: column; min-height: 0; overflow: hidden;
+}
+.panel-section { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.panel-section.grow { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.panel h3 {
+  margin: 0 0 10px; font-size: 12px; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--muted); font-weight: 700;
+  display: flex; justify-content: space-between; align-items: baseline;
+}
+.hint { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--muted); opacity: .7; font-size: 10px; }
+.muted { color: var(--muted); font-size: 13px; }
+
+/* Segmented control */
+.seg { display: flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 3px; gap: 3px; }
+.seg-btn {
+  flex: 1; background: transparent; color: var(--muted); border: 0;
+  padding: 6px 4px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;
+}
+.seg-btn.active { background: var(--accent); color: var(--bg); }
+.toggle-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; color: var(--text); }
+
+/* Roster */
+.roster { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; max-height: 100%; }
+.roster-team-label { font-size: 11px; color: var(--muted); margin: 8px 0 2px; font-weight: 700; }
+.roster-row {
+  display: flex; align-items: center; gap: 8px; padding: 5px 6px;
+  border-radius: 7px; cursor: pointer; user-select: none; border: 1px solid transparent;
+}
+.roster-row:hover { background: var(--panel-2); }
+.roster-row.focused { background: #1d2c49; border-color: #355; border-color: var(--accent); }
+.roster-row.hidden-player { opacity: .4; }
+.roster-row .num {
+  width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 11px; font-weight: 800; color: #06101f; flex: none;
+}
+.roster-row .pname { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.roster-row .prole { font-size: 10px; color: var(--muted); }
+.roster-row .eye { font-size: 12px; color: var(--muted); }
+
+/* Stage / court */
+.stage { display: flex; flex-direction: column; min-height: 0; gap: 12px; }
+.court-wrap {
+  flex: 1; min-height: 0; position: relative;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
+}
+#court { display: block; width: 100%; height: 100%; }
+.court-overlay { position: absolute; inset: 0; pointer-events: none; }
+
+/* Transport */
+.transport {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 8px 12px; box-shadow: var(--shadow);
+}
+.transport #scrub { flex: 1; }
+.transport .time { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; min-width: 96px; text-align: center; }
+.transport .speed { font-size: 12px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+#liveBtn { font-size: 11px; font-weight: 700; color: var(--good); }
+#liveBtn.active { background: var(--good); color: var(--bg); }
+
+/* Stats */
+.stat-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.stat-card { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.stat-card .k { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.stat-card .v { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.stat-card .u { font-size: 11px; color: var(--muted); }
+.focus-head { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; }
+.focus-head .num { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; color: #06101f; font-size: 12px; }
+
+.table-wrap { overflow-y: auto; flex: 1; min-height: 0; }
+.stats-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.stats-table th, .stats-table td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.stats-table th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 700; cursor: pointer; }
+.stats-table th:nth-child(2), .stats-table td:nth-child(2) { text-align: left; }
+.stats-table td:first-child, .stats-table th:first-child { text-align: center; }
+.stats-table tbody tr { cursor: pointer; }
+.stats-table tbody tr:hover { background: var(--panel-2); }
+.stats-table tbody tr.focused { background: #1d2c49; }
+.stats-table .tag { display: inline-block; width: 18px; height: 18px; border-radius: 50%; font-size: 10px; font-weight: 800; color: #06101f; text-align: center; line-height: 18px; }
+.stats-table td.num-cell { font-variant-numeric: tabular-nums; }
+
+/* Statusbar */
+.statusbar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 16px; border-top: 1px solid var(--line);
+  font-size: 12px; color: var(--muted); background: #0c1322;
+}
+.legend { display: flex; gap: 14px; align-items: center; }
+.legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+.dot.teamA { background: var(--teamA); }
+.dot.teamB { background: var(--teamB); }
+.dot.ball { background: var(--ball); }
+
+/* Responsive */
+@media (max-width: 1100px) {
+  .layout { grid-template-columns: 200px 1fr; }
+  .panel.right { display: none; }
+}
+@media (max-width: 760px) {
+  .layout { grid-template-columns: 1fr; }
+  .panel.left { display: none; }
+}

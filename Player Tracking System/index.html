@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Revo Player Tracking — Floorball Analysis</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">REVO</span>
+      <span class="brand-sub">Player Tracking</span>
+    </div>
+    <div class="session-meta">
+      <label>Team
+        <select id="teamSelect"></select>
+      </label>
+      <span class="meta-chip" id="venueChip">Venue: —</span>
+      <span class="meta-chip" id="sourceChip">Source: Simulated</span>
+      <span class="meta-chip clock" id="clockChip">00:00</span>
+    </div>
+    <div class="topbar-actions">
+      <input type="file" id="loadFile" accept="application/json" hidden />
+      <button class="btn ghost" id="loadBtn" title="Load a recorded session JSON">Load session</button>
+      <button class="btn ghost" id="exportBtn" title="Download the current session as JSON">Export</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- Left: roster + view controls -->
+    <aside class="panel left">
+      <div class="panel-section">
+        <h3>View</h3>
+        <div class="seg" id="viewModes">
+          <button class="seg-btn active" data-mode="dots">Dots</button>
+          <button class="seg-btn" data-mode="trails">Trails</button>
+          <button class="seg-btn" data-mode="heatmap">Heatmap</button>
+        </div>
+        <label class="toggle-row">
+          <input type="checkbox" id="showBall" checked /> Show ball
+        </label>
+        <label class="toggle-row">
+          <input type="checkbox" id="showNumbers" checked /> Player numbers
+        </label>
+      </div>
+
+      <div class="panel-section">
+        <h3>Roster <span class="hint">click to focus</span></h3>
+        <div class="roster" id="roster"></div>
+      </div>
+    </aside>
+
+    <!-- Center: court -->
+    <section class="stage">
+      <div class="court-wrap">
+        <canvas id="court"></canvas>
+        <div class="court-overlay" id="courtOverlay"></div>
+      </div>
+
+      <div class="transport">
+        <button class="btn icon" id="playBtn" title="Play / Pause">⏸</button>
+        <button class="btn icon" id="liveBtn" title="Jump to live">⏭ LIVE</button>
+        <input type="range" id="scrub" min="0" max="0" value="0" step="1" />
+        <span class="time" id="timeLabel">00:00 / 00:00</span>
+        <label class="speed">Speed
+          <select id="simSpeed">
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="2">2×</option>
+            <option value="4">4×</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <!-- Right: stats -->
+    <aside class="panel right">
+      <div class="panel-section">
+        <h3>Performance</h3>
+        <div class="stat-cards" id="focusCards">
+          <div class="muted">Select a player to see detail, or view the team table below.</div>
+        </div>
+      </div>
+      <div class="panel-section grow">
+        <h3>Team table</h3>
+        <div class="table-wrap">
+          <table class="stats-table" id="statsTable">
+            <thead>
+              <tr>
+                <th>#</th><th>Player</th>
+                <th title="Distance covered (m)">Dist</th>
+                <th title="Top speed (km/h)">Top</th>
+                <th title="Average speed while moving (km/h)">Avg</th>
+                <th title="Sprint count (&gt;18 km/h)">Spr</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="statusbar">
+    <span id="statusText">Prototype — simulated data. Drop in real UWB tracking via the documented JSON format.</span>
+    <span class="legend">
+      <i class="dot teamA"></i> Team A
+      <i class="dot teamB"></i> Team B
+      <i class="dot ball"></i> Ball
+    </span>
+  </footer>
+
+  <script src="js/court.js"></script>
+  <script src="js/analytics.js"></script>
+  <script src="js/simulation.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
