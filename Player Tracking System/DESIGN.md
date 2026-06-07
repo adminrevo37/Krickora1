@@ -244,6 +244,23 @@ This also closes the loop on the whole product: the **booking creates the
 session**, the **serial registration creates the roster**, and the **gateway only
 works as hard as the current bookings require.**
 
+### 6.4 Waking tags & control channels (BLE retained)
+The allowlist is **purely server-side** — the gateway derives "track these serials"
+from the fixture, so **no tag radio is needed to *decide* what to track.** What the
+tag radios do is **wake** and **carry control**:
+
+- **Wake — motion first.** A sleeping tag's radios are off, so it can't be woken by
+  radio. The **accelerometer** wakes it the instant it's handled/moved; it then
+  announces its serial and the gateway matches it against the server allowlist
+  (track, or send back to sleep). This needs no wake-radio and saves the most power.
+- **Control/identity — UWB and/or BLE.** UWB is two-way, so start/stop/rate can ride
+  on UWB. **BLE is retained** as the convenience channel for **check-in, the dormant
+  presence/battery heartbeat, OTA firmware updates, and bench diagnostics.** It's
+  already integrated in the DWM3001C (nRF52833) → no extra parts, negligible power.
+
+**Decision:** server fixture = source of truth; motion-wake = primary wake;
+UWB = in-play control; **BLE kept** for check-in/heartbeat/OTA/diagnostics.
+
 ⚠️ TO CONFIRM: live booking feed vs a pre-match export; buffer time around slots
 (warm-up before the booked start); handling unscheduled/walk-in games.
 
@@ -307,11 +324,15 @@ battery + a tiny carrier board + an enclosure. No RF design, no antenna tuning.
   cheap, low-power, and simple. (Onboard IMU logging for richer metrics is a v2
   option.)
 - **Identity:** the tag advertises its **serial** over BLE + in the UWB payload →
-  the gateway maps serial → allowlist (§6) → player/team (§8). Serial + QR on the
-  case; **NFC tap** assigns/checks-in a tag in the team app.
+  the gateway matches it against the **server-derived allowlist** (the fixture,
+  §6.4) → player/team (§8). Serial + QR on the case; **NFC tap** assigns/checks-in
+  a tag in the team app.
+- **Wake:** **accelerometer motion-wake** is primary (§6.4); button/NFC/BLE also
+  available.
 - **Ranging:** TWR for the pilot (responds to the coordinator's scheduled poll);
   scheduled-blink TDoA later for scale (§3).
-- **OTA:** nRF BLE DFU → field firmware updates.
+- **BLE — retained** (confirmed): check-in, dormant presence/battery heartbeat,
+  and **OTA firmware updates** (nRF BLE DFU). Free on the module, negligible power.
 
 **Power budget** (a tag is dormant/asleep except during booked play):
 | State | Avg current | Runtime on 500 mAh |
