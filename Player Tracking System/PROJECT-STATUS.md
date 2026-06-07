@@ -3,7 +3,7 @@
 Living handoff doc. **Read this first** to resume work. Detail lives in
 [`DESIGN.md`](./DESIGN.md); how-to-run in [`README.md`](./README.md).
 
-> Last updated: 2026-06-07 (session pause).
+> Last updated: 2026-06-07 (added testing-hardware decisions D16–D19 + 10-tag bench plan).
 
 ---
 
@@ -54,6 +54,10 @@ registers its **wearable serials**, and reviews its own stats via a shareable UR
 | D13 | Tag radios | **UWB** (positioning + in-play control) + **BLE — RETAINED** (check-in/heartbeat/OTA/diagnostics) + **NFC** (tap-to-assign). **Accelerometer motion-wake** is primary |
 | D14 | Tag form factor | **Vest pod (upper back)** primary for accuracy; wrist optional |
 | D15 | Ranging mode | **TWR** for pilot (~10 tags @ 10 Hz); **TDoA** for scale (30 tags) |
+| D16 | **Testing hardware** | **Makerfabs ESP32 UWB DW3000** for both anchor + tag (DW3000 + **Wi-Fi**), so the **wireless anchor→Pi link (MQTT) is tested from day one**. ⚠️ Buy DW3000, *not* the DW1000 "Pro with Display". Production tag stays the DWM3001C module route (D11). `DESIGN.md §7.6` |
+| D17 | **Bench backhaul** | Anchors → **dedicated AP (travel router on court)** → **MQTT (Mosquitto on Pi)** → trilaterate → frame format. *Not* the venue Wi-Fi |
+| D18 | **Anchor power** | Anchor is **not battery-critical** (stationary). Draw ~150–250 mA @5 V → **10,000 mAh power bank = 20 h+**; 20,000 mAh for a full day. Measure actual draw to confirm |
+| D19 | **ESP32 at scale** | ESP32 Wi-Fi is **fine for pilot + multi-court** (range payloads tiny; Wi-Fi not the bottleneck). Scaling limit = **UWB capacity** → fix via scheduling/Option B/TDoA, not a faster anchor. For big/permanent multi-court venues consider **high-power UWB (ESP32 UWB Pro ~120 m)** + **wired/PoE anchors**. `DESIGN.md §7.7` |
 
 ---
 
@@ -81,9 +85,15 @@ registers its **wearable serials**, and reviews its own stats via a shareable UR
 ---
 
 ## 6. Next steps (offered, not started)
-- **Phase 1 hardware:** build 4 anchors + a few **DWM3001C tags**; write the
-  **gateway position solver** (ranges → trilateration → smoothing → the canonical
-  frame JSON). This is the only real code needed to replace the simulator. (§9, §11)
+- **Phase 1 — 10-tag bench pilot (planned, see `DESIGN.md §7.6`):** order the
+  **Makerfabs ESP32 UWB DW3000** boards (4–6 anchors + 10 tags), a Raspberry Pi,
+  and a dedicated AP. Build order: **1 anchor + 1 tag** → ranging works → **4
+  anchors + 1 tag** → trilateration/positioning → **scale to 10 tags** → capacity
+  + anchor battery test. Backhaul over **Wi-Fi/MQTT** from the start. BOM ≈ AUD
+  1,750–2,100.
+- **Gateway position solver** — the only real code to replace the simulator:
+  anchor ranges (MQTT) → trilateration → smoothing → the canonical frame JSON
+  (§9). Anchors run Makerfabs DW3000 TWR firmware + a small Wi-Fi/MQTT publisher.
 - **Anchor + gateway deep-dive** in `DESIGN.md` (mirror the tag deep-dive).
 - **Multi-court UI** in the prototype: court switcher + per-court calibration view.
 - **Shareable deploy URL:** decide standalone Vercel/Netlify project **vs** fold

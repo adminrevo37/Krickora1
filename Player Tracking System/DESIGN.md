@@ -393,7 +393,75 @@ sessions) is part of the portable kit.
   importer/representative**. The pre-certified DWM3001C eases EMC but the
   *finished* tag still needs its own RCM sign-off. Budget a one-off cert cost.
 
-⚠️ TO CONFIRM final BOM after a bench test of one anchor + one DWM3001C tag.
+⚠️ TO CONFIRM final BOM after a bench test of one anchor + one tag.
+
+### 7.6 Bench pilot — test build (Makerfabs ESP32 UWB DW3000)
+
+For **testing** we deliberately use a different board than the production tag
+(§7.2): the **Makerfabs ESP32 UWB DW3000**. Why: the **ESP32 gives Wi-Fi on both
+anchor and tag**, so we validate the **wireless anchor→Pi link from day one** (no
+USB backhaul to outgrow); it's the **same DW3000 radio** as production; and it has
+the richest community firmware (Makerfabs Arduino libraries). Same board for both
+roles keeps tag↔anchor interoperable.
+
+> ⚠️ Buy the **DW3000** board — not the DW1000 "Pro with Display" (radio
+> generations don't mix). A confirmed-DW3000 OLED variant is nice-to-have for live
+> distance read-outs while testing.
+
+**1 anchor =** ESP32 UWB DW3000 + USB power (wall adapter or power bank) + tripod
++ clamp. **No data cable** — Wi-Fi is the backhaul. The anchor is **not
+battery-critical** (it's stationary); a power bank just makes it portable.
+
+**Backhaul:** each anchor joins a **dedicated AP** (a travel router on court — *not*
+the venue Wi-Fi), ranges the tags over UWB, and **publishes distances to the Pi
+over MQTT** (Mosquitto on the Pi). The Pi trilaterates → frame format (§9) → UI.
+
+**10-tag bench BOM (AUD, indicative):**
+| Item | Qty | ~Unit | ~Total |
+|---|---|---|---|
+| ESP32 UWB DW3000 — **tags** | 10 | $65 | $650 |
+| ESP32 UWB DW3000 — **anchors** | 4–6 | $65 | $260–390 |
+| USB power bank 10,000 mAh — anchors (20 h+) | 4–6 | $30 | $120–180 |
+| USB power bank ~5,000 mAh (or LiPo) — tags, testing | 10 | $15 | $150 |
+| Raspberry Pi 5 + PSU + SD (gateway + MQTT broker) | 1 | $160 | $160 |
+| Dedicated Wi-Fi travel router / AP | 1 | $70 | $70 |
+| Tripod stand + clamp (anchors) | 4–6 | $50 | $200–300 |
+| USB-C cables | ~16 | $5 | $80 |
+| Enclosures (assorted) | — | — | $60 |
+| **Total** | | | **~AUD 1,750–2,100** |
+
+**Why 10 tags is a meaningful test:** at the TWR airtime budget (~10 ms/tag/fix
+with 4 anchors), **10 tags ≈ the single-channel ceiling at 10 Hz** (§3). So this
+build directly proves the capacity limit and *why* scheduling (§6), per-court
+channels (§5 Option B), or TDoA are needed beyond ~10 tags.
+
+**Anchor battery sizing (20 h target):** an active ESP32+DW3000 anchor (Wi-Fi +
+UWB) draws ~**150–250 mA @ 5 V** (≈1–1.25 W) — *measure yours with an inline USB
+power meter to confirm*. Sizing rule:
+`bank_mAh(@3.7V) ≈ (I_mA × 5/3.7 × hours) / 0.85`. At 200 mA → ~6,400 mAh, so a
+standard **10,000 mAh power bank gives 20 h+ with margin** (often ~30 h). Use
+**20,000 mAh** for a comfortable full day; a 5,000 mAh bank only lasts ~12–15 h.
+
+### 7.7 Is the ESP32 powerful enough? (range, Wi-Fi, multi-court, high load)
+- **Wi-Fi power/range:** ESP32 2.4 GHz, ~+20 dBm, PCB antenna → ~30–50 m+ in an
+  open hall (line-of-sight). Fine across a 40×20 court with a central AP; for an
+  ~80 m hall, centre the AP or pick a board with an external Wi-Fi antenna.
+- **Wi-Fi is *not* the bottleneck at scale.** Range messages are tiny; even many
+  anchors × high rate × multiple courts is trivial data volume. The real ceiling
+  is **UWB airtime/capacity**, which is independent of the MCU — solved by
+  **scheduling (§6), per-court anchor sets/channels (§5 Option B), and TDoA (§3)**,
+  not by a faster anchor CPU.
+- **So "a more powerful anchor" isn't what scaling needs — architecture is.** Two
+  upgrades *are* worth it for a busy permanent multi-court venue:
+  1. **Big-hall UWB reach:** the **ESP32 UWB Pro (high-power, ~120 m)** variant /
+     external UWB antenna improves the tag↔anchor link budget.
+  2. **Fixed-install backhaul + TDoA sync:** **wired/PoE anchors** (e.g.
+     ESP32-POE / Ethernet) give rock-solid data and easier anchor time-sync for
+     TDoA — better than Wi-Fi for a permanent high-load rig.
+- **Verdict:** the ESP32 UWB DW3000 is **suitable for testing, the single-court
+  pilot, and the 10-tag capacity test**, and stays usable for multi-court **if
+  architected** (dedicated AP + scheduling + Option B). Plan the high-power-UWB
+  and/or PoE-anchor upgrades for a permanent high-load venue — don't buy them now.
 
 ---
 
@@ -500,10 +568,12 @@ the 10–30 cm jitter) → emit a `players` entry per tag. Everything downstream
 
 - **Phase 0 — Prototype (this folder).** Court UI, simulated match, heatmaps,
   speed/distance/sprints, load/replay/export, shareable via Vercel. ✅
-- **Phase 1 — One physical kit, one court.** Build 4 anchors + a few **DWM3001C
-  tags** (§7.2); gateway solver (TWR) emits the frame format; record a real
-  session; load it into *this* UI unchanged. Validate accuracy vs tape-measured
-  spots; confirm tag form factor, charging, and battery life on court.
+- **Phase 1 — Bench pilot, one court (10 tags).** Build with **Makerfabs ESP32
+  UWB DW3000** (§7.6) so the **Wi-Fi anchor→Pi link (MQTT) is tested from day
+  one**. Stand up 4 anchors + scale to **10 tags**; gateway solver (TWR)
+  trilaterates → the frame format; load into *this* UI unchanged. Validate
+  accuracy vs tape-measured spots, the 10-tag capacity ceiling, and anchor
+  battery life. *(Production tag = the DWM3001C module route, §7.2.)*
 - **Phase 2 — Multi-tenant SaaS + scheduling.** Team logins, serial→player
   registration, per-team session storage (Convex), post-game review online.
   **Booking-driven active-tag allowlist (§6)** and per-court calibration (§5).
@@ -528,5 +598,9 @@ the 10–30 cm jitter) → emit a `players` entry per tag. Everything downstream
    contact-pad charging; caddy bay count.
 8. **Selling in Australia:** RCM/EMC certification path + Australian importer
    (§7.5).
-9. **Live latency** expectations if/when live is prioritised.
-10. **Ball tracking** in/out of scope (extra tag, harder dynamics).
+9. **Anchor backhaul at scale:** Wi-Fi (pilot) vs **wired/PoE** for a permanent
+   multi-court install; measure real anchor current draw to finalise battery (§7.6).
+10. **Big-hall UWB reach:** standard vs **ESP32 UWB Pro high-power (~120 m)** /
+    external antenna for large or multi-court venues (§7.7).
+11. **Live latency** expectations if/when live is prioritised.
+12. **Ball tracking** in/out of scope (extra tag, harder dynamics).
