@@ -7,5 +7,4 @@ export const PRICE_DEFAULTS = {
   customerPerHour: 40,
   trumanPerHour: 50,
   coachPerHour: 25,
-  coachPer30Min: 15,
 } as const;

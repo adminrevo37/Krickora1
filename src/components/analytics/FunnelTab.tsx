@@ -1,26 +1,52 @@
 // SPEC_ANALYTICS_BUILD_2026-06 C2.5 — booking-flow funnel: per-step conversion,
 // drop-off, median time-in-step, time-to-book, checkout abandon rate.
-import { useQuery } from 'convex/react'
 import { api } from '../../../convex/_generated/api'
-import { type DateRange, KpiCard, Section, Loading, Empty, fmtMins } from './shared'
+import {
+  type AnalyticsRange, KpiCard, DeltaKpi, Section, Loading, Empty, fmtMins,
+  periodsOf, usePeriodResults,
+} from './shared'
 
-export default function FunnelTab({ range }: { range: DateRange }) {
-  const data = useQuery(api.analyticsUsage.getBookingFunnel, { from: range.from || undefined, to: range.to || undefined })
+export default function FunnelTab({ range }: { range: AnalyticsRange }) {
+  // One window normally; N consecutive windows (results[0] = current) when comparing.
+  const periods = periodsOf(range)
+  const results = usePeriodResults<any>(api.analyticsUsage.getBookingFunnel, periods, (p) => ({
+    from: p.from || undefined,
+    to: p.to || undefined,
+    // Exact ms bounds drive sub-day (1h/4h) windows; the query merges them via rangeMs.
+    fromMs: p.fromMs,
+    toMs: p.toMs,
+  }))
+
+  const data = results[0]
   if (data === undefined) return <Loading label="Loading funnel…" />
   if (data === null) return <Empty label="Unavailable." />
 
+  const prev = range.compare ? results[1] : undefined
   const ladder = data.ladder ?? []
   const topCount = ladder[0]?.count ?? 0
 
   return (
     <div className="space-y-5">
+      {/* KPI cards: deltas vs prev period when comparing, plain values otherwise. */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <KpiCard icon="🧭" label="Calendar sessions" value={String(data.calendarOpens)} sub="top of funnel" tone="blue" />
-        <KpiCard icon="🛒" label="Booking attempts" value={String(data.totalFlows)} sub="slot selected" />
-        <KpiCard icon="✅" label="Slot→book conversion" value={`${data.conversionPct}%`} tone="emerald" />
-        <KpiCard icon="🏁" label="Median time to book" value={fmtMins(data.medianTimeToBookSec / 60)} sub={`avg ${fmtMins(data.avgTimeToBookSec / 60)}`} />
+        {range.compare ? (
+          <>
+            <DeltaKpi icon="🧭" label="Calendar sessions" value={data.calendarOpens} prev={prev?.calendarOpens} format={(n) => String(Math.round(n))} tone="blue" />
+            <DeltaKpi icon="🛒" label="Booking attempts" value={data.totalFlows} prev={prev?.totalFlows} format={(n) => String(Math.round(n))} />
+            <DeltaKpi icon="✅" label="Slot→book conversion" value={data.conversionPct} prev={prev?.conversionPct} format={(n) => `${Math.round(n)}%`} tone="emerald" />
+            <DeltaKpi icon="🏁" label="Median time to book" value={data.medianTimeToBookSec / 60} prev={prev ? prev.medianTimeToBookSec / 60 : undefined} format={(n) => fmtMins(n)} />
+          </>
+        ) : (
+          <>
+            <KpiCard icon="🧭" label="Calendar sessions" value={String(data.calendarOpens)} sub="top of funnel" tone="blue" />
+            <KpiCard icon="🛒" label="Booking attempts" value={String(data.totalFlows)} sub="slot selected" />
+            <KpiCard icon="✅" label="Slot→book conversion" value={`${data.conversionPct}%`} tone="emerald" />
+            <KpiCard icon="🏁" label="Median time to book" value={fmtMins(data.medianTimeToBookSec / 60)} sub={`avg ${fmtMins(data.avgTimeToBookSec / 60)}`} />
+          </>
+        )}
       </div>
 
+      {/* Ladder + time-in-step show ONLY the current period (comparison never fans tables/funnels). */}
       <Section title="Conversion ladder" subtitle="Distinct booking attempts reaching each step (a fresh attempt begins at slot select)">
         {ladder.length === 0 || topCount === 0 ? (
           <Empty label="No booking-flow events tracked yet (begins collecting once live)." />

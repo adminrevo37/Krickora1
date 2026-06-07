@@ -30,9 +30,19 @@ function scopeBookings(
 // Admins get full data. Authenticated users get full PII only for their own bookings.
 // Unauthenticated users get scheduling data only (name/email/phone stripped).
 export const listBookings = query({
-  args: {},
-  handler: async (ctx) => {
-    const bookings = await ctx.db.query("bookings").collect();
+  // E1: optional date window. The customer calendar passes a wide window so this no
+  // longer scans the whole (ever-growing) bookings table; absent args = legacy full
+  // scan (back-compat for any un-windowed caller).
+  args: { from: v.optional(v.string()), to: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const bookings = args.from
+      ? await ctx.db
+          .query("bookings")
+          .withIndex("by_date", (q: any) =>
+            args.to ? q.gte("date", args.from).lte("date", args.to) : q.gte("date", args.from)
+          )
+          .collect()
+      : await ctx.db.query("bookings").collect();
     const identity = await ctx.auth.getUserIdentity();
 
     if (!identity) {
@@ -377,9 +387,68 @@ export const listAthletesByCoach = query({
   },
 });
 
+// Smart athlete ordering for SEQUENTIAL allocation (2026-06). Scores a coach's
+// athletes by their session history over the last 5 weeks relative to a target
+// start time: sessions at the EXACT start time weigh most, then sessions CLOSE to
+// it (proximity-weighted). Athletes with no history get no score → the client
+// orders them alphabetically last. Returns { athleteId: score }. Coach-scoped
+// (own coach bookings only), mirroring listAthletesByCoach's auth guard.
+export const rankAthletesForAllocation = query({
+  args: { coachId: v.string(), startHour: v.number() },
+  handler: async (ctx, args): Promise<Record<string, number>> => {
+    if (!args.coachId) return {};
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return {};
+    const callerCustomer = await resolveCanonicalCustomerByEmail(ctx, caller.email);
+    if (!caller.isAdmin) {
+      const matchesCoach =
+        callerCustomer &&
+        callerCustomer.role === "coach" &&
+        (callerCustomer._id === args.coachId ||
+          callerCustomer.email === args.coachId.toLowerCase().trim());
+      if (!matchesCoach) return {};
+    }
+    // Resolve the coach's email (coachId may be an _id or an email).
+    let coachEmail: string | null = args.coachId.includes("@")
+      ? args.coachId.toLowerCase().trim()
+      : null;
+    if (!coachEmail) {
+      let row: any = null;
+      try { row = await ctx.db.get(args.coachId as any); } catch { row = null; }
+      coachEmail = row?.email
+        ? String(row.email).toLowerCase().trim()
+        : callerCustomer?.email ?? null;
+    }
+    if (!coachEmail) return {};
+
+    // Last 5 weeks (35 days), AWST date key.
+    const cutoff = new Date(Date.now() + 8 * 3600000 - 35 * 86400000);
+    const cutoffKey = `${cutoff.getUTCFullYear()}-${String(cutoff.getUTCMonth() + 1).padStart(2, "0")}-${String(cutoff.getUTCDate()).padStart(2, "0")}`;
+
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", coachEmail))
+      .collect();
+
+    const score: Record<string, number> = {};
+    for (const b of bookings as any[]) {
+      if (!b.isCoachBooking || b.status === "cancelled") continue;
+      if ((b.date ?? "") < cutoffKey) continue;
+      for (const s of b.athleteSlots ?? []) {
+        const aid = s.athleteId;
+        if (!aid) continue;
+        const diff = Math.abs((s.startHour ?? 0) - args.startHour);
+        const w = diff < 0.01 ? 10 : diff <= 0.25 ? 6 : diff <= 0.5 ? 4 : diff <= 1 ? 2 : 1;
+        score[aid] = (score[aid] ?? 0) + w;
+      }
+    }
+    return score;
+  },
+});
+
 // Allocation change history for a booking (SPEC_COACH_ALLOCATION_AND_PLANNER
-// Part 2). Admin, the coach who owns the booking, or the booking owner only.
-// Newest first.
+// Part 2). Admin or the booking owner only (S2: the code grants no coach branch —
+// comment corrected to match). Newest first.
 export const getAllocationAuditLog = query({
   args: { bookingId: v.string() },
   handler: async (ctx, args) => {
@@ -387,10 +456,10 @@ export const getAllocationAuditLog = query({
     if (!caller.identity) return [];
     const booking: any = await ctx.db.get(args.bookingId as any).catch(() => null);
     if (!booking) return [];
-    const isOwnerOrCoach =
+    const isOwnerOrAdmin =
       caller.isAdmin ||
       (booking.customerEmail?.toLowerCase() === caller.email);
-    if (!isOwnerOrCoach) return [];
+    if (!isOwnerOrAdmin) return [];
     const rows = await ctx.db
       .query("allocationAuditLog")
       .withIndex("by_booking", (q: any) => q.eq("bookingId", args.bookingId))
@@ -691,9 +760,16 @@ export const getRevenueBreakdown = query({
 
     const inRange = (dateStr: string, start: string) =>
       dateStr >= start && dateStr <= todayStr;
+    // E4a: weekStart can precede monthStart at a month boundary, so the index lower
+    // bound is the earlier of the two.
+    const rangeStart = weekStartStr < monthStartStr ? weekStartStr : monthStartStr;
 
     // Customer revenue from stripePayments (status: paid/complete)
-    const payments = await ctx.db.query("stripePayments").collect();
+    // E4a: read only [rangeStart..today] via by_date instead of scanning all payments.
+    const payments = await ctx.db
+      .query("stripePayments")
+      .withIndex("by_date", (q: any) => q.gte("date", rangeStart).lte("date", todayStr))
+      .collect();
     let custToday = 0, custWeek = 0, custMonth = 0;
     for (const p of payments) {
       const status = (p.status || "").toLowerCase();
@@ -706,7 +782,13 @@ export const getRevenueBreakdown = query({
     }
 
     // Coach revenue (payments made to coaches)
-    const coachPayments = await ctx.db.query("payments").collect();
+    // E4a: bound by the by_dateReceived index over the same window.
+    const coachPayments = await ctx.db
+      .query("payments")
+      .withIndex("by_dateReceived", (q: any) =>
+        q.gte("dateReceived", rangeStart).lte("dateReceived", todayStr)
+      )
+      .collect();
     let coachToday = 0, coachWeek = 0, coachMonth = 0;
     const coachBreakdown: Record<string, { today: number; week: number; month: number }> = {};
     for (const p of coachPayments) {

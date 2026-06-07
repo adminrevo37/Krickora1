@@ -8,6 +8,7 @@ import { v } from "convex/values";
 import { getCallerContext } from "./lib/adminGuard";
 import {
   awstDateKey,
+  awstDateKeyToMs,
   parseUserAgent,
   median,
   round2,
@@ -20,21 +21,56 @@ async function isAdmin(ctx: any): Promise<boolean> {
   return caller.isAdmin;
 }
 
-function rangeMs(from?: string, to?: string): { fromMs: number; toMs: number } {
+// Resolve a {from,to} day-string range to ms bounds. Explicit fromMs/toMs (used by
+// the sub-day 1h/4h presets) override the day-string conversion when provided.
+function rangeMs(
+  from?: string,
+  to?: string,
+  fromMs?: number,
+  toMs?: number
+): { fromMs: number; toMs: number } {
   return {
-    fromMs: from ? Date.parse(from + "T00:00:00+08:00") : -Infinity,
-    toMs: to ? Date.parse(to + "T23:59:59+08:00") : Infinity,
+    fromMs: fromMs ?? (from ? Date.parse(from + "T00:00:00+08:00") : -Infinity),
+    toMs: toMs ?? (to ? Date.parse(to + "T23:59:59+08:00") : Infinity),
   };
 }
+
+// ============================================================================
+// WS-B — Active-user snapshot (last hour / today). Own ms windows (sub-day),
+// independent of the day-level range. Indexed read (today's events only).
+// ============================================================================
+export const getActiveUserSnapshot = query({
+  args: {},
+  handler: async (ctx) => {
+    if (!(await isAdmin(ctx))) return null;
+    const now = Date.now();
+    const hourAgo = now - 3600_000;
+    const todayStartMs = awstDateKeyToMs(awstDateKey(now));
+    const events = await ctx.db
+      .query("analytics")
+      .withIndex("by_timestamp", (q: any) => q.gte("timestamp", Math.min(hourAgo, todayStartMs)))
+      .collect();
+    const idOf = (e: any) => e.userId ?? e.sessionId ?? "";
+    const lastHour = new Set<string>();
+    const today = new Set<string>();
+    for (const e of events as any[]) {
+      const id = idOf(e);
+      if (!id) continue;
+      if (e.timestamp >= hourAgo) lastHour.add(id);
+      if (e.timestamp >= todayStartMs) today.add(id);
+    }
+    return { lastHour: lastHour.size, today: today.size };
+  },
+});
 
 // ============================================================================
 // C2.3 — APP USAGE (DAU/WAU/MAU, sessions, session length, pages, device split)
 // ============================================================================
 export const getUsageAnalytics = query({
-  args: { from: v.optional(v.string()), to: v.optional(v.string()) },
+  args: { from: v.optional(v.string()), to: v.optional(v.string()), fromMs: v.optional(v.number()), toMs: v.optional(v.number()) },
   handler: async (ctx, args) => {
     if (!(await isAdmin(ctx))) return null;
-    const { fromMs, toMs } = rangeMs(args.from, args.to);
+    const { fromMs, toMs } = rangeMs(args.from, args.to, args.fromMs, args.toMs);
     const allEvents = await ctx.db.query("analytics").collect();
 
     // First-ever timestamp per identity (all-time) for new-vs-returning.
@@ -185,10 +221,10 @@ const STEP_LABELS: Record<string, string> = {
 };
 
 export const getBookingFunnel = query({
-  args: { from: v.optional(v.string()), to: v.optional(v.string()) },
+  args: { from: v.optional(v.string()), to: v.optional(v.string()), fromMs: v.optional(v.number()), toMs: v.optional(v.number()) },
   handler: async (ctx, args) => {
     if (!(await isAdmin(ctx))) return null;
-    const { fromMs, toMs } = rangeMs(args.from, args.to);
+    const { fromMs, toMs } = rangeMs(args.from, args.to, args.fromMs, args.toMs);
     const stepSet = new Set(ALL_STEPS);
 
     const events = (
@@ -283,10 +319,10 @@ export const getBookingFunnel = query({
 // C2.8 — DOOR-CODE ACCESS LEAD TIME (when people open the app to grab their code)
 // ============================================================================
 export const getCodeAccessLeadTime = query({
-  args: { from: v.optional(v.string()), to: v.optional(v.string()) },
+  args: { from: v.optional(v.string()), to: v.optional(v.string()), fromMs: v.optional(v.number()), toMs: v.optional(v.number()) },
   handler: async (ctx, args) => {
     if (!(await isAdmin(ctx))) return null;
-    const { fromMs, toMs } = rangeMs(args.from, args.to);
+    const { fromMs, toMs } = rangeMs(args.from, args.to, args.fromMs, args.toMs);
     const events = (
       await ctx.db
         .query("analytics")
@@ -331,10 +367,10 @@ export const getCodeAccessLeadTime = query({
 // C2.4 — PUSH analytics (sends/delivery/CTR by category + platform, opt-in)
 // ============================================================================
 export const getPushAnalytics = query({
-  args: { from: v.optional(v.string()), to: v.optional(v.string()) },
+  args: { from: v.optional(v.string()), to: v.optional(v.string()), fromMs: v.optional(v.number()), toMs: v.optional(v.number()) },
   handler: async (ctx, args) => {
     if (!(await isAdmin(ctx))) return null;
-    const { fromMs, toMs } = rangeMs(args.from, args.to);
+    const { fromMs, toMs } = rangeMs(args.from, args.to, args.fromMs, args.toMs);
     const events = (
       await ctx.db
         .query("pushEvents")
@@ -397,10 +433,10 @@ export const getPushAnalytics = query({
 // C2.6 + push — WAITLIST OFFER response analytics (accept/decline/no-action time)
 // ============================================================================
 export const getWaitlistAnalytics = query({
-  args: { from: v.optional(v.string()), to: v.optional(v.string()) },
+  args: { from: v.optional(v.string()), to: v.optional(v.string()), fromMs: v.optional(v.number()), toMs: v.optional(v.number()) },
   handler: async (ctx, args) => {
     if (!(await isAdmin(ctx))) return null;
-    const { fromMs, toMs } = rangeMs(args.from, args.to);
+    const { fromMs, toMs } = rangeMs(args.from, args.to, args.fromMs, args.toMs);
     const events = (
       await ctx.db
         .query("waitlistOfferEvents")

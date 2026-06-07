@@ -2,7 +2,7 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { useAuth } from '../hooks/useAuth'
 import AdminAnalyticsDashboard from '../components/AdminAnalyticsDashboard'
 
-export const Route = createFileRoute('/admin/analytics')({
+export const Route = createFileRoute('/rev-ops-7k2p/analytics')({
   component: AnalyticsPage,
 })
 
@@ -33,7 +33,7 @@ function AnalyticsPage() {
         {/* Header */}
         <div className="flex items-center gap-4 mb-8">
           <Link
-            to="/admin"
+            to="/rev-ops-7k2p"
             className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-emerald-600 transition-colors"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

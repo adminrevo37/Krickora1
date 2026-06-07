@@ -42,6 +42,32 @@ export const migrateRemoveTentative = internalMutation({
 });
 
 /**
+ * C1/C2 (2026-06-06 audit) — unset the dead pricing fields on the siteSettings
+ * singleton (`customerPrice90Min`, `trumanPrice90Min`, `coachPer30Min`). Per-hour
+ * pricing is now canonical (1.5hr = 1.5×hourly; coach = per-hour). The schema cols
+ * were made optional in this deploy; after this migration runs they can be dropped
+ * entirely in a later schema-only deploy without tripping document validation.
+ * Idempotent.
+ */
+export const migrateRemove90MinPricing = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const settings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    if (!settings) return { found: false, cleared: 0 };
+    const patch: Record<string, unknown> = {};
+    for (const f of ["customerPrice90Min", "trumanPrice90Min", "coachPer30Min"]) {
+      if ((settings as any)[f] !== undefined) patch[f] = undefined;
+    }
+    const cleared = Object.keys(patch).length;
+    if (cleared > 0) await ctx.db.patch(settings._id, patch as any);
+    return { found: true, cleared };
+  },
+});
+
+/**
  * BATCH 2C — audit a coach's identity before re-pointing athletes. Pass an email or
  * a name fragment; returns every matching `customers` row (with role/tier/tombstone
  * flags), the athletes whose assignedCoachIds point at each row, and that email's

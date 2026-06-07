@@ -89,10 +89,12 @@ export const getBookingsNeedingReminder = internalQuery({
         return false; // Too far away
       }
 
-      // SPEC_PUSH_NOTIFICATIONS_V2 §3.1 — fire ~22 min before the booking. The
-      // cron runs every 5 min (§3.2), so a tight 18–24 min window (0.30–0.40 h)
-      // is hit reliably exactly once; the reminderSent guard prevents repeats.
-      return hoursUntil >= 0.3 && hoursUntil <= 0.4;
+      // SPEC_PUSH_NOTIFICATIONS_V2 §3.1 — fire ~22 min before the booking. The cron
+      // runs every 5 min (§3.2): normally the first eligible tick (~20–24 min before)
+      // fires it, and the reminderSent guard prevents repeats. C8: use a due-and-not-yet-
+      // sent lower bound (0..0.4 h) instead of a tight 18–24 min band, so a single
+      // delayed/skipped cron tick still catches the reminder rather than missing it.
+      return hoursUntil >= 0 && hoursUntil <= 0.4;
     });
 
     return needsReminder.map((b) => ({

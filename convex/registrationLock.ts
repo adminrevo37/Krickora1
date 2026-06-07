@@ -39,10 +39,7 @@ export const setRegistrationLocked = mutation({
     return await ctx.db.insert("siteSettings", {
       key: "global",
       customerPricePerHour: PRICE_DEFAULTS.customerPerHour,
-      customerPrice90Min: 55,
       trumanPricePerHour: PRICE_DEFAULTS.trumanPerHour,
-      trumanPrice90Min: 70,
-      coachPer30Min: PRICE_DEFAULTS.coachPer30Min,
       coachPerHour: PRICE_DEFAULTS.coachPerHour,
       cancellationHoursBefore: 2,
       openingHour: 7,

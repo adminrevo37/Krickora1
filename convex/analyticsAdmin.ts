@@ -338,14 +338,17 @@ export const getRetentionCohorts = query({
   args: { weeks: v.optional(v.number()) },
   handler: async (ctx, args) => {
     if (!(await isAdmin(ctx))) return null;
-    const maxOffsets = Math.min(Math.max(args.weeks ?? 8, 2), 16);
+    // Expanded to 26 weeks (was 8). Default + cap 26.
+    const maxOffsets = Math.min(Math.max(args.weeks ?? 26, 2), 26);
     const all = (await ctx.db.query("bookings").collect()).filter(
       (b: any) => !b.isCoachBooking && b.status === "confirmed" && b.customerEmail
     );
 
-    // email -> set of week keys with a booking, and earliest week.
+    // email -> set of week keys with a booking; earliest + latest week; all weeks.
     const weeksByEmail = new Map<string, Set<string>>();
     const firstWeekByEmail = new Map<string, { key: string; ms: number }>();
+    const lastWeekMsByEmail = new Map<string, number>();
+    const weekMsByEmail = new Map<string, number[]>();
     for (const b of all as any[]) {
       const email = b.customerEmail.toLowerCase();
       const w = isoWeekKey(b.date);
@@ -354,6 +357,10 @@ export const getRetentionCohorts = query({
       weeksByEmail.set(email, set);
       const prev = firstWeekByEmail.get(email);
       if (!prev || w.mondayMs < prev.ms) firstWeekByEmail.set(email, { key: w.key, ms: w.mondayMs });
+      lastWeekMsByEmail.set(email, Math.max(lastWeekMsByEmail.get(email) ?? 0, w.mondayMs));
+      const arr = weekMsByEmail.get(email) ?? [];
+      arr.push(w.mondayMs);
+      weekMsByEmail.set(email, arr);
     }
 
     // Group customers by their first-booking week (cohort).
@@ -379,10 +386,64 @@ export const getRetentionCohorts = query({
           }
           retention.push(size > 0 ? Math.round((active / size) * 100) : 0);
         }
-        return { cohort: isoWeekKey(key).label, cohortKey: key, size, retention };
+        // Per-cohort extras: repeat rate (≥2 active weeks) + avg active weeks.
+        let repeat = 0;
+        let weeksActiveSum = 0;
+        for (const email of c.emails) {
+          const wc = weeksByEmail.get(email)?.size ?? 0;
+          if (wc >= 2) repeat++;
+          weeksActiveSum += wc;
+        }
+        return {
+          cohort: isoWeekKey(key).label,
+          cohortKey: key,
+          size,
+          retention,
+          repeatPct: size > 0 ? Math.round((repeat / size) * 100) : 0,
+          avgWeeksActive: size > 0 ? round2(weeksActiveSum / size) : 0,
+        };
       });
 
-    return { cohorts, maxOffsets };
+    // ── Extra cross-cohort analytics ──────────────────────────────────────────
+    const nowWeekMs = isoWeekKey(awstDateKey(Date.now())).mondayMs;
+    const allEmails = Array.from(firstWeekByEmail.keys());
+    const totalCustomers = allEmails.length;
+    let repeatAll = 0;
+    let lifespanSum = 0;
+    let churned = 0;
+    let reactivated = 0;
+    for (const email of allEmails) {
+      const wc = weeksByEmail.get(email)?.size ?? 0;
+      if (wc >= 2) repeatAll++;
+      const first = firstWeekByEmail.get(email)!.ms;
+      const last = lastWeekMsByEmail.get(email) ?? first;
+      lifespanSum += Math.round((last - first) / WEEK_MS) + 1; // weeks first→last inclusive
+      if ((nowWeekMs - last) / WEEK_MS > 4) churned++; // no activity in 4+ weeks
+      const uniq = Array.from(new Set(weekMsByEmail.get(email) ?? [])).sort((a, b) => a - b);
+      for (let i = 1; i < uniq.length; i++) {
+        if ((uniq[i] - uniq[i - 1]) / WEEK_MS >= 4) { reactivated++; break; } // returned after a 4+ week gap
+      }
+    }
+    // Size-weighted average retention at each week offset (the rolling retention curve).
+    const weekNRetention: number[] = [];
+    for (let off = 0; off < maxOffsets; off++) {
+      let num = 0, den = 0;
+      for (const c of cohorts) { num += (c.retention[off] ?? 0) * c.size; den += c.size; }
+      weekNRetention.push(den > 0 ? Math.round(num / den) : 0);
+    }
+
+    return {
+      cohorts,
+      maxOffsets,
+      summary: {
+        totalCustomers,
+        repeatRatePct: totalCustomers > 0 ? Math.round((repeatAll / totalCustomers) * 100) : 0,
+        avgLifespanWeeks: totalCustomers > 0 ? round2(lifespanSum / totalCustomers) : 0,
+        churnedPct: totalCustomers > 0 ? Math.round((churned / totalCustomers) * 100) : 0,
+        reactivatedCount: reactivated,
+        weekNRetention,
+      },
+    };
   },
 });
 
@@ -814,5 +875,60 @@ export const getLaneWeekly = query({
         lanes: Object.fromEntries(LANE_IDS.map((lid) => [lid, round2(e.lanes[lid] ?? 0)])),
       }));
     return { laneIds: LANE_IDS, laneNames: LANE_IDS.map((l) => defaultLaneName(l)), series };
+  },
+});
+
+// Cumulative carpet-wear (2026-06): accumulated booked HOURS per physical lane over
+// time (weekly), counting from each lane's latest carpet reset forward. All lanes on
+// one chart so wear growth is comparable; a reset zeroes that lane's accumulator.
+export const getLaneWearCumulative = query({
+  args: {},
+  handler: async (ctx) => {
+    if (!(await isAdmin(ctx))) return null;
+    const resets = await ctx.db.query("laneWearResets").collect();
+    const resetByLane: Record<string, string> = {};
+    for (const r of resets as any[]) {
+      if (!resetByLane[r.laneId] || r.resetDate > resetByLane[r.laneId]) resetByLane[r.laneId] = r.resetDate;
+    }
+    const all = (await ctx.db.query("bookings").collect()).filter(
+      (b: any) => b.status === "confirmed"
+    );
+    // weekKey -> { mondayMs, label, lanes: {laneId: hoursThisWeek} }
+    const weeks = new Map<string, { mondayMs: number; label: string; lanes: Record<string, number> }>();
+    for (const b of all as any[]) {
+      const h = (b.duration ?? 0) / 60;
+      const w = isoWeekKey(b.date);
+      for (const lid of [b.laneId, ...((b.additionalLaneIds as string[]) ?? [])]) {
+        if (!LANE_IDS.includes(lid)) continue;
+        const reset = resetByLane[lid];
+        if (reset && b.date < reset) continue; // pre-reset wear excluded
+        const e = weeks.get(w.key) ?? { mondayMs: w.mondayMs, label: w.label, lanes: {} };
+        e.lanes[lid] = (e.lanes[lid] ?? 0) + h;
+        weeks.set(w.key, e);
+      }
+    }
+    const ordered = Array.from(weeks.entries())
+      .map(([weekKey, e]) => ({ weekKey, ...e }))
+      .sort((a, b) => a.mondayMs - b.mondayMs);
+    const cum: Record<string, number> = {};
+    for (const l of LANE_IDS) cum[l] = 0;
+    const series = ordered.map((w) => {
+      const row: Record<string, any> = { weekKey: w.weekKey, label: w.label };
+      for (const lid of LANE_IDS) {
+        cum[lid] += w.lanes[lid] ?? 0;
+        row[lid] = round2(cum[lid]);
+      }
+      return row;
+    });
+    return {
+      laneIds: LANE_IDS,
+      laneNames: LANE_IDS.map((l) => defaultLaneName(l)),
+      series,
+      resets: LANE_IDS.map((l) => ({
+        laneId: l,
+        laneName: defaultLaneName(l),
+        resetDate: resetByLane[l] ?? null,
+      })),
+    };
   },
 });

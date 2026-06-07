@@ -2,7 +2,10 @@
 // referral attribution, discount-code performance.
 import { useQuery } from 'convex/react'
 import { api } from '../../../convex/_generated/api'
-import { type DateRange, KpiCard, Section, Loading, Empty, fmtMoney } from './shared'
+import {
+  type AnalyticsRange, KpiCard, DeltaKpi, Section, Loading, Empty, fmtMoney, fmtPct,
+  BarRow, periodsOf, usePeriodResults,
+} from './shared'
 
 function TopList({ title, rows, accent }: { title: string; rows: any[]; accent: 'emerald' | 'indigo' }) {
   const badge = accent === 'indigo' ? 'bg-indigo-100 text-indigo-700' : 'bg-emerald-100 text-emerald-700'
@@ -45,12 +48,37 @@ function cohortColor(pct: number): string {
   return 'bg-gray-50 text-gray-300'
 }
 
-export default function CustomersTab({ range }: { range: DateRange }) {
-  const cohorts = useQuery(api.analyticsAdmin.getRetentionCohorts, { weeks: 8 })
-  const value = useQuery(api.analyticsAdmin.getCustomerValue, { from: range.from || undefined, to: range.to || undefined, limit: 25 })
+export default function CustomersTab({ range }: { range: AnalyticsRange }) {
+  // Comparison-aware windows. periods[0] = current; tables only ever use periods[0].
+  const periods = periodsOf(range)
+  const comparing = range.compare
+
+  // getRetentionCohorts / getTopCustomersComparison stay as-is (current-period / all-time).
+  const cohorts = useQuery(api.analyticsAdmin.getRetentionCohorts, { weeks: 26 })
   const topcmp = useQuery(api.analyticsAdmin.getTopCustomersComparison, { limit: 10 })
-  const referral = useQuery(api.analyticsAdmin.getReferralBreakdown, { from: range.from || undefined, to: range.to || undefined })
-  const discount = useQuery(api.analyticsAdmin.getDiscountPerformance, { from: range.from || undefined, to: range.to || undefined })
+
+  // Range-aware queries fired once per period (slot 0 = current). Tables read [0];
+  // KPI cards read [0] (value) + [1] (prev) when comparing.
+  const valueResults = usePeriodResults(
+    api.analyticsAdmin.getCustomerValue,
+    periods,
+    (p) => ({ from: p.from || undefined, to: p.to || undefined, limit: 25 }),
+  )
+  const referralResults = usePeriodResults(
+    api.analyticsAdmin.getReferralBreakdown,
+    periods,
+    (p) => ({ from: p.from || undefined, to: p.to || undefined }),
+  )
+  const discountResults = usePeriodResults(
+    api.analyticsAdmin.getDiscountPerformance,
+    periods,
+    (p) => ({ from: p.from || undefined, to: p.to || undefined }),
+  )
+
+  const value = valueResults[0]
+  const valuePrev = valueResults[1]
+  const referral = referralResults[0]
+  const discount = discountResults[0]
 
   return (
     <div className="space-y-5">
@@ -58,10 +86,21 @@ export default function CustomersTab({ range }: { range: DateRange }) {
       {value === undefined ? <Loading /> : value === null ? <Empty label="Unavailable." /> : (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <KpiCard icon="👤" label="Unique customers" value={String(value.uniqueCustomers)} tone="blue" />
-            <KpiCard icon="💎" label="Avg lifetime value" value={fmtMoney(value.avgLtv)} sub="revenue / customer" tone="emerald" />
-            <KpiCard icon="🔁" label="Avg bookings / customer" value={String(value.avgBookingsPerCustomer)} />
-            <KpiCard icon="🧾" label="Avg revenue / booking" value={fmtMoney(value.avgRevenuePerBooking)} />
+            {comparing ? (
+              <>
+                <DeltaKpi icon="👤" label="Unique customers" value={value.uniqueCustomers} prev={valuePrev?.uniqueCustomers} format={(n) => String(n)} tone="blue" />
+                <DeltaKpi icon="💎" label="Avg lifetime value" value={value.avgLtv} prev={valuePrev?.avgLtv} format={fmtMoney} tone="emerald" />
+                <DeltaKpi icon="🔁" label="Avg bookings / customer" value={value.avgBookingsPerCustomer} prev={valuePrev?.avgBookingsPerCustomer} format={(n) => String(n)} />
+                <DeltaKpi icon="🧾" label="Avg revenue / booking" value={value.avgRevenuePerBooking} prev={valuePrev?.avgRevenuePerBooking} format={fmtMoney} />
+              </>
+            ) : (
+              <>
+                <KpiCard icon="👤" label="Unique customers" value={String(value.uniqueCustomers)} tone="blue" />
+                <KpiCard icon="💎" label="Avg lifetime value" value={fmtMoney(value.avgLtv)} sub="revenue / customer" tone="emerald" />
+                <KpiCard icon="🔁" label="Avg bookings / customer" value={String(value.avgBookingsPerCustomer)} />
+                <KpiCard icon="🧾" label="Avg revenue / booking" value={fmtMoney(value.avgRevenuePerBooking)} />
+              </>
+            )}
           </div>
 
         </>
@@ -77,6 +116,31 @@ export default function CustomersTab({ range }: { range: DateRange }) {
         )}
       </Section>
 
+      {/* Retention summary */}
+      {cohorts === undefined ? <Loading /> : cohorts === null ? <Empty label="Unavailable." /> : (
+        <Section title="Retention summary" subtitle="All-time customer retention, lifespan and reactivation">
+          <div className="p-5 space-y-5">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+              <KpiCard icon="👥" label="Total customers" value={String(cohorts.summary.totalCustomers)} tone="blue" />
+              <KpiCard icon="🔁" label="Repeat rate" value={`${cohorts.summary.repeatRatePct}%`} tone="emerald" />
+              <KpiCard icon="📆" label="Avg lifespan" value={`${cohorts.summary.avgLifespanWeeks} wks`} />
+              <KpiCard icon="📉" label="Churned" value={`${cohorts.summary.churnedPct}%`} tone="red" valueColor="text-red-600" />
+              <KpiCard icon="💫" label="Reactivated" value={String(cohorts.summary.reactivatedCount)} tone="violet" />
+            </div>
+            {cohorts.summary.weekNRetention.length > 0 && (
+              <div>
+                <h4 className="text-sm font-semibold text-gray-700 mb-2">Rolling retention</h4>
+                <div className="space-y-1.5">
+                  {cohorts.summary.weekNRetention.map((pct: number, i: number) => (
+                    <BarRow key={i} label={`W${i}`} value={pct} max={100} suffix="%" color="bg-emerald-500" />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </Section>
+      )}
+
       {/* Retention cohorts */}
       <Section title="Weekly retention cohorts" subtitle="Of customers who first booked in a week, the % booking again in later weeks">
         {cohorts === undefined ? <Loading /> : cohorts === null ? <Empty label="Unavailable." /> : cohorts.cohorts.length === 0 ? <Empty /> : (
@@ -84,8 +148,10 @@ export default function CustomersTab({ range }: { range: DateRange }) {
             <table className="text-xs border-separate" style={{ borderSpacing: 3 }}>
               <thead>
                 <tr>
-                  <th className="px-2 py-1 text-left text-gray-500 font-semibold">Cohort</th>
+                  <th className="px-2 py-1 text-left text-gray-500 font-semibold sticky left-0 bg-white z-10">Cohort</th>
                   <th className="px-2 py-1 text-right text-gray-500 font-semibold">Size</th>
+                  <th className="px-2 py-1 text-right text-gray-500 font-semibold whitespace-nowrap">Repeat %</th>
+                  <th className="px-2 py-1 text-right text-gray-500 font-semibold whitespace-nowrap">Avg wks</th>
                   {Array.from({ length: cohorts.maxOffsets }).map((_, i) => (
                     <th key={i} className="px-2 py-1 text-center text-gray-400 font-medium">W{i}</th>
                   ))}
@@ -94,8 +160,10 @@ export default function CustomersTab({ range }: { range: DateRange }) {
               <tbody>
                 {cohorts.cohorts.map((c: any) => (
                   <tr key={c.cohortKey}>
-                    <td className="px-2 py-1 text-gray-700 whitespace-nowrap">{c.cohort}</td>
+                    <td className="px-2 py-1 text-gray-700 whitespace-nowrap sticky left-0 bg-white z-10">{c.cohort}</td>
                     <td className="px-2 py-1 text-right text-gray-500">{c.size}</td>
+                    <td className="px-2 py-1 text-right text-gray-600 tabular-nums">{fmtPct(c.repeatPct)}</td>
+                    <td className="px-2 py-1 text-right text-gray-600 tabular-nums">{c.avgWeeksActive}</td>
                     {c.retention.map((pct: number, i: number) => (
                       <td key={i} className={`px-2 py-1 text-center rounded font-medium tabular-nums ${cohortColor(pct)}`}>{pct > 0 ? `${pct}%` : '·'}</td>
                     ))}

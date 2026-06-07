@@ -29,6 +29,10 @@ function ProfilePage() {
   // (self-editable; athleteCapacity stays admin-managed).
   const isCoach = user?.role === 'coach'
   const [sessionLength, setSessionLength] = useState(60)
+  // Coach allocation mode: false (default/unticked) = sequential — auto-advance the
+  // next athlete's start + smart-order the picker; true (ticked) = coaches multiple
+  // athletes at once (current independent behaviour).
+  const [coachesSimultaneously, setCoachesSimultaneously] = useState(false)
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
@@ -56,6 +60,7 @@ function ProfilePage() {
       const cr = customerRecord as any
       setLocation({ postcode: (cr?.postcode ?? '').trim(), suburb: (cr?.suburb ?? '').trim() })
       setSessionLength(Math.min(cr?.defaultSessionDuration ?? 60, 90))
+      setCoachesSimultaneously(cr?.coachesSimultaneously ?? false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, customerRecord])
@@ -94,8 +99,8 @@ function ProfilePage() {
         phone: phone.trim() || undefined,
         postcode: location.postcode.trim(),
         suburb: location.suburb.trim(),
-        // §2.2: coaches save their own default session length.
-        ...(isCoach ? { defaultSessionDuration: sessionLength } : {}),
+        // §2.2: coaches save their own default session length + allocation mode.
+        ...(isCoach ? { defaultSessionDuration: sessionLength, coachesSimultaneously } : {}),
       })
       setMessage({ type: 'success', text: 'Profile updated successfully' })
       setIsEditing(false)
@@ -112,6 +117,7 @@ function ProfilePage() {
     const cr = customerRecord as any
     setLocation({ postcode: (cr?.postcode ?? '').trim(), suburb: (cr?.suburb ?? '').trim() })
     setSessionLength(Math.min(cr?.defaultSessionDuration ?? 60, 90))
+    setCoachesSimultaneously(cr?.coachesSimultaneously ?? false)
     setIsEditing(false)
     setMessage(null)
   }
@@ -151,6 +157,9 @@ function ProfilePage() {
               <div className="flex justify-between"><span className="text-gray-500">Postcode</span><span className="font-medium text-gray-800">{location.postcode || '—'}</span></div>
               {isCoach && (
                 <div className="flex justify-between"><span className="text-gray-500">Default session length</span><span className="font-medium text-gray-800">{sessionLength} min</span></div>
+              )}
+              {isCoach && (
+                <div className="flex justify-between"><span className="text-gray-500">Coaches multiple at once</span><span className="font-medium text-gray-800">{coachesSimultaneously ? 'Yes' : 'No'}</span></div>
               )}
             </div>
             <button
@@ -218,6 +227,22 @@ function ProfilePage() {
                   ))}
                 </select>
                 <p className="text-xs text-gray-500 mt-1">Pre-fills each athlete slot when you allocate a session. You can still change any slot.</p>
+              </div>
+            )}
+            {isCoach && (
+              <div>
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={coachesSimultaneously}
+                    onChange={(e) => setCoachesSimultaneously(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span className="text-sm text-gray-700">
+                    <span className="font-medium">Do you coach multiple athletes at the same time? (bowling)</span>
+                    <span className="block text-xs text-gray-500 mt-0.5">Leave unticked if you coach athletes one after another — when you allocate a session we'll auto-advance each athlete's start time and show your most-frequent athletes for that time first.</span>
+                  </span>
+                </label>
               </div>
             )}
             <div className="flex gap-2 pt-2">

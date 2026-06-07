@@ -1,7 +1,9 @@
 // SPEC_ANALYTICS_BUILD_2026-06 — Overview tab. The original booking-metrics
 // dashboard (getAdminAnalytics) + the catchment reports, lifted intact from the
 // previous single-file AdminAnalyticsDashboard so the tabbed shell can host it
-// alongside the new tabs. Keeps its own trailing-N-months selector.
+// alongside the new tabs. Driven by the GLOBAL analytics range picker (8 presets)
+// instead of a local months selector; supports the LOCKED comparison UX (overlaid
+// time-series + KPI deltas, with distributions/tables on the current period only).
 import { useState } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '../../../convex/_generated/api'
@@ -9,6 +11,7 @@ import {
   ComposedChart,
   Bar,
   BarChart,
+  LineChart,
   Line,
   XAxis,
   YAxis,
@@ -18,13 +21,30 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts'
+import {
+  type AnalyticsRange,
+  DeltaKpi,
+  PERIOD_COLORS,
+  periodsOf,
+  usePeriodResults,
+  fmtMoney,
+} from './shared'
 
 const LANE_COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444']
 
-export default function OverviewTab() {
-  const [months, setMonths] = useState<3 | 6 | 12>(12)
+export default function OverviewTab({ range }: { range: AnalyticsRange }) {
   const [peakMode, setPeakMode] = useState<'all' | 'weekday' | 'weekend'>('all')
-  const data = useQuery(api.analytics.getAdminAnalytics, { months })
+
+  // One getAdminAnalytics query per comparison period (index 0 = current window).
+  // In non-comparison mode `periods` has length 1, so only the current slot runs.
+  const periods = periodsOf(range)
+  const results = usePeriodResults<any>(
+    api.analytics.getAdminAnalytics,
+    periods,
+    (p) => ({ from: p.from, to: p.to }),
+  )
+  const data = results[0]
+  const compare = range.compare
 
   if (!data) {
     return (
@@ -38,9 +58,30 @@ export default function OverviewTab() {
   }
 
   const { kpis, byMonth, lanes, timeSlots, byDayOfWeek, topCustomers } = data
+  const prevKpis = compare ? results[1]?.kpis : undefined
   const timeSlotsWeekday = (data as any).timeSlotsWeekday ?? []
   const timeSlotsWeekend = (data as any).timeSlotsWeekend ?? []
   const peakData = peakMode === 'weekday' ? timeSlotsWeekday : peakMode === 'weekend' ? timeSlotsWeekend : timeSlots
+
+  // Overlaid revenue/bookings series — aligned by BUCKET INDEX (position in each
+  // period's byMonth array), one line per period coloured by PERIOD_COLORS[i].
+  const overlayLen = Math.max(0, ...results.map((r) => r?.byMonth?.length ?? 0))
+  const overlayRevenue = Array.from({ length: overlayLen }).map((_, i) => {
+    const row: any = { idx: i + 1 }
+    periods.forEach((p, pi) => {
+      const b = results[pi]?.byMonth?.[i]
+      row[p.label] = b ? b.revenue : null
+    })
+    return row
+  })
+  const overlayBookings = Array.from({ length: overlayLen }).map((_, i) => {
+    const row: any = { idx: i + 1 }
+    periods.forEach((p, pi) => {
+      const b = results[pi]?.byMonth?.[i]
+      row[p.label] = b ? b.bookings : null
+    })
+    return row
+  })
 
   const pct = (cur: number, prev: number): string => {
     if (prev === 0) return cur > 0 ? '+100%' : '—'
@@ -62,98 +103,154 @@ export default function OverviewTab() {
   const maxBookings = peakData.length > 0 ? Math.max(...peakData.map((s: any) => s.bookings)) : 0
   const maxDayBookings = byDayOfWeek.length > 0 ? Math.max(...byDayOfWeek.map((d) => d.bookings)) : 0
 
+  const totalBookings = kpis.customerBookingsCount + kpis.coachBookingsCount
+  const win = `(${range.from} → ${range.to})`
+
   return (
     <div className="space-y-6">
-      {/* Header + period selector */}
+      {/* Header — window now comes from the global range picker above. */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-xl font-bold text-gray-900">Overview</h2>
-          <p className="text-sm text-gray-500 mt-0.5">Booking and revenue insights</p>
-        </div>
-        <div className="flex gap-1 bg-gray-100 rounded-xl p-1">
-          {([3, 6, 12] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMonths(m)}
-              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
-                months === m ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-800'
-              }`}
-            >
-              {m}M
-            </button>
-          ))}
+          <p className="text-sm text-gray-500 mt-0.5">
+            Booking and revenue insights · {range.from} → {range.to}
+            {compare && <span className="text-violet-600 font-medium"> · comparing {periods.length} periods</span>}
+          </p>
         </div>
       </div>
 
       {/* ── KPI Row 1: Period totals ───────────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <KpiCard
-          icon="💰"
-          label={`Revenue (${months}M)`}
-          value={`$${kpis.periodRevenue.toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
-          sub={`Avg $${kpis.avgRevenuePerBooking.toFixed(0)} / booking`}
-        />
-        <KpiCard
-          icon="📅"
-          label={`Bookings (${months}M)`}
-          value={String(kpis.customerBookingsCount + kpis.coachBookingsCount)}
-          sub={`${kpis.coachBookingsCount} coach · ${kpis.customerBookingsCount} customer`}
-        />
-        <KpiCard
-          icon="⏱️"
-          label={`Hours Booked (${months}M)`}
-          value={`${kpis.periodHours.toFixed(0)} hrs`}
-          sub={`Avg ${totalBookingTypes > 0 ? ((kpis.periodHours / (totalBookingTypes)) * 60).toFixed(0) : 0} min / session`}
-        />
-        <KpiCard
-          icon="🏏"
-          label={`Coach Charges (${months}M)`}
-          value={`$${kpis.periodCoachCharges.toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
-          sub="Accumulated on statements"
-        />
-      </div>
+      {compare ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <DeltaKpi icon="💰" label="Revenue (window)" value={kpis.periodRevenue} prev={prevKpis?.periodRevenue} format={fmtMoney} />
+          <DeltaKpi icon="📅" label="Bookings (window)" value={totalBookings}
+            prev={prevKpis ? prevKpis.customerBookingsCount + prevKpis.coachBookingsCount : undefined} format={(n) => String(Math.round(n))} />
+          <DeltaKpi icon="⏱️" label="Hours Booked (window)" value={kpis.periodHours} prev={prevKpis?.periodHours} format={(n) => `${n.toFixed(0)} hrs`} />
+          <DeltaKpi icon="🏏" label="Coach Charges (window)" value={kpis.periodCoachCharges} prev={prevKpis?.periodCoachCharges} format={fmtMoney} />
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <KpiCard
+            icon="💰"
+            label={`Revenue ${win}`}
+            value={`$${kpis.periodRevenue.toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+            sub={`Avg $${kpis.avgRevenuePerBooking.toFixed(0)} / booking`}
+          />
+          <KpiCard
+            icon="📅"
+            label={`Bookings ${win}`}
+            value={String(totalBookings)}
+            sub={`${kpis.coachBookingsCount} coach · ${kpis.customerBookingsCount} customer`}
+          />
+          <KpiCard
+            icon="⏱️"
+            label={`Hours Booked ${win}`}
+            value={`${kpis.periodHours.toFixed(0)} hrs`}
+            sub={`Avg ${totalBookingTypes > 0 ? ((kpis.periodHours / (totalBookingTypes)) * 60).toFixed(0) : 0} min / session`}
+          />
+          <KpiCard
+            icon="🏏"
+            label={`Coach Charges ${win}`}
+            value={`$${kpis.periodCoachCharges.toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+            sub="Accumulated on statements"
+          />
+        </div>
+      )}
 
-      {/* ── KPI Row 2: Month-over-month ────────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <KpiCard
-          icon="📈"
-          label="Revenue This Month"
-          value={`$${kpis.currentMonthRevenue.toFixed(0)}`}
-          change={pct(kpis.currentMonthRevenue, kpis.prevMonthRevenue)}
-          changeColor={pctColor(kpis.currentMonthRevenue, kpis.prevMonthRevenue)}
-          sub="vs last month"
-        />
-        <KpiCard
-          icon="🗓️"
-          label="Bookings This Month"
-          value={String(kpis.currentMonthBookings)}
-          change={pct(kpis.currentMonthBookings, kpis.prevMonthBookings)}
-          changeColor={pctColor(kpis.currentMonthBookings, kpis.prevMonthBookings)}
-          sub="vs last month"
-        />
-        <KpiCard
-          icon="🚫"
-          label="Cancellation Rate"
-          value={`${kpis.cancellationRate}%`}
-          sub={`last ${months} months`}
-          valueColor={kpis.cancellationRate > 20 ? 'text-red-600' : kpis.cancellationRate > 10 ? 'text-amber-600' : 'text-gray-900'}
-        />
-        <KpiCard
-          icon="🔁"
-          label="Return Rate"
-          value={`${returnRate}%`}
-          sub={`${kpis.returningCustomers} of ${kpis.totalUniqueCustomers} customers`}
-          valueColor={returnRate >= 50 ? 'text-emerald-600' : 'text-gray-900'}
-        />
-      </div>
+      {/* ── KPI Row 2: Month-over-month + window rates ─────────────────────── */}
+      {compare ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <DeltaKpi icon="🚫" label="Cancellation Rate" value={kpis.cancellationRate} prev={prevKpis?.cancellationRate} format={(n) => `${Math.round(n)}%`} />
+          <DeltaKpi icon="🔁" label="Returning Customers" value={kpis.returningCustomers} prev={prevKpis?.returningCustomers} format={(n) => String(Math.round(n))} />
+          <DeltaKpi icon="✨" label="New Customers" value={kpis.newCustomers} prev={prevKpis?.newCustomers} format={(n) => String(Math.round(n))} />
+          <DeltaKpi icon="👥" label="Unique Customers" value={kpis.totalUniqueCustomers} prev={prevKpis?.totalUniqueCustomers} format={(n) => String(Math.round(n))} />
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <KpiCard
+            icon="📈"
+            label="Revenue This Month"
+            value={`$${kpis.currentMonthRevenue.toFixed(0)}`}
+            change={pct(kpis.currentMonthRevenue, kpis.prevMonthRevenue)}
+            changeColor={pctColor(kpis.currentMonthRevenue, kpis.prevMonthRevenue)}
+            sub="vs last month"
+          />
+          <KpiCard
+            icon="🗓️"
+            label="Bookings This Month"
+            value={String(kpis.currentMonthBookings)}
+            change={pct(kpis.currentMonthBookings, kpis.prevMonthBookings)}
+            changeColor={pctColor(kpis.currentMonthBookings, kpis.prevMonthBookings)}
+            sub="vs last month"
+          />
+          <KpiCard
+            icon="🚫"
+            label="Cancellation Rate"
+            value={`${kpis.cancellationRate}%`}
+            sub="in selected window"
+            valueColor={kpis.cancellationRate > 20 ? 'text-red-600' : kpis.cancellationRate > 10 ? 'text-amber-600' : 'text-gray-900'}
+          />
+          <KpiCard
+            icon="🔁"
+            label="Return Rate"
+            value={`${returnRate}%`}
+            sub={`${kpis.returningCustomers} of ${kpis.totalUniqueCustomers} customers`}
+            valueColor={returnRate >= 50 ? 'text-emerald-600' : 'text-gray-900'}
+          />
+        </div>
+      )}
 
-      {/* ── Revenue & Bookings monthly chart ──────────────────────────────── */}
+      {/* ── Revenue & Bookings time-series ────────────────────────────────── */}
+      {compare ? (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+            <h3 className="text-base font-semibold text-gray-800 mb-1">Customer Revenue</h3>
+            <p className="text-xs text-gray-400 mb-5">Overlaid periods, aligned by position within each window</p>
+            {overlayLen === 0 ? (
+              <div className="flex items-center justify-center h-48 text-gray-400 text-sm">No data for these periods</div>
+            ) : (
+              <ResponsiveContainer width="100%" height={260}>
+                <LineChart data={overlayRevenue} margin={{ top: 4, right: 24, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis dataKey="idx" tick={{ fontSize: 11 }} />
+                  <YAxis tickFormatter={(v: number) => `$${v}`} tick={{ fontSize: 11 }} width={56} />
+                  <Tooltip formatter={(v: number, name: string) => [`$${(v ?? 0).toFixed(0)}`, name]} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  {periods.map((p, pi) => (
+                    <Line key={p.label} type="monotone" dataKey={p.label} stroke={PERIOD_COLORS[pi]} strokeWidth={2} dot={{ r: 2 }} connectNulls />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+          <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+            <h3 className="text-base font-semibold text-gray-800 mb-1">Bookings</h3>
+            <p className="text-xs text-gray-400 mb-5">Overlaid periods, aligned by position within each window</p>
+            {overlayLen === 0 ? (
+              <div className="flex items-center justify-center h-48 text-gray-400 text-sm">No data for these periods</div>
+            ) : (
+              <ResponsiveContainer width="100%" height={260}>
+                <LineChart data={overlayBookings} margin={{ top: 4, right: 24, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis dataKey="idx" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} width={32} allowDecimals={false} />
+                  <Tooltip formatter={(v: number, name: string) => [v ?? 0, name]} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  {periods.map((p, pi) => (
+                    <Line key={p.label} type="monotone" dataKey={p.label} stroke={PERIOD_COLORS[pi]} strokeWidth={2} dot={{ r: 2 }} connectNulls />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+      ) : (
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
-        <h3 className="text-base font-semibold text-gray-800 mb-1">Revenue &amp; Bookings by Month</h3>
+        <h3 className="text-base font-semibold text-gray-800 mb-1">Revenue &amp; Bookings</h3>
         <p className="text-xs text-gray-400 mb-5">
           Green bars = customer revenue (left axis) · Blue line = bookings (right axis)
         </p>
-        {byMonth.every((m) => m.revenue === 0 && m.bookings === 0) ? (
+        {byMonth.every((m: any) => m.revenue === 0 && m.bookings === 0) ? (
           <div className="flex items-center justify-center h-48 text-gray-400 text-sm">No data for this period</div>
         ) : (
           <ResponsiveContainer width="100%" height={260}>
@@ -197,6 +294,7 @@ export default function OverviewTab() {
           </ResponsiveContainer>
         )}
       </div>
+      )}
 
       {/* ── Booking type split + Day of week ──────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

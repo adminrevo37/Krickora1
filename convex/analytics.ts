@@ -2,6 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { getCallerContext } from "./lib/adminGuard";
 import { defaultLaneName } from "./lib/lanes";
+import { awstDateKey, isoWeekKey, monthKey, dayLabel } from "./lib/analyticsHelpers";
 
 // ============================================================================
 // TRACK EVENT — public mutation for client-side tracker
@@ -131,23 +132,85 @@ function hourLabel(h: number): string {
 }
 
 export const getAdminAnalytics = query({
-  args: { months: v.optional(v.number()) },
+  // `from`/`to` (YYYY-MM-DD, inclusive) drive an explicit window; when absent we
+  // fall back to the legacy trailing-`months` window (unchanged behaviour).
+  args: {
+    months: v.optional(v.number()),
+    from: v.optional(v.string()),
+    to: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const caller = await getCallerContext(ctx);
     if (!caller.isAdmin) return null;
 
-    const months = args.months ?? 12;
+    const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     const now = new Date();
     const curY = now.getFullYear();
     const curM = now.getMonth(); // 0-based
 
-    // Cutoff = first day of the (months-1) months before the current month.
-    const cutoff = new Date(curY, curM - (months - 1), 1);
-    const cutoffKey = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, "0")}-01`;
+    const months = args.months ?? 12;
+    const explicit = !!(args.from && args.to);
 
-    const allBookings = await ctx.db.query("bookings").collect();
+    // ── Window bounds (cutoffKey..toKey inclusive) ───────────────────────────
+    // Explicit from/to window, else legacy trailing-N-months cutoff (to = today).
+    let cutoffKey: string;
+    let toKey: string;
+    if (explicit) {
+      cutoffKey = args.from!;
+      toKey = args.to!;
+    } else {
+      const cutoff = new Date(curY, curM - (months - 1), 1);
+      cutoffKey = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, "0")}-01`;
+      toKey = awstDateKey(now.getTime());
+    }
+
+    // UTC midnight ms for a YYYY-MM-DD (month arg is 0-based for Date.UTC).
+    const keyToUtcMs = (k: string) => {
+      const [y, m, d] = k.split("-").map(Number);
+      return Date.UTC(y, (m || 1) - 1, d || 1);
+    };
+    const utcMsToKey = (ms: number) => {
+      const d = new Date(ms);
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+    };
+
+    // Time-series bucket granularity: by DAY for short spans, ISO-WEEK for
+    // medium, MONTH for long (or always month on the legacy path).
+    const spanDays = explicit
+      ? Math.round((keyToUtcMs(toKey) - keyToUtcMs(cutoffKey)) / 86400000) + 1
+      : 0;
+    const gran: "day" | "week" | "month" = !explicit
+      ? "month"
+      : spanDays <= 31
+        ? "day"
+        : spanDays <= 120
+          ? "week"
+          : "month";
+
+    // Bucket helpers — map an AWST date-string to its bucket key + label.
+    const bucketOf = (date: string): { key: string; label: string } => {
+      if (gran === "day") return { key: date, label: dayLabel(date) };
+      if (gran === "week") {
+        const w = isoWeekKey(date);
+        return { key: w.key, label: w.label };
+      }
+      const m = monthKey(date);
+      return { key: m.key, label: explicit ? m.label : MONTH_ABBR[Number(date.slice(5, 7)) - 1] };
+    };
+
+    // Read only the window for the period aggregates (efficiency); the all-time
+    // first-booking pass below still needs everything. The legacy months path
+    // keeps its original behaviour (no upper bound — future-dated bookings still
+    // count); the explicit window is bounded both sides via the by_date index.
+    const inPeriod = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) =>
+        explicit ? q.gte("date", cutoffKey).lte("date", toKey) : q.gte("date", cutoffKey),
+      )
+      .collect();
 
     // Earliest booking date per customer email (across ALL time) → "new" detection.
+    const allBookings = await ctx.db.query("bookings").collect();
     const firstBookingByEmail = new Map<string, string>();
     for (const b of allBookings) {
       if (b.isCoachBooking) continue;
@@ -157,17 +220,32 @@ export const getAdminAnalytics = query({
       if (!prev || b.date < prev) firstBookingByEmail.set(email, b.date);
     }
 
-    const inPeriod = allBookings.filter((b) => b.date >= cutoffKey);
-
-    // Month buckets (oldest → newest).
-    const monthKeys: string[] = [];
+    // Ordered time-series buckets (oldest → newest), pre-seeded so empty
+    // buckets still render a zero column on the chart.
+    const bucketKeys: string[] = [];
     const byMonthMap = new Map<string, { label: string; revenue: number; coachCharges: number; bookings: number }>();
-    const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    for (let i = months - 1; i >= 0; i--) {
-      const d = new Date(curY, curM - i, 1);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      monthKeys.push(key);
-      byMonthMap.set(key, { label: MONTH_ABBR[d.getMonth()], revenue: 0, coachCharges: 0, bookings: 0 });
+    const seedBucket = (date: string) => {
+      const { key, label } = bucketOf(date);
+      if (!byMonthMap.has(key)) {
+        bucketKeys.push(key);
+        byMonthMap.set(key, { label, revenue: 0, coachCharges: 0, bookings: 0 });
+      }
+    };
+    if (!explicit) {
+      // Legacy: exactly N month columns, including empty months.
+      for (let i = months - 1; i >= 0; i--) {
+        const d = new Date(curY, curM - i, 1);
+        seedBucket(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`);
+      }
+    } else {
+      // Explicit: walk every day in the window so day/week/month columns are
+      // contiguous even where no booking lands in a bucket.
+      let cur = keyToUtcMs(cutoffKey);
+      const end = keyToUtcMs(toKey);
+      while (cur <= end) {
+        seedBucket(utcMsToKey(cur));
+        cur += 86400000;
+      }
     }
 
     const curMonthKey = `${curY}-${String(curM + 1).padStart(2, "0")}`;
@@ -194,7 +272,8 @@ export const getAdminAnalytics = query({
     const custAgg = new Map<string, { email: string; name: string; bookings: number; hours: number }>();
 
     for (const b of inPeriod) {
-      const monthKey = b.date.slice(0, 7);
+      const bucketKey = bucketOf(b.date).key;
+      const calMonthKey = b.date.slice(0, 7); // calendar month, for MoM KPIs
       const hours = (b.duration ?? 0) / 60;
       const revenue = b.priceInCents != null ? b.priceInCents / 100 : 0;
       const coachCharge = b.isCoachBooking ? (b.coachPrice ?? 0) : 0;
@@ -205,18 +284,18 @@ export const getAdminAnalytics = query({
         // statement — so it must count toward coach revenue in management reports too
         // (previously the blanket cancelled-skip hid it). coachCharge = coachPrice here.
         if (b.coachLateCancelCharged) {
-          const mBucket = byMonthMap.get(monthKey);
+          const mBucket = byMonthMap.get(bucketKey);
           periodCoachCharges += coachCharge;
           if (mBucket) mBucket.coachCharges += coachCharge;
-          if (monthKey === curMonthKey) currentMonthRevenue += coachCharge;
-          else if (monthKey === prevMonthKey) prevMonthRevenue += coachCharge;
+          if (calMonthKey === curMonthKey) currentMonthRevenue += coachCharge;
+          else if (calMonthKey === prevMonthKey) prevMonthRevenue += coachCharge;
         }
         continue; // other cancelled bookings don't count toward revenue/utilisation
       }
       confirmedCount++;
 
       periodHours += hours;
-      const mBucket = byMonthMap.get(monthKey);
+      const mBucket = byMonthMap.get(bucketKey);
 
       if (b.isCoachBooking) {
         coachBookingsCount++;
@@ -237,10 +316,10 @@ export const getAdminAnalytics = query({
 
       if (mBucket) mBucket.bookings++;
 
-      if (monthKey === curMonthKey) {
+      if (calMonthKey === curMonthKey) {
         currentMonthBookings++;
         currentMonthRevenue += b.isCoachBooking ? coachCharge : revenue;
-      } else if (monthKey === prevMonthKey) {
+      } else if (calMonthKey === prevMonthKey) {
         prevMonthBookings++;
         prevMonthRevenue += b.isCoachBooking ? coachCharge : revenue;
       }
@@ -280,7 +359,7 @@ export const getAdminAnalytics = query({
     const cancellationRate = totalForRate > 0 ? Math.round((cancelledCount / totalForRate) * 100) : 0;
     const avgRevenuePerBooking = customerBookingsCount > 0 ? periodRevenue / customerBookingsCount : 0;
 
-    const byMonth = monthKeys.map((k) => byMonthMap.get(k)!);
+    const byMonth = bucketKeys.map((k) => byMonthMap.get(k)!);
     const lanes = Array.from(laneMap.values()).sort((a, b) => b.bookings - a.bookings)
       .map((l) => ({ ...l, hours: Math.round(l.hours * 10) / 10 }));
     const slotsFrom = (m: Map<number, number>) =>

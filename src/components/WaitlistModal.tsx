@@ -3,7 +3,6 @@ import { useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 // Time-slot based waitlist — lane is '*' (any)
 import { useAuth } from '../hooks/useAuth'
-import { useWaitlist } from '../hooks/useWaitlist'
 
 interface WaitlistModalProps {
   selectedSlots: { laneId: string; date: string; hour: number }[]
@@ -17,7 +16,6 @@ interface WaitlistModalProps {
 
 export default function WaitlistModal({ selectedSlots, availableHours, date, onClose, onSuccess }: WaitlistModalProps) {
   const { user } = useAuth()
-  const { addToWaitlist } = useWaitlist(user?.id)
   const addToWaitlistServer = useMutation(api.mutations.addToWaitlist)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [done, setDone] = useState(false)
@@ -61,7 +59,6 @@ export default function WaitlistModal({ selectedSlots, availableHours, date, onC
       date: s.date,
       hour: s.hour,
     }))
-    addToWaitlist(entries)
     try {
       await addToWaitlistServer({ entries })
     } catch (err) {

@@ -15,6 +15,7 @@ import {
   scheduleWaitlistAdvance,
   consumeWaitlistHoldForBooking,
 } from "./waitlist";
+import { recordBookingEvent } from "./bookingEvents";
 import {
   getAWSTNow,
   checkBookingHorizon,
@@ -582,6 +583,30 @@ export async function applyBookingChange(
     reminderSent: false,
   });
 
+  // WS-C live feed: record the modify event. `booking.*` still holds the PRE-patch
+  // (old) slot; `change`/`newSnap` carry the new one — so before vs after is exact.
+  await recordBookingEvent(ctx, {
+    type: "modified",
+    bookingId: booking._id.toString(),
+    customerName: booking.customerName ?? "Unknown",
+    actorName: change.actorName,
+    isCoachBooking: booking.isCoachBooking,
+    before: {
+      date: booking.date,
+      startHour: booking.startHour,
+      duration: booking.duration,
+      lane: booking.laneNameSnapshot ?? booking.laneId ?? "",
+      variant: booking.variantLabelSnapshot ?? undefined,
+    },
+    after: {
+      date: change.newDate,
+      startHour: change.newStartHour,
+      duration: change.newDuration,
+      lane: newSnap.laneNameSnapshot,
+      variant: newSnap.variantLabelSnapshot ?? undefined,
+    },
+  });
+
   // SPEC_WAITLIST_OFFER_REDESIGN: a reschedule/modify away from the old slot
   // frees it — offer it to the next waitlisted member. `booking.*` here still
   // holds the PRE-patch (old) slot. An in-place extend leaves the booking
@@ -1129,6 +1154,22 @@ export const createBooking = mutation({
       createdAt: Date.now(), // §6.2 admin digest windowing
     });
 
+    // WS-C live feed: record the create event (admin Live Feed tab).
+    await recordBookingEvent(ctx, {
+      type: "created",
+      bookingId: id.toString(),
+      customerName: args.customerName,
+      actorName: args.customerName,
+      isCoachBooking: effectiveIsCoachBooking,
+      after: {
+        date: args.date,
+        startHour: args.startHour,
+        duration: args.duration,
+        lane: laneSnap.laneNameSnapshot,
+        variant: laneSnap.variantLabelSnapshot ?? undefined,
+      },
+    });
+
     // SPEC_WAITLIST_OFFER_REDESIGN: if this booking is the waitlisted member
     // acting on their exclusive offer, consume the waitlist hold + mark their
     // entry booked so the queue doesn't roll on while they (potentially) pay.
@@ -1577,6 +1618,21 @@ export const cancelBooking = mutation({
       ...(coachLateCancelCharged ? { coachLateCancelCharged: true } : {}),
     });
 
+    // WS-C live feed: record the cancel event (booking.* holds the cancelled slot).
+    await recordBookingEvent(ctx, {
+      type: "cancelled",
+      bookingId: args.id.toString(),
+      customerName: booking.customerName ?? "Unknown",
+      isCoachBooking: booking.isCoachBooking,
+      after: {
+        date: booking.date,
+        startHour: booking.startHour,
+        duration: booking.duration,
+        lane: booking.laneNameSnapshot ?? booking.laneId ?? "",
+        variant: booking.variantLabelSnapshot ?? undefined,
+      },
+    });
+
     // SPEC_PAYMENTS_AND_CREDIT #2: cancelling a PAID customer booking auto-issues
     // the value back as account credit (cash charged + any credit previously
     // applied) — no Stripe card refund. Coach bookings aren't prepaid online, so
@@ -1971,8 +2027,9 @@ export const modifyBooking = mutation({
     let priceDiffCents = 0;
     let oldGrossCents = 0;
     if (isCoach) {
-      const per30 = settings?.coachPer30Min ?? PRICE_DEFAULTS.coachPer30Min;
-      newCoachPrice = (effDuration / 30) * per30;
+      // C2: coach price is per-hour (matches createBooking + the client preview).
+      const coachPerHour = settings?.coachPerHour ?? PRICE_DEFAULTS.coachPerHour;
+      newCoachPrice = Math.round((effDuration / 60) * coachPerHour * 100) / 100;
     } else {
       const laneCents = (variantId: string | null) =>
         computeCustomerPriceCents(settings, variantId, effDuration);
@@ -2184,10 +2241,15 @@ function generateServerAccessCode(existingCodes: Set<string>, reserved?: Set<str
 // code, so a freshly minted code can't collide with a live one. AWST today (UTC+8).
 async function collectActiveAccessCodes(ctx: any): Promise<Set<string>> {
   const todayKey = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
-  const all = await ctx.db.query("bookings").collect();
+  // E3: only today-and-future bookings can hold a LIVE code — read the by_date range
+  // instead of scanning the whole (ever-growing) table on this booking-write path.
+  const all = await ctx.db
+    .query("bookings")
+    .withIndex("by_date", (q: any) => q.gte("date", todayKey))
+    .collect();
   const set = new Set<string>();
   for (const b of all) {
-    if (b.status === "cancelled" || b.date < todayKey) continue;
+    if (b.status === "cancelled") continue;
     if (b.accessCode) set.add(b.accessCode);
     for (const s of b.athleteSlots ?? []) {
       if (s.accessCode) set.add(s.accessCode);
@@ -2544,7 +2606,7 @@ async function writeCoachSessionCopy(
     src: any;
     coach: any;
     targetDate: string;
-    coachPer30: number;
+    coachPerHour: number;
     analysis: CoachCopyAnalysis;
     existingCodes: Set<string>;
     reserved?: Set<string>;
@@ -2552,7 +2614,7 @@ async function writeCoachSessionCopy(
     actorName?: string;
   }
 ): Promise<string> {
-  const { src, coach, targetDate, coachPer30, analysis, existingCodes, reserved } = opts;
+  const { src, coach, targetDate, coachPerHour, analysis, existingCodes, reserved } = opts;
   const newCode = generateServerAccessCode(existingCodes, reserved);
   const nowIso = new Date().toISOString();
   const copiedSlots = analysis.keptSlots.map((s) => ({
@@ -2566,7 +2628,7 @@ async function writeCoachSessionCopy(
   // SPEC_ANALYTICS_ATHLETE_CATCHMENT: snapshot each athlete's home suburb.
   const copiedSlotsWithSuburbs = (await attachAthleteSuburbs(ctx, copiedSlots)) ?? [];
 
-  const newCoachPrice = (src.duration / 30) * coachPer30;
+  const newCoachPrice = Math.round((src.duration / 60) * coachPerHour * 100) / 100;
   const newId = await ctx.db.insert("bookings", {
     laneId: src.laneId,
     variantId: src.variantId,
@@ -2587,6 +2649,22 @@ async function writeCoachSessionCopy(
     variantLabelSnapshot: analysis.variantLabelSnapshot,
     createdAt: Date.now(), // §6.2 admin digest windowing
   } as any);
+
+  // WS-C live feed: record the repeat (created) event.
+  await recordBookingEvent(ctx, {
+    type: "created",
+    bookingId: newId.toString(),
+    customerName: coach.name,
+    actorName: coach.name,
+    isCoachBooking: true,
+    after: {
+      date: targetDate,
+      startHour: src.startHour,
+      duration: src.duration,
+      lane: analysis.laneNameSnapshot,
+      variant: analysis.variantLabelSnapshot ?? undefined,
+    },
+  });
 
   if (copiedSlots.length > 0) {
     await scheduleAllocationEmails(ctx, {
@@ -2725,7 +2803,7 @@ export const repeatCoachBooking = mutation({
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
       .first();
-    const coachPer30 = (settings as any)?.coachPer30Min ?? PRICE_DEFAULTS.coachPer30Min;
+    const coachPerHour = (settings as any)?.coachPerHour ?? PRICE_DEFAULTS.coachPerHour;
     const dailyHours: any = (settings as any)?.dailyHours;
     const coachIdForms = new Set<string>([coach._id as string, coach.email]);
 
@@ -2751,7 +2829,7 @@ export const repeatCoachBooking = mutation({
       src,
       coach,
       targetDate,
-      coachPer30,
+      coachPerHour,
       analysis,
       existingCodes,
       reserved,
@@ -2888,6 +2966,7 @@ export const updateCustomerByEmail = mutation({
     creditBalance: v.optional(v.number()),
     color: v.optional(v.string()),
     defaultSessionDuration: v.optional(v.number()),
+    coachesSimultaneously: v.optional(v.boolean()),
     athleteCapacity: v.optional(v.number()),
     bookingEmailsEnabled: v.optional(v.boolean()),
     emailNotificationsEnabled: v.optional(v.boolean()), // Bug 7: master email switch
@@ -2953,7 +3032,11 @@ export const updateCustomerByEmail = mutation({
         // (and athleteCapacity, which stays admin-managed) is still stripped.
         const editingOwnCoachRecord =
           updCallerEmail === normalizedEmail && (existing as any).role === "coach";
-        if (!editingOwnCoachRecord) delete (updates as any).defaultSessionDuration;
+        if (!editingOwnCoachRecord) {
+          delete (updates as any).defaultSessionDuration;
+          // Same carve-out: a coach may self-toggle their own allocation mode.
+          delete (updates as any).coachesSimultaneously;
+        }
       }
       const cleanUpdates = Object.fromEntries(
         Object.entries(updates).filter(([_, v]) => v !== undefined)
@@ -3637,10 +3720,7 @@ export const dismissWaitlistNotification = mutation({
 export const updateSiteSettings = mutation({
   args: {
     customerPricePerHour: v.optional(v.number()),
-    customerPrice90Min: v.optional(v.number()),
     trumanPricePerHour: v.optional(v.number()),
-    trumanPrice90Min: v.optional(v.number()),
-    coachPer30Min: v.optional(v.number()),
     coachPerHour: v.optional(v.number()),
     cancellationHoursBefore: v.optional(v.number()),
     openingHour: v.optional(v.number()),
@@ -3690,10 +3770,7 @@ export const updateSiteSettings = mutation({
 
     const defaults = {
       customerPricePerHour: 40,
-      customerPrice90Min: 55,
       trumanPricePerHour: 50,
-      trumanPrice90Min: 70,
-      coachPer30Min: 15,
       coachPerHour: 25,
       cancellationHoursBefore: 2,
       openingHour: 7,
@@ -4018,6 +4095,25 @@ export const voidBookingCharge = mutation({
   },
 });
 
+// Carpet-wear reset (2026-06): record that a lane's carpet was replaced — cumulative
+// lane-wear analytics counts booked hours from this date forward. ADMIN ONLY.
+export const resetLaneWear = mutation({
+  args: { laneId: v.string(), resetDate: v.string(), note: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const admin = await requireAdmin(ctx);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(args.resetDate)) {
+      throw new ConvexError("resetDate must be YYYY-MM-DD.");
+    }
+    return await ctx.db.insert("laneWearResets", {
+      laneId: args.laneId,
+      resetDate: args.resetDate,
+      note: args.note,
+      createdAt: new Date().toISOString(),
+      createdByEmail: (admin as any)?.email ?? undefined,
+    });
+  },
+});
+
 // Reset site settings to defaults — ADMIN ONLY
 export const resetSiteSettings = mutation({
   args: {},
@@ -4031,10 +4127,7 @@ export const resetSiteSettings = mutation({
     const defaults = {
       key: "global" as const,
       customerPricePerHour: 40,
-      customerPrice90Min: 55,
       trumanPricePerHour: 50,
-      trumanPrice90Min: 70,
-      coachPer30Min: 15,
       coachPerHour: 25,
       cancellationHoursBefore: 2,
       openingHour: 7,

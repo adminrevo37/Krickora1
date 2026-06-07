@@ -564,6 +564,36 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
         }),
       };
 
+    // ── Fault / service report (admin ops alert) ──────────────────────────────
+    // Internal operations email to the ops inbox when a user reports an issue.
+    // Reporter details, session context, full description, and a link to the
+    // attached photo (served Convex storage URL). Not customer-facing.
+    case "fault-report":
+      return {
+        subject: `🛠️ New fault report${d.where ? ` — ${esc(d.where)}` : ""}`,
+        html: layout({
+          title: "New fault report",
+          preheader: (d.details || "").replace(/\s+/g, " ").slice(0, 120),
+          bodyHtml:
+            p(`A new issue has been reported through the app.`) +
+            detailRows(
+              ([
+                ["Reported by", d.reporterName],
+                ["Mobile", d.reporterMobile],
+                ["Email", d.reporterEmail],
+                ["Lane", d.laneId],
+                ["Category", d.category],
+                ["Session", d.sessionInfo],
+                ["Reported", d.createdAtLabel],
+              ] as [string, string][]).filter((r) => r[1]),
+            ) +
+            `<p style="margin:16px 0 6px;color:${BRAND.navy};font-size:14px;font-weight:700;">Details</p>` +
+            paragraphs(d.details) +
+            (d.photoUrl ? button("View attached photo", d.photoUrl) : "") +
+            muted("Automated operations alert — triage this in the admin panel."),
+        }),
+      };
+
     default:
       return null;
   }

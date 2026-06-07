@@ -96,7 +96,7 @@ function RootComponent() {
                         </div>
                         <div className="p-1">
                           {isAdmin && (
-                            <Link to="/admin" onClick={() => setShowUserMenu(false)} className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
+                            <Link to="/rev-ops-7k2p" onClick={() => setShowUserMenu(false)} className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
                               <span>⚙️</span> Admin Panel
                             </Link>
                           )}
@@ -181,13 +181,13 @@ function RootComponent() {
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <button
-              onClick={() => navigate({ to: '/admin', search: { section: impersonatedUser.role === 'coach' ? 'coaches' : 'customers' } })}
+              onClick={() => navigate({ to: '/rev-ops-7k2p', search: { section: impersonatedUser.role === 'coach' ? 'coaches' : 'customers' } })}
               className="text-amber-100 hover:text-white text-xs underline underline-offset-2"
             >
               Back to admin
             </button>
             <button
-              onClick={() => { exitImpersonation(); navigate({ to: '/admin', search: { section: impersonatedUser.role === 'coach' ? 'coaches' : 'customers' } }) }}
+              onClick={() => { exitImpersonation(); navigate({ to: '/rev-ops-7k2p', search: { section: impersonatedUser.role === 'coach' ? 'coaches' : 'customers' } }) }}
               className="px-3 py-1 bg-white text-amber-700 rounded-lg text-xs font-bold hover:bg-amber-50 transition-colors"
             >
               Exit

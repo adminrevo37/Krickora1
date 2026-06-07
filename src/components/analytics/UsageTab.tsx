@@ -2,9 +2,12 @@
 import { useQuery } from 'convex/react'
 import { api } from '../../../convex/_generated/api'
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
-import { type DateRange, KpiCard, Section, Loading, Empty, BarRow, fmtMins } from './shared'
+import {
+  type AnalyticsRange, KpiCard, DeltaKpi, Section, Loading, Empty, BarRow, fmtMins,
+  periodsOf, usePeriodResults, PERIOD_COLORS,
+} from './shared'
 
 function SplitCard({ title, data, color }: { title: string; data: Record<string, number>; color: string }) {
   const entries = Object.entries(data ?? {}).sort((a, b) => b[1] - a[1])
@@ -21,9 +24,29 @@ function SplitCard({ title, data, color }: { title: string; data: Record<string,
   )
 }
 
-export default function UsageTab({ range }: { range: DateRange }) {
-  const data = useQuery(api.analyticsUsage.getUsageAnalytics, { from: range.from || undefined, to: range.to || undefined })
-  const lead = useQuery(api.analyticsUsage.getCodeAccessLeadTime, { from: range.from || undefined, to: range.to || undefined })
+export default function UsageTab({ range }: { range: AnalyticsRange }) {
+  // A) Live active-user snapshot (range-independent).
+  const snapshot = useQuery(api.analyticsUsage.getActiveUserSnapshot, {})
+
+  // B) One query per comparison period (results[0] = current). In non-comparison
+  // mode periods has length 1, so only the current window runs.
+  const periods = periodsOf(range)
+  const results = usePeriodResults<any>(
+    api.analyticsUsage.getUsageAnalytics,
+    periods,
+    (p) => ({ from: p.from, to: p.to, fromMs: p.fromMs, toMs: p.toMs }),
+  )
+  const data = results[0]
+  const prev = results[1]
+  const comparing = range.compare && periods.length > 1
+
+  // C) Lead time stays current-period only; sub-day windows need the ms bounds.
+  const lead = useQuery(api.analyticsUsage.getCodeAccessLeadTime, {
+    from: range.from || undefined,
+    to: range.to || undefined,
+    fromMs: range.fromMs,
+    toMs: range.toMs,
+  })
 
   if (data === undefined) return <Loading label="Loading usage…" />
   if (data === null) return <Empty label="Unavailable." />
@@ -37,24 +60,89 @@ export default function UsageTab({ range }: { range: DateRange }) {
     { label: 'after start', value: lead.buckets.after_start },
   ] : []
 
+  // Overlay the daily-active series, aligned by bucket index across periods.
+  const maxLen = comparing
+    ? Math.max(0, ...results.map((r) => r?.dailyActive?.length ?? 0))
+    : 0
+  const overlayData = comparing
+    ? Array.from({ length: maxLen }).map((_, i) => {
+      const row: any = { idx: i + 1 }
+      periods.forEach((p, pi) => {
+        const v = results[pi]?.dailyActive?.[i]
+        row[p.label] = v ? v.users : null
+        row[`__date${pi}`] = v?.date ?? ''
+      })
+      return row
+    })
+    : []
+
   return (
     <div className="space-y-5">
+      {/* A) Live active-user snapshot */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <KpiCard icon="👥" label="Unique visitors" value={String(data.uniqueUsers)} sub={`${data.sessions} sessions`} tone="blue" />
+        <KpiCard icon="🟢" label="Active — last hour"
+          value={snapshot == null ? '…' : String(snapshot.lastHour)} tone="emerald" />
+        <KpiCard icon="📆" label="Active — today"
+          value={snapshot == null ? '…' : String(snapshot.today)} tone="blue" />
+      </div>
+
+      {/* B) KPI rows — DeltaKpi vs prev period when comparing, else plain cards. */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {comparing ? (
+          <DeltaKpi icon="👥" label="Unique visitors" value={data.uniqueUsers} prev={prev?.uniqueUsers} format={(n) => String(n)} tone="blue" />
+        ) : (
+          <KpiCard icon="👥" label="Unique visitors" value={String(data.uniqueUsers)} sub={`${data.sessions} sessions`} tone="blue" />
+        )}
         <KpiCard icon="📈" label="WAU / MAU" value={`${data.wau} / ${data.mau}`} sub="last 7 / 30 days" tone="emerald" />
-        <KpiCard icon="⏱️" label="Avg session" value={fmtMins(data.avgSessionMin)} sub={`median ${fmtMins(data.medianSessionMin)}`} />
-        <KpiCard icon="📄" label="Pageviews / session" value={String(data.pageviewsPerSession)} sub={`${data.pageviews} pageviews`} />
+        {comparing ? (
+          <DeltaKpi icon="⏱️" label="Avg session (min)" value={data.avgSessionMin} prev={prev?.avgSessionMin} format={fmtMins} />
+        ) : (
+          <KpiCard icon="⏱️" label="Avg session" value={fmtMins(data.avgSessionMin)} sub={`median ${fmtMins(data.medianSessionMin)}`} />
+        )}
+        {comparing ? (
+          <DeltaKpi icon="📄" label="Pageviews / session" value={data.pageviewsPerSession} prev={prev?.pageviewsPerSession} format={(n) => String(n)} />
+        ) : (
+          <KpiCard icon="📄" label="Pageviews / session" value={String(data.pageviewsPerSession)} sub={`${data.pageviews} pageviews`} />
+        )}
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <KpiCard icon="✨" label="New visitors" value={String(data.newVisitors)} tone="emerald" />
-        <KpiCard icon="🔁" label="Returning" value={String(data.returning)} tone="amber" />
-        <KpiCard icon="🧭" label="Sessions / user" value={String(data.sessionsPerUser)} />
+        {comparing ? (
+          <DeltaKpi icon="✨" label="New visitors" value={data.newVisitors} prev={prev?.newVisitors} format={(n) => String(n)} tone="emerald" />
+        ) : (
+          <KpiCard icon="✨" label="New visitors" value={String(data.newVisitors)} tone="emerald" />
+        )}
+        {comparing ? (
+          <DeltaKpi icon="🔁" label="Returning" value={data.returning} prev={prev?.returning} format={(n) => String(n)} tone="amber" />
+        ) : (
+          <KpiCard icon="🔁" label="Returning" value={String(data.returning)} tone="amber" />
+        )}
+        {comparing ? (
+          <DeltaKpi icon="🧭" label="Sessions / user" value={data.sessionsPerUser} prev={prev?.sessionsPerUser} format={(n) => String(n)} />
+        ) : (
+          <KpiCard icon="🧭" label="Sessions / user" value={String(data.sessionsPerUser)} />
+        )}
         <KpiCard icon="🟢" label="Active days tracked" value={String(data.dailyActive.length)} />
       </div>
 
-      <Section title="Daily active visitors" subtitle="Distinct visitors per day (AWST)">
+      <Section title="Daily active visitors"
+        subtitle={comparing ? 'Distinct visitors per day — overlaid by period (aligned by position)' : 'Distinct visitors per day (AWST)'}>
         <div className="p-5">
-          {data.dailyActive.length === 0 ? <Empty label="No sessions tracked yet — analytics begins collecting once this build is live." /> : (
+          {comparing ? (
+            overlayData.length === 0 ? <Empty label="No sessions tracked yet — analytics begins collecting once this build is live." /> : (
+              <ResponsiveContainer width="100%" height={200}>
+                <LineChart data={overlayData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis dataKey="idx" tick={{ fontSize: 11 }} label={{ value: 'day #', position: 'insideBottom', offset: -2, fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} width={28} />
+                  <Tooltip />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  {periods.map((p, pi) => (
+                    <Line key={p.label} type="monotone" dataKey={p.label} stroke={PERIOD_COLORS[pi]} strokeWidth={2} dot={{ r: 2 }} connectNulls />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            )
+          ) : data.dailyActive.length === 0 ? <Empty label="No sessions tracked yet — analytics begins collecting once this build is live." /> : (
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={data.dailyActive} margin={{ top: 0, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
@@ -68,6 +156,7 @@ export default function UsageTab({ range }: { range: DateRange }) {
         </div>
       </Section>
 
+      {/* Tables/splits show the CURRENT period only (comparison does not fan tables). */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <SplitCard title="Device" data={data.device} color="bg-blue-500" />
         <SplitCard title="Operating system" data={data.os} color="bg-violet-500" />
@@ -84,7 +173,7 @@ export default function UsageTab({ range }: { range: DateRange }) {
         )}
       </Section>
 
-      {/* C2.8 — door-code access lead time */}
+      {/* C2.8 — door-code access lead time (current period only) */}
       <Section title="Door-code access lead time"
         subtitle="When people open the app to get their access code, relative to their booking start">
         {lead === undefined ? <Loading /> : !lead || lead.total === 0 ? (

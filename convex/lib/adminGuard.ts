@@ -3,6 +3,7 @@
  */
 import { authComponent } from "../auth";
 import { ConvexError } from "convex/values";
+import { internal } from "../_generated/api";
 
 /**
  * Returns the authenticated Better Auth user, or null if not authenticated.
@@ -66,9 +67,9 @@ export async function requireAdmin(ctx: any): Promise<{
 }
 
 /**
- * Admin guard for ACTIONS (no ctx.db access). Relies solely on the Better Auth
- * user role. Use in `action`/`"use node"` contexts where requireAdmin's
- * customers-table fallback (ctx.db) is unavailable.
+ * Admin guard for ACTIONS (no ctx.db access). Authenticates via Better Auth, then
+ * confirms admin against the customers.role SSOT through an internal query (S1) —
+ * not the Better Auth user.role alone. Use in `action`/`"use node"` contexts.
  */
 export async function requireAdminAction(ctx: any): Promise<{
   _id: string;
@@ -76,7 +77,17 @@ export async function requireAdminAction(ctx: any): Promise<{
   role?: string;
 }> {
   const user = await authComponent.getAuthUser(ctx);
-  if (!user || (user as any).role !== "admin") {
+  if (!user) {
+    throw new ConvexError("Not authorized");
+  }
+  // S1: resolve admin from the customers.role SSOT (via an internal query — actions
+  // have no ctx.db) rather than the Better Auth user.role alone, closing the
+  // stale-admin-after-failed-role-sync gap. Matches getCallerContext / createPaymentLink.
+  const email = (user as any).email as string | undefined;
+  const isAdmin = email
+    ? await ctx.runQuery(internal.queries.isAdminEmail, { email })
+    : false;
+  if (!isAdmin) {
     throw new ConvexError("Not authorized");
   }
   return user as any;

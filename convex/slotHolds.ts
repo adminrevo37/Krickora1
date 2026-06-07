@@ -20,7 +20,12 @@ async function releaseAbandonedBooking(ctx: any, booking: any): Promise<boolean>
   // Abandoned unified-modify top-up (SPEC_MODIFY_BOOKING_UPGRADE): the booking is
   // still a valid CONFIRMED booking at its original slot — only the unpaid change
   // is abandoned. Revert it, never cancel it.
-  if (booking.status === "pending_edit_payment" && booking.paymentStatus !== "paid") {
+  // C4: a pending_edit_payment booking always reverts to its original CONFIRMED slot
+  // (only the unpaid edit is abandoned). The status check alone is the guard — a paid
+  // top-up would have set status "confirmed" via confirmBookingPayment, so we never
+  // reach here for a completed edit. (Previously also required paymentStatus !== "paid",
+  // which wrongly left an already-paid original wedged in pending_edit_payment.)
+  if (booking.status === "pending_edit_payment") {
     await ctx.db.patch(booking._id, {
       status: "confirmed",
       pendingEdit: undefined,

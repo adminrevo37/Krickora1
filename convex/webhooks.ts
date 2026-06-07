@@ -156,10 +156,13 @@ export const confirmBookingPayment = internalMutation({
       const laneNameMap: Record<string, string> = {
         bm1: "Bowling Machine Lane 1",
         bm2: "Bowling Machine Lane 2",
+        bm3: "Bowling Machine Lane 3",
         ru1: "Run-Up Lane 1",
         ru2: "Run-Up Lane 2",
       };
-      const laneName = laneNameMap[b.laneId] ?? String(b.laneId).toUpperCase();
+      // C5: prefer the per-booking lane-name snapshot (covers BM3 + reconfigured lanes),
+      // matching the confirmation push below; fall back to the static map.
+      const laneName = b.laneNameSnapshot ?? laneNameMap[b.laneId] ?? String(b.laneId).toUpperCase();
       const description = `${laneName} — ${b.date}`;
       const paymentDate = new Date().toLocaleDateString("en-US", {
         year: "numeric",
@@ -224,6 +227,22 @@ export const markBookingPaymentFailed = internalMutation({
     if (!booking) return { success: false, reason: "booking_not_found" };
 
     const b = booking as any;
+
+    // C4: a failed MODIFY top-up must not wedge the booking. The original slot is
+    // still a valid CONFIRMED (already-paid) booking — only the unpaid change is
+    // abandoned. Revert to confirmed + clear the pending edit + drop the edit's
+    // checkout hold (mirrors releaseAbandonedBooking), and do NOT mark the original
+    // as failed. Handled before the paid/failed noop guard, since the original is paid.
+    if (b.status === "pending_edit_payment") {
+      await ctx.db.patch(booking._id, { status: "confirmed", pendingEdit: undefined });
+      const editHolds = await ctx.db
+        .query("slotHolds")
+        .withIndex("by_bookingId", (q: any) => q.eq("bookingId", booking._id.toString()))
+        .collect();
+      for (const h of editHolds) await ctx.db.delete(h._id);
+      return { success: true, reverted: true };
+    }
+
     if (b.paymentStatus === "failed" || b.paymentStatus === "paid") {
       return { success: true, noop: true };
     }
@@ -237,7 +256,7 @@ export const markBookingPaymentFailed = internalMutation({
     await ctx.scheduler.runAfter(0, internal.push.sendAdminPush, {
       title: "Payment failed",
       body: `${b.customerName ?? b.customerEmail ?? "A customer"} — ${b.laneNameSnapshot ?? b.laneId} ${b.date}.`,
-      url: "/admin",
+      url: "/rev-ops-7k2p",
       tag: `payfail-${booking._id.toString()}`,
     });
 

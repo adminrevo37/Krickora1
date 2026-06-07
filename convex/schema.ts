@@ -92,6 +92,10 @@ export default defineSchema({
     coachTier: v.optional(v.string()), // 'L1' | 'L2'
     defaultSessionDuration: v.optional(v.number()), // coach default athlete slot duration in minutes
     athleteCapacity: v.optional(v.number()), // coach max athletes per session (1-4); drives auto-populate
+    // Coach allocation mode (2026-06): UNticked/absent (default) = coach runs athletes
+    // SEQUENTIALLY → auto-advance the next slot's start + smart-order the athlete picker
+    // by recent history. ticked (true) = coaches multiple at once → independent slots.
+    coachesSimultaneously: v.optional(v.boolean()),
     bookingEmailsEnabled: v.optional(v.boolean()),
     // Bug 7: master email switch. Strict === false silences ALL preference-gated
     // emails (regular notifications + the weekly summary); legacy/absent = ON. Does
@@ -118,7 +122,8 @@ export default defineSchema({
     createdAt: v.string(),
   })
     .index("by_email", ["email"])
-    .index("by_role", ["role"]),
+    .index("by_role", ["role"])
+    .index("by_createdAt", ["createdAt"]), // E9: hourly-digest new-account range (ISO sorts chronologically)
 
   // Child-athlete entities (SPEC_PARENT_ATHLETE_MODEL). Separates the ACCOUNT
   // holder (customers — parent/guardian or adult who logs in, pays, receives
@@ -502,11 +507,13 @@ export default defineSchema({
   siteSettings: defineTable({
     key: v.string(), // always "global"
     customerPricePerHour: v.number(),
-    customerPrice90Min: v.number(),
+    // DEPRECATED (C1): per-hour pricing is canonical (1.5hr = 1.5×hourly). Kept optional
+    // so existing docs still validate; unset by migrateRemove90MinPricing, then droppable.
+    customerPrice90Min: v.optional(v.number()),
     trumanPricePerHour: v.number(),
-    trumanPrice90Min: v.number(),
+    trumanPrice90Min: v.optional(v.number()),
     coachPerHour: v.number(),
-    coachPer30Min: v.optional(v.number()),
+    coachPer30Min: v.optional(v.number()), // DEPRECATED (C2) — coach price is per-hour only
     cancellationHoursBefore: v.number(),
     openingHour: v.number(),
     closingHour: v.number(),
@@ -852,6 +859,47 @@ export default defineSchema({
   })
     .index("by_status", ["status"])
     .index("by_createdAt", ["createdAt"]),
+
+  // Live admin feed of booking lifecycle events (created/modified/cancelled).
+  // Append-only; read newest-first via by_at. Captures the modify before/after diff
+  // that no other table records for the self-service path (2026-06 live feed).
+  bookingEvents: defineTable({
+    at: v.number(),
+    type: v.string(), // 'created' | 'modified' | 'cancelled'
+    bookingId: v.string(),
+    customerName: v.string(),
+    actorName: v.optional(v.string()),
+    isCoachBooking: v.optional(v.boolean()),
+    before: v.optional(
+      v.object({
+        date: v.string(),
+        startHour: v.number(),
+        duration: v.number(),
+        lane: v.string(),
+        variant: v.optional(v.string()),
+      })
+    ),
+    after: v.optional(
+      v.object({
+        date: v.string(),
+        startHour: v.number(),
+        duration: v.number(),
+        lane: v.string(),
+        variant: v.optional(v.string()),
+      })
+    ),
+  }).index("by_at", ["at"]),
+
+  // Carpet-wear reset markers (2026-06): an admin records the date a lane's carpet
+  // was replaced; cumulative lane-wear analytics counts booked hours only from the
+  // latest reset forward. History retained (one row per reset).
+  laneWearResets: defineTable({
+    laneId: v.string(),
+    resetDate: v.string(), // YYYY-MM-DD — wear accumulates from this date
+    note: v.optional(v.string()),
+    createdAt: v.string(),
+    createdByEmail: v.optional(v.string()),
+  }).index("by_laneId", ["laneId"]),
 
   // Coach payments tracking
   payments: defineTable({

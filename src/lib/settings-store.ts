@@ -23,11 +23,8 @@ export interface DailyHours {
 
 export interface SiteSettings {
   customerPricePerHour: number
-  customerPrice90Min: number
   trumanPricePerHour: number
-  trumanPrice90Min: number
   coachPerHour: number
-  coachPer30Min?: number
   cancellationHoursBefore: number
   openingHour: number
   closingHour: number
@@ -71,11 +68,8 @@ const DEFAULT_DAILY_HOURS: Record<DayKey, DailyHours> = {
 
 const DEFAULT_SETTINGS: SiteSettings = {
   customerPricePerHour: PRICE_DEFAULTS.customerPerHour,
-  customerPrice90Min: 55,
   trumanPricePerHour: PRICE_DEFAULTS.trumanPerHour,
-  trumanPrice90Min: 70,
   coachPerHour: PRICE_DEFAULTS.coachPerHour,
-  coachPer30Min: PRICE_DEFAULTS.coachPer30Min,
   cancellationHoursBefore: 2,
   openingHour: 7,
   closingHour: 21,

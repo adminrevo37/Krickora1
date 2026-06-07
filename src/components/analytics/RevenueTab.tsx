@@ -1,14 +1,21 @@
 // SPEC_ANALYTICS_BUILD_2026-06 C2.7 (time-series revenue/bookings, navigable
 // hour/day/week/month incl. future), C2.2 (persisted snapshots), C2.9 (credit).
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '../../../convex/_generated/api'
 import {
-  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  ComposedChart, Bar, Line, LineChart, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
-import { type DateRange, KpiCard, Section, Loading, Empty, downloadCsv, fmtMoney, fmtMins, BarRow } from './shared'
+import {
+  type AnalyticsRange, KpiCard, DeltaKpi, Section, Loading, Empty, downloadCsv, fmtMoney, fmtMins, BarRow,
+  PERIOD_COLORS, periodsOf, usePeriodResults,
+} from './shared'
 
 type Gran = 'hour' | 'day' | 'week' | 'month'
+
+// Overlay granularity for comparison mode, derived from the preset window length.
+const compareGran = (windowDays: number): 'day' | 'week' | 'month' =>
+  windowDays <= 31 ? 'day' : windowDays <= 120 ? 'week' : 'month'
 
 const addDaysKey = (key: string, days: number): string => {
   const [y, m, d] = key.split('-').map(Number)
@@ -26,30 +33,46 @@ const SPAN: Record<Gran, { back: number; fwd: number }> = {
   month: { back: 300, fwd: 60 },
 }
 
-export default function RevenueTab({ range }: { range: DateRange }) {
-  const [gran, setGran] = useState<Gran>('day')
-  const [win, setWin] = useState(() => {
-    const t = todayKey()
-    return { from: addDaysKey(t, -SPAN.day.back), to: addDaysKey(t, SPAN.day.fwd) }
-  })
+export default function RevenueTab({ range }: { range: AnalyticsRange }) {
+  // Comparison mode swaps the navigable time-series for an overlay of N
+  // consecutive windows + KPI deltas. Credit + lead-time always show the
+  // current period only, so they live in the shared trailer below.
+  return (
+    <div className="space-y-5">
+      {range.compare ? <RevenueCompare range={range} /> : <RevenueSingle range={range} />}
+      <CurrentPeriodPanels range={range} />
+    </div>
+  )
+}
 
-  // Reset the window to a sensible default whenever granularity changes.
+function RevenueSingle({ range }: { range: AnalyticsRange }) {
+  const [gran, setGran] = useState<Gran>('day')
+  // Seed/drive the initial window from the global picker (range.from/range.to)
+  // so the page-level range still applies on first paint.
+  const [win, setWin] = useState(() => ({ from: range.from, to: range.to }))
+
+  // Follow the global picker when it changes — drives the window from
+  // range.from/range.to (also covers the initial seed via the state initialiser).
   useEffect(() => {
+    setWin({ from: range.from, to: range.to })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [range.from, range.to])
+
+  // Reset the window to a sensible default whenever granularity changes — but
+  // skip the first run so the range-seeded initial window survives mount.
+  const firstGran = useRef(true)
+  useEffect(() => {
+    if (firstGran.current) { firstGran.current = false; return }
     const t = todayKey()
     setWin({ from: addDaysKey(t, -SPAN[gran].back), to: addDaysKey(t, SPAN[gran].fwd) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gran])
 
   const bounds = useQuery(api.analyticsAdmin.getBookingDateBounds, {})
   const series = useQuery(api.analyticsAdmin.getBookingRevenueSeries, {
     granularity: gran, from: win.from, to: win.to,
   })
-  const credit = useQuery(api.analyticsAdmin.getCreditAnalytics, {
-    from: range.from || undefined, to: range.to || undefined,
-  })
   const period = useQuery(api.analyticsAdmin.getPeriodSummary, {})
-  const lead = useQuery(api.analyticsAdmin.getBookingLeadTime, {
-    from: range.from || undefined, to: range.to || undefined,
-  })
 
   const shift = (dir: -1 | 1) => {
     // For 'hour' the window aggregates a date range; nudge by the span too.
@@ -72,7 +95,7 @@ export default function RevenueTab({ range }: { range: DateRange }) {
 
   return (
     <div className="space-y-5">
-      {/* Today / this week / next week snapshot */}
+      {/* Today / this week / next week snapshot (always current — not range-driven) */}
       <PeriodSummary period={period} />
 
       {/* Controls */}
@@ -129,13 +152,115 @@ export default function RevenueTab({ range }: { range: DateRange }) {
           )}
         </div>
       </Section>
+    </div>
+  )
+}
 
+// ─── Comparison mode: overlay N consecutive windows of the selected preset ───
+// One line per period (coloured by PERIOD_COLORS), aligned by bucket index like
+// CompareTab. KPI cards become DeltaKpi (current vs prev period). Granularity is
+// derived from the window length so longer windows don't explode into 100s of
+// daily buckets.
+function RevenueCompare({ range }: { range: AnalyticsRange }) {
+  const periods = periodsOf(range)
+  const windowDays = Math.max(1, Math.round((range.toMs - range.fromMs) / 86400000))
+  const gran = compareGran(windowDays)
+  const results = usePeriodResults<{ series: any[] } | null>(
+    api.analyticsAdmin.getBookingRevenueSeries,
+    periods,
+    (p) => ({ granularity: gran, from: p.from, to: p.to }),
+  )
+
+  const anyLoading = periods.some((_, i) => results[i] === undefined)
+
+  // Per-period totals (also feed the KPI deltas: current = [0], prev = [1]).
+  const totalsCust = periods.map((_, i) => (results[i]?.series ?? []).reduce((s: number, b: any) => s + (b.custRevenue ?? 0), 0))
+  const totalsCoach = periods.map((_, i) => (results[i]?.series ?? []).reduce((s: number, b: any) => s + (b.coachCharges ?? 0), 0))
+  const totalsBookings = periods.map((_, i) => (results[i]?.series ?? []).reduce((s: number, b: any) => s + (b.bookings ?? 0), 0))
+
+  // Align overlaid series by bucket index (position i in each period's series).
+  const maxLen = Math.max(0, ...periods.map((_, i) => results[i]?.series?.length ?? 0))
+  const chartData = Array.from({ length: maxLen }).map((_, i) => {
+    const row: any = { idx: i + 1 }
+    periods.forEach((p, pi) => {
+      const v = results[pi]?.series?.[i]
+      row[p.label] = v ? v.custRevenue : null
+    })
+    return row
+  })
+
+  const exportCsv = () => {
+    const header = ['Bucket', ...periods.map((p) => p.label)]
+    const rows = chartData.map((r) => [r.idx, ...periods.map((p) => r[p.label] ?? '')])
+    rows.push(['TOTAL', ...totalsCust.map((t) => Math.round(t * 100) / 100)])
+    downloadCsv(`revenue_compare_${gran}.csv`, [header, ...rows])
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Today / this week / next week snapshot (always current — not range-driven) */}
+      <CurrentPeriodSummary />
+
+      {/* KPI deltas: current period vs the immediately preceding one */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <DeltaKpi icon="💰" label="Customer revenue" value={totalsCust[0]} prev={totalsCust[1]} format={fmtMoney} tone="emerald" />
+        <DeltaKpi icon="🏏" label="Coach charges" value={totalsCoach[0]} prev={totalsCoach[1]} format={fmtMoney} tone="violet" />
+        <DeltaKpi icon="📅" label="Bookings" value={totalsBookings[0]} prev={totalsBookings[1]} format={(n) => String(Math.round(n))} tone="blue" />
+        <KpiCard icon="📊" label="Periods overlaid" value={String(periods.length)} sub={`by ${gran}, aligned by position`} />
+      </div>
+
+      {/* Overlay chart — one customer-revenue line per period */}
+      <Section title="Customer revenue — period overlay"
+        subtitle={`${periods.length} × ${range.preset} windows, by ${gran} (aligned by position in each period)`}
+        action={<button onClick={exportCsv} disabled={chartData.length === 0}
+          className="px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">CSV</button>}>
+        <div className="p-5">
+          {anyLoading ? <Loading /> : chartData.length === 0 ? <Empty label="No data for the selected periods." /> : (
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={chartData} margin={{ top: 4, right: 24, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                <XAxis dataKey="idx" tick={{ fontSize: 11 }}
+                  label={{ value: `${gran} #`, position: 'insideBottom', offset: -2, fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `$${v}`} width={56} />
+                <Tooltip formatter={(v: number, name: string) => [`$${Math.round(v)}`, name]} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                {periods.map((p, pi) => (
+                  <Line key={p.label} type="monotone" dataKey={p.label} name={p.label}
+                    stroke={PERIOD_COLORS[pi % PERIOD_COLORS.length]} strokeWidth={2} dot={{ r: 2 }} connectNulls />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </Section>
+    </div>
+  )
+}
+
+// Today / this week / next week snapshot — used by the comparison view, which
+// has no PeriodSummary of its own (getPeriodSummary takes no args).
+function CurrentPeriodSummary() {
+  const period = useQuery(api.analyticsAdmin.getPeriodSummary, {})
+  return <PeriodSummary period={period} />
+}
+
+// Credit + lead-time always reflect the CURRENT period only (period[0]) in both
+// modes, per the locked comparison UX (these panels don't fan across periods).
+function CurrentPeriodPanels({ range }: { range: AnalyticsRange }) {
+  const cur = periodsOf(range)[0]
+  const credit = useQuery(api.analyticsAdmin.getCreditAnalytics, {
+    from: cur.from || undefined, to: cur.to || undefined,
+  })
+  const lead = useQuery(api.analyticsAdmin.getBookingLeadTime, {
+    from: cur.from || undefined, to: cur.to || undefined,
+  })
+  return (
+    <>
       {/* Booking lead time — how far ahead people book */}
       <LeadTimePanel lead={lead} />
-
       {/* Credit analytics (C2.9) */}
       <CreditPanel credit={credit} />
-    </div>
+    </>
   )
 }
 

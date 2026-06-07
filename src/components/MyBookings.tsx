@@ -4,7 +4,6 @@ import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { useBookings } from '../hooks/useBookingStore'
 import { useAuth } from '../hooks/useAuth'
-import { useWaitlist } from '../hooks/useWaitlist'
 import { useSettings } from '../hooks/useSettings'
 import {
   LANES,
@@ -114,7 +113,6 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     modifyBooking, updateAthleteSlots,
   } = useBookings()
   const { user, isCoach, isCustomer, isAdmin, getAllCoaches, assignCoach, removeCoach, customerRecord, getCreditBalance } = useAuth()
-  const { notifications, dismissNotification } = useWaitlist(user?.id)
   const { settings } = useSettings()
   // When impersonating, filter bookings by the impersonated user's email
   const effectiveEmail = impersonatedEmail ?? user?.email
@@ -424,7 +422,6 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const userWaitlistEntries = myWaitlistRows
     .filter((w) => { const s = w.status ?? 'waiting'; return s === 'waiting' || s === 'offered' })
     .map((w) => ({ id: w._id, laneId: w.laneId, date: w.date, hour: w.hour, status: w.status ?? 'waiting' }))
-  const userNotifications = notifications
   const coaches = getAllCoaches()
   const assignedCoachIds: string[] = customerRecord?.assignedCoachIds ?? []
 
@@ -969,11 +966,6 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
               💰 ${getCreditBalance(user.id).toFixed(2)} credit
             </span>
           )}
-          {userNotifications.length > 0 && (
-            <span className="flex items-center gap-1 text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-2 py-1 rounded-full font-semibold animate-pulse">
-              🔔 {userNotifications.length}
-            </span>
-          )}
         </div>
       </div>
 
@@ -986,26 +978,6 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
         </div>
       )}
 
-      {/* Slot-available notifications */}
-      {userNotifications.length > 0 && (
-        <div className="space-y-2">
-          {userNotifications.map((notif) => (
-            <div key={notif.id} className="bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-200 dark:border-amber-800/50 p-3 flex items-center gap-3">
-              <span className="text-xl shrink-0">🔔</span>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">Slot available!</div>
-                <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                  {notif.laneName} · {formatDate(notif.date)} at {formatTime(notif.hour)}
-                </div>
-              </div>
-              <div className="flex flex-col gap-1 shrink-0">
-                <a href={`/?book=${notif.laneId}&date=${notif.date}&hour=${notif.hour}`} className="text-xs px-2.5 py-1 bg-emerald-500 hover:bg-emerald-600 text-white font-semibold rounded-lg text-center">Book</a>
-                <button onClick={() => dismissNotification(notif.id)} className="text-[10px] text-gray-400 hover:text-gray-600 text-center">Dismiss</button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
 
       {/* §2.11: SMS-details copied toast (desktop). */}
       {toast && (
@@ -1216,6 +1188,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           bottomSheet={isCoach}
           defaultSessionDuration={(customerRecord as any)?.defaultSessionDuration ?? undefined}
           athleteCapacity={(customerRecord as any)?.athleteCapacity ?? undefined}
+          coachesSimultaneously={(customerRecord as any)?.coachesSimultaneously ?? false}
         />
       )}
 

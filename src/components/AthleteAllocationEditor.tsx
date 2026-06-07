@@ -14,6 +14,10 @@ interface AthleteAllocationEditorProps {
   bottomSheet?: boolean // render as a mobile bottom sheet instead of a centred modal
   defaultSessionDuration?: number // coach's preferred default slot length in minutes
   athleteCapacity?: number // coach's max athletes per session (1-4) — drives auto-populate
+  // Coach allocation mode (2026-06): false (default) = SEQUENTIAL — auto-advance each
+  // subsequent slot's start to the previous slot's end + smart-order the athlete picker
+  // by recent history. true = coaches multiple athletes at once (independent slots).
+  coachesSimultaneously?: boolean
   // SPEC_COACH_PLANNER_RETIRE_AND_VIEW §6: when the coach taps an unallocated gap
   // on a card, open straight into edit mode with a fresh empty slot pre-seeded to
   // that gap's time range (existing slots preserved), dropdown auto-open.
@@ -51,6 +55,7 @@ export default function AthleteAllocationEditor({
   bottomSheet = false,
   defaultSessionDuration,
   athleteCapacity,
+  coachesSimultaneously = false,
   seedNewSlot,
 }: AthleteAllocationEditorProps) {
   const bookingEndHour = bookingStartHour + bookingDuration / 60
@@ -75,6 +80,28 @@ export default function AthleteAllocationEditor({
       cursor += dur / 60
     }
     return out.length > 0 ? out : [{ athleteName: '', startHour: bookingStartHour, durationMinutes: defaultSlotDuration }]
+  }
+
+  // Sequential mode (coachesSimultaneously === false): re-pack slots from `startIdx`
+  // so each starts where the previous one ends, keeping its own duration (capped to
+  // the window). No-op when the coach coaches multiple athletes at once.
+  const cascadeFrom = (arr: AthleteSlot[], startIdx: number): AthleteSlot[] => {
+    if (coachesSimultaneously) return arr
+    const out = [...arr]
+    for (let i = Math.max(1, startIdx); i < out.length; i++) {
+      const prevEnd = out[i - 1].startHour + out[i - 1].durationMinutes / 60
+      const newStart = roundToQuarter(Math.min(prevEnd, bookingEndHour))
+      const maxDur = Math.round((bookingEndHour - newStart) * 60)
+      out[i] = {
+        ...out[i],
+        startHour: newStart,
+        durationMinutes:
+          maxDur >= SESSION_FLOOR
+            ? snapDuration(Math.min(out[i].durationMinutes, maxDur), maxDur)
+            : out[i].durationMinutes,
+      }
+    }
+    return out
   }
 
   // Index of the gap-seeded slot (appended after any existing slots), or null.
@@ -123,6 +150,18 @@ export default function AthleteAllocationEditor({
   const athletes = useQuery(api.queries.listAthletesByCoach, coachId ? { coachId } : "skip")
   const addAthleteToCoach = useMutation(api.athletes.addAthleteToCoach)
   const removeAthleteFromCoach = useMutation(api.athletes.removeAthleteFromCoach)
+
+  // Smart ordering (sequential mode only): rank the coach's athletes by their
+  // last-5-weeks session history at the OPEN slot's start time. Skipped when the
+  // coach coaches multiple at once, or when no picker is open.
+  const activeSlotStart =
+    activeDropdown !== null && slots[activeDropdown] ? slots[activeDropdown].startHour : null
+  const athleteScores = useQuery(
+    api.queries.rankAthletesForAllocation,
+    !coachesSimultaneously && coachId && activeSlotStart !== null
+      ? { coachId, startHour: activeSlotStart }
+      : 'skip'
+  ) as Record<string, number> | undefined | null
 
   const handleAddAthlete = async () => {
     const email = addParentEmail.trim()
@@ -184,11 +223,12 @@ export default function AthleteAllocationEditor({
   }, [slots])
 
   const addSlot = () => {
-    setSlots([...slots, {
+    const next = [...slots, {
       athleteName: '',
       startHour: bookingStartHour,
       durationMinutes: defaultSlotDuration,
-    }])
+    }]
+    setSlots(cascadeFrom(next, slots.length))
     setError(null)
     setSuccessMsg(null)
     setActiveDropdown(slots.length)
@@ -196,7 +236,7 @@ export default function AthleteAllocationEditor({
   }
 
   const removeSlot = (index: number) => {
-    setSlots(slots.filter((_, i) => i !== index))
+    setSlots(cascadeFrom(slots.filter((_, i) => i !== index), 1))
     setError(null)
     setSuccessMsg(null)
     if (activeDropdown !== null && activeDropdown >= index) {
@@ -239,7 +279,8 @@ export default function AthleteAllocationEditor({
         durationMinutes: value,
       }
     }
-    setSlots(updated)
+    // Sequential mode: push every later slot back-to-back after this edit.
+    setSlots(cascadeFrom(updated, index + 1))
     setError(null)
     setSuccessMsg(null)
   }
@@ -314,14 +355,29 @@ export default function AthleteAllocationEditor({
 
   const getFilteredAthletes = (slotIndex: number) => {
     const selectedNames = getSelectedAthleteNames(slotIndex)
-    const available = (athletes ?? []).filter(
+    let available = (athletes ?? []).filter(
       a => !selectedNames.includes(a.name.toLowerCase().trim())
     )
-    if (!searchQuery.trim()) return available
-    return available.filter(a =>
-      a.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      a.email.toLowerCase().includes(searchQuery.toLowerCase())
-    )
+    if (searchQuery.trim()) {
+      available = available.filter(a =>
+        a.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        a.email.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+    }
+    // Sequential mode: most sessions at/near this start time (last 5 weeks) first;
+    // athletes with no history fall back to alphabetical by first name. When the
+    // coach coaches multiple at once, keep the raw list order (nothing changes).
+    if (!coachesSimultaneously) {
+      const scores = athleteScores ?? {}
+      const firstName = (n: string) => (n ?? '').trim().split(/\s+/)[0].toLowerCase()
+      available = [...available].sort((a, b) => {
+        const sb = scores[(b as any)._id] ?? 0
+        const sa = scores[(a as any)._id] ?? 0
+        if (sb !== sa) return sb - sa
+        return firstName(a.name).localeCompare(firstName(b.name))
+      })
+    }
+    return available
   }
 
   const availableAthleteCount = (athletes ?? []).length - slots.filter(s => s.athleteName.trim()).length

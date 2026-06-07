@@ -1,11 +1,14 @@
 // SPEC_ANALYTICS_BUILD_2026-06 C2.6 — lane occupancy (booked hours ÷ open lane-hours).
 import { useState } from 'react'
-import { useQuery } from 'convex/react'
+import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../../convex/_generated/api'
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
+  BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell,
 } from 'recharts'
-import { type DateRange, KpiCard, Section, Loading, Empty, BarRow, downloadCsv } from './shared'
+import {
+  type AnalyticsRange, KpiCard, DeltaKpi, Section, Loading, Empty, BarRow, downloadCsv,
+  periodsOf, usePeriodResults, PERIOD_COLORS,
+} from './shared'
 
 const hourLabel = (h: number) => {
   const period = h >= 12 ? 'pm' : 'am'
@@ -13,29 +16,77 @@ const hourLabel = (h: number) => {
   return `${disp}${period}`
 }
 
-export default function OccupancyTab({ range }: { range: DateRange }) {
-  const data = useQuery(api.analyticsAdmin.getOccupancy, { from: range.from || undefined, to: range.to || undefined })
+export default function OccupancyTab({ range }: { range: AnalyticsRange }) {
+  const periods = periodsOf(range)
+  // Fire getOccupancy once per period (slot 0 = current). Tables/lists use slot 0 only.
+  const occResults = usePeriodResults<any>(
+    api.analyticsAdmin.getOccupancy, periods, (p) => ({ from: p.from || undefined, to: p.to || undefined }),
+  )
+  const data = occResults[0]
   const weekly = useQuery(api.analyticsAdmin.getLaneWeekly, { from: range.from || undefined, to: range.to || undefined })
   const [hourMode, setHourMode] = useState<'all' | 'weekday' | 'weekend'>('all')
   if (data === undefined) return <Loading label="Loading occupancy…" />
   if (data === null) return <Empty label="Unavailable." />
 
+  const comparing = range.compare && periods.length > 1
+  const prev = comparing ? occResults[1] : undefined
+
   const maxLaneHours = data.lanes.reduce((m: number, l: any) => Math.max(m, l.hours), 0)
   const hourData = hourMode === 'weekday' ? data.byHourWeekday : hourMode === 'weekend' ? data.byHourWeekend : data.byHourOfDay
   const peakHour = hourData.reduce((mx: any, h: any) => (h.count > (mx?.count ?? 0) ? h : mx), null as any)
 
+  // Overlay the daily-occupancy series one line per period, aligned by BUCKET INDEX
+  // (position i in each period's `daily` array), coloured by PERIOD_COLORS.
+  const dailyMaxLen = Math.max(0, ...occResults.map((r) => r?.daily?.length ?? 0))
+  const dailyOverlay = Array.from({ length: dailyMaxLen }).map((_, i) => {
+    const row: any = { idx: i + 1 }
+    periods.forEach((p, pi) => {
+      const d = occResults[pi]?.daily?.[i]
+      row[p.label] = d ? d.occupancyPct : null
+      row[`__date${pi}`] = d?.date ?? ''
+    })
+    return row
+  })
+
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <KpiCard icon="📊" label="Overall occupancy" value={`${data.overallPct}%`} sub="booked ÷ open lane-hours" tone="emerald" />
-        <KpiCard icon="⏱️" label="Booked lane-hours" value={String(data.totalBookedHours)} />
-        <KpiCard icon="🏟️" label="Open capacity" value={`${data.totalCapacityHours} hrs`} sub={`${data.laneCount} lanes`} tone="blue" />
-        <KpiCard icon="🔥" label="Busiest hour" value={peakHour ? hourLabel(peakHour.hour) : '—'} sub={peakHour ? `${peakHour.count} bookings` : ''} tone="amber" />
+        {comparing ? (
+          <>
+            <DeltaKpi icon="📊" label="Overall occupancy" value={data.overallPct} prev={prev?.overallPct} format={(n) => `${Math.round(n)}%`} tone="emerald" />
+            <DeltaKpi icon="⏱️" label="Booked lane-hours" value={data.totalBookedHours} prev={prev?.totalBookedHours} format={(n) => String(Math.round(n * 10) / 10)} />
+            <DeltaKpi icon="🏟️" label="Open capacity" value={data.totalCapacityHours} prev={prev?.totalCapacityHours} format={(n) => `${Math.round(n)} hrs`} tone="blue" />
+            <DeltaKpi icon="🔥" label="Peak bookings/hr" value={peakHour?.count ?? 0} prev={undefined} format={(n) => String(Math.round(n))} tone="amber" />
+          </>
+        ) : (
+          <>
+            <KpiCard icon="📊" label="Overall occupancy" value={`${data.overallPct}%`} sub="booked ÷ open lane-hours" tone="emerald" />
+            <KpiCard icon="⏱️" label="Booked lane-hours" value={String(data.totalBookedHours)} />
+            <KpiCard icon="🏟️" label="Open capacity" value={`${data.totalCapacityHours} hrs`} sub={`${data.laneCount} lanes`} tone="blue" />
+            <KpiCard icon="🔥" label="Busiest hour" value={peakHour ? hourLabel(peakHour.hour) : '—'} sub={peakHour ? `${peakHour.count} bookings` : ''} tone="amber" />
+          </>
+        )}
       </div>
 
-      <Section title="Daily occupancy" subtitle="Booked lane-hours ÷ open lane-hours per day">
+      <Section title="Daily occupancy"
+        subtitle={comparing ? 'Occupancy % per day — one line per period, aligned by position' : 'Booked lane-hours ÷ open lane-hours per day'}>
         <div className="p-5">
-          {data.daily.length === 0 ? <Empty /> : (
+          {comparing ? (
+            dailyOverlay.length === 0 ? <Empty /> : (
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={dailyOverlay} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis dataKey="idx" tick={{ fontSize: 11 }} label={{ value: 'day #', position: 'insideBottom', offset: -2, fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 11 }} width={32} tickFormatter={(v: number) => `${v}%`} domain={[0, 100]} />
+                  <Tooltip formatter={(v: number, name: string) => [`${v}%`, name]} />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  {periods.map((p, pi) => (
+                    <Line key={p.label} type="monotone" dataKey={p.label} stroke={PERIOD_COLORS[pi]} strokeWidth={2} dot={{ r: 2 }} connectNulls />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            )
+          ) : data.daily.length === 0 ? <Empty /> : (
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={data.daily} margin={{ top: 0, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
@@ -86,6 +137,9 @@ export default function OccupancyTab({ range }: { range: DateRange }) {
 
       {/* Weekly lane utilisation — carpet-wear monitoring */}
       <WeeklyLaneUtil weekly={weekly} />
+
+      {/* Cumulative carpet wear since last reset — not range-driven */}
+      <LaneWearCumulative />
     </div>
   )
 }
@@ -140,6 +194,78 @@ function WeeklyLaneUtil({ weekly }: { weekly: any }) {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+    </Section>
+  )
+}
+
+// Extend PERIOD_COLORS so each physical lane gets a distinct line even past 6 lanes.
+const LANE_COLORS = [...PERIOD_COLORS, '#0ea5e9', '#d946ef', '#65a30d', '#e11d48', '#0891b2', '#7c3aed']
+
+function LaneResetRow({ laneId, laneName, resetDate }: { laneId: string; laneName: string; resetDate: string | null }) {
+  const reset = useMutation(api.mutations.resetLaneWear)
+  const [date, setDate] = useState('')
+  const [busy, setBusy] = useState(false)
+  const onReset = async () => {
+    if (!date || busy) return
+    setBusy(true)
+    try {
+      await reset({ laneId, resetDate: date })
+      setDate('')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="flex items-center gap-3 flex-wrap text-sm">
+      <div className="w-28 shrink-0 font-medium text-gray-700 truncate">{laneName}</div>
+      <div className="w-40 shrink-0 text-xs text-gray-400">
+        {resetDate ? `since ${resetDate}` : 'all-time'}
+      </div>
+      <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+        className="px-2 py-1.5 border border-gray-200 rounded-lg text-sm" />
+      <button onClick={onReset} disabled={!date || busy}
+        className="px-2.5 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+        {busy ? 'Saving…' : 'Mark carpet replaced'}
+      </button>
+    </div>
+  )
+}
+
+function LaneWearCumulative() {
+  // Not range-driven: cumulative wear since each lane's last carpet reset.
+  const data = useQuery(api.analyticsAdmin.getLaneWearCumulative, {})
+  return (
+    <Section title="Carpet wear (cumulative)"
+      subtitle="Accumulated booked hours per lane since its last carpet reset — all-time, not affected by the range">
+      {data === undefined ? <Loading label="Loading carpet wear…" /> : data === null ? <Empty label="Unavailable." /> : (
+        <div className="p-5 space-y-5">
+          {data.series.length === 0 ? <Empty /> : (
+            <ResponsiveContainer width="100%" height={260}>
+              <LineChart data={data.series} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 11 }} width={36} tickFormatter={(v: number) => `${v}h`} />
+                <Tooltip formatter={(v: number, name: string) => [`${v} hrs`, name]} />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                {data.laneIds.map((lid: string, i: number) => (
+                  <Line key={lid} type="monotone" dataKey={lid} name={data.laneNames[i]}
+                    stroke={LANE_COLORS[i % LANE_COLORS.length]} strokeWidth={2} dot={false} />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+
+          <div className="border-t border-gray-100 pt-4 space-y-2">
+            <div className="text-[11px] font-semibold text-gray-500 uppercase">Carpet resets</div>
+            {data.resets.map((r: any) => (
+              <LaneResetRow key={r.laneId} laneId={r.laneId} laneName={r.laneName} resetDate={r.resetDate} />
+            ))}
+            <p className="text-xs text-gray-400 pt-1">
+              Resetting zeroes a lane's wear total from that date (use when the carpet is replaced).
+            </p>
+          </div>
         </div>
       )}
     </Section>

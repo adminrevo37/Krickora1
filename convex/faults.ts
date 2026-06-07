@@ -122,8 +122,33 @@ export const submitFaultReport = mutation({
     await ctx.scheduler.runAfter(0, internal.push.sendAdminPush, {
       title: "🛠️ New issue reported",
       body: `${who} · ${where}: ${details.slice(0, 100)}`,
-      url: "/admin",
+      url: "/rev-ops-7k2p",
       tag: `fault-${reportId.toString()}`,
+    });
+
+    // SPEC fault-report (2026-06): also EMAIL the full report + a link to the photo
+    // to the ops inbox. Push alone was unreliable (VAPID/device-subscription gated,
+    // best-effort) — the email is the durable backstop. Fixed address, internal ops
+    // alert (not prefs-gated); best-effort via the scheduler.
+    const photoUrl = args.photoStorageId
+      ? await ctx.storage.getUrl(args.photoStorageId)
+      : null;
+    const a = new Date(Date.now() + 8 * 3600000); // AWST wall-clock
+    const hh = a.getUTCHours();
+    const t12 = `${(hh % 12) || 12}:${String(a.getUTCMinutes()).padStart(2, "0")}${hh >= 12 ? "pm" : "am"}`;
+    const createdAtLabel = `${a.getUTCDate()}/${a.getUTCMonth() + 1}/${a.getUTCFullYear()} ${t12} AWST`;
+    await ctx.scheduler.runAfter(0, internal.emails.sendFaultReportEmail, {
+      to: "admin@revolutionsports.com.au",
+      reporterName: reportedByName ?? "Someone",
+      reporterEmail: reportedByEmail ?? "",
+      reporterMobile: reportedByMobile ?? "",
+      laneId: args.laneId ?? "",
+      category: args.category ?? "",
+      sessionInfo,
+      where,
+      details,
+      photoUrl: photoUrl ?? "",
+      createdAtLabel,
     });
 
     return reportId;

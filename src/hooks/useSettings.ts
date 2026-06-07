@@ -8,9 +8,9 @@ const store = getSettingsStore()
 // Every scalar/boolean setting that lives in Convex (siteSettings singleton) and
 // must propagate to every device. dailyHours is synced separately (array ↔ Record).
 const REMOTE_SCALAR_KEYS = [
-  'customerPricePerHour', 'customerPrice90Min',
-  'trumanPricePerHour', 'trumanPrice90Min',
-  'coachPerHour', 'coachPer30Min',
+  'customerPricePerHour',
+  'trumanPricePerHour',
+  'coachPerHour',
   'cancellationHoursBefore', 'openingHour', 'closingHour',
   'minBookingNoticeMinutes', 'coachBookingWindowDays',
   'customerOpenDay', 'customerOpenHour',

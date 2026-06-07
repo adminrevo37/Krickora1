@@ -47,12 +47,17 @@ export const getAdminHourlyDigestData = internalQuery({
     }
     if (!(awstHour >= open && awstHour < close)) return { skip: true as const };
 
-    // New accounts (customers.createdAt is an ISO string).
-    const customers = await ctx.db.query("customers").collect();
-    const newAccounts = customers.filter((c: any) => {
-      const t = Date.parse(c.createdAt ?? "");
-      return Number.isFinite(t) && t >= start && t < end;
-    }).length;
+    // New accounts. customers.createdAt is an ISO string; ISO 8601 sorts
+    // chronologically, so the by_createdAt index ranges the hour without a full
+    // table scan (E9).
+    const startIso = new Date(start).toISOString();
+    const endIso = new Date(end).toISOString();
+    const newAccounts = (
+      await ctx.db
+        .query("customers")
+        .withIndex("by_createdAt", (q: any) => q.gte("createdAt", startIso).lt("createdAt", endIso))
+        .collect()
+    ).length;
 
     // New bookings (createdAt ms; legacy rows have none → naturally excluded).
     const newBookings = (
@@ -88,7 +93,7 @@ export const sendAdminHourlyDigest = internalAction({
     await ctx.runAction(internal.push.sendAdminPush, {
       title: "📊 Last hour",
       body: `${parts.join(" · ")}.`,
-      url: "/admin",
+      url: "/rev-ops-7k2p",
       tag: "admin-digest",
     });
     return { sent: true };

@@ -110,6 +110,43 @@ export const getEmailPrefInternal = internalQuery({
   },
 });
 
+// SPEC fault-report (2026-06): email the full fault/service report + a link to the
+// attached photo to the ops inbox. Internal ops alert to a FIXED address — NOT
+// prefs-gated (sent via sendTemplateEmail directly, like admin broadcasts), so it
+// can't be silenced by any per-user email preference.
+export const sendFaultReportEmail = internalAction({
+  args: {
+    to: v.string(),
+    reporterName: v.string(),
+    reporterEmail: v.string(),
+    reporterMobile: v.string(),
+    laneId: v.string(),
+    category: v.string(),
+    sessionInfo: v.string(),
+    where: v.string(),
+    details: v.string(),
+    photoUrl: v.string(),
+    createdAtLabel: v.string(),
+  },
+  handler: async (
+    _ctx,
+    args
+  ): Promise<{ success: boolean; skipped?: boolean; reason?: string }> => {
+    return await sendTemplateEmail("fault-report", args.to, {
+      reporterName: args.reporterName,
+      reporterEmail: args.reporterEmail,
+      reporterMobile: args.reporterMobile,
+      laneId: args.laneId,
+      category: args.category,
+      sessionInfo: args.sessionInfo,
+      where: args.where,
+      details: args.details,
+      photoUrl: args.photoUrl,
+      createdAtLabel: args.createdAtLabel,
+    });
+  },
+});
+
 export const getGreetingFirstNameInternal = internalQuery({
   args: { email: v.string() },
   handler: async (ctx, args): Promise<string | null> => {

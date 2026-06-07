@@ -57,7 +57,6 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       id: vid,
       name: variantLabel(vid, seg.variants.length === 1 && seg.mode === 'BM'),
       pricePerHour: variantRatePerHour(vid, settingsForPrice),
-      price90Min: 0,
       description: '',
     })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -195,12 +194,18 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   // identical means this preview equals what Stripe actually charges (SSOT/R1).
   const priceBeforeDiscount = price + additionalLanePrice
 
-  const discountAmount = appliedDiscount
+  // C3: mirror the server (convex/lib/discounts.ts discountAmountCents) EXACTLY by
+  // computing the discount in whole CENTS, not dollars — otherwise a percent discount
+  // rounds to a whole dollar here but a whole cent on the server, so the preview total
+  // could differ from the actual Stripe charge by up to ~$0.99.
+  const grossCents = Math.round(priceBeforeDiscount * 100)
+  const discountCents = appliedDiscount
     ? appliedDiscount.type === 'fixed'
-      ? Math.min(priceBeforeDiscount, appliedDiscount.amountOff)
-      : Math.round(priceBeforeDiscount * appliedDiscount.discount / 100)
+      ? Math.min(grossCents, Math.round(appliedDiscount.amountOff * 100))
+      : Math.round((grossCents * appliedDiscount.discount) / 100)
     : 0
-  const afterDiscount = Math.max(0, priceBeforeDiscount - discountAmount)
+  const discountAmount = discountCents / 100
+  const afterDiscount = Math.max(0, (grossCents - discountCents) / 100)
 
   const creditToApply = applyCredit ? Math.min(creditBalance, afterDiscount) : 0
   const totalPrice = Math.max(0, afterDiscount - creditToApply)

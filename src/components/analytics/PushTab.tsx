@@ -3,21 +3,48 @@
 // the share who never press a button).
 import { useQuery } from 'convex/react'
 import { api } from '../../../convex/_generated/api'
-import { type DateRange, KpiCard, Section, Loading, Empty, fmtMins } from './shared'
+import {
+  type AnalyticsRange, KpiCard, DeltaKpi, Section, Loading, Empty, fmtMins,
+  periodsOf, usePeriodResults,
+} from './shared'
 
-export default function PushTab({ range }: { range: DateRange }) {
-  const push = useQuery(api.analyticsUsage.getPushAnalytics, { from: range.from || undefined, to: range.to || undefined })
-  const wl = useQuery(api.analyticsUsage.getWaitlistAnalytics, { from: range.from || undefined, to: range.to || undefined })
+export default function PushTab({ range }: { range: AnalyticsRange }) {
+  // Comparison fans the push KPIs (DeltaKpi vs prev period); the by-category +
+  // by-platform tables and the waitlist panel always reflect ONLY the current
+  // (most-recent) period.
+  const periods = periodsOf(range)
+  const pushResults = usePeriodResults(
+    api.analyticsUsage.getPushAnalytics,
+    periods,
+    (p) => ({ from: p.from || undefined, to: p.to || undefined, fromMs: p.fromMs, toMs: p.toMs }),
+  )
+  const push = pushResults[0]
+  const pushPrev = pushResults[1]
+  const cur = periods[0]
+  const wl = useQuery(api.analyticsUsage.getWaitlistAnalytics, {
+    from: cur.from || undefined, to: cur.to || undefined, fromMs: cur.fromMs, toMs: cur.toMs,
+  })
 
   return (
     <div className="space-y-5">
       {push === undefined ? <Loading label="Loading push…" /> : push === null ? <Empty label="Unavailable." /> : (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            <KpiCard icon="📤" label="Notifications sent" value={String(push.totals.sent)} sub={`${push.totals.failed} failed · ${push.totals.pruned} pruned`} tone="blue" />
-            <KpiCard icon="📥" label="Delivery rate" value={`${push.deliveryRatePct}%`} sub={`${push.totals.delivered} delivered`} tone="emerald" />
-            <KpiCard icon="👆" label="Click-through" value={`${push.ctrPct}%`} sub={`${push.totals.clicked} clicked`} tone="amber" />
-            <KpiCard icon="🔔" label="Opt-in rate" value={`${push.optInRatePct}%`} sub={`${push.subscribedAccounts}/${push.activeCustomers} accounts · ${push.subscribedDevices} devices`} tone="violet" />
+            {range.compare ? (
+              <>
+                <DeltaKpi icon="📤" label="Notifications sent" value={push.totals.sent} prev={pushPrev?.totals.sent} format={(n) => String(n)} tone="blue" />
+                <DeltaKpi icon="📥" label="Delivery rate" value={push.deliveryRatePct} prev={pushPrev?.deliveryRatePct} format={(n) => `${n}%`} tone="emerald" />
+                <DeltaKpi icon="👆" label="Click-through" value={push.ctrPct} prev={pushPrev?.ctrPct} format={(n) => `${n}%`} tone="amber" />
+                <DeltaKpi icon="🔔" label="Opt-in rate" value={push.optInRatePct} prev={pushPrev?.optInRatePct} format={(n) => `${n}%`} tone="violet" />
+              </>
+            ) : (
+              <>
+                <KpiCard icon="📤" label="Notifications sent" value={String(push.totals.sent)} sub={`${push.totals.failed} failed · ${push.totals.pruned} pruned`} tone="blue" />
+                <KpiCard icon="📥" label="Delivery rate" value={`${push.deliveryRatePct}%`} sub={`${push.totals.delivered} delivered`} tone="emerald" />
+                <KpiCard icon="👆" label="Click-through" value={`${push.ctrPct}%`} sub={`${push.totals.clicked} clicked`} tone="amber" />
+                <KpiCard icon="🔔" label="Opt-in rate" value={`${push.optInRatePct}%`} sub={`${push.subscribedAccounts}/${push.activeCustomers} accounts · ${push.subscribedDevices} devices`} tone="violet" />
+              </>
+            )}
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -80,7 +107,7 @@ export default function PushTab({ range }: { range: DateRange }) {
         </>
       )}
 
-      {/* Waitlist offer response analytics */}
+      {/* Waitlist offer response analytics — current period only */}
       <Section title="Waitlist offer responses" subtitle="How fast people accept/decline a waitlist offer — and how many never press a button">
         {wl === undefined ? <Loading /> : wl === null ? <Empty label="Unavailable." /> : wl.offered === 0 ? (
           <Empty label="No waitlist offers made in range." />

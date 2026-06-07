@@ -3,7 +3,6 @@ export interface LaneVariant {
   id: string
   name: string
   pricePerHour: number
-  price90Min: number
   description: string
 }
 
@@ -26,8 +25,8 @@ export const LANES: Lane[] = [
     type: 'bowling-machine',
     icon: '🎯',
     variants: [
-      { id: 'bm3-standard', name: 'Standard', pricePerHour: 40, price90Min: 55, description: 'Standard bowling machine' },
-      { id: 'bm3-truman', name: 'Truman', pricePerHour: 50, price90Min: 70, description: 'Premium Truman bowling machine' },
+      { id: 'bm3-standard', name: 'Standard', pricePerHour: 40, description: 'Standard bowling machine' },
+      { id: 'bm3-truman', name: 'Truman', pricePerHour: 50, description: 'Premium Truman bowling machine' },
     ],
   },
   { id: 'ru1', name: '9m Run Up 1', shortName: 'RU 1', type: 'run-up', icon: '🏏' },
@@ -95,9 +94,14 @@ export const CLOSING_HOUR = 21
 export const TIMEZONE = 'Australia/Perth'
 
 export function getAWSTNow(): Date {
+  // C7: build AWST wall-clock via fixed-offset arithmetic instead of parsing a locale
+  // string — WebKit/iOS Safari (the PWA target) parses non-ISO date strings unreliably.
+  // The returned Date's LOCAL getters (getHours/getDate/…) read as AWST on ANY device:
+  // shift UTC by +8h (AWST, no DST) and back out the device's own offset. Mirrors the
+  // fixed-offset idiom in convex/reminderQueries + convex/lib/analyticsHelpers.
   const now = new Date()
-  const awstStr = now.toLocaleString('en-US', { timeZone: TIMEZONE })
-  return new Date(awstStr)
+  const AWST_OFFSET_MIN = 8 * 60
+  return new Date(now.getTime() + (AWST_OFFSET_MIN + now.getTimezoneOffset()) * 60 * 1000)
 }
 
 export interface TimeSlot {

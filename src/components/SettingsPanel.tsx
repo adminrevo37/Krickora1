@@ -142,7 +142,6 @@ export default function SettingsPanel() {
           <NumberInput label="Customer / hour ($)" value={settings.customerPricePerHour} onChange={(v) => updateSettings({ customerPricePerHour: v })} />
           <NumberInput label="Truman / hour ($)" value={settings.trumanPricePerHour} onChange={(v) => updateSettings({ trumanPricePerHour: v })} />
           <NumberInput label="Coach / hour ($)" value={settings.coachPerHour} onChange={(v) => updateSettings({ coachPerHour: v })} />
-          <NumberInput label="Coach / 30 min ($)" value={settings.coachPer30Min ?? 15} onChange={(v) => updateSettings({ coachPer30Min: v })} />
         </div>
       </div>
 

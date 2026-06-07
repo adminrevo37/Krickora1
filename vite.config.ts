@@ -59,6 +59,12 @@ export default defineConfig({
         // skipWaiting omitted: in 'prompt' mode the waiting SW holds until the
         // user taps Reload (PwaUpdater calls updateServiceWorker(true)).
         globPatterns: ["**/*.{js,css,html,svg,png,ico,woff,woff2}"],
+        // E7: keep admin-only code OUT of the customer PWA install precache (still
+        // fetched on demand at runtime when an admin opens the dashboard). The
+        // recharts+d3 "charts" chunk is the big, predictable admin-only payload; the
+        // lazy admin-analytics route/tab chunks (incl. leaflet via MapTab) are fetched
+        // on demand anyway.
+        globIgnores: ["**/charts-*.js"],
         // App-shell navigations → NetworkFirst (a new deploy is picked up; falls
         // back to the cached shell offline). NEVER fall back for /api/*.
         navigateFallback: "/index.html",

@@ -10,19 +10,24 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as StatementsRouteImport } from './routes/statements'
+import { Route as RevOps7k2pRouteImport } from './routes/rev-ops-7k2p'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as PaymentsRouteImport } from './routes/payments'
 import { Route as JoinRouteImport } from './routes/join'
 import { Route as BookingsRouteImport } from './routes/bookings'
-import { Route as AdminRouteImport } from './routes/admin'
 import { Route as AddMateRouteImport } from './routes/add-mate'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as RevOps7k2pAnalyticsRouteImport } from './routes/rev-ops-7k2p.analytics'
 import { Route as CheckoutSuccessRouteImport } from './routes/checkout/success'
-import { Route as AdminAnalyticsRouteImport } from './routes/admin.analytics'
 
 const StatementsRoute = StatementsRouteImport.update({
   id: '/statements',
   path: '/statements',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RevOps7k2pRoute = RevOps7k2pRouteImport.update({
+  id: '/rev-ops-7k2p',
+  path: '/rev-ops-7k2p',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProfileRoute = ProfileRouteImport.update({
@@ -45,11 +50,6 @@ const BookingsRoute = BookingsRouteImport.update({
   path: '/bookings',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminRoute = AdminRouteImport.update({
-  id: '/admin',
-  path: '/admin',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const AddMateRoute = AddMateRouteImport.update({
   id: '/add-mate',
   path: '/add-mate',
@@ -60,101 +60,101 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const RevOps7k2pAnalyticsRoute = RevOps7k2pAnalyticsRouteImport.update({
+  id: '/analytics',
+  path: '/analytics',
+  getParentRoute: () => RevOps7k2pRoute,
+} as any)
 const CheckoutSuccessRoute = CheckoutSuccessRouteImport.update({
   id: '/checkout/success',
   path: '/checkout/success',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminAnalyticsRoute = AdminAnalyticsRouteImport.update({
-  id: '/analytics',
-  path: '/analytics',
-  getParentRoute: () => AdminRoute,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/add-mate': typeof AddMateRoute
-  '/admin': typeof AdminRouteWithChildren
   '/bookings': typeof BookingsRoute
   '/join': typeof JoinRoute
   '/payments': typeof PaymentsRoute
   '/profile': typeof ProfileRoute
+  '/rev-ops-7k2p': typeof RevOps7k2pRouteWithChildren
   '/statements': typeof StatementsRoute
-  '/admin/analytics': typeof AdminAnalyticsRoute
   '/checkout/success': typeof CheckoutSuccessRoute
+  '/rev-ops-7k2p/analytics': typeof RevOps7k2pAnalyticsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/add-mate': typeof AddMateRoute
-  '/admin': typeof AdminRouteWithChildren
   '/bookings': typeof BookingsRoute
   '/join': typeof JoinRoute
   '/payments': typeof PaymentsRoute
   '/profile': typeof ProfileRoute
+  '/rev-ops-7k2p': typeof RevOps7k2pRouteWithChildren
   '/statements': typeof StatementsRoute
-  '/admin/analytics': typeof AdminAnalyticsRoute
   '/checkout/success': typeof CheckoutSuccessRoute
+  '/rev-ops-7k2p/analytics': typeof RevOps7k2pAnalyticsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/add-mate': typeof AddMateRoute
-  '/admin': typeof AdminRouteWithChildren
   '/bookings': typeof BookingsRoute
   '/join': typeof JoinRoute
   '/payments': typeof PaymentsRoute
   '/profile': typeof ProfileRoute
+  '/rev-ops-7k2p': typeof RevOps7k2pRouteWithChildren
   '/statements': typeof StatementsRoute
-  '/admin/analytics': typeof AdminAnalyticsRoute
   '/checkout/success': typeof CheckoutSuccessRoute
+  '/rev-ops-7k2p/analytics': typeof RevOps7k2pAnalyticsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/add-mate'
-    | '/admin'
     | '/bookings'
     | '/join'
     | '/payments'
     | '/profile'
+    | '/rev-ops-7k2p'
     | '/statements'
-    | '/admin/analytics'
     | '/checkout/success'
+    | '/rev-ops-7k2p/analytics'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/add-mate'
-    | '/admin'
     | '/bookings'
     | '/join'
     | '/payments'
     | '/profile'
+    | '/rev-ops-7k2p'
     | '/statements'
-    | '/admin/analytics'
     | '/checkout/success'
+    | '/rev-ops-7k2p/analytics'
   id:
     | '__root__'
     | '/'
     | '/add-mate'
-    | '/admin'
     | '/bookings'
     | '/join'
     | '/payments'
     | '/profile'
+    | '/rev-ops-7k2p'
     | '/statements'
-    | '/admin/analytics'
     | '/checkout/success'
+    | '/rev-ops-7k2p/analytics'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AddMateRoute: typeof AddMateRoute
-  AdminRoute: typeof AdminRouteWithChildren
   BookingsRoute: typeof BookingsRoute
   JoinRoute: typeof JoinRoute
   PaymentsRoute: typeof PaymentsRoute
   ProfileRoute: typeof ProfileRoute
+  RevOps7k2pRoute: typeof RevOps7k2pRouteWithChildren
   StatementsRoute: typeof StatementsRoute
   CheckoutSuccessRoute: typeof CheckoutSuccessRoute
 }
@@ -166,6 +166,13 @@ declare module '@tanstack/react-router' {
       path: '/statements'
       fullPath: '/statements'
       preLoaderRoute: typeof StatementsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/rev-ops-7k2p': {
+      id: '/rev-ops-7k2p'
+      path: '/rev-ops-7k2p'
+      fullPath: '/rev-ops-7k2p'
+      preLoaderRoute: typeof RevOps7k2pRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/profile': {
@@ -196,13 +203,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof BookingsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin': {
-      id: '/admin'
-      path: '/admin'
-      fullPath: '/admin'
-      preLoaderRoute: typeof AdminRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/add-mate': {
       id: '/add-mate'
       path: '/add-mate'
@@ -217,6 +217,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/rev-ops-7k2p/analytics': {
+      id: '/rev-ops-7k2p/analytics'
+      path: '/analytics'
+      fullPath: '/rev-ops-7k2p/analytics'
+      preLoaderRoute: typeof RevOps7k2pAnalyticsRouteImport
+      parentRoute: typeof RevOps7k2pRoute
+    }
     '/checkout/success': {
       id: '/checkout/success'
       path: '/checkout/success'
@@ -224,34 +231,29 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CheckoutSuccessRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/analytics': {
-      id: '/admin/analytics'
-      path: '/analytics'
-      fullPath: '/admin/analytics'
-      preLoaderRoute: typeof AdminAnalyticsRouteImport
-      parentRoute: typeof AdminRoute
-    }
   }
 }
 
-interface AdminRouteChildren {
-  AdminAnalyticsRoute: typeof AdminAnalyticsRoute
+interface RevOps7k2pRouteChildren {
+  RevOps7k2pAnalyticsRoute: typeof RevOps7k2pAnalyticsRoute
 }
 
-const AdminRouteChildren: AdminRouteChildren = {
-  AdminAnalyticsRoute: AdminAnalyticsRoute,
+const RevOps7k2pRouteChildren: RevOps7k2pRouteChildren = {
+  RevOps7k2pAnalyticsRoute: RevOps7k2pAnalyticsRoute,
 }
 
-const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
+const RevOps7k2pRouteWithChildren = RevOps7k2pRoute._addFileChildren(
+  RevOps7k2pRouteChildren,
+)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AddMateRoute: AddMateRoute,
-  AdminRoute: AdminRouteWithChildren,
   BookingsRoute: BookingsRoute,
   JoinRoute: JoinRoute,
   PaymentsRoute: PaymentsRoute,
   ProfileRoute: ProfileRoute,
+  RevOps7k2pRoute: RevOps7k2pRouteWithChildren,
   StatementsRoute: StatementsRoute,
   CheckoutSuccessRoute: CheckoutSuccessRoute,
 }

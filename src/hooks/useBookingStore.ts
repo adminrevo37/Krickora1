@@ -45,7 +45,18 @@ export function useBookings() {
   // straight to [] makes the calendar render a FULLY EMPTY day during that window
   // (the "empty calendar flash"). Track the loading state so the UI can hold the
   // grid back until real booking data is in.
-  const rawBookingsResult = useQuery(api.queries.listBookings)
+  // E1: bound the calendar's booking query to a wide window (≈13 months back → 4
+  // months ahead) so it stops scanning the whole table at scale. Computed once per
+  // mount → stable args (no refetch loop). Covers all realistic calendar + My
+  // Bookings history; only bookings older than ~400 days fall outside it.
+  const bookingWindow = useMemo(() => {
+    const key = (offsetDays: number) => {
+      const d = new Date(Date.now() + 8 * 3600000 + offsetDays * 86400000)
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+    }
+    return { from: key(-400), to: key(120) }
+  }, [])
+  const rawBookingsResult = useQuery(api.queries.listBookings, bookingWindow)
   const bookingsLoading = rawBookingsResult === undefined
   const rawBookings = rawBookingsResult ?? []
   const { user, isAdmin } = useAuth()

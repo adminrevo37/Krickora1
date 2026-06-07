@@ -155,9 +155,9 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   const isSelectedDayClosed = closedDates.has(dateKey)
   const selectedClosureReason = closedDates.get(dateKey)
 
-  // SPEC_MOBILE_BOOKING_UPDATES §4.5 — PUBLIC waitlist data from Convex (the local
-  // useWaitlist store only reflects this client). Counts only ACTIVE waiters; the
-  // per-day positions power "You're #k in the queue".
+  // SPEC_MOBILE_BOOKING_UPDATES §4.5 — PUBLIC waitlist data from Convex (the single
+  // source of truth; the old local waitlist-store was removed). Counts only ACTIVE
+  // waiters; the per-day positions power "You're #k in the queue".
   const waitlistRows = (useQuery(
     api.queries.listWaitlistByLaneDate,
     user ? { laneId: '*', date: dateKey } : 'skip'

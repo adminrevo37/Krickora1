@@ -35,7 +35,7 @@ const VALID_SECTIONS: Section[] = [
   'statements', 'discounts', 'faults', 'waitlist', 'broadcast', 'announcements', 'lanes', 'settings',
 ]
 
-export const Route = createFileRoute('/admin')({
+export const Route = createFileRoute('/rev-ops-7k2p')({
   component: AdminPage,
   validateSearch: (search: Record<string, unknown>) => ({
     section: (VALID_SECTIONS.includes(search.section as Section)
@@ -165,7 +165,7 @@ function Sidebar({
       {/* Analytics — own page */}
       <div className="px-2 pb-4 border-t border-gray-100 pt-3">
         <Link
-          to="/admin/analytics"
+          to="/rev-ops-7k2p/analytics"
           onClick={onClose}
           className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900 transition-colors"
         >
@@ -196,10 +196,10 @@ function AdminPage() {
   const [localUnlocked, setLocalUnlocked] = useState(false)
   // BUG-6: Detect child routes (e.g. /admin/analytics) to render <Outlet /> instead of section panels
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  const isChildRoute = pathname.startsWith('/admin/') && pathname.length > '/admin/'.length
+  const isChildRoute = pathname.startsWith('/rev-ops-7k2p/') && pathname.length > '/rev-ops-7k2p/'.length
 
   const setSection = (s: Section) => {
-    navigate({ to: '/admin', search: { section: s }, replace: true })
+    navigate({ to: '/rev-ops-7k2p', search: { section: s }, replace: true })
     setMobileSidebarOpen(false)
   }
 
