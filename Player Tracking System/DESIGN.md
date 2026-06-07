@@ -249,46 +249,130 @@ works as hard as the current bookings require.**
 
 ---
 
-## 7. DIY hardware & cost (indicative)
+## 7. DIY hardware, tag design & cost
 
-Parts only, GBP-ish ballpark — for **fast iteration**, not final retail.
+Costs are **indicative AUD, parts-level**, for the **module-route** (assemble
+finished modules, don't manufacture PCBs) — chosen so we never commit to a big
+production run. See §7.2 for why and §7.5 for the volume path.
 
-**Anchor (×4–8 depending on courts):**
-| Item | ~Cost |
+### 7.1 Anchor (×4–8 depending on courts)
+| Item | ~AUD |
 |---|---|
-| ESP32 + DW3000 UWB module (e.g. Makerfabs ESP32 UWB DW3000 / Qorvo DWM3000EVB) | £18–28 |
-| USB power bank | £8–12 |
-| Enclosure + tripod mount | £6 |
-| **Per anchor** | **~£35** |
+| UWB module (ESP32+DW3000, e.g. Makerfabs; or a DWM3001C for tag/anchor parity) | 35–55 |
+| USB power bank (~8 h) | 18–25 |
+| Enclosure + tripod mount | 10 |
+| **Per anchor** | **~AUD 70** |
 
 Anchor counts: **1 court = 4** (5–6 with mid-side); **2 courts = ~6 shared
-(Option A)** or **~8 isolated (Option B)** — see §5.
+(Option A)** or **~8 isolated (Option B)** — see §5. Tripods (lighting stands)
+~AUD 30–50 each.
 
-**Tag / wearable (×30):**
-| Item | ~Cost |
+### 7.2 Tag / wearable — built on the Qorvo DWM3001C
+
+The DWM3001C is a **finished, pre-certified module** that already contains almost
+the entire tag, so the "build" is light assembly around it — order the quantity
+you need, scale with demand.
+
+```
+ ┌──────────────────────── Wearable tag ─────────────────────────┐
+ │  DWM3001C module (≈AUD 55):                                    │
+ │   • DW3110 UWB radio + planar antenna → ranges to anchors      │
+ │   • nRF52833 (BLE 5) → app, scheduling, check-in, OTA, NFC     │
+ │   • LIS2DH accelerometer → motion-wake + impact/step metrics   │
+ │   • PMIC + 38.4 MHz crystal                                    │
+ │  + LiPo 400–500 mAh   + 3.3 V buck-boost                       │
+ │  + USB-C or contact-pad charger    + status LED(s)             │
+ │  + button (check-in)   + NFC coil (tap-to-assign)              │
+ │  + laser-marked serial + QR (e.g. RV-00A1B2)                   │
+ └────────────────────────────────────────────────────────────────┘
+```
+
+**Why this module:** the onboard nRF52833 hosts *all* of the tag's brains —
+the UWB ranging app, BLE (config / check-in / OTA), the accelerometer read, and
+even **NFC** (built-in peripheral; just add a coil). So a tag is the module + a
+battery + a tiny carrier board + an enclosure. No RF design, no antenna tuning.
+
+**Firmware states** (ties directly to scheduling, §6):
+```
+ DEEP SLEEP ──motion/button──▶ DORMANT ──check-in / gateway wake──▶ ACTIVE
+  (~1–5 µA,    (in kitbag)     (BLE 0.1 Hz   (NFC tap, button, or   (UWB ranging
+   System OFF)                  heartbeat:    BLE wake of the         at scheduled
+       ▲                        presence +    booked serials)         TWR/TDoA rate)
+       └──── still > N min ◀──── battery)  ◀──── session end ───────────────┘
+  (CHARGING whenever docked)
+```
+
+- **Dumb-by-design:** positions are solved at the **gateway/anchors** (§9), so the
+  tag only *ranges* — no onboard logging, no GPS-vest-style storage. That keeps it
+  cheap, low-power, and simple. (Onboard IMU logging for richer metrics is a v2
+  option.)
+- **Identity:** the tag advertises its **serial** over BLE + in the UWB payload →
+  the gateway maps serial → allowlist (§6) → player/team (§8). Serial + QR on the
+  case; **NFC tap** assigns/checks-in a tag in the team app.
+- **Ranging:** TWR for the pilot (responds to the coordinator's scheduled poll);
+  scheduled-blink TDoA later for scale (§3).
+- **OTA:** nRF BLE DFU → field firmware updates.
+
+**Power budget** (a tag is dormant/asleep except during booked play):
+| State | Avg current | Runtime on 500 mAh |
+|---|---|---|
+| ACTIVE — 10 Hz TWR | ~15–25 mA | **~20–30 h tracking** |
+| DORMANT — BLE 0.1 Hz heartbeat | <0.1 mA | weeks |
+| DEEP SLEEP | ~1–5 µA | months |
+
+A match is ~1–2 h, so one charge covers **many matches**. Battery is not a
+constraint once scheduling/sleep (§6) is in place — that's a selling point.
+
+**Form factor:** **vest pod on the upper back is primary** (least body-shadowing
+of the UWB antenna → best accuracy, per §10); a **wrist band** is the convenient
+option but is shadowed more. Mount the planar antenna facing outward; target
+IP55+ for sweat (contact-pad charging suits a sealed case better than USB-C).
+
+**Per-tag BOM (~100 qty, AUD):**
+| Item | ~AUD |
 |---|---|
-| ESP32 + DW3000 (same module, tag firmware) | £18–28 |
-| LiPo + charge circuit | £4 |
-| Wrist/vest enclosure | £4 |
-| **Per tag (parts)** | **~£26–36** |
+| DWM3001C module | 55 |
+| Carrier PCB + charger IC + buck-boost + passives | 8–12 |
+| LiPo 400–500 mAh | 4–6 |
+| Button + LED(s) + NFC coil | 2–3 |
+| Enclosure + strap/clip | 8–15 |
+| Small-batch assembly + test | 10–20 |
+| **Assembled tag** | **~AUD 90–110** |
 
-> A purpose-built tag (bare DW3000 + small MCU, no ESP32) drops to **~£8–12** at
-> volume — the path to a sellable wearable. Pilot with dev boards first.
+The only PCB is a **trivial 2-layer carrier** (module castellations + battery +
+charger + button) — JLCPCB/contract SMT in tens, no factory commitment.
 
-**Gateway:** Raspberry Pi 4/5 (£60–80) or any laptop. Runs the position solver +
-recorder + the schedule/allowlist (§6) + (later) uploads to cloud.
+### 7.3 Gateway
+Raspberry Pi 4/5 (~AUD 120–160) or any laptop. Runs the position solver +
+recorder + the schedule/allowlist (§6) + (later) cloud upload.
 
-**Tripods:** £15–25 each (lighting stands).
-
-**Indicative kits (parts):**
+### 7.4 Indicative kits (AUD, module-route, small qty)
 | Kit | Contents | ~Total |
 |---|---|---|
-| Pilot (1 court) | 4 anchors + 12 tags + Pi + 4 stands | **£550–700** |
-| Full squad (1 court) | 6 anchors + 30 tags + Pi + 6 stands + case | **£1,300–1,500** |
-| 2 courts shared (A) | 6 anchors + 30 tags + Pi + stands | **~£1,400–1,600** |
-| 2 courts isolated (B) | 8 anchors + 30 tags + Pi + stands | **~£1,500–1,700** |
+| Pilot (1 court) | 4 anchors + 12 tags + Pi + 4 stands | **~AUD 1,700–2,000** |
+| Full squad (1 court) | 6 anchors + 30 tags + Pi + 6 stands + case | **~AUD 3,800–4,200** |
+| 2 courts shared (A) | 6 anchors + 30 tags + Pi + stands | **~AUD 3,900–4,300** |
+| 2 courts isolated (B) | 8 anchors + 30 tags + Pi + stands | **~AUD 4,100–4,500** |
 
-⚠️ TO CONFIRM final BOM after a bench test of one anchor + one tag.
+**Tags dominate** (30 × ~AUD 100 = ~AUD 3,000). Two levers: (a) **teams buy their
+own tags** (spreads cost, fits the "sell a wearable" model, §8); (b) the **volume
+path** below.
+
+A **multi-bay charging caddy** (pogo-pin dock, charges 10–30 tags between
+sessions) is part of the portable kit.
+
+### 7.5 Volume path & compliance
+- **Cost at volume:** replacing the module with a **custom PCB** (bare DW3110 +
+  small MCU, own antenna) drops a tag to **~AUD 30–45**, taking 30 tags from
+  ~AUD 3,000 to **~AUD 900–1,350**. Worth it only once volumes justify the design
+  + tooling + a *second* certification.
+- **Australian compliance to *sell*:** UWB is licence-exempt to *operate* (ACMA
+  LIPD class licence), but selling a wireless device needs the **RCM mark** (EMC
+  to **AS/NZS 4268** + signed SDoC), and a foreign maker needs an **Australian
+  importer/representative**. The pre-certified DWM3001C eases EMC but the
+  *finished* tag still needs its own RCM sign-off. Budget a one-off cert cost.
+
+⚠️ TO CONFIRM final BOM after a bench test of one anchor + one DWM3001C tag.
 
 ---
 
@@ -395,9 +479,10 @@ the 10–30 cm jitter) → emit a `players` entry per tag. Everything downstream
 
 - **Phase 0 — Prototype (this folder).** Court UI, simulated match, heatmaps,
   speed/distance/sprints, load/replay/export, shareable via Vercel. ✅
-- **Phase 1 — One physical kit, one court.** Build 4 anchors + a few tags;
-  gateway solver (TWR) emits the frame format; record a real session; load it into
-  *this* UI unchanged. Validate accuracy vs tape-measured spots.
+- **Phase 1 — One physical kit, one court.** Build 4 anchors + a few **DWM3001C
+  tags** (§7.2); gateway solver (TWR) emits the frame format; record a real
+  session; load it into *this* UI unchanged. Validate accuracy vs tape-measured
+  spots; confirm tag form factor, charging, and battery life on court.
 - **Phase 2 — Multi-tenant SaaS + scheduling.** Team logins, serial→player
   registration, per-team session storage (Convex), post-game review online.
   **Booking-driven active-tag allowlist (§6)** and per-court calibration (§5).
@@ -418,6 +503,9 @@ the 10–30 cm jitter) → emit a `players` entry per tag. Everything downstream
    B** (shared mesh vs isolated sets); fixed install vs portable for regulars.
 6. **Scheduling source:** live Krickora booking feed vs pre-match export; warm-up
    buffers; walk-in/unscheduled games.
-7. **Wrist vs vest** tag placement.
-8. **Live latency** expectations if/when live is prioritised.
-9. **Ball tracking** in/out of scope (extra tag, harder dynamics).
+7. **Tag form factor & charging:** vest pod vs wrist (§7.2); USB-C vs sealed
+   contact-pad charging; caddy bay count.
+8. **Selling in Australia:** RCM/EMC certification path + Australian importer
+   (§7.5).
+9. **Live latency** expectations if/when live is prioritised.
+10. **Ball tracking** in/out of scope (extra tag, harder dynamics).
