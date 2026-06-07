@@ -10,6 +10,8 @@ This folder contains two things:
 2. **[`DESIGN.md`](./DESIGN.md)** — the engineering & feasibility plan: why UWB
    (not RFID/LiDAR), the portable kit, DIY hardware + costs, the 500-team
    multi-tenant model, and the roadmap.
+3. **[`PROJECT-STATUS.md`](./PROJECT-STATUS.md)** — **start here to resume:**
+   decision log, current state, open decisions, and next steps.
 
 > Built for fast iteration: no build step, no dependencies. Open it and go.
 
