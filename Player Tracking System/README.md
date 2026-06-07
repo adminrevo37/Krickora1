@@ -57,7 +57,7 @@ directory and no build command. That gives the link to send to teams to review.
 
 The simulator emits the **same JSON the real UWB pipeline will** — so going live
 means swapping the data source, not rewriting the UI. Format
-([full spec in DESIGN.md §7](./DESIGN.md#7-data-pipeline--format)):
+([full spec in DESIGN.md §9](./DESIGN.md#9-data-pipeline--format)):
 
 ```jsonc
 {
@@ -73,7 +73,8 @@ means swapping the data source, not rewriting the UI. Format
 - Metres, origin bottom-left (x∈[0,40], y∈[0,20]); `t` = seconds from start.
 - `serial` is the wearable tag's printed serial — the join key for the team's
   roster. The gateway's position solver produces the `players` array from UWB
-  ranges (see DESIGN.md §3, §7).
+  ranges (see DESIGN.md §3, §9). Multi-court venues and booking-driven tracking
+  are covered in DESIGN.md §5–§6.
 
 Regenerate the sample (any length in seconds):
 
