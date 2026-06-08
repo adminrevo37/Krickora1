@@ -16,7 +16,7 @@ import { getCallerContext } from "./lib/adminGuard";
 export type ActivityRow = {
   id: string;
   at: number; // server ms (formatted to AWST in the UI)
-  source: "page" | "push" | "email";
+  source: "page" | "push" | "email" | "entry";
   kind: string; // page: 'pageview'|'session_start'|'session_end'|'event:<name>'
   //           push:  'sent'|'failed'|'pruned'|'delivered'|'clicked'
   //           email: 'sent'|'delivered'|'opened'|'clicked'|'bounced'|...
@@ -67,11 +67,34 @@ export const logEmailEventInternal = internalMutation({
   },
 });
 
+// ── Door-keypad entry logger — called by the /ha/entry webhook in http.ts ──────
+export const logEntryEventInternal = internalMutation({
+  args: {
+    at: v.number(),
+    ts: v.number(),
+    bay: v.string(),
+    codeHash: v.string(),
+    result: v.string(),
+    source: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.insert("entryEvents", {
+      at: args.at,
+      ts: args.ts,
+      bay: args.bay.slice(0, 16),
+      codeHash: args.codeHash.slice(0, 128),
+      result: args.result.slice(0, 16),
+      source: args.source.slice(0, 32),
+    });
+    return true;
+  },
+});
+
 // ── Unified real-time activity feed (admin only) ──────────────────────────────
 export const getServerActivity = query({
   args: {
     limit: v.optional(v.number()),
-    sources: v.optional(v.array(v.string())), // subset of ['page','push','email']; empty/absent = all
+    sources: v.optional(v.array(v.string())), // subset of ['page','push','email','entry']; empty/absent = all
   },
   handler: async (ctx, args): Promise<ActivityRow[]> => {
     const caller = await getCallerContext(ctx);
@@ -137,6 +160,21 @@ export const getServerActivity = query({
           kind: e.type,
           email: e.to ?? undefined,
           label: e.subject ?? undefined,
+        });
+      }
+    }
+
+    // ENTRY — door-keypad events (HA /ha/entry webhook). No PII: no email/name.
+    if (want("entry")) {
+      const en = await ctx.db.query("entryEvents").withIndex("by_at").order("desc").take(perTable);
+      for (const e of en) {
+        rows.push({
+          id: e._id,
+          at: e.at,
+          source: "entry",
+          kind: e.result, // valid | invalid | unknown
+          label: e.bay ? `Bay ${e.bay}` : undefined,
+          sub: e.codeHash ? `${e.codeHash.slice(0, 10)}…` : undefined,
         });
       }
     }

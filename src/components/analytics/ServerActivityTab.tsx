@@ -11,7 +11,7 @@ import { Section, Loading, Empty } from './shared'
 type Row = {
   id: string
   at: number
-  source: 'page' | 'push' | 'email'
+  source: 'page' | 'push' | 'email' | 'entry'
   kind: string
   email?: string
   name?: string
@@ -35,6 +35,7 @@ const SOURCE_META: Record<Row['source'], { label: string; cls: string }> = {
   page: { label: 'Page', cls: 'bg-sky-50 text-sky-700 border-sky-200' },
   push: { label: 'Push', cls: 'bg-violet-50 text-violet-700 border-violet-200' },
   email: { label: 'Email', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+  entry: { label: 'Entry', cls: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
 }
 
 const LIFECYCLE_TONE: Record<string, string> = {
@@ -57,6 +58,11 @@ function kindLabel(source: Row['source'], kind: string): { text: string; tone: s
     if (kind.startsWith('event:')) return { text: kind.slice(6), tone: 'text-sky-600' }
     return { text: kind, tone: 'text-gray-500' }
   }
+  if (source === 'entry') {
+    if (kind === 'valid') return { text: 'valid entry', tone: 'text-emerald-600' }
+    if (kind === 'invalid') return { text: 'invalid code', tone: 'text-red-600' }
+    return { text: kind, tone: 'text-gray-500' }
+  }
   return { text: kind.replace(/_/g, ' '), tone: LIFECYCLE_TONE[kind] ?? 'text-gray-500' }
 }
 
@@ -65,6 +71,7 @@ const FILTERS: { id: 'all' | Row['source']; label: string }[] = [
   { id: 'page', label: 'Page views' },
   { id: 'push', label: 'Push' },
   { id: 'email', label: 'Email' },
+  { id: 'entry', label: 'Entry' },
 ]
 
 export default function ServerActivityTab() {
@@ -109,8 +116,8 @@ export default function ServerActivityTab() {
           {rows.map((r) => {
             const sm = SOURCE_META[r.source]
             const k = kindLabel(r.source, r.kind)
-            const who = r.name || r.email || 'Guest'
-            const known = !!(r.name || r.email)
+            const who = r.source === 'entry' ? 'Keypad' : (r.name || r.email || 'Guest')
+            const known = r.source === 'entry' || !!(r.name || r.email)
             return (
               <div key={r.id} className="px-6 py-2.5 flex items-start gap-3 text-sm">
                 <div className="w-36 shrink-0 text-xs text-gray-400 tabular-nums pt-0.5">{fmtTime(r.at)}</div>

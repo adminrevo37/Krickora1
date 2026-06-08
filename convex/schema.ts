@@ -80,6 +80,20 @@ export default defineSchema({
     emailId: v.optional(v.string()), // Resend email id — correlates one email's lifecycle
   }).index("by_at", ["at"]),
 
+  // DOOR-KEYPAD ENTRY LOG (SPEC_DOOR_ENTRY_LOG_WEBHOOK) — raw keypad entry events
+  // pushed by HA via the signed /ha/entry webhook. No PII (v1): the door code is a
+  // keyed HMAC hash (codeHash), never the raw code. bookingId is filled in the later
+  // attribution phase (§7). Additive — no migration.
+  entryEvents: defineTable({
+    at: v.number(), // server receive time (ms)
+    ts: v.number(), // device unix seconds
+    bay: v.string(), // "" for invalid
+    codeHash: v.string(), // HMAC hex; "" if none
+    result: v.string(), // "valid" | "invalid" | "unknown"
+    source: v.string(), // "keypad"
+    bookingId: v.optional(v.id("bookings")), // attribution phase
+  }).index("by_at", ["at"]),
+
   // Application tables
   customers: defineTable({
     name: v.string(), // DERIVED display string = "firstName lastName" (SPEC_NAME_SPLIT)

@@ -312,4 +312,72 @@ http.route({
   }),
 });
 
+// ── Door-keypad entry-event webhook (HMAC-signed, no auth) ──────────
+// HA's /config/entry_webhook.py POSTs a signed entry event from the facility keypad
+// (SPEC_DOOR_ENTRY_LOG_WEBHOOK). Body is compact JSON {ts, bay, code_hash, result,
+// source}; the door code is a keyed HMAC hash (code_hash) — the RAW code never
+// leaves the HA box. Header:  X-HA-Signature: sha256=<hex HMAC_SHA256(ENTRY_SIGN_KEY,
+// rawBody)>  — the HMAC key is the ENTRY_SIGN_KEY *string* bytes (matching the HA
+// script's `sign_key.encode()`), NOT hex-decoded. Constant-time compare; 401 on
+// mismatch or until ENTRY_SIGN_KEY is set. Same shape as the Resend webhook above.
+function entryBytesToHex(buf: ArrayBuffer): string {
+  const arr = new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < arr.length; i++) s += arr[i].toString(16).padStart(2, "0");
+  return s;
+}
+async function entrySignatureHex(key: string, message: string): Promise<string> {
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(key),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(message));
+  return entryBytesToHex(sig);
+}
+function entryConstantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+http.route({
+  path: "/ha/entry",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const signKey = process.env.ENTRY_SIGN_KEY || "";
+    const body = await request.text();
+    if (!signKey) {
+      return new Response("not configured", { status: 401, headers: corsHeaders(request) });
+    }
+    const header = request.headers.get("x-ha-signature") || "";
+    let expected: string;
+    try {
+      expected = "sha256=" + (await entrySignatureHex(signKey, body));
+    } catch {
+      return new Response("verify error", { status: 401, headers: corsHeaders(request) });
+    }
+    if (!header || !entryConstantTimeEqual(header, expected)) {
+      return new Response("invalid signature", { status: 401, headers: corsHeaders(request) });
+    }
+    try {
+      const d = JSON.parse(body || "{}");
+      await ctx.runMutation(internal.serverActivity.logEntryEventInternal, {
+        at: Date.now(),
+        ts: typeof d.ts === "number" ? d.ts : 0,
+        bay: typeof d.bay === "string" ? d.bay : "",
+        codeHash: typeof d.code_hash === "string" ? d.code_hash : "",
+        result: typeof d.result === "string" ? d.result : "unknown",
+        source: typeof d.source === "string" ? d.source : "keypad",
+      });
+    } catch {
+      /* signature already verified; never error on a parse hiccup */
+    }
+    return new Response(null, { status: 200, headers: corsHeaders(request) });
+  }),
+});
+
 export default http;
