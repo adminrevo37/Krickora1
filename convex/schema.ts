@@ -15,6 +15,7 @@ export default defineSchema({
     referrer: v.optional(v.string()),
     sessionId: v.optional(v.string()),
     userId: v.optional(v.string()),
+    email: v.optional(v.string()), // server-derived actor email (authed only) — powers the admin activity feed
     metadata: v.optional(v.string()), // JSON-stringified extra data
     userAgent: v.optional(v.string()),
     timestamp: v.number(), // Unix ms
@@ -63,6 +64,20 @@ export default defineSchema({
     platform: v.optional(v.string()), // 'ios' | 'fcm' | 'firefox' | 'windows' | 'other'
     email: v.optional(v.string()), // recipient (server-side rows only; never from beacon)
     tag: v.optional(v.string()),
+  }).index("by_at", ["at"]),
+
+  // SERVER-ACTIVITY FEED (2026-06) — email lifecycle events from the Resend webhook
+  // (/resend/webhook): sent -> delivered -> opened -> clicked, plus bounced /
+  // complained / delivery_delayed. One row per webhook event. Lets the admin
+  // activity feed show email delivery in real time without instrumenting any send
+  // site. Inert until RESEND_WEBHOOK_SECRET is set + the webhook is configured in
+  // Resend. Additive — no migration.
+  emailEvents: defineTable({
+    at: v.number(), // ms (event time)
+    type: v.string(), // 'sent' | 'delivered' | 'opened' | 'clicked' | 'bounced' | 'complained' | 'delivery_delayed'
+    to: v.optional(v.string()), // recipient email
+    subject: v.optional(v.string()),
+    emailId: v.optional(v.string()), // Resend email id — correlates one email's lifecycle
   }).index("by_at", ["at"]),
 
   // Application tables

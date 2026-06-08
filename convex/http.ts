@@ -231,4 +231,85 @@ http.route({
   handler: stripeWebhook,
 });
 
+// ── Resend email webhook (Svix-signed, no auth) ──────────────────────
+// Records email lifecycle events (sent/delivered/opened/clicked/bounced/…) into
+// the emailEvents table for the admin Activity feed. ZERO send-site changes.
+// Configure in Resend → Webhooks:
+//   URL: https://<deployment>.convex.site/resend/webhook  (Convex CONVEX_SITE_URL)
+//   then set env RESEND_WEBHOOK_SECRET = the "whsec_…" signing secret.
+// Inert (returns 200, inserts nothing) until that secret is set, so Resend's
+// "send test" succeeds even before go-live.
+async function verifySvix(
+  secret: string,
+  id: string,
+  timestamp: string,
+  body: string,
+  sigHeader: string
+): Promise<boolean> {
+  try {
+    const b64 = secret.startsWith("whsec_") ? secret.slice(6) : secret;
+    const keyBytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const cryptoKey = await crypto.subtle.importKey(
+      "raw",
+      keyBytes,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const data = new TextEncoder().encode(`${id}.${timestamp}.${body}`);
+    const sig = await crypto.subtle.sign("HMAC", cryptoKey, data);
+    const expected = btoa(String.fromCharCode(...new Uint8Array(sig)));
+    // svix-signature header = space-separated "v1,<base64sig>" tokens.
+    return sigHeader.split(" ").some((tok) => {
+      const comma = tok.indexOf(",");
+      return comma > 0 && tok.slice(comma + 1) === expected;
+    });
+  } catch {
+    return false;
+  }
+}
+
+http.route({
+  path: "/resend/webhook",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const secret = process.env.RESEND_WEBHOOK_SECRET || "";
+    const body = await request.text();
+    // Not configured yet — accept silently (Resend's test ping should 200).
+    if (!secret) {
+      return new Response(null, { status: 200, headers: corsHeaders(request) });
+    }
+    const id = request.headers.get("svix-id") || "";
+    const ts = request.headers.get("svix-timestamp") || "";
+    const sig = request.headers.get("svix-signature") || "";
+    if (!id || !ts || !sig || !(await verifySvix(secret, id, ts, body, sig))) {
+      return new Response("invalid signature", { status: 401, headers: corsHeaders(request) });
+    }
+    try {
+      const evt = JSON.parse(body || "{}");
+      const rawType = String(evt?.type ?? ""); // e.g. "email.delivered"
+      const type = rawType.startsWith("email.") ? rawType.slice(6) : rawType;
+      const data = evt?.data ?? {};
+      const to = Array.isArray(data.to)
+        ? data.to[0]
+        : typeof data.to === "string"
+          ? data.to
+          : undefined;
+      const created = evt?.created_at ? Date.parse(evt.created_at) : NaN;
+      if (type) {
+        await ctx.runMutation(internal.serverActivity.logEmailEventInternal, {
+          at: Number.isFinite(created) ? created : Date.now(),
+          type,
+          to: typeof to === "string" ? to : undefined,
+          subject: typeof data.subject === "string" ? data.subject : undefined,
+          emailId: typeof data.email_id === "string" ? data.email_id : undefined,
+        });
+      }
+    } catch {
+      /* never error a webhook on a parse hiccup */
+    }
+    return new Response(null, { status: 200, headers: corsHeaders(request) });
+  }),
+});
+
 export default http;

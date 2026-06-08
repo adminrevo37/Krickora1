@@ -36,6 +36,9 @@ export const trackEvent = mutation({
       referrer: cap(args.referrer, 1024),
       sessionId: cap(args.sessionId, 128),
       userId: identity?.subject ?? undefined,
+      // Server-derived actor email (authed visitors only) so the admin activity
+      // feed can attribute page views to a customer. Never client-supplied.
+      email: identity?.email ? String(identity.email).toLowerCase().slice(0, 256) : undefined,
       metadata: cap(args.metadata, 4096),
       userAgent: cap(args.userAgent, 512),
       timestamp: args.timestamp,
