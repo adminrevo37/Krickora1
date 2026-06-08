@@ -1076,6 +1076,14 @@ function CustomersTab() {
                 {c.creditBalance ? (
                   <span className="text-sm text-emerald-600 font-semibold">${c.creditBalance.toFixed(2)} credit</span>
                 ) : null}
+                {c.emailBounced && (
+                  <span
+                    className="text-xs px-2 py-0.5 rounded-full bg-red-50 text-red-600 border border-red-200 font-semibold"
+                    title={`Last email to ${c.email} bounced${c.emailBounceAt ? ` (${new Date(c.emailBounceAt).toLocaleDateString()})` : ''} — the address may be undeliverable or mistyped.`}
+                  >
+                    ✉ Bounced
+                  </span>
+                )}
                 <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 font-medium capitalize">{c.role}</span>
                 <button
                   onClick={() => {

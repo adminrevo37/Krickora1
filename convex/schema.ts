@@ -94,6 +94,13 @@ export default defineSchema({
     suburb: v.optional(v.string()),
     email: v.string(),
     phone: v.optional(v.string()),
+    // Email deliverability flag (2026-06) — set true by the Resend webhook
+    // (/resend/webhook) when an email to this address bounces/complains; auto-cleared
+    // when a later email to it delivers. Surfaces a "Bounced" badge in admin →
+    // Customers so a mistyped address (e.g. iinet.au vs iinet.net.au) is caught fast.
+    emailBounced: v.optional(v.boolean()),
+    emailBounceAt: v.optional(v.number()),
+    emailBounceType: v.optional(v.string()), // 'bounced' | 'complained'
     // SPEC_SIGNUP_UPDATES_2026-06 G5 — "How did you hear about us?" captured at
     // signup (required there). referralSource = the chosen option; when it is
     // "Other", the free text the customer typed is stored in referralSourceOther.

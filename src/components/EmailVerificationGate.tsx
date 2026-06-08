@@ -53,15 +53,18 @@ export default function EmailVerificationGate({ email }: { email: string }) {
         </div>
         <div className="p-6 space-y-4 text-center">
           <p className="text-sm text-gray-700 dark:text-gray-300">
-            Please <strong>check your email to verify your account before proceeding</strong>.
+            Open the email from Cricket Revolution and tap the <strong>&ldquo;Verify email&rdquo;</strong> button to activate your account.
           </p>
           <p className="text-xs text-gray-500 dark:text-gray-400">
-            We sent a verification link to<br />
+            We sent it to<br />
             <span className="font-semibold text-gray-700 dark:text-gray-200">{email}</span>
+          </p>
+          <p className="text-xs text-gray-400 dark:text-gray-500">
+            Check your <strong>spam</strong> folder too. It can take a few minutes to arrive with some providers (iiNet, Bigpond). If it never comes, the address may be mistyped — sign out and sign up again with the correct email.
           </p>
           <div className="flex items-center justify-center gap-2 text-xs text-emerald-600 dark:text-emerald-400">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            This page unlocks automatically once you verify.
+            This page unlocks automatically once you verify — you can close that tab and come back.
           </div>
 
           {resent && <div className="text-xs text-emerald-700 bg-emerald-50 dark:bg-emerald-900/20 rounded-lg py-2 px-3">Verification email re-sent — check your inbox (and spam).</div>}

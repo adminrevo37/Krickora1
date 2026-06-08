@@ -37,13 +37,32 @@ export const logEmailEventInternal = internalMutation({
     emailId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const to = args.to ? args.to.toLowerCase().slice(0, 256) : undefined;
+    const type = args.type.slice(0, 32);
     await ctx.db.insert("emailEvents", {
       at: args.at,
-      type: args.type.slice(0, 32),
-      to: args.to ? args.to.toLowerCase().slice(0, 256) : undefined,
+      type,
+      to,
       subject: args.subject ? args.subject.slice(0, 256) : undefined,
       emailId: args.emailId ? args.emailId.slice(0, 128) : undefined,
     });
+    // Flag the matching customer so admin → Customers shows a "Bounced" badge
+    // (catches mistyped / undeliverable addresses fast). Auto-cleared when a later
+    // email to the same address delivers. Only the relevant lifecycle events do a
+    // customer lookup (skip the high-volume sent/opened/clicked).
+    if (to && (type === "bounced" || type === "complained")) {
+      const c = await ctx.db
+        .query("customers")
+        .withIndex("by_email", (q: any) => q.eq("email", to))
+        .first();
+      if (c) await ctx.db.patch(c._id, { emailBounced: true, emailBounceAt: args.at, emailBounceType: type });
+    } else if (to && type === "delivered") {
+      const c = await ctx.db
+        .query("customers")
+        .withIndex("by_email", (q: any) => q.eq("email", to))
+        .first();
+      if (c && (c as any).emailBounced) await ctx.db.patch(c._id, { emailBounced: false });
+    }
     return true;
   },
 });
