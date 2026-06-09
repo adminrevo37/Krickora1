@@ -49,6 +49,10 @@ const staticOrigins = [
   "http://localhost:4173",
   "http://localhost:8081",
   "https://krickora-prod.vercel.app",
+  // Primary custom domain.
+  "https://cricketrevolution.com.au",
+  "https://www.cricketrevolution.com.au",
+  // Legacy domain — kept for the .au→.com.au redirect window.
   "https://cricketrevolution.au",
   "https://www.cricketrevolution.au",
 ];

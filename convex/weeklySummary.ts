@@ -149,7 +149,7 @@ export const sendOne = internalAction({
       bookingCount: args.bookingCount,
       weekRange: args.weekRange,
       bookingsHtml: args.bookingsHtml,
-      bookingUrl: "https://cricketrevolution.au",
+      bookingUrl: "https://cricketrevolution.com.au",
     });
     return { success: result.success, reason: result.reason };
   },

@@ -5,4 +5,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: http://krickora.shipper.now/sitemap.xml
+Sitemap: https://cricketrevolution.com.au/sitemap.xml

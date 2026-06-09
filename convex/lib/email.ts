@@ -21,7 +21,7 @@
  *                      configured"}) — same behaviour as the old Shipper path,
  *                      so nothing throws before the key is added.
  *   - EMAIL_FROM       From header, e.g.
- *                      `Cricket Revolution <noreply@cricketrevolution.au>`.
+ *                      `Cricket Revolution <noreply@cricketrevolution.com.au>`.
  *                      Defaults to the Resend shared sender when unset.
  */
 
@@ -41,7 +41,7 @@ const MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,'Courier New',monospace
 
 // Public site base (links in emails). Door codes / calendar already default to
 // this elsewhere in the codebase.
-const SITE = "https://cricketrevolution.au";
+const SITE = "https://cricketrevolution.com.au";
 
 // ── HTML helpers ─────────────────────────────────────────────────────────────
 /** HTML-escape a text value. Use for ALL caller-supplied text. */
@@ -150,7 +150,7 @@ ${opts.bodyHtml}
 <!-- footer -->
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;"><tr><td style="border-top:1px solid ${C.rule};padding-top:14px;">
 <p style="margin:0 0 3px;font-family:${FONT};color:${C.faint};font-size:12px;line-height:1.55;">Cricket Revolution &middot; 78 Jones St, Stirling WA</p>
-<p style="margin:0;font-family:${FONT};color:${C.faint};font-size:12px;"><a href="${SITE}" style="color:${C.faint};">cricketrevolution.au</a></p>
+<p style="margin:0;font-family:${FONT};color:${C.faint};font-size:12px;"><a href="${SITE}" style="color:${C.faint};">cricketrevolution.com.au</a></p>
 </td></tr></table>
 </td></tr>
 </table>

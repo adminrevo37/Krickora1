@@ -274,7 +274,7 @@ export const sendBookingConfirmation = internalAction({
       duration: args.duration,
       amount: args.amount,
       accessCode: args.accessCode,
-      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.com.au",
     });
   },
 });
@@ -309,8 +309,8 @@ export const sendBookingCancellation = internalAction({
       timeSlot: args.timeSlot,
       duration: args.duration,
       cancellationReason: args.reason ?? "",
-      bookingUrl: "https://cricketrevolution.au",
-      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
+      bookingUrl: "https://cricketrevolution.com.au",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.com.au",
     });
   },
 });
@@ -349,7 +349,7 @@ export const sendBookingRescheduled = internalAction({
       newTimeSlot: args.newTimeSlot,
       newDuration: args.newDuration,
       accessCode: args.accessCode,
-      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.com.au",
     });
   },
 });
@@ -382,7 +382,7 @@ export const sendBookingReminder = internalAction({
       timeSlot: args.timeSlot,
       duration: args.duration,
       accessCode: args.accessCode,
-      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.com.au",
     });
   },
 });
@@ -509,7 +509,7 @@ export const sendAthleteAllocation = internalAction({
       timeSlot: args.timeSlot,
       duration: args.duration,
       accessCode: args.accessCode,
-      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.com.au",
     });
   },
 });
@@ -546,7 +546,7 @@ export const sendAthleteInvite = internalAction({
     return await sendEmail("athlete-invite", args.to, {
       childName: args.childName,
       coachName: args.coachName,
-      signUpUrl: "https://cricketrevolution.au",
+      signUpUrl: "https://cricketrevolution.com.au",
     });
   },
 });
@@ -623,7 +623,7 @@ export const sendAthleteReschedule = internalAction({
       timeSlot: args.timeSlot,
       duration: args.duration,
       accessCode: args.accessCode,
-      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.com.au",
     });
   },
 });
@@ -659,7 +659,7 @@ export const sendMateAdded = internalAction({
       timeSlot: args.timeSlot,
       duration: args.duration,
       accessCode: args.accessCode,
-      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.com.au",
     });
   },
 });
@@ -754,7 +754,7 @@ export const sendMateModified = internalAction({
       newTimeSlot: args.newTimeSlot,
       newDuration: args.newDuration,
       accessCode: args.accessCode,
-      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.au",
+      calendarUrl: args.calendarUrl ?? "https://cricketrevolution.com.au",
     });
   },
 });
