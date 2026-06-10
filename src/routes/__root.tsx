@@ -231,10 +231,12 @@ function RootComponent() {
           <EmailVerificationGate email={user.email} />
         )}
 
-      {/* SPEC_PROFILE_POSTCODE_SUBURB — hard-block gate: signed-in non-admin users (and
-          not while impersonating) must supply postcode + suburb before using the app.
-          Only after email is verified (the verify gate above shows first). */}
-      {isAuthenticated && user && profileReady && user.role !== 'admin' && !isImpersonating &&
+      {/* SPEC_PROFILE_POSTCODE_SUBURB — hard-block gate: signed-in CUSTOMERS (not admin,
+          not coach, not while impersonating) must supply postcode + suburb before using
+          the app. Coaches are EXEMPT — postcode is only used for customer/athlete
+          catchment analytics, so it's needless friction onboarding coaches. Only after
+          email is verified (the verify gate above shows first). */}
+      {isAuthenticated && user && profileReady && user.role !== 'admin' && user.role !== 'coach' && !isImpersonating &&
         user.emailVerified !== false && (!user.postcode || !user.suburb) && (
           <PostcodeRequiredModal email={user.email} />
         )}
