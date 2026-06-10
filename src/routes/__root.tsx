@@ -223,10 +223,13 @@ function RootComponent() {
 
       {showAuth && <AuthModal initialMode={authMode} onClose={() => setShowAuth(false)} onSuccess={() => setShowAuth(false)} />}
 
-      {/* SIGNUP-VERIFY-LOCKDOWN — non-dismissable gate: a signed-in non-admin user
-          (not while impersonating) must verify their email before proceeding. Takes
-          precedence over the postcode gate; auto-unmounts when emailVerified flips. */}
-      {isAuthenticated && user && profileReady && user.role !== 'admin' && !isImpersonating &&
+      {/* SIGNUP-VERIFY-LOCKDOWN — non-dismissable gate: a signed-in CUSTOMER (not admin,
+          not coach, not while impersonating) must verify their email before proceeding.
+          Coaches are EXEMPT — they're known/trusted migrated accounts, so verification is
+          needless onboarding friction (booking itself no longer requires it — see
+          SIGNUP-NO-LOCKDOWN in createBooking). Takes precedence over the postcode gate;
+          auto-unmounts when emailVerified flips. */}
+      {isAuthenticated && user && profileReady && user.role !== 'admin' && user.role !== 'coach' && !isImpersonating &&
         user.emailVerified === false && (
           <EmailVerificationGate email={user.email} />
         )}
