@@ -116,6 +116,9 @@ export function createAuthOptions(ctx?: GenericCtx<DataModel>): BetterAuthOption
       // SEC decision #7: NIST-aligned — length over forced complexity.
       minPasswordLength: 10,
       maxPasswordLength: 128,
+      // 24h reset-token validity (Better Auth defaults to 1h) — coaches/customers
+      // often don't click the "set your password" link straight away.
+      resetPasswordTokenExpiresIn: 60 * 60 * 24,
       sendResetPassword: async ({ user, url }: { user: any; url: string }) => {
         // NI-5 / S-1: throttle reset emails per address (inbox-bomb protection).
         // Over-limit → silently skip the send (response to the caller is unchanged,
