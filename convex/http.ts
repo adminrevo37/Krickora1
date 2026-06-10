@@ -46,6 +46,11 @@ const ALLOWED_ORIGINS = [
   "http://localhost:3000",
   "http://localhost:4173",
   "https://krickora-prod.vercel.app",
+  // Primary custom domain.
+  "https://cricketrevolution.com.au",
+  "https://www.cricketrevolution.com.au",
+  // Legacy domain — kept so credentialed calls still work during the .au→.com.au
+  // redirect window (harmless once the redirect is fully live).
   "https://cricketrevolution.au",
   "https://www.cricketrevolution.au",
   ...(SITE_URL ? [SITE_URL] : []),
@@ -74,6 +79,8 @@ authComponent.registerRoutes(http, createAuth, {
       "http://localhost:3000",
       "http://localhost:4173",
       "https://krickora-prod.vercel.app",
+      "https://cricketrevolution.com.au",
+      "https://www.cricketrevolution.com.au",
       "https://cricketrevolution.au",
       "https://www.cricketrevolution.au",
       ...(SITE_URL ? [SITE_URL] : []),
