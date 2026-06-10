@@ -68,7 +68,11 @@ export default defineConfig({
         // App-shell navigations → NetworkFirst (a new deploy is picked up; falls
         // back to the cached shell offline). NEVER fall back for /api/*.
         navigateFallback: "/index.html",
-        navigateFallbackDenylist: [/^\/api\//],
+        // /api/* never gets the SPA fallback. /reset-password is also denylisted so a
+        // fresh navigation to it (a coach clicking their emailed reset link) always
+        // hits the NETWORK for the latest shell — otherwise a stale cached install
+        // would serve an old index.html that lacks the route and 404s ("Not Found").
+        navigateFallbackDenylist: [/^\/api\//, /^\/reset-password/],
         // CRITICAL: do NOT intercept Convex realtime/HTTP or Better Auth traffic.
         // Those are cross-origin (*.convex.cloud/.site) so the same-origin routes
         // below never match them — the SW leaves them entirely alone (realtime +
