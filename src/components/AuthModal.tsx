@@ -45,6 +45,12 @@ interface ChildRow {
   coachIds: string[]
 }
 
+// TEMP (cutover 2026-06-10) — hide the "Link your Coaches" athlete-capture section on
+// signup while the migrated coaches self-register (it's irrelevant to them, and skipping
+// it also drops the coaching validation + payload via the coachingYes default below).
+// Flip back to false to restore the section for normal customer signups.
+const HIDE_COACHING_CAPTURE = true
+
 export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', prefillEmail }: AuthModalProps) {
   const [mode, setMode] = useState<Mode>(initialMode)
   const registrationLocked = useQuery(api.registrationLock.isRegistrationLocked)
@@ -62,7 +68,7 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
   const [password, setPassword] = useState('')
   // SPEC_SIGNUP_UPDATES_2026-06 G2 — coaching capture. Defaults to YES (most
   // signups are coached athletes/parents linking their coach at signup).
-  const [coachingYes, setCoachingYes] = useState(true)
+  const [coachingYes, setCoachingYes] = useState(!HIDE_COACHING_CAPTURE)
   const [selfCoached, setSelfCoached] = useState(false)
   const [selfCoachIds, setSelfCoachIds] = useState<string[]>([])
   const [children, setChildren] = useState<ChildRow[]>([])
@@ -381,7 +387,7 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
           )}
 
           {/* G2 — coaching capture (sits directly below Mobile) */}
-          {mode === 'signup' && (
+          {mode === 'signup' && !HIDE_COACHING_CAPTURE && (
             <div className="rounded-xl border border-emerald-200 dark:border-emerald-800/50 bg-emerald-50/40 dark:bg-emerald-900/10 p-3 space-y-3">
               <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400 font-bold text-sm">
                 <span>🏏</span> Link your Coaches
