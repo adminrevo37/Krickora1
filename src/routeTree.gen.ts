@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as StatementsRouteImport } from './routes/statements'
 import { Route as RevOps7k2pRouteImport } from './routes/rev-ops-7k2p'
+import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as PaymentsRouteImport } from './routes/payments'
 import { Route as JoinRouteImport } from './routes/join'
@@ -28,6 +29,11 @@ const StatementsRoute = StatementsRouteImport.update({
 const RevOps7k2pRoute = RevOps7k2pRouteImport.update({
   id: '/rev-ops-7k2p',
   path: '/rev-ops-7k2p',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProfileRoute = ProfileRouteImport.update({
@@ -78,6 +84,7 @@ export interface FileRoutesByFullPath {
   '/join': typeof JoinRoute
   '/payments': typeof PaymentsRoute
   '/profile': typeof ProfileRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/rev-ops-7k2p': typeof RevOps7k2pRouteWithChildren
   '/statements': typeof StatementsRoute
   '/checkout/success': typeof CheckoutSuccessRoute
@@ -90,6 +97,7 @@ export interface FileRoutesByTo {
   '/join': typeof JoinRoute
   '/payments': typeof PaymentsRoute
   '/profile': typeof ProfileRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/rev-ops-7k2p': typeof RevOps7k2pRouteWithChildren
   '/statements': typeof StatementsRoute
   '/checkout/success': typeof CheckoutSuccessRoute
@@ -103,6 +111,7 @@ export interface FileRoutesById {
   '/join': typeof JoinRoute
   '/payments': typeof PaymentsRoute
   '/profile': typeof ProfileRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/rev-ops-7k2p': typeof RevOps7k2pRouteWithChildren
   '/statements': typeof StatementsRoute
   '/checkout/success': typeof CheckoutSuccessRoute
@@ -117,6 +126,7 @@ export interface FileRouteTypes {
     | '/join'
     | '/payments'
     | '/profile'
+    | '/reset-password'
     | '/rev-ops-7k2p'
     | '/statements'
     | '/checkout/success'
@@ -129,6 +139,7 @@ export interface FileRouteTypes {
     | '/join'
     | '/payments'
     | '/profile'
+    | '/reset-password'
     | '/rev-ops-7k2p'
     | '/statements'
     | '/checkout/success'
@@ -141,6 +152,7 @@ export interface FileRouteTypes {
     | '/join'
     | '/payments'
     | '/profile'
+    | '/reset-password'
     | '/rev-ops-7k2p'
     | '/statements'
     | '/checkout/success'
@@ -154,6 +166,7 @@ export interface RootRouteChildren {
   JoinRoute: typeof JoinRoute
   PaymentsRoute: typeof PaymentsRoute
   ProfileRoute: typeof ProfileRoute
+  ResetPasswordRoute: typeof ResetPasswordRoute
   RevOps7k2pRoute: typeof RevOps7k2pRouteWithChildren
   StatementsRoute: typeof StatementsRoute
   CheckoutSuccessRoute: typeof CheckoutSuccessRoute
@@ -173,6 +186,13 @@ declare module '@tanstack/react-router' {
       path: '/rev-ops-7k2p'
       fullPath: '/rev-ops-7k2p'
       preLoaderRoute: typeof RevOps7k2pRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reset-password': {
+      id: '/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof ResetPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/profile': {
@@ -253,6 +273,7 @@ const rootRouteChildren: RootRouteChildren = {
   JoinRoute: JoinRoute,
   PaymentsRoute: PaymentsRoute,
   ProfileRoute: ProfileRoute,
+  ResetPasswordRoute: ResetPasswordRoute,
   RevOps7k2pRoute: RevOps7k2pRouteWithChildren,
   StatementsRoute: StatementsRoute,
   CheckoutSuccessRoute: CheckoutSuccessRoute,

@@ -225,6 +225,28 @@ export async function sendPasswordReset(email: string) {
   }
 }
 
+/**
+ * Complete a password reset — exchange the emailed token for a new password.
+ * Better Auth 1.5.x: POST /api/auth/reset-password with { newPassword, token }.
+ */
+export async function resetPassword(token: string, newPassword: string) {
+  try {
+    const baseURL = convexSiteUrl || "https://adventurous-chickadee-53.convex.site";
+    const response = await credentialFetch(`${baseURL}/api/auth/reset-password`, {
+      method: "POST",
+      body: JSON.stringify({ newPassword, token }),
+    });
+    if (!response.ok) {
+      let msg = "Failed to reset password";
+      try { const err = await response.json(); msg = err?.message || err?.error?.message || msg; } catch {}
+      return { success: false, error: { message: msg } };
+    }
+    return { success: true };
+  } catch (error: any) {
+    return { success: false, error: { message: error?.message || "Failed to reset password" } };
+  }
+}
+
 export async function refreshSession() {
   try {
     const session = await authClient.getSession({
