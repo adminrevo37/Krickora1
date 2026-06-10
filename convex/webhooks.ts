@@ -34,6 +34,51 @@ export const confirmBookingPayment = internalMutation({
       return { success: true, alreadyPaid: true };
     }
 
+    // SAFETY backstop (audit 2026-06-10 money-hole #1): a payment confirmed for a
+    // booking that is no longer live. The abandoned-checkout sweep (or a cancel)
+    // already terminated it and its slot may have been re-booked. The timing fix
+    // (hold window ≥ Stripe session lifetime, lib/slotHolds.ts) makes this rare,
+    // but clock skew / a late Stripe retry could still land here. Do NOT run the
+    // normal confirm side-effects — that would send a false "Booking confirmed"
+    // and redeem account credit against a dead booking. Instead: record the money
+    // so it's traceable, flag the booking for an admin refund, and alert. Setting
+    // paymentStatus:"paid" also makes any Stripe retry hit the idempotency no-op
+    // above. (Coaches don't pay, so this is customer-only by construction.)
+    if (b.status === "cancelled") {
+      await ctx.db.patch(booking._id, {
+        paymentStatus: "paid",
+        stripeSessionId: args.stripeSessionId,
+        needsRefund: true,
+      } as any);
+      if (b.customerEmail) {
+        const currency = (args.currency ?? "AUD").toUpperCase();
+        const laneName = b.laneNameSnapshot ?? String(b.laneId).toUpperCase();
+        await ctx.runMutation(internal.mutations.recordStripePaymentInternal, {
+          bookingId: booking._id.toString(),
+          stripeSessionId: args.stripeSessionId,
+          customerEmail: b.customerEmail,
+          customerName: b.customerName ?? "Customer",
+          amount: args.amountPaid / 100,
+          currency,
+          status: "paid",
+          laneName,
+          date: b.date,
+          description: `REFUND DUE — payment received after booking cancelled (${b.date})`,
+          receiptUrl: args.receiptUrl,
+        });
+      }
+      await ctx.scheduler.runAfter(0, internal.push.sendAdminPush, {
+        title: "⚠️ Refund needed — paid after cancel",
+        body: `${b.customerName ?? b.customerEmail ?? "A customer"} paid for a CANCELLED booking (${b.laneNameSnapshot ?? b.laneId} ${b.date}). Refund required.`,
+        url: "/rev-ops-7k2p",
+        tag: `refund-${booking._id.toString()}`,
+      });
+      console.error(
+        `[webhook] PAYMENT FOR CANCELLED BOOKING ${booking._id.toString()} — flagged needsRefund, admin alerted`
+      );
+      return { success: true, orphanedPayment: true };
+    }
+
     // Booking edit / unified modify top-up — apply the pending change once paid.
     if (b.status === "pending_edit_payment" && b.pendingEdit) {
       const pe = b.pendingEdit;

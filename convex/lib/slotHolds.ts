@@ -11,14 +11,24 @@
 
 const DEFAULT_ABANDONED_MINUTES = 10;
 
-/** Resolve the configured abandoned-checkout window in ms. */
+// The Stripe Checkout session stays payable for this long (stripe.ts sets
+// expires_at = now + 30 min). A checkout hold must NEVER expire before its
+// session can no longer be paid, or the cron (releaseExpiredHolds) cancels the
+// booking while the customer can still complete payment → they get charged for a
+// booking that's been cancelled and its slot freed/re-booked (audit 2026-06-10
+// money-hole #1). So the hold window is floored at this value regardless of the
+// admin's abandonedCheckoutMinutes setting; the setting can only make it LONGER.
+export const STRIPE_CHECKOUT_SESSION_MS = 30 * 60 * 1000;
+
+/** Resolve the configured abandoned-checkout window in ms (never below the
+ * Stripe session lifetime — see STRIPE_CHECKOUT_SESSION_MS). */
 export async function abandonedCheckoutMs(ctx: any): Promise<number> {
   const settings = await ctx.db
     .query("siteSettings")
     .withIndex("by_key", (q: any) => q.eq("key", "global"))
     .first();
   const minutes = (settings as any)?.abandonedCheckoutMinutes ?? DEFAULT_ABANDONED_MINUTES;
-  return minutes * 60 * 1000;
+  return Math.max(minutes * 60 * 1000, STRIPE_CHECKOUT_SESSION_MS);
 }
 
 /** Create a checkout hold for a freshly-created pending_payment booking. */

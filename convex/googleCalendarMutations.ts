@@ -1,6 +1,6 @@
 import { query, mutation, internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
-import { requireAdmin } from "./lib/adminGuard";
+import { requireAdmin, getAuthUserSafe, resolveIsAdmin } from "./lib/adminGuard";
 
 // ============================================================================
 // GOOGLE CALENDAR TOKEN MUTATIONS (internal - used by googleCalendar.ts)
@@ -181,9 +181,14 @@ export const removeLaneCalendarMapping = mutation({
   },
 });
 
+// Admin-only (audit 2026-06-10 security #7): leaks every lane's Google Calendar
+// ID. Non-throwing (returns [] for non-admins) so it's safe to subscribe from any
+// context; only the admin calendar-settings page needs the data.
 export const listLaneCalendarMappings = query({
   args: {},
   handler: async (ctx) => {
+    const user = await getAuthUserSafe(ctx);
+    if (!(await resolveIsAdmin(ctx, (user as any)?.email))) return [];
     return await ctx.db.query("laneCalendarMappings").collect();
   },
 });
@@ -209,9 +214,16 @@ export const getAllActiveBookings = internalQuery({
 // PUBLIC QUERIES
 // ============================================================================
 
+// Admin-only (audit 2026-06-10 security #7): exposes the connected Google account
+// email + calendar ID. Non-throwing — returns the disconnected shape for
+// non-admins so any subscriber renders safely; only the admin settings page uses it.
 export const isConnected = query({
   args: {},
   handler: async (ctx) => {
+    const user = await getAuthUserSafe(ctx);
+    if (!(await resolveIsAdmin(ctx, (user as any)?.email))) {
+      return { connected: false, email: null, calendarId: null, connectedAt: null };
+    }
     const tokens = await ctx.db
       .query("googleCalendarTokens")
       .withIndex("by_key", (q: any) => q.eq("key", "default"))

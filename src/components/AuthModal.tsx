@@ -45,11 +45,10 @@ interface ChildRow {
   coachIds: string[]
 }
 
-// TEMP (cutover 2026-06-10) — hide the "Link your Coaches" athlete-capture section on
-// signup while the migrated coaches self-register (it's irrelevant to them, and skipping
-// it also drops the coaching validation + payload via the coachingYes default below).
-// Flip back to false to restore the section for normal customer signups.
-const HIDE_COACHING_CAPTURE = true
+// Cutover (2026-06-10) hid the "Link your Coaches" athlete-capture section on signup
+// while the 12 migrated coaches self-registered. They're onboarded now, so this is
+// back on (false) and normal customer signups capture coaching/athletes again.
+const HIDE_COACHING_CAPTURE = false
 
 export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', prefillEmail }: AuthModalProps) {
   const [mode, setMode] = useState<Mode>(initialMode)

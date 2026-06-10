@@ -352,6 +352,10 @@ export default defineSchema({
     // mode/amount captured in modificationHistory + creditLedger (reason "refund").
     refunded: v.optional(v.boolean()),
     refundedAt: v.optional(v.string()),
+    // Set by the Stripe webhook when a payment confirms for an already-cancelled
+    // booking (audit 2026-06-10 money-hole #1 backstop). The customer was charged
+    // but has no live booking → admin must refund. Surfaced via an admin alert.
+    needsRefund: v.optional(v.boolean()),
     priceInCents: v.optional(v.number()), // Stored price at booking time (used for edit diff calculation)
     // SPEC_RECONFIGURABLE_LANES: denormalised snapshot of the date-resolved lane
     // name + variant label, set at create + re-set at modify (resolved at the

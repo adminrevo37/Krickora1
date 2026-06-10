@@ -68,11 +68,14 @@ export default defineConfig({
         // App-shell navigations → NetworkFirst (a new deploy is picked up; falls
         // back to the cached shell offline). NEVER fall back for /api/*.
         navigateFallback: "/index.html",
-        // /api/* never gets the SPA fallback. /reset-password is also denylisted so a
-        // fresh navigation to it (a coach clicking their emailed reset link) always
-        // hits the NETWORK for the latest shell — otherwise a stale cached install
-        // would serve an old index.html that lacks the route and 404s ("Not Found").
-        navigateFallbackDenylist: [/^\/api\//, /^\/reset-password/],
+        // /api/* never gets the SPA fallback. /reset-password and /rev-ops-7k2p are
+        // also denylisted so a fresh navigation to them always hits the NETWORK for
+        // the latest shell — otherwise a stale cached install serves an old
+        // index.html that lacks the route and 404s ("Not Found"). /reset-password =
+        // a coach clicking their emailed reset link; /rev-ops-7k2p = an admin tapping
+        // a deep-linked push (payment-failed, fault report, hourly digest) — both
+        // post-date older installs (audit 2026-06-10 #5).
+        navigateFallbackDenylist: [/^\/api\//, /^\/reset-password/, /^\/rev-ops-7k2p/],
         // CRITICAL: do NOT intercept Convex realtime/HTTP or Better Auth traffic.
         // Those are cross-origin (*.convex.cloud/.site) so the same-origin routes
         // below never match them — the SW leaves them entirely alone (realtime +

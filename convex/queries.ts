@@ -837,14 +837,23 @@ export const listEmailTemplates = query({
 // SITE SETTINGS QUERIES
 // ============================================================================
 
-// Get the global site settings (singleton)
+// Get the global site settings (singleton).
+// PUBLIC + unauthenticated (read on every page load for booking prices/hours), so
+// it must NOT leak ops-only fields. `reservedAccessCodes` holds the permanent
+// staff front-door PINs (C3 door-code work) — stripped here so an anonymous
+// visitor of an unstaffed facility can't read live entry codes from the network
+// tab (audit 2026-06-10 security #4). Server code that needs the reserved set
+// reads the siteSettings row directly, not through this query.
 export const getSiteSettings = query({
   args: {},
   handler: async (ctx) => {
-    return await ctx.db
+    const settings = await ctx.db
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
       .first();
+    if (!settings) return null;
+    const { reservedAccessCodes, ...publicSettings } = settings as any;
+    return publicSettings;
   },
 });
 
@@ -860,6 +869,15 @@ export const getCheckoutAmountCents = internalQuery({
     const booking = await ctx.db.get(args.bookingId as Id<"bookings">);
     if (!booking) return null;
     const b = booking as any;
+    // Modify/extend top-up (audit 2026-06-10 money-hole #2): a booking awaiting a
+    // top-up payment must be charged ONLY the price difference, not its full
+    // original price. modifyBooking leaves priceInCents at the original value and
+    // stashes the (already credit-adjusted) amount due in pendingEdit.priceDifference;
+    // the credit it accounts for is redeemed separately on confirm (pe.creditApplied),
+    // so do NOT subtract credit again here.
+    if (b.status === "pending_edit_payment" && b.pendingEdit) {
+      return Math.max(0, Math.round(b.pendingEdit.priceDifference ?? 0));
+    }
     const priceCents = Math.max(0, Math.round(b.priceInCents ?? 0));
     // Clamp the credit to the customer's real balance at charge time.
     const email = (b.customerEmail ?? "").toLowerCase().trim();
