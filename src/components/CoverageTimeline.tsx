@@ -31,12 +31,18 @@ export interface SegmentTapTarget {
 
 // Background colour bands for a vertically-spanning calendar block. Fills its
 // (position:relative) parent; render the block's text content above with z-10.
-export function CoverageBlockBg({ booking, coachColor }: { booking: Booking; coachColor?: string }) {
-  const segs = coverageSegments(booking)
+export function CoverageBlockBg({ booking, coachColor, solid }: { booking: Booking; coachColor?: string; solid?: boolean }) {
   const start = booking.startHour
   const total = booking.duration / 60
   const color = coachColor || DEFAULT_COACH_COLOR
   if (total <= 0) return null
+  // Admin calendar (solid): the whole block is the coach's colour — allocation
+  // gaps are NOT surfaced as amber (admins only need to identify the coach; the
+  // athlete names are still listed in the block body).
+  if (solid) {
+    return <div className="absolute inset-0 rounded-md" style={{ backgroundColor: color }} aria-hidden />
+  }
+  const segs = coverageSegments(booking)
   return (
     <div className="absolute inset-0 rounded-md overflow-hidden pointer-events-none">
       {segs.map((s, i) => {

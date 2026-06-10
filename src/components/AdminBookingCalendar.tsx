@@ -573,8 +573,9 @@ export default function AdminBookingCalendar() {
                         booked.isCoachBooking ? '' : 'bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400'
                       }`}
                     >
-                      {/* §6: allocation coverage (coach colour allocated / amber unallocated). */}
-                      {booked.isCoachBooking && <CoverageBlockBg booking={booked} coachColor={coachColor} />}
+                      {/* Admin view: solid coach colour (no amber unallocated bands — admin
+                          only needs to identify the coach; athlete names below stay visible). */}
+                      {booked.isCoachBooking && <CoverageBlockBg booking={booked} coachColor={coachColor} solid />}
                       <button
                         onClick={(e) => { e.stopPropagation(); setDetailsBooking(booked) }}
                         title={`View / modify booking — ${booked.customerName}`}
