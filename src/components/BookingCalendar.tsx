@@ -484,8 +484,8 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
         </div>
       )}
       <div ref={gridScrollRef} className="bg-white rounded-2xl border-2 border-black shadow-sm overflow-auto max-h-[60dvh] sm:max-h-[72vh]">
-        <div className="min-w-[560px]">
-        <div className="grid grid-cols-[70px_repeat(5,1fr)] border-b-2 border-black bg-white sticky top-0 z-30">
+        <div className="min-w-0 sm:min-w-[560px]">
+        <div className="grid grid-cols-[48px_repeat(5,minmax(0,1fr))] sm:grid-cols-[70px_repeat(5,1fr)] border-b-2 border-black bg-white sticky top-0 z-30">
           <div className="p-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider flex items-center justify-center sticky left-0 z-40 bg-white">Time</div>
           {LANES.map((lane) => (
             <div key={lane.id} className="p-2 text-center border-l-2 border-black bg-white">
@@ -513,9 +513,9 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
             const myQueuePos = myWaitlistPositions[String(slot.hour)]
             const onThisHour = waitlistByHour.mine.has(slot.hour) || myQueuePos != null
             return (
-              <div key={slot.hour} className={`grid grid-cols-[70px_repeat(5,1fr)] ${slotIdx < visibleTimeSlots.length - 1 ? `border-b ${isHalfHour ? 'border-gray-300' : 'border-black'}` : ''}`}>
-                <div className="p-1.5 flex items-center justify-center sticky left-0 z-20 bg-white">
-                  <span className={`text-[11px] font-medium text-gray-500 ${isHalfHour ? 'opacity-60' : ''}`}>{slot.label}</span>
+              <div key={slot.hour} className={`grid grid-cols-[48px_repeat(5,minmax(0,1fr))] sm:grid-cols-[70px_repeat(5,1fr)] ${slotIdx < visibleTimeSlots.length - 1 ? `border-b ${isHalfHour ? 'border-gray-300' : 'border-black'}` : ''}`}>
+                <div className="p-1 sm:p-1.5 flex items-center justify-center sticky left-0 z-20 bg-white">
+                  <span className={`text-[10px] sm:text-[11px] font-medium text-gray-500 ${isHalfHour ? 'opacity-60' : ''}`}>{slot.label}</span>
                 </div>
                 {showWaitlistBand ? (
                   <button type="button" onClick={() => { if (!onThisHour) openWaitlistForHour(slot.hour) }}
