@@ -560,6 +560,24 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
 
                   const isStartOfBooking = booked && Math.abs(booked.startHour - slot.hour) < 0.01
                   const isMiddleOfBooking = booked && !isStartOfBooking
+                  // A fully-booked whole-hour row renders as a single JOIN WAITLIST band
+                  // INSTEAD of per-lane cells, so a booking whose true start row is that band
+                  // never renders its "Booked" block there → its continuation rows below look
+                  // empty. Anchor the block at the booking's FIRST visible row that is NOT a
+                  // band, so it always shows.
+                  const bookingEndHour = booked ? booked.startHour + booked.duration / 60 : 0
+                  const isWaitlistBandRow = (h: number) =>
+                    !isAdmin && !userIsCoach && h === Math.floor(h) &&
+                    !isPast(selectedDay, h) && !isSelectedDayClosed && isTimeSlotFullyBooked(dateKey, h)
+                  let renderBlockHere = false
+                  if (booked) {
+                    for (const vs of visibleTimeSlots) {
+                      if (vs.hour >= booked.startHour && vs.hour < bookingEndHour && !isWaitlistBandRow(vs.hour)) {
+                        renderBlockHere = Math.abs(vs.hour - slot.hour) < 0.01
+                        break
+                      }
+                    }
+                  }
                   const validStarts = laneStartTimes.get(lane.id) ?? []
                   const isValidStart = validStarts.includes(slot.hour) || (userIsCoach && validCoachStartsForDay.includes(slot.hour)) || isAdmin
                   // SPEC_30MIN_GAP_FILL: resolve the customer durations once. A slot whose ONLY
@@ -577,10 +595,11 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   const tooLate = !past && !booked && !timeCheck.allowed
 
                   const getBookingVisualHeight = () => {
-                    if (!booked || !isStartOfBooking) return 0
-                    const bookingEnd = booked.startHour + booked.duration / 60
+                    if (!booked || !renderBlockHere) return 0
+                    // Span from the anchor row (slot.hour) — not the true start, which may be
+                    // an earlier hidden band row — down to the booking end.
                     let count = 0
-                    for (const vs of visibleTimeSlots) { if (vs.hour >= booked.startHour && vs.hour < bookingEnd) count++ }
+                    for (const vs of visibleTimeSlots) { if (vs.hour >= slot.hour && vs.hour < bookingEndHour) count++ }
                     return count
                   }
                   const visualSpan = getBookingVisualHeight()
@@ -642,7 +661,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                           {bandTagText(lane.id, dateKey, bs.seg)}
                         </div>
                       )}
-                      {isStartOfBooking && booked && ownCoachBooking && (
+                      {renderBlockHere && booked && ownCoachBooking && (
                         <div className="absolute inset-x-0.5 top-0.5 z-10 rounded-md overflow-hidden border border-blue-300"
                           style={{ height: `${visualSpan * 32 - 4}px` }}>
                           <CoachCalendarBlock booking={booked} heightPx={visualSpan * 32 - 4} />
@@ -653,7 +672,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                           )}
                         </div>
                       )}
-                      {isStartOfBooking && booked && !ownCoachBooking && (
+                      {renderBlockHere && booked && !ownCoachBooking && (
                         <div className={`absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border ${useBlueBlock ? 'bg-gradient-to-br from-blue-100 to-blue-50 border-blue-200' : 'bg-gradient-to-br from-red-100 to-red-50 border-red-200'}`}
                           style={{ height: `${visualSpan * 32 - 4}px` }}>
                           <div className={`text-[9px] font-semibold truncate ${useBlueBlock ? 'text-blue-700' : 'text-red-700'}`}>
@@ -666,7 +685,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                           </div>
                         </div>
                       )}
-                      {isMiddleOfBooking && <div className={`absolute inset-0 ${useBlueBlock ? 'bg-blue-50/30' : 'bg-red-50/30'}`} />}
+                      {isMiddleOfBooking && !renderBlockHere && <div className={`absolute inset-0 ${useBlueBlock ? 'bg-blue-50/30' : 'bg-red-50/30'}`} />}
                       {past && !booked && <div className="absolute inset-0 flex items-center justify-center pointer-events-none"><span className="text-[14px] leading-none text-gray-400 font-medium">–</span></div>}
                       {tooLate && !booked && <div className="absolute inset-0 flex items-center justify-center"><span className="text-[8px] text-gray-400">Too late</span></div>}
                       {canBook && hasDurations && !booked && !past && !tooLate && (
