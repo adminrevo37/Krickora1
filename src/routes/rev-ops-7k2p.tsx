@@ -1313,9 +1313,10 @@ function CoachesTab() {
   const [editingCoach, setEditingCoach] = useState<any | null>(null)
   const invites = useQuery(api.queries.listCoachInvites) ?? []
   const createInvite = useMutation(api.mutations.createCoachInvite)
+  const deleteInvite = useMutation((api.mutations as any).deleteCoachInvite)
   const createCoach = useMutation((api.mutations as any).createCoach)
   const setPassword = useAction((api as any).adminPassword.adminSetPassword)
-  const [form, setForm] = useState({ name: '', email: '', phone: '' })
+  const [form, setForm] = useState({ name: '', email: '', phone: '', coachTier: 'L1' })
   const [coachForm, setCoachForm] = useState({ name: '', email: '', phone: '', coachTier: 'L1', password: '' })
   const [busy, setBusy] = useState(false)
   const [busyAdd, setBusyAdd] = useState(false)
@@ -1403,24 +1404,67 @@ function CoachesTab() {
     finally { setBusyAdd(false) }
   }
 
+  // Coach invite = "pre-create + set-password email" (the flow that onboarded the
+  // 12 migrated coaches). Orchestrates four already-deployed primitives, no new
+  // backend: (1) record the invite row (audit + delete/resend), (2) create the
+  // coach's customers row (role=coach + tier) so the role SSOT recognises them and
+  // the login gates exempt them, (3) create the Better Auth login with a throwaway
+  // password, (4) email a "set your password" link via the proven reset flow → the
+  // coach lands on /reset-password and chooses their own password. createCoachInvite
+  // rejects an email that already has an account, so this can't clobber a real user.
   const submitInvite = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!createInvite) { alert('Coach invites not available'); return }
+    const email = form.email.toLowerCase().trim()
+    const name = form.name.trim()
     setBusy(true)
     try {
       const token = typeof crypto !== 'undefined' && 'randomUUID' in crypto
         ? crypto.randomUUID()
         : Math.random().toString(36).slice(2) + Date.now().toString(36)
+      // (1) invite record (also guards: throws if an account/unused invite exists)
       await createInvite({
         token,
-        name: form.name.trim(),
-        email: form.email.toLowerCase().trim(),
+        name,
+        email,
         phone: form.phone,
         createdBy: (user as any)?._id ?? (user as any)?.id ?? 'admin',
       })
-      setForm({ name: '', email: '', phone: '' })
+      // (2) coach customers row (role + tier)
+      await createCoach({ name, email, phone: form.phone, coachTier: form.coachTier })
+      // (3) create the login (throwaway password the coach immediately overwrites)
+      const throwaway = (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2) + Date.now().toString(36)) + 'A1!'
+      await setPassword({ email, password: throwaway })
+      // (4) email the "set your password" link (same flow as the 12 cutover coaches)
+      const reset = await sendPasswordReset(email)
+      if (!reset.success) {
+        alert(`Coach account created, but the set-password email failed to send: ${reset.error?.message ?? 'unknown'}. Use “Resend” on the pending invite below.`)
+      } else {
+        alert(`Invite sent. ${name} will receive an email to set their password and log in at cricketrevolution.com.au.`)
+      }
+      setForm({ name: '', email: '', phone: '', coachTier: 'L1' })
     } catch (err: any) { alert(getErrorMessage(err) ?? 'Failed') }
     finally { setBusy(false) }
+  }
+
+  // Resend the set-password email for a pending invite (e.g. the first one bounced
+  // or the coach lost it). Reuses the proven reset flow — the login already exists.
+  const resendInvite = async (inviteEmail: string) => {
+    const reset = await sendPasswordReset(inviteEmail.toLowerCase().trim())
+    alert(reset.success
+      ? `Set-password email re-sent to ${inviteEmail}.`
+      : `Failed to resend: ${reset.error?.message ?? 'unknown'}`)
+  }
+
+  // Delete an invite record (admin-gated deleteCoachInvite). Does NOT delete the
+  // coach's account if they've already been created — only removes the tracking row.
+  const removeInvite = async (inv: any) => {
+    if (!deleteInvite) { alert('Delete not available'); return }
+    if (!window.confirm(`Delete the invite for ${inv.name || inv.email}? This removes the tracking row only — it does not delete an account they've already set up.`)) return
+    try { await deleteInvite({ id: inv._id }) }
+    catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to delete invite') }
   }
 
   const pendingInvites = (invites as any[]).filter(i => !i.used)
@@ -1606,13 +1650,20 @@ function CoachesTab() {
               </button>
             </form>
           ) : (
-            <form onSubmit={submitInvite} className="p-6 grid grid-cols-1 sm:grid-cols-4 gap-3">
+            <form onSubmit={submitInvite} className="p-6 grid grid-cols-1 sm:grid-cols-5 gap-3">
               <input required placeholder="Full name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} className="sm:col-span-2 px-3 py-2 border border-gray-200 rounded-lg text-sm" />
               <input required type="email" placeholder="Email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
               <input placeholder="Phone" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm" />
-              <button disabled={busy} className="sm:col-span-4 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors">
+              <select value={form.coachTier} onChange={e => setForm({ ...form, coachTier: e.target.value })} className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
+                <option value="L1">L1</option>
+                <option value="L2">L2</option>
+              </select>
+              <button disabled={busy} className="sm:col-span-5 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-sm font-semibold disabled:opacity-50 transition-colors">
                 {busy ? 'Sending…' : 'Send Invite'}
               </button>
+              <p className="sm:col-span-5 text-xs text-gray-400 -mt-1">
+                Creates the coach account and emails them a link to set their password. They can change tier later in their profile.
+              </p>
             </form>
           )}
         </div>
@@ -1627,14 +1678,30 @@ function CoachesTab() {
           </div>
           <div className="divide-y divide-gray-100">
             {(invites as any[]).map((inv: any) => (
-              <div key={inv._id} className="px-6 py-3 flex items-center justify-between">
-                <div>
-                  <div className="font-medium text-gray-900 text-sm">{inv.name}</div>
-                  <div className="text-xs text-gray-500">{inv.email}</div>
+              <div key={inv._id} className="px-6 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-medium text-gray-900 text-sm truncate">{inv.name}</div>
+                  <div className="text-xs text-gray-500 truncate">{inv.email}</div>
                 </div>
-                <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${inv.used ? 'bg-gray-100 text-gray-400' : 'bg-amber-100 text-amber-700'}`}>
-                  {inv.used ? 'Used' : 'Pending'}
-                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${inv.used ? 'bg-gray-100 text-gray-400' : 'bg-amber-100 text-amber-700'}`}>
+                    {inv.used ? 'Used' : 'Pending'}
+                  </span>
+                  <button
+                    onClick={() => resendInvite(inv.email)}
+                    className="text-xs px-2.5 py-1 rounded-md border border-gray-200 text-gray-600 hover:bg-gray-50 font-medium"
+                    title="Re-send the set-password email"
+                  >
+                    Resend
+                  </button>
+                  <button
+                    onClick={() => removeInvite(inv)}
+                    className="text-xs px-2.5 py-1 rounded-md border border-red-200 text-red-600 hover:bg-red-50 font-medium"
+                    title="Delete this invite record"
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
             ))}
           </div>
