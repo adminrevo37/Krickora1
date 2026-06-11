@@ -217,10 +217,19 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   const visibleTimeSlots = useMemo(() => {
     const base = allTimeSlots.filter(slot => {
       if (slot.hour === Math.floor(slot.hour)) return true
-      // SPEC_MOBILE_BOOKING_UPDATES §7.1 — 3:30pm row is COACHES-ONLY (all tiers),
-      // weekdays. Never leak it to customers, even if a coach booking spans it →
-      // do NOT fall through to the active-lane rule below for 15.5.
-      if (slot.hour === 15.5) return userIsCoach && isWeekday(selectedDay)
+      // SPEC_MOBILE_BOOKING_UPDATES §7.1 — 3:30pm is a COACH-ONLY start row (all tiers,
+      // weekdays). Never shown to customers as an empty bookable start. BUT
+      // (SPEC_30MIN_GAP_FILL) if a coach booking actually OCCUPIES 3:30, show the row to
+      // customers so it renders as "Booked" — making the 3:00–3:30 gap-fill read
+      // correctly. Empty 3:30 cells on other lanes still render as inactive "–", never a
+      // "+", so no bookable 3:30 start leaks.
+      if (slot.hour === 15.5) {
+        if (userIsCoach && isWeekday(selectedDay)) return true
+        for (const activeSet of laneActiveHalfHours.values()) {
+          if (activeSet.has(15.5)) return true
+        }
+        return false
+      }
       // Other half-hours: show if any lane is active there (e.g. a 30-min coach slot).
       for (const activeSet of laneActiveHalfHours.values()) {
         if (activeSet.has(slot.hour)) return true
