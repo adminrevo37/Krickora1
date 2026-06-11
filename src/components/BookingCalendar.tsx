@@ -516,8 +516,13 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
             const rowPast = isPast(selectedDay, slot.hour)
             // §4.2 — a fully-booked row becomes a single amber JOIN WAITLIST band for
             // regular customers (admins/coaches keep the per-lane booking view).
+            // SPEC_30MIN_GAP_FILL: NEVER on a half-hour row (e.g. 3:30) — those only
+            // appear to show a coach booking that occupies them; the other lanes are
+            // merely "inactive" there, not bookable, so offering a waitlist for a time we
+            // don't normally sell is confusing. Half-hour rows always render per-lane (so
+            // the coach booking shows as "Booked" and empty cells stay blank).
             const rowFull = !rowPast && !isSelectedDayClosed && isTimeSlotFullyBooked(dateKey, slot.hour)
-            const showWaitlistBand = rowFull && !isAdmin && !userIsCoach
+            const showWaitlistBand = rowFull && !isAdmin && !userIsCoach && !isHalfHour
             const hourWaitCount = waitlistByHour.count.get(slot.hour) ?? 0
             const myQueuePos = myWaitlistPositions[String(slot.hour)]
             const onThisHour = waitlistByHour.mine.has(slot.hour) || myQueuePos != null
