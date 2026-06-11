@@ -519,7 +519,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                 </div>
                 {showWaitlistBand ? (
                   <button type="button" onClick={() => { if (!onThisHour) openWaitlistForHour(slot.hour) }}
-                    className={`relative col-span-5 border-l-2 border-black min-h-[40px] transition-colors ${onThisHour ? 'bg-amber-100 cursor-default' : 'bg-amber-50 hover:bg-amber-100 cursor-pointer'}`}>
+                    className={`relative z-30 col-span-5 border-l-2 border-black min-h-[40px] transition-colors ${onThisHour ? 'bg-amber-100 cursor-default' : 'bg-amber-50 hover:bg-amber-100 cursor-pointer'}`}>
                     {/* Absolutely positioned + centred on the visible lane area (waitlistLabelX),
                         so it tracks horizontal scroll and stays fully readable on mobile. */}
                     <span
@@ -548,8 +548,17 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   const isMiddleOfBooking = booked && !isStartOfBooking
                   const validStarts = laneStartTimes.get(lane.id) ?? []
                   const isValidStart = validStarts.includes(slot.hour) || (userIsCoach && validCoachStartsForDay.includes(slot.hour)) || isAdmin
-                  const canBook = !isSelectedDayClosed && !past && !booked && !blocked && isValidStart && canBookSlot(bookings, lane.id, dateKey, slot.hour, 60)
-                  const hasDurations = !isSelectedDayClosed && !past && !booked && isValidStart ? getCustomerDurations(bookings, lane.id, dateKey, slot.hour).length > 0 || (userIsCoach && validCoachStartsForDay.includes(slot.hour)) || isAdmin : false
+                  // SPEC_30MIN_GAP_FILL: resolve the customer durations once. A slot whose ONLY
+                  // option is [30] is an unavoidable 30-min gap (before a half-hour coach booking
+                  // or against closing) — render it distinctly so it reads as a short slot, not a
+                  // normal hour. Computed once and reused by canBook/hasDurations below.
+                  const custDurations = !isSelectedDayClosed && !past && !booked && isValidStart ? getCustomerDurations(bookings, lane.id, dateKey, slot.hour) : []
+                  const isGapFillSlot = !userIsCoach && !isAdmin && custDurations.length === 1 && custDurations[0] === 30
+                  // Probe the 30-min minimum unit (not a full hour) so a valid 30-min gap-fill
+                  // slot is bookable. The real gating is isValidStart + hasDurations (which only
+                  // expose a 30-min slot for an unavoidable gap); this is just the space check.
+                  const canBook = !isSelectedDayClosed && !past && !booked && !blocked && isValidStart && canBookSlot(bookings, lane.id, dateKey, slot.hour, 30)
+                  const hasDurations = !isSelectedDayClosed && !past && !booked && isValidStart ? custDurations.length > 0 || (userIsCoach && validCoachStartsForDay.includes(slot.hour)) || isAdmin : false
                   const timeCheck = canBookTime(dateKey, slot.hour)
                   const tooLate = !past && !booked && !timeCheck.allowed
 
@@ -648,7 +657,11 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                       {tooLate && !booked && <div className="absolute inset-0 flex items-center justify-center"><span className="text-[8px] text-gray-400">Too late</span></div>}
                       {canBook && hasDurations && !booked && !past && !tooLate && (
                         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                          <span className="text-[15px] leading-none text-emerald-400 font-semibold group-hover:text-emerald-600 transition-colors">+</span>
+                          {isGapFillSlot ? (
+                            <span className="px-1 py-0.5 rounded border border-emerald-400 text-emerald-600 text-[8px] font-semibold leading-none group-hover:bg-emerald-100 transition-colors">30 min</span>
+                          ) : (
+                            <span className="text-[15px] leading-none text-emerald-400 font-semibold group-hover:text-emerald-600 transition-colors">+</span>
+                          )}
                         </div>
                       )}
                       {!past && !booked && canBook && hasDurations && timeCheck.allowed && (

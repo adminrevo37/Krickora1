@@ -10,6 +10,8 @@ const store = getSettingsStore()
 const REMOTE_SCALAR_KEYS = [
   'customerPricePerHour',
   'trumanPricePerHour',
+  'thirtyMinPrice',
+  'trumanThirtyMinPrice',
   'coachPerHour',
   'cancellationHoursBefore', 'openingHour', 'closingHour',
   'minBookingNoticeMinutes', 'coachBookingWindowDays',

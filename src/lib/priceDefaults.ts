@@ -5,4 +5,7 @@ export const PRICE_DEFAULTS = {
   customerPerHour: 40,
   trumanPerHour: 50,
   coachPerHour: 25,
+  // SPEC_30MIN_GAP_FILL — explicit 30-min gap-fill price ($20 std/run-up, $25 Truman).
+  thirtyMin: 20,
+  trumanThirtyMin: 25,
 } as const

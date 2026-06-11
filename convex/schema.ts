@@ -552,6 +552,10 @@ export default defineSchema({
     customerPrice90Min: v.optional(v.number()),
     trumanPricePerHour: v.number(),
     trumanPrice90Min: v.optional(v.number()),
+    // SPEC_30MIN_GAP_FILL — explicit 30-min gap-fill price (dollars). Optional; the
+    // PRICE_DEFAULTS fallback ($20 std/run-up, $25 Truman) applies when unset.
+    thirtyMinPrice: v.optional(v.number()),
+    trumanThirtyMinPrice: v.optional(v.number()),
     coachPerHour: v.number(),
     coachPer30Min: v.optional(v.number()), // DEPRECATED (C2) — coach price is per-hour only
     cancellationHoursBefore: v.number(),

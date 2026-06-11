@@ -7,11 +7,32 @@
 // explicit one in ./lanes (SPEC_RECONFIGURABLE_LANES — replaces the old /truman/
 // substring hack; still matches legacy "bm3-truman" ids via normalizeVariant).
 
-import { variantRatePerHour } from "./lanes";
+import { variantRatePerHour, normalizeVariant, VARIANT_TRUMAN } from "./lanes";
+import { PRICE_DEFAULTS } from "./priceDefaults";
 
 export interface PricingSettings {
   customerPricePerHour?: number | null;
   trumanPricePerHour?: number | null;
+  // SPEC_30MIN_GAP_FILL — explicit per-variant 30-minute gap-fill price (dollars).
+  thirtyMinPrice?: number | null;
+  trumanThirtyMinPrice?: number | null;
+}
+
+/**
+ * SPEC_30MIN_GAP_FILL — flat 30-minute gap-fill price in whole cents. Explicit
+ * (NOT pro-rata of the hourly): Truman uses `trumanThirtyMinPrice` (default $25),
+ * everything else uses `thirtyMinPrice` (default $20). Used only for the unavoidable
+ * 30-min gap a full hour can't fill (validated in createBooking).
+ */
+export function thirtyMinPriceCents(
+  settings: PricingSettings | null | undefined,
+  variantId: string | null | undefined
+): number {
+  const isTruman = normalizeVariant(variantId) === VARIANT_TRUMAN;
+  const dollars = isTruman
+    ? settings?.trumanThirtyMinPrice ?? PRICE_DEFAULTS.trumanThirtyMin
+    : settings?.thirtyMinPrice ?? PRICE_DEFAULTS.thirtyMin;
+  return Math.round(dollars * 100);
 }
 
 /** Customer lane price for a duration, in whole cents. */
@@ -20,6 +41,8 @@ export function computeCustomerPriceCents(
   variantId: string | null | undefined,
   durationMinutes: number
 ): number {
+  // SPEC_30MIN_GAP_FILL — a 30-min booking is a flat gap-fill price, not pro-rata.
+  if (durationMinutes === 30) return thirtyMinPriceCents(settings, variantId);
   const hours = durationMinutes / 60;
   const perHour = variantRatePerHour(variantId, settings);
   return Math.round(perHour * hours * 100);

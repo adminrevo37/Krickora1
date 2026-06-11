@@ -37,7 +37,7 @@ export const LANES: Lane[] = [
 // Rate is sourced from admin panel settings (siteSettings.coachPerHour)
 import { getSettingsStore, getHoursForDate, DAY_KEYS } from './settings-store'
 import { PRICE_DEFAULTS } from './priceDefaults'
-import { variantRatePerHour } from './lanes'
+import { variantRatePerHour, normalizeVariant, VARIANT_TRUMAN } from './lanes'
 
 export const COACH_PRICING = {
   get perHour(): number {
@@ -55,6 +55,19 @@ export function getCoachPrice(durationMinutes: number): number {
 }
 
 export function getCustomerPrice(_lane: Lane, variantId: string | null, durationMinutes: number): number {
+  // SPEC_30MIN_GAP_FILL — a 30-min gap-fill is a flat price (not pro-rata), mirroring
+  // the server thirtyMinPriceCents: Truman = trumanThirtyMinPrice ($25), else $20.
+  if (durationMinutes === 30) {
+    try {
+      const s = getSettingsStore().get()
+      const isTruman = normalizeVariant(variantId) === VARIANT_TRUMAN
+      return isTruman
+        ? (s.trumanThirtyMinPrice ?? PRICE_DEFAULTS.trumanThirtyMin)
+        : (s.thirtyMinPrice ?? PRICE_DEFAULTS.thirtyMin)
+    } catch {
+      return PRICE_DEFAULTS.thirtyMin
+    }
+  }
   const hours = durationMinutes / 60
   let perHour: number = PRICE_DEFAULTS.customerPerHour
   try {
@@ -327,6 +340,10 @@ function noViableOptionsOnAnyLane(bookings: Booking[], dateKey: string, duration
 // Customer durations
 export function getCustomerDurations(bookings: Booking[], laneId: string, dateKey: string, startHour: number): number[] {
   const maxMins = getMaxDuration(bookings, laneId, dateKey, startHour, false)
+  // SPEC_30MIN_GAP_FILL — if the only space here is exactly 30 minutes (a full hour
+  // can't fit), the sole option is a 30-min gap-fill. Coach bookings align to the
+  // half-hour, so getMaxDuration returns 30 only for a genuine orphan gap.
+  if (maxMins === 30) return [30]
   const nextStart = getNextBookingStart(bookings, laneId, dateKey, startHour)
   const lastMinute = isLastMinuteBooking(dateKey, startHour)
   const durations: number[] = []
@@ -397,6 +414,11 @@ export function getAvailableStartTimes(bookings: Booking[], laneId: string, date
 
     // Standard rule: need at least 60 min of space
     if (effectiveAvail >= 60) {
+      times.push(h)
+    } else if (effectiveAvail === 30) {
+      // SPEC_30MIN_GAP_FILL: a full hour can't fit, but there is an unavoidable 30-min
+      // gap (e.g. 3:00–3:30 before a 3:30 coach booking). Expose it; getCustomerDurations
+      // returns only [30] here, priced as a flat gap-fill ($20 / $25 Truman).
       times.push(h)
     } else if (effectiveAvail >= 30 && isLastMinuteBooking(dateKey, h)) {
       // Last-minute exception: if booking is same-day within 3 hours,

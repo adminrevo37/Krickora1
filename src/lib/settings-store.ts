@@ -24,6 +24,9 @@ export interface DailyHours {
 export interface SiteSettings {
   customerPricePerHour: number
   trumanPricePerHour: number
+  // SPEC_30MIN_GAP_FILL — explicit 30-min gap-fill price ($20 std/run-up, $25 Truman).
+  thirtyMinPrice?: number
+  trumanThirtyMinPrice?: number
   coachPerHour: number
   cancellationHoursBefore: number
   openingHour: number
@@ -69,6 +72,8 @@ const DEFAULT_DAILY_HOURS: Record<DayKey, DailyHours> = {
 const DEFAULT_SETTINGS: SiteSettings = {
   customerPricePerHour: PRICE_DEFAULTS.customerPerHour,
   trumanPricePerHour: PRICE_DEFAULTS.trumanPerHour,
+  thirtyMinPrice: PRICE_DEFAULTS.thirtyMin,
+  trumanThirtyMinPrice: PRICE_DEFAULTS.trumanThirtyMin,
   coachPerHour: PRICE_DEFAULTS.coachPerHour,
   cancellationHoursBefore: 2,
   openingHour: 7,

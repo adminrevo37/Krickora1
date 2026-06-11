@@ -862,7 +862,12 @@ export const createBooking = mutation({
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
       .first();
     const endHour = args.startHour + args.duration / 60;
-    if (args.duration < 60) {
+    // SPEC_30MIN_GAP_FILL — a 30-minute booking is allowed ONLY as a gap-fill (a
+    // customer filling an unavoidable 30-min slot a full hour can't occupy). The
+    // gap-validity + role checks run after the conflict scan below; here we only
+    // relax the 1-hour floor for exactly 30. Every other sub-60 value is rejected.
+    const isThirtyMin = args.duration === 30;
+    if (args.duration < 60 && !isThirtyMin) {
       throw new ConvexError("Minimum booking duration is 1 hour.");
     }
 
@@ -962,6 +967,11 @@ export const createBooking = mutation({
 
     // Check for conflicts on all lanes
     const allLaneIds = [args.laneId, ...(args.additionalLaneIds ?? [])];
+    // SPEC_30MIN_GAP_FILL — for a 30-min booking, track whether a full 60-min booking
+    // would have fit at this start (it doesn't if it overlaps a booking/block or runs
+    // past closing). A 30-min booking is only legitimate when a 60-min would NOT fit.
+    const sixtyEnd = args.startHour + 1;
+    let sixtyMinWouldFit = isThirtyMin ? sixtyEnd <= CLOSING_HOUR : false;
     for (const lid of allLaneIds) {
       const laneBookings = await ctx.db
         .query("bookings")
@@ -995,6 +1005,34 @@ export const createBooking = mutation({
       });
       if (hasBlockConflict) {
         throw new ConvexError("This lane is blocked for service/repair during this time.");
+      }
+
+      // SPEC_30MIN_GAP_FILL gap check: would a 60-min booking overlap a booking/block here?
+      if (isThirtyMin && sixtyMinWouldFit) {
+        const sixtyOverlap =
+          laneBookings.some((b) => {
+            if (b.status === "cancelled") return false;
+            const bEnd = b.startHour + b.duration / 60;
+            return args.startHour < bEnd && sixtyEnd > b.startHour;
+          }) ||
+          laneBlocks.some((b) => {
+            const bEnd = b.startHour + b.duration / 60;
+            return args.startHour < bEnd && sixtyEnd > b.startHour;
+          });
+        if (sixtyOverlap) sixtyMinWouldFit = false;
+      }
+    }
+
+    // SPEC_30MIN_GAP_FILL — a 30-min booking is allowed only where a full hour can't
+    // fit (the orphan before a half-hour coach booking, or against closing). Reject a
+    // 30-min booking that a 60-min would have fit (no cheap 30-min in open time).
+    // Coaches are min 1 hour; admin-manual bookings are exempt (deliberate).
+    if (isThirtyMin && !isAdminCaller) {
+      if (effectiveIsCoachBooking) {
+        throw new ConvexError("Coach bookings are a minimum of 1 hour.");
+      }
+      if (sixtyMinWouldFit) {
+        throw new ConvexError("30-minute slots are only available to fill a short gap.");
       }
     }
 
@@ -3721,6 +3759,8 @@ export const updateSiteSettings = mutation({
   args: {
     customerPricePerHour: v.optional(v.number()),
     trumanPricePerHour: v.optional(v.number()),
+    thirtyMinPrice: v.optional(v.number()),
+    trumanThirtyMinPrice: v.optional(v.number()),
     coachPerHour: v.optional(v.number()),
     cancellationHoursBefore: v.optional(v.number()),
     openingHour: v.optional(v.number()),
