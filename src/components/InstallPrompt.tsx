@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
-import { useRouterState } from '@tanstack/react-router'
 import { usePwaInstall } from '../hooks/usePwaInstall'
-import { usePush } from '../hooks/usePush'
 
-// SPEC_PWA_PUSH_NOTIFICATIONS §4.5 — gentle, platform-aware install nudge.
-// Mounted once in __root. The nudge shows in the booking flow when not installed;
-// dismiss is NOT permanent — it re-arms each time the user enters the booking
-// flow. An "Install app" menu/footer item opens the same instructions modal via
-// the `open-install-help` window event (so it works regardless of nudge state).
+// SPEC_PWA_PUSH_NOTIFICATIONS §4.5 — "How to install" modal host.
+// The bottom install/enable NUDGE was removed 2026-06-08 (Inspector): install
+// instructions now live in the top InstallNagBanner (PushReminderBanners) and the
+// push-enable prompt lives in the top PushTestHelperBanner. This component now ONLY
+// hosts the instructions modal, opened from the "Install app" menu/footer item via
+// the `open-install-help` window event (still needed on desktop, where the top
+// mobile banner is hidden).
 
 export const INSTALL_HELP_EVENT = 'open-install-help'
 export function openInstallHelp() {
@@ -16,79 +16,17 @@ export function openInstallHelp() {
 
 export default function InstallPrompt() {
   const { isStandalone, canInstall, promptInstall, isIos, isIosSafari } = usePwaInstall()
-  const { supported, permission, isSubscribed, enable } = usePush()
-  const pathname = useRouterState({ select: (s) => s.location.pathname })
-
-  const [dismissed, setDismissed] = useState(false)
   const [showModal, setShowModal] = useState(false)
 
-  // Re-arm the nudge whenever the user enters the booking flow (the home/calendar).
-  useEffect(() => {
-    if (pathname === '/') setDismissed(false)
-  }, [pathname])
-
-  // Open the instructions modal from the menu/footer entry.
+  // Open the instructions modal from the "Install app" menu/footer entry.
   useEffect(() => {
     const handler = () => setShowModal(true)
     window.addEventListener(INSTALL_HELP_EVENT, handler)
     return () => window.removeEventListener(INSTALL_HELP_EVENT, handler)
   }, [])
 
-  const onBookingFlow = pathname === '/' || pathname === '/checkout/success'
-
-  // Install nudge (not installed). On iOS show the "Add to Home Screen" route.
-  const showInstallNudge = !isStandalone && (canInstall || isIos) && onBookingFlow && !dismissed
-  // Once installed but push undecided: a one-time enable nudge.
-  const showEnableNudge =
-    isStandalone && supported && permission === 'default' && !isSubscribed && onBookingFlow && !dismissed
-
-  const handleInstall = async () => {
-    if (canInstall) {
-      const ok = await promptInstall()
-      if (!ok) setShowModal(true)
-    } else {
-      setShowModal(true)
-    }
-  }
-
   return (
     <>
-      {(showInstallNudge || showEnableNudge) && (
-        <div
-          className="fixed inset-x-3 sm:left-auto sm:right-4 sm:w-96 z-[60]"
-          style={{ bottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
-        >
-          <div className="bg-white rounded-2xl shadow-xl border border-gray-200 p-4 flex items-start gap-3">
-            <div className="w-10 h-10 rounded-xl bg-red-600 flex items-center justify-center shrink-0">
-              <span className="text-white text-lg">🏏</span>
-            </div>
-            <div className="flex-1 min-w-0">
-              {showEnableNudge ? (
-                <>
-                  <p className="text-sm font-bold text-gray-800">Turn on notifications</p>
-                  <p className="text-xs text-gray-500 mt-0.5">Get your door code, reminders and changes pushed to this device.</p>
-                  <div className="mt-2 flex gap-2">
-                    <button onClick={() => enable()} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white">Enable</button>
-                    <button onClick={() => setDismissed(true)} className="px-3 py-1.5 text-xs font-medium rounded-lg text-gray-500 hover:bg-gray-100">Not now</button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p className="text-sm font-bold text-gray-800">Add Cricket Revolution to your phone</p>
-                  <p className="text-xs text-gray-500 mt-0.5">Book faster and get push alerts — install it like an app.</p>
-                  <div className="mt-2 flex gap-2">
-                    <button onClick={handleInstall} className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-600 hover:bg-red-700 text-white">
-                      {canInstall ? 'Install' : 'How to install'}
-                    </button>
-                    <button onClick={() => setDismissed(true)} className="px-3 py-1.5 text-xs font-medium rounded-lg text-gray-500 hover:bg-gray-100">Not now</button>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
       {showModal && (
         <InstallHelpModal
           isIos={isIos}

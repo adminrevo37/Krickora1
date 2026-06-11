@@ -56,13 +56,13 @@ function InstallNagBanner() {
         {open && (
           <div className="mt-2 pt-2 border-t border-red-400/50 space-y-1.5 leading-relaxed">
             <p>
-              <strong>iPhone</strong> → Use <u>Safari</u> → Share → Add to Home Screen → follow the final prompt!
+              <strong>iPhone</strong> → in <u>Safari</u>, tap the <strong>Share</strong> button (the square with an arrow pointing up&nbsp;↑) at the bottom → scroll down → <strong>Add to Home Screen</strong> → <strong>Add</strong>.
             </p>
             <p>
-              <strong>Android</strong> → Use Chrome → Share → Add to Home Screen → follow the final prompt!
+              <strong>Android</strong> → in <u>Chrome</u>, tap the <strong>⋮</strong> menu (or <strong>Share</strong>) → <strong>Add to Home Screen</strong> / <strong>Install app</strong>.
             </p>
-            <p>Exit web browser and click on the App saved on your home screen.</p>
-            <p>Follow the final instruction in App. 😊</p>
+            <p>Then exit the browser and open the <strong>Revolution</strong> app from your home screen.</p>
+            <p>Follow the final prompt in the app to turn on notifications. 😊</p>
           </div>
         )}
       </div>
