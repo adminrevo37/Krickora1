@@ -142,7 +142,14 @@ export default function SettingsPanel() {
           <NumberInput label="Customer / hour ($)" value={settings.customerPricePerHour} onChange={(v) => updateSettings({ customerPricePerHour: v })} />
           <NumberInput label="Truman / hour ($)" value={settings.trumanPricePerHour} onChange={(v) => updateSettings({ trumanPricePerHour: v })} />
           <NumberInput label="Coach / hour ($)" value={settings.coachPerHour} onChange={(v) => updateSettings({ coachPerHour: v })} />
+          {/* SPEC_30MIN_GAP_FILL — flat 30-min gap-fill prices (shown only when a 1-hour
+              slot won't fit, e.g. before a 3:30 coach booking). Edits propagate live. */}
+          <NumberInput label="30-min gap — Machine/Run-Up ($)" value={settings.thirtyMinPrice ?? 20} onChange={(v) => updateSettings({ thirtyMinPrice: v })} />
+          <NumberInput label="30-min gap — Truman ($)" value={settings.trumanThirtyMinPrice ?? 25} onChange={(v) => updateSettings({ trumanThirtyMinPrice: v })} />
         </div>
+        <p className="px-6 pb-5 -mt-2 text-xs text-gray-400">
+          The 30-min price only applies to the gap-fill slot a full hour can't fill — customers can't book 30 min in open time.
+        </p>
       </div>
 
       {/* Booking Rules */}
