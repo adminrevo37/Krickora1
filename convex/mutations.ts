@@ -849,12 +849,28 @@ export const createBooking = mutation({
         );
       }
 
-      // SIGNUP-NO-LOCKDOWN (2026-06): the first-booking email-verification gate
-      // (former SEC decision #4) is DISABLED by request — a new account can book
-      // immediately after signing up, without waiting for an email-verification
-      // link. The door code is now delivered by push (Push v2, door-code-first) as
-      // well as email, so an unverified email no longer blocks code delivery.
-      // Admins and coach/manual bookings were already exempt.
+      // SEC decision #4 (re-enabled 2026-06-15): a verified email is required to
+      // COMPLETE the FIRST booking, so the door-code email reliably lands. Exempt
+      // admins and coaches (resolved role, not the client flag). Later bookings are
+      // unaffected. The app also gates its whole UI on verification for customers
+      // (SIGNUP-VERIFY-LOCKDOWN, __root); this is the server-side backstop.
+      if (!isAdminCaller && callerCustomer?.role !== "coach") {
+        const authUser = await getAuthUserSafe(ctx);
+        const verified = (authUser as any)?.emailVerified === true;
+        if (!verified) {
+          const bookerEmail = args.customerEmail.toLowerCase().trim();
+          const priorByEmail = await ctx.db
+            .query("bookings")
+            .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", bookerEmail))
+            .collect();
+          const hasPrior = priorByEmail.some((b: any) => b.status !== "cancelled");
+          if (!hasPrior) {
+            throw new ConvexError(
+              "Please verify your email address before making your first booking. Check your inbox for the verification link."
+            );
+          }
+        }
+      }
     }
 
     const siteSettings = await ctx.db
