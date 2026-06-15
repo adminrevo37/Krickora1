@@ -891,8 +891,10 @@ export const createBooking = mutation({
     const callerIsL1Coach =
       callerCustomer?.role === "coach" &&
       !(callerCustomer?.coachTier === "L2" || callerCustomer?.coachTier === "BowlingL2");
-    const allowEarlyCoachSlot = callerIsL1Coach && args.startHour === 6.5;
-    if (args.startHour < OPENING_HOUR && !allowEarlyCoachSlot) {
+    // L1 coaches may book the 6:30am slot; admins may book ANY pre-open slot
+    // (manual / early bookings, e.g. 6:30am) as an explicit override.
+    const allowPreOpen = (callerIsL1Coach && args.startHour === 6.5) || isAdminCaller;
+    if (args.startHour < OPENING_HOUR && !allowPreOpen) {
       throw new ConvexError("Booking starts before opening time.");
     }
     if (endHour > CLOSING_HOUR) {

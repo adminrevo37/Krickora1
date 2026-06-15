@@ -4,7 +4,7 @@ import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
 import {
   LANES, formatDateKey, formatTime, getAWSTNow, isToday, isSlotBooked,
-  getActiveHalfHoursForLane, type Lane, type TimeSlot, type Booking,
+  type Lane, type TimeSlot, type Booking,
 } from '../lib/booking-data'
 import { getHoursForDate } from '../lib/settings-store'
 import { useSettings } from '../hooks/useSettings'
@@ -115,7 +115,10 @@ export default function AdminBookingCalendar() {
   const allTimeSlots = useMemo(() => {
     const { open, close } = getHoursForDate(settings, selectedDay)
     const slots: TimeSlot[] = []
-    for (let h = open; h < close; h += 0.5) slots.push({ hour: h, label: formatTime(h) })
+    // Admin may book the 6:30am pre-open slot (outside opening hours), so start the
+    // grid from 6:30am when the day opens later. Half-hour granularity throughout.
+    const gridStart = Math.min(open, 6.5)
+    for (let h = gridStart; h < close; h += 0.5) slots.push({ hour: h, label: formatTime(h) })
     return slots
   }, [selectedDay, settings])
   const dateKey = formatDateKey(selectedDay)
@@ -169,21 +172,9 @@ export default function AdminBookingCalendar() {
     }
   }, [activeMonthKey])
 
-  const laneActiveHalfHours = useMemo(() => {
-    const map = new Map<string, Set<number>>()
-    for (const lane of LANES) map.set(lane.id, getActiveHalfHoursForLane(bookings, lane.id, dateKey))
-    return map
-  }, [bookings, dateKey])
-
-  const visibleTimeSlots = useMemo(() => {
-    return allTimeSlots.filter(slot => {
-      if (slot.hour === Math.floor(slot.hour)) return true
-      for (const activeSet of laneActiveHalfHours.values()) {
-        if (activeSet.has(slot.hour)) return true
-      }
-      return false
-    })
-  }, [allTimeSlots, laneActiveHalfHours])
+  // Admin calendar shows EVERY half-hour row so a booking can be made on the half
+  // hour (e.g. 3:30, 4:30) — not just where a half-hour booking already exists.
+  const visibleTimeSlots = allTimeSlots
 
   const isPastDay = useMemo(() => {
     const today = getAWSTNow(); today.setHours(0,0,0,0)
