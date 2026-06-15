@@ -404,6 +404,7 @@ function StatementsTab() {
   const navigate = useNavigate()
   const customers = useQuery(api.queries.listCustomers) ?? []
   const coaches = (customers as any[]).filter(c => c.role === 'coach')
+    .sort((a, b) => (a.name || a.email || '').localeCompare(b.name || b.email || '')) // alphabetical by first name
   const [viewCoach, setViewCoach] = useState<any | null>(null)
   const createPayment = useMutation((api.mutations as any).createPayment)
   const today = new Date().toISOString().slice(0, 10)
@@ -1310,6 +1311,7 @@ function CoachesTab() {
   const navigate = useNavigate()
   const customers = useQuery(api.queries.listCustomers) ?? []
   const coaches = (customers as any[]).filter(c => c.role === 'coach')
+    .sort((a, b) => (a.name || a.email || '').localeCompare(b.name || b.email || '')) // alphabetical by first name
   const [editingCoach, setEditingCoach] = useState<any | null>(null)
   const invites = useQuery(api.queries.listCoachInvites) ?? []
   const createInvite = useMutation(api.mutations.createCoachInvite)

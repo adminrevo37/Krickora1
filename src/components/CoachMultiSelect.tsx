@@ -53,6 +53,7 @@ export default function CoachMultiSelect({
     return coaches
       .filter((c) => !value.includes(c._id))
       .filter((c) => (q ? c.name.toLowerCase().includes(q) : true))
+      .sort((a, b) => a.name.localeCompare(b.name)) // alphabetical by first name
   }, [coaches, value, query])
 
   const add = (id: string) => {
