@@ -555,6 +555,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
   // §2.1: clamp a legacy/120 default down to the {30..90} option set so the select isn't blank.
   const [defaultSessionDuration, setDefaultSessionDuration] = useState<number>(Math.min(user.defaultSessionDuration || 60, 90))
   const [athleteCapacity, setAthleteCapacity] = useState<number>(user.athleteCapacity || 1)
+  const [hideFromPublicCoachList, setHideFromPublicCoachList] = useState<boolean>(!!user.hideFromPublicCoachList)
   const [busy, setBusy] = useState(false)
   // SPEC_ADMIN_MANUAL_POWERS — manual support actions
   const [creditAmount, setCreditAmount] = useState('')
@@ -603,7 +604,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
     try {
       const args: any = { email: user.email, phone, role }
       if (isCoach) { args.name = name } else { args.firstName = firstName.trim(); args.lastName = lastName.trim() }
-      if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color; args.defaultSessionDuration = defaultSessionDuration; args.athleteCapacity = athleteCapacity }
+      if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color; args.defaultSessionDuration = defaultSessionDuration; args.athleteCapacity = athleteCapacity; args.hideFromPublicCoachList = hideFromPublicCoachList }
       // SPEC_PROFILE_POSTCODE_SUBURB: only send when both present (avoids clobbering to blank).
       if (location.postcode.trim() && location.suburb.trim()) { args.postcode = location.postcode.trim(); args.suburb = location.suburb.trim() }
       await updateProfile(args)
@@ -705,6 +706,13 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
                   <option key={n} value={n}>{n === 1 ? '1 (one-on-one)' : `${n} athletes`}</option>
                 ))}
               </select>
+            </label>
+            <label className="flex items-start gap-2 text-sm bg-gray-50 rounded-lg p-3 cursor-pointer select-none">
+              <input type="checkbox" checked={hideFromPublicCoachList} onChange={e => setHideFromPublicCoachList(e.target.checked)} className="mt-0.5 w-4 h-4 accent-emerald-500 shrink-0" />
+              <span className="text-gray-600">
+                <span className="font-medium text-gray-800">Hide from public coach list</span>
+                {' '}— this coach won't appear on the signup form or the "add coaches" picker. Bookings &amp; allocation still work.
+              </span>
             </label>
           </>
         )}

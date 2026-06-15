@@ -294,7 +294,10 @@ export const listCoachesPublic = query({
       .query("customers")
       .withIndex("by_role", (q: any) => q.eq("role", "coach"))
       .collect();
-    return rows.map((c: any) => ({ _id: c._id, name: c.name }));
+    // Exclude coaches flagged hidden from the public list (e.g. the owner account).
+    return rows
+      .filter((c: any) => c.hideFromPublicCoachList !== true)
+      .map((c: any) => ({ _id: c._id, name: c.name }));
   },
 });
 

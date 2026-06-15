@@ -132,6 +132,11 @@ export default defineSchema({
     // SEQUENTIALLY → auto-advance the next slot's start + smart-order the athlete picker
     // by recent history. ticked (true) = coaches multiple at once → independent slots.
     coachesSimultaneously: v.optional(v.boolean()),
+    // 2026-06: hide this coach from the PUBLIC coach list (signup form + the My
+    // Athletes "add coaches" picker) while keeping the account fully functional for
+    // bookings/allocation. Used for the owner account (Noddy) and any coach that
+    // shouldn't be publicly selectable. Admin-toggled on the coach edit form.
+    hideFromPublicCoachList: v.optional(v.boolean()),
     bookingEmailsEnabled: v.optional(v.boolean()),
     // Bug 7: master email switch. Strict === false silences ALL preference-gated
     // emails (regular notifications + the weekly summary); legacy/absent = ON. Does
