@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cricket Revolution — Customer Guide</title>
+<style>
+  :root{--green:#10b981;--green-d:#059669;--blue:#3b82f6;--amber:#f59e0b;--dark:#0f2e23;--ink:#1b2b25;--soft:#5b6b64;--bg:#f6f8f7;--line:#e2e8e5;
+    --screen:#0f172a;--field:#1e293b;--fieldbd:#334155;--ph:#94a3b8;--label:#cbd5e1}
+  *{box-sizing:border-box} body{margin:0;font:16px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:#fff}
+  header{background:linear-gradient(135deg,#137a59,#0f2e23);color:#fff;padding:38px 24px}
+  header .wrap{max-width:900px;margin:0 auto}
+  .badge{display:inline-block;background:rgba(255,255,255,.15);padding:4px 12px;border-radius:999px;font-size:13px;letter-spacing:.04em}
+  h1{margin:.35em 0 .15em;font-size:33px} .lead{font-size:18px;color:#dff0e9;margin:.2em 0 0}
+  main{max-width:900px;margin:0 auto;padding:8px 24px 64px}
+  h2{margin:1.7em 0 .4em;font-size:23px;color:var(--dark);border-bottom:2px solid var(--line);padding-bottom:6px}
+  h3{margin:1.1em 0 .3em;font-size:17px;color:var(--dark)}
+  ol,ul{padding-left:22px} li{margin:.3em 0}
+  .tip{background:#eef7f2;border-left:4px solid var(--green);padding:10px 14px;border-radius:6px;margin:12px 0;font-size:15px}
+  .note{background:#eff6ff;border-left:4px solid var(--blue);padding:10px 14px;border-radius:6px;margin:12px 0;font-size:15px}
+  .toc{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:16px 20px;margin:18px 0}
+  .toc a{color:var(--green-d);text-decoration:none}.toc ol{margin:.3em 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14.5px}
+  th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;vertical-align:top}th{background:var(--bg)}
+  code{background:#eef2f0;padding:1px 6px;border-radius:4px;font-size:14px}
+  footer{max-width:900px;margin:0 auto;padding:24px;color:var(--soft);font-size:13px;border-top:1px solid var(--line)}
+  /* facility access photos */
+  .acc{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:14px 0 6px}
+  .acol{text-align:center}
+  .apill{display:inline-block;background:var(--green);color:#fff;font-weight:800;font-size:14px;border-radius:999px;padding:4px 15px}
+  .acol img{display:block;margin:9px auto 0;max-height:300px;max-width:100%;border-radius:11px;border:1px solid var(--line)}
+  .acap{margin:8px auto 0;font-size:15px;max-width:330px}
+  /* phone mockups */
+  .shots{display:flex;flex-wrap:wrap;gap:18px;justify-content:center;margin:16px 0 6px}
+  .shot{width:230px;text-align:center}.shot .cap{font-size:13px;color:var(--soft);margin-top:7px}
+  .phone{width:230px;background:#0b1226;border-radius:24px;padding:8px;border:1px solid #d7dedb;box-shadow:0 6px 16px rgba(15,46,35,.16)}
+  .scr{position:relative;background:var(--screen);border-radius:17px;overflow:hidden;height:410px}
+  .em-head{background:linear-gradient(135deg,var(--green),var(--green-d));color:#fff;padding:14px 11px 10px;text-align:center;position:relative}
+  .em-head.blue{background:linear-gradient(135deg,#3b82f6,#4f46e5)}.em-head.amber{background:linear-gradient(135deg,#f59e0b,#d97706)}
+  .em-head .t{font-size:13px;font-weight:800}.em-head .s{font-size:9px;opacity:.92;margin-top:1px}
+  .em-x{position:absolute;top:9px;right:10px;width:16px;height:16px;border-radius:50%;background:rgba(255,255,255,.25);color:#fff;font-size:10px;display:flex;align-items:center;justify-content:center}
+  .pad{padding:10px 11px;color:#cbd5e1}
+  .lab{font-size:8.5px;font-weight:700;color:var(--label);margin:7px 0 3px}
+  .fld{background:var(--field);border:1px solid var(--fieldbd);border-radius:7px;min-height:22px;display:flex;align-items:center;padding:5px 8px;color:var(--ph);font-size:9px}
+  .fld.sel{color:#e2e8f0}
+  .opts{display:flex;gap:5px;margin-top:3px}
+  .opt{flex:1;text-align:center;font-size:9px;border-radius:6px;padding:6px 2px;background:#1e293b;color:#94a3b8;border:1px solid #334155}
+  .opt.on{background:var(--green);color:#fff;border-color:var(--green);font-weight:700}
+  .btn{background:linear-gradient(135deg,var(--green),var(--green-d));color:#fff;text-align:center;font-weight:800;font-size:10.5px;border-radius:8px;padding:9px;margin-top:10px}
+  .btn.blue{background:linear-gradient(135deg,#3b82f6,#4f46e5)}.btn.amber{background:linear-gradient(135deg,#f59e0b,#d97706)}
+  .btn.ghost{background:#1e293b;color:#cbd5e1;border:1px solid #334155}
+  .rowb{display:flex;gap:6px;margin-top:9px}.rowb>div{flex:1}
+  .chk{display:flex;align-items:center;gap:5px;font-size:9px;color:#cbd5e1;margin-top:7px}
+  .box{width:11px;height:11px;border-radius:3px;background:var(--green);color:#fff;font-size:8px;display:flex;align-items:center;justify-content:center}
+  .price{display:flex;justify-content:space-between;font-size:9px;color:#cbd5e1;margin-top:5px}
+  .price.tot{font-size:12px;color:#fff;font-weight:800;border-top:1px solid #334155;padding-top:5px;margin-top:6px}
+  .price .gm{color:#6ee7b7}
+  .av{width:18px;height:18px;border-radius:50%;background:var(--green);color:#fff;font-size:9px;display:flex;align-items:center;justify-content:center;font-weight:700}
+  .arow{display:flex;align-items:center;gap:7px;background:#0b1226;border:1px solid #334155;border-radius:8px;padding:6px;margin-top:6px}
+  .arow .nm{font-size:9.5px;color:#e2e8f0;font-weight:700;flex:1;text-align:left}.arow .lk{font-size:8px;color:#6ee7b7}
+  .vmid{padding:14px;text-align:center;color:#cbd5e1}.vmid .ico{font-size:30px}.vmid p{font-size:9px;margin:7px 4px}
+  /* booking grid */
+  .grid5{display:grid;grid-template-columns:26px repeat(5,1fr);gap:3px;margin-top:6px}
+  .gh{font-size:6.5px;color:#cbd5e1;text-align:center;font-weight:700;padding:2px 0;background:#1e293b;border-radius:3px}
+  .gt{font-size:7px;color:#94a3b8;display:flex;align-items:center;justify-content:flex-end;padding-right:2px}
+  .cell{border-radius:3px;text-align:center;padding:7px 0;font-size:6.5px;font-weight:700}
+  .cell.open{background:#064e3b;color:#6ee7b7}.cell.bk{background:#334155;color:#cbd5e1}.cell.g30{background:#155e75;color:#cffafe}
+  .band{grid-column:2/7;background:#b45309;color:#fff;text-align:center;border-radius:3px;padding:6px 0;font-size:7.5px;font-weight:800}
+  /* my-bookings card */
+  .mb{background:#0b1226;border:1px solid #2563eb;border-radius:10px;padding:9px;text-align:left}
+  .mb .tm{font-size:11px;color:#fff;font-weight:800}
+  .mb .ln{font-size:9px;color:#cbd5e1;margin-top:2px}.mb .ln b{color:#6ee7b7}
+  .codebox{background:#0c2a4d;border:1px solid #2563eb;border-radius:7px;padding:6px;margin-top:7px;text-align:center}
+  .codebox .k{font-size:7px;color:#93c5fd;font-weight:700;letter-spacing:.04em}
+  .codebox .c{font-size:15px;color:#bfdbfe;font-weight:800;font-family:monospace;letter-spacing:2px}
+  .acts{display:flex;gap:5px;margin-top:8px;flex-wrap:wrap}
+  .acts div{flex:1;text-align:center;font-size:8px;border-radius:6px;padding:5px 0;border:1px solid #334155;color:#cbd5e1;min-width:48px}
+  .sumg{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px}
+  .sc{background:#0b1226;border:1px solid #334155;border-radius:8px;padding:7px;text-align:left}
+  .sc .k{font-size:7px;color:#94a3b8;font-weight:700;letter-spacing:.03em}.sc .v{font-size:13px;color:#e2e8f0;font-weight:800;margin-top:2px}
+  .sc.cr{background:#0c2a4d;border-color:#2563eb}.sc.cr .v{color:#bfdbfe}
+  .ledg{margin-top:7px;font-size:8px}
+  .ledg .lr{display:flex;justify-content:space-between;border-bottom:1px solid #1e293b;padding:4px 2px;color:#cbd5e1}
+  .tag{font-size:7px;border-radius:4px;padding:1px 5px;font-weight:700}.tag.pd{background:#14532d;color:#bbf7d0}.tag.cr{background:#1e3a8a;color:#bfdbfe}
+  .chip{display:inline-flex;align-items:center;gap:3px;background:var(--amber);color:#fff;font-size:9px;font-weight:700;border-radius:99px;padding:3px 9px;margin:3px 3px 0 0}
+  .chip.off{background:#1e293b;color:#fcd34d;border:1px solid #92400e}
+  @media print{header{-webkit-print-color-adjust:exact;print-color-adjust:exact}h2{page-break-after:avoid}.shots,.phone,table,.acc{page-break-inside:avoid}}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <span class="badge">🏏 CRICKET REVOLUTION · CUSTOMER GUIDE</span>
+  <h1>Booking at Cricket Revolution</h1>
+  <p class="lead">Sign up, book a net, pay, get your door code, and manage it all from your phone.</p>
+</div></header>
+<main>
+
+<h2 id="access" style="margin-top:.3em">Getting in &amp; out at the facility</h2>
+<div class="acc">
+  <div class="acol"><span class="apill">Getting in</span>
+    <img src="s4-ann.jpg" alt="Use the silver Sebury keypad">
+    <p class="acap">Use the <b>silver Sebury keypad</b> (not the black intercom). Enter your
+    <b>door code, then press&nbsp;#</b> — the roller door opens, then closes automatically on a
+    <b>30-second timer</b> once the entrance is clear.</p></div>
+  <div class="acol"><span class="apill">Getting out</span>
+    <img src="exit-ann.jpg" alt="Press the green button to exit">
+    <p class="acap">Press the green <b>“PRESS TO OPEN DOOR”</b> button on the wall — the roller door
+    opens to let you out, then closes again on a <b>30-second timer</b> once the entrance is clear.</p></div>
+</div>
+<div class="tip">Your door code is in your booking confirmation (email + on screen). Full facility instructions &amp;
+house rules: <b>cricketrevolution.com.au/access</b></div>
+
+<div class="toc"><strong>On this page</strong>
+  <ol>
+    <li><a href="#access">Getting in &amp; out at the facility</a></li>
+    <li><a href="#rules">House rules &amp; at the facility</a></li>
+    <li><a href="#signup">Creating your account</a></li>
+    <li><a href="#book">Booking a net</a></li>
+    <li><a href="#manage">Your bookings — change or cancel</a></li>
+    <li><a href="#waitlist">Joining a waitlist</a></li>
+    <li><a href="#mate">Adding a mate</a></li>
+    <li><a href="#family">Family &amp; kids (My Athletes)</a></li>
+    <li><a href="#pay">Payments &amp; account credit</a></li>
+    <li><a href="#notify">Emails you'll get</a></li>
+    <li><a href="#install">Add the app to your phone</a></li>
+  </ol>
+</div>
+
+<!-- HOUSE RULES / FACILITY -->
+<h2 id="rules">House rules &amp; at the facility</h2>
+<h3>Your lane</h3>
+<p>The <b>5 lanes are numbered inside the building</b> — your booking confirmation tells you which one. Lighting is
+automatic, and bowling-machine operating instructions are <b>on the machine</b>.</p>
+<h3>House rules</h3>
+<ul>
+  <li><b>Footwear &amp; surface:</b> clean, flat-soled, non-marking shoes only — <b>no spikes or metal cleats</b> in the building. No food or chewing gum in the nets.</li>
+  <li><b>Safety:</b> protective gear (helmet, pads, gloves, box) is <b>compulsory</b>. One batter in the lane at a time; everyone else outside the net. Only one person operating the machine. Never reach into the machine while it's on. Anyone under 18 must be supervised. <b>Maximum 3 people per lane.</b></li>
+  <li><b>Equipment &amp; care:</b> operate machines only as instructed. Collect all balls and leave the crate on the machine stand. <b style="color:#b02a26">Do NOT mix crates of balls — anyone found mixing crates will be banned.</b> Report any fault via the app.</li>
+  <li><b>Conduct:</b> keep noise down — we back onto homes and a bowling club. No alcohol, smoking or vaping anywhere on site.</li>
+  <li><b>Leaving:</b> take all your belongings and rubbish. The lights switch off and the roller door closes automatically.</li>
+</ul>
+<div class="note"><b>Urgent, or can't get in (any hour):</b> call Julian on <b>0451&nbsp;016&nbsp;151</b>. Emergency exits
+are on the <b>West wall by the run-up nets</b> and the <b>main entrance door</b> — in a fire, get out and call <b>000</b>.
+Full facility instructions: <b>cricketrevolution.com.au/access</b></div>
+
+<!-- SIGNUP -->
+<h2 id="signup">1. Creating your account</h2>
+<p>Tap <b>Sign Up</b> and fill in your details. If you (or your child) train with a coach, tap <b>Yes</b> under
+<b>Link your Coaches</b> and pick them — that links you so the coach can book your sessions. Then <b>verify your email</b>
+(tap the link we send) to activate the account.</p>
+<div class="shots">
+  <div class="shot"><div class="phone"><div class="scr">
+    <div class="em-head"><div class="em-x">✕</div><div class="t">Create Account</div><div class="s">Sign up to book and manage sessions</div></div>
+    <div class="pad">
+      <div class="rowb"><div><div class="lab">First Name</div><div class="fld">John</div></div><div><div class="lab">Last Name</div><div class="fld">Smith</div></div></div>
+      <div class="lab">Email Address</div><div class="fld">your@email.com</div>
+      <div class="lab">Mobile</div><div class="fld">0412 345 678</div>
+      <div style="border:1px solid #1f6f53;background:rgba(16,185,129,.10);border-radius:8px;padding:7px;margin-top:9px">
+        <div style="color:#6ee7b7;font-weight:800;font-size:9px">🏏 Link your Coaches</div>
+        <div class="opts" style="margin-top:5px"><div class="opt on">Yes</div><div class="opt">No</div></div>
+      </div>
+      <div class="lab">Password</div><div class="fld">Min 10 characters</div>
+      <div class="btn">Create Account</div>
+    </div>
+  </div></div><div class="cap">Name, email, mobile, link your coach, password.</div></div>
+  <div class="shot"><div class="phone"><div class="scr">
+    <div class="em-head"><div class="t">📧 Verify your email</div></div>
+    <div class="vmid"><div class="ico">📧</div>
+      <p>Open the email from Cricket Revolution and tap the <b>“Verify email”</b> button to activate your account.</p>
+      <p>Sent to <b>your@email.com</b></p>
+      <div class="btn">I've verified — check now</div>
+      <p style="font-size:8px">Check spam too — it can take a few minutes with some providers.</p>
+    </div>
+  </div></div><div class="cap">Verify your email to finish — the app unlocks automatically.</div></div>
+</div>
+
+<!-- BOOK -->
+<h2 id="book">2. Booking a net</h2>
+<p>Open <b>Book a Net</b>, pick your day, then tap an open <b>＋</b> cell on the lane and time you want. There are
+<b>5 lanes</b> — Bowling Machine 1–3 and 9m Run Up 1–2 (Bowling Machine 3 also offers the premium <b>Truman</b> machine).</p>
+<ul>
+  <li><span style="color:#059669;font-weight:700">＋</span> = open · <b style="color:#64748b">Booked</b> = taken · a <b>30 min</b> cell is a short gap you can grab · a full hour shows <b style="color:#b45309">JOIN WAITLIST</b>.</li>
+  <li>In the booking box: pick the machine type and length, see the price, add a <b>discount code</b> or your <b>account credit</b>, then pay securely by card. You get your <b>door code</b> straight away.</li>
+</ul>
+<div class="shots">
+  <div class="shot"><div class="phone"><div class="scr">
+    <div class="em-head"><div class="t">📅 Book a Net</div><div class="s">Tuesday 17 June</div></div>
+    <div class="pad">
+      <div class="grid5">
+        <div class="gt"></div><div class="gh">BM1</div><div class="gh">BM2</div><div class="gh">BM3</div><div class="gh">RU1</div><div class="gh">RU2</div>
+        <div class="gt">3pm</div><div class="cell bk">Booked</div><div class="cell open">＋</div><div class="cell open">＋</div><div class="cell open">＋</div><div class="cell open">＋</div>
+        <div class="gt">3:30</div><div class="cell g30">30 min</div><div class="cell bk">Booked</div><div class="cell open">＋</div><div class="cell open">＋</div><div class="cell open">＋</div>
+        <div class="gt">4pm</div><div class="cell bk">Booked</div><div class="cell bk">Booked</div><div class="cell bk">Booked</div><div class="cell bk">Booked</div><div class="cell bk">Booked</div>
+        <div class="gt">4pm</div><div class="band">⏳ JOIN WAITLIST · 2 waiting</div>
+        <div class="gt">5pm</div><div class="cell open">＋</div><div class="cell open">＋</div><div class="cell open">＋</div><div class="cell open">＋</div><div class="cell open">＋</div>
+      </div>
+      <div style="font-size:8px;color:#94a3b8;margin-top:8px;text-align:center">Tap ＋ to book · tap a full row to join the waitlist</div>
+    </div>
+  </div></div><div class="cap">The lane × time grid — tap an open cell.</div></div>
+  <div class="shot"><div class="phone"><div class="scr">
+    <div class="em-head"><div class="em-x">✕</div><div class="t">Bowling Machine 3</div><div class="s">Tue 17 Jun · 5:00–6:00pm</div></div>
+    <div class="pad">
+      <div class="lab">Machine type</div>
+      <div class="opts"><div class="opt on">Standard $40/hr</div><div class="opt">Truman $50/hr</div></div>
+      <div class="lab" style="margin-top:9px">Length</div>
+      <div class="fld sel">1 hour — $40.00</div>
+      <div class="lab">Discount code</div>
+      <div class="rowb" style="margin-top:0"><div class="fld">Enter code</div><div class="btn ghost" style="margin-top:0;flex:0 0 52px">Apply</div></div>
+      <div class="chk"><span class="box">✓</span> Apply my account credit ($15.00)</div>
+      <div class="price"><span>1 hour · Standard</span><span>$40.00</span></div>
+      <div class="price"><span class="gm">Account credit</span><span class="gm">−$15.00</span></div>
+      <div class="price tot"><span>Total</span><span>$25.00</span></div>
+      <div class="btn blue">Pay $25.00</div>
+    </div>
+  </div></div><div class="cap">Choose machine + length, apply credit, pay by card.</div></div>
+  <div class="shot"><div class="phone"><div class="scr">
+    <div class="em-head"><div class="t">✓ Booking confirmed!</div><div class="s">BM3 Standard · Tue 17 · 5–6pm</div></div>
+    <div class="vmid"><div class="ico">🔑</div>
+      <p>Your door code<br><b style="font-size:16px;color:#6ee7b7">8 0 2 3</b></p>
+      <div class="btn">📅 Add to calendar</div>
+      <p style="font-size:8px">Also sent to your email. Enter it on the keypad, then press #.</p>
+    </div>
+  </div></div><div class="cap">Door code on screen + emailed instantly.</div></div>
+</div>
+
+<!-- MANAGE -->
+<h2 id="manage">3. Your bookings — change or cancel</h2>
+<p>Find everything under <b>My Bookings</b>. Your own sessions show in <b>blue</b> with the door code. Tap <b>✏️ Modify</b> to
+change the lane, machine, time or length, or <b>Cancel</b> to cancel.</p>
+<ul>
+  <li><b>Costs more?</b> (e.g. longer, or Truman) — you pay just the <b>difference</b> (your credit is used first).</li>
+  <li><b>Costs less?</b> (e.g. shorter) — the difference comes back as <b>account credit</b>.</li>
+  <li><b>Cancel</b> at least the cutoff time before you start (usually 2 hours) — you get the value back as credit. Closer to the start it locks (🔒).</li>
+  <li>Within 2 hours of your start you can still move <b>up to 1 hour earlier</b> or <b>extend</b> (paying the difference).</li>
+</ul>
+<div class="shots">
+  <div class="shot"><div class="phone"><div class="scr">
+    <div class="em-head blue"><div class="t">My Bookings</div><div class="s">Your sessions</div></div>
+    <div class="pad">
+      <div class="mb">
+        <div class="tm">5:00 – 6:00pm</div>
+        <div class="ln">🎯 Bowling Machine 3 · <b>Truman</b> · 60 min · <b>$50</b></div>
+        <div class="ln" style="color:#fcd34d">👥 With Alex &amp; Jordan</div>
+        <div class="codebox"><div class="k">🔑 ACCESS CODE</div><div class="c">8023</div></div>
+        <div class="acts"><div>✏️ Modify</div><div>👥 Add a Mate</div><div>Cancel</div></div>
+      </div>
+    </div>
+  </div></div><div class="cap">Your booking, in blue, with the door code + actions.</div></div>
+</div>
+
+<!-- WAITLIST -->
+<h2 id="waitlist">4. Joining a waitlist</h2>
+<p>If an hour is fully booked it shows <b>JOIN WAITLIST</b>. Tap it, pick the times you want, and we'll <b>email you the
+moment any lane opens</b> at those times (from a cancellation or change). It's <b>first-in, first-refusal</b> — you get an
+exclusive hold to grab it before the next person.</p>
+<div class="shots">
+  <div class="shot"><div class="phone"><div class="scr">
+    <div class="em-head amber"><div class="em-x">✕</div><div class="t">Join Waitlist</div><div class="s">Tuesday 17 June</div></div>
+    <div class="pad">
+      <p style="font-size:9px">Pick the times you'd like a net. We'll notify you when any lane opens — first in the queue gets first refusal.</p>
+      <div style="margin-top:4px"><span class="chip">✓ 4pm</span><span class="chip off">5pm</span><span class="chip off">6pm</span><span class="chip">✓ 6:30pm</span></div>
+      <div style="background:#0b1226;border:1px solid #334155;border-radius:7px;padding:7px;margin-top:9px;font-size:8px;color:#94a3b8">You'll get an email the moment ANY lane opens at these times — it doesn't matter which lane.</div>
+      <div class="btn amber">Join Waitlist</div>
+    </div>
+  </div></div><div class="cap">Pick your times — we email you when one frees up.</div></div>
+</div>
+
+<!-- MATE -->
+<h2 id="mate">5. Adding a mate</h2>
+<p>Training with friends? On any booking tap <b>👥 Add a Mate</b> to add people who have a Cricket Revolution account — they
+share the <b>same single door code</b>. Search them by mobile number; if they're not signed up yet you can <b>send an SMS
+invite</b> and they get the code once they join. Your regular mates are saved for next time.</p>
+<div class="shots">
+  <div class="shot"><div class="phone"><div class="scr">
+    <div class="em-head"><div class="t">Add a Mate</div><div class="s">Share the same door code</div></div>
+    <div class="pad">
+      <div class="mb" style="border-color:#334155"><div class="tm" style="font-size:9px">Bowling Machine 3 · Tue 17 · 5–6pm</div>
+        <div class="codebox"><div class="k">🔑 DOOR CODE</div><div class="c">8023</div></div></div>
+      <div class="lab">Add by mobile</div>
+      <div class="rowb" style="margin-top:0"><div class="fld">04xx xxx xxx</div><div class="btn ghost" style="margin-top:0;flex:0 0 56px">Search</div></div>
+      <div class="lab" style="margin-top:9px">Your mates</div>
+      <div class="arow"><span class="av">A</span><span class="nm">Alex Brown <span style="color:#94a3b8">(×3)</span></span><span class="lk">Add</span></div>
+      <div class="arow"><span class="av">J</span><span class="nm">Jordan Lee <span style="color:#94a3b8">(×1)</span></span><span class="lk">Add</span></div>
+    </div>
+  </div></div><div class="cap">Search by mobile, or invite by SMS. Mates share one code.</div></div>
+</div>
+
+<!-- FAMILY -->
+<h2 id="family">6. Family &amp; kids (My Athletes)</h2>
+<p>Under <b>Profile → My Athletes</b> you can add your children as athletes and pick their coach(es). When a coach books a
+session for your child, you get the details and a door code — tap <b>📱 SMS Details</b> on their session to text the code and
+time straight to a phone.</p>
+<div class="note">One account can hold the whole family. Add each child, choose their coach, and their coaching sessions
+appear under your bookings with their own access code.</div>
+
+<!-- PAY -->
+<h2 id="pay">7. Payments &amp; account credit</h2>
+<p>Card payments are handled securely by Stripe. Any time a booking is cancelled or shortened, the value comes back as
+<b>account credit</b> — it's <b>applied automatically</b> at your next checkout. See it all under <b>Payments &amp; Credit</b>,
+including receipts/tax invoices.</p>
+<div class="shots">
+  <div class="shot"><div class="phone"><div class="scr">
+    <div class="em-head blue"><div class="t">Payments &amp; Credit</div><div class="s">History &amp; balance</div></div>
+    <div class="pad">
+      <div class="sumg">
+        <div class="sc cr"><div class="k">ACCOUNT CREDIT</div><div class="v">$15.00</div></div>
+        <div class="sc"><div class="k">TOTAL PAID</div><div class="v">$320</div></div>
+      </div>
+      <div class="ledg">
+        <div class="lr"><span><span class="tag pd">Paid</span> BM3 · Tue 17</span><span>$25.00</span></div>
+        <div class="lr"><span><span class="tag cr">Credit</span> Booking shortened</span><span>+$15.00</span></div>
+        <div class="lr"><span><span class="tag pd">Paid</span> RU1 · Fri 13</span><span>$40.00</span></div>
+      </div>
+      <div style="font-size:8px;color:#94a3b8;margin-top:7px;text-align:center">Credit is applied automatically at checkout.</div>
+    </div>
+  </div></div><div class="cap">Balance, payment history and receipts.</div></div>
+</div>
+
+<!-- NOTIFY -->
+<h2 id="notify">8. Notifications you'll get</h2>
+<p>If you <a href="#install">install the app</a> and allow notifications, you'll also get <b>push notifications</b> on
+your phone — the <b>door code comes first</b> so you can get straight in.</p>
+<h3>Push notifications</h3>
+<ul>
+  <li><b>Booking confirmed</b> — with your door code</li>
+  <li><b>Session reminder</b> — shortly before you start (door code first)</li>
+  <li><b>A waitlist slot opened</b> — tap <b>Accept</b> to grab it, or pass to the next person</li>
+  <li><b>Booking changed or cancelled</b></li>
+  <li><b>Account credit added</b></li>
+  <li><b>A mate added you</b> to a booking</li>
+</ul>
+<p>You choose which push categories you want and can turn them off per device (under <b>Profile → Notifications</b>).
+Email still covers everything below.</p>
+<h3>Emails</h3>
+<table>
+  <tr><th>When</th><th>You get</th></tr>
+  <tr><td>You book a net</td><td><b>Booking confirmation</b> with your <b>door code</b> + add-to-calendar</td></tr>
+  <tr><td>A few hours before</td><td>A <b>reminder</b> with the time + door code</td></tr>
+  <tr><td>You change a booking</td><td>An updated confirmation with the <b>new code</b></td></tr>
+  <tr><td>You cancel</td><td>A cancellation note + any <b>credit issued</b></td></tr>
+  <tr><td>You're on a waitlist</td><td>Confirmation, then an <b>“a slot opened!”</b> offer (with an Accept link) when one frees up</td></tr>
+  <tr><td>A mate adds you</td><td>A note with the booking + door code</td></tr>
+</table>
+<div class="tip">You can fine-tune which optional emails you get under <b>Profile → Email preferences</b>. Booking confirmations
+with your door code always come through.</div>
+
+<!-- INSTALL -->
+<h2 id="install">9. Add the app to your phone</h2>
+<p>Install Cricket Revolution to your home screen for one-tap booking and push notifications.</p>
+<ul>
+  <li><b>iPhone (Safari):</b> tap the <b>Share</b> button (square with an arrow) → <b>Add to Home Screen</b> → <b>Add</b>.</li>
+  <li><b>Android (Chrome):</b> open the menu and choose <b>Install app</b> / <b>Add to Home screen</b>, or tap <b>Install now</b> when prompted.</li>
+</ul>
+
+</main>
+<footer>
+  Cricket Revolution — Customer Guide. &nbsp;·&nbsp; Questions? info@cricketrevolution.com.au &nbsp;·&nbsp;
+  Facility access &amp; house rules: cricketrevolution.com.au/access
+</footer>
+</body>
+</html>
