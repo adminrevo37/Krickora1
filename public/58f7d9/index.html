@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cricket Revolution — Coach Guide</title>
+<style>
+  :root{--green:#10b981;--green-d:#059669;--blue:#3b82f6;--amber:#f59e0b;--dark:#0f2e23;--ink:#1b2b25;--soft:#5b6b64;--bg:#f6f8f7;--line:#e2e8e5;
+    --screen:#0f172a;--field:#1e293b;--fieldbd:#334155;--ph:#94a3b8;--label:#cbd5e1}
+  *{box-sizing:border-box} body{margin:0;font:16px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:#fff}
+  header{background:linear-gradient(135deg,#0f7a52,#0f2e23);color:#fff;padding:38px 24px}
+  header .wrap{max-width:900px;margin:0 auto}
+  .badge{display:inline-block;background:rgba(255,255,255,.15);padding:4px 12px;border-radius:999px;font-size:13px;letter-spacing:.04em}
+  h1{margin:.35em 0 .15em;font-size:33px} .lead{font-size:18px;color:#dff0e9;margin:.2em 0 0}
+  main{max-width:900px;margin:0 auto;padding:8px 24px 64px}
+  h2{margin:1.7em 0 .4em;font-size:23px;color:var(--dark);border-bottom:2px solid var(--line);padding-bottom:6px}
+  h3{margin:1.1em 0 .3em;font-size:17px;color:var(--dark)}
+  ol,ul{padding-left:22px} li{margin:.3em 0}
+  .tip{background:#eef7f2;border-left:4px solid var(--green);padding:10px 14px;border-radius:6px;margin:12px 0;font-size:15px}
+  .note{background:#eff6ff;border-left:4px solid var(--blue);padding:10px 14px;border-radius:6px;margin:12px 0;font-size:15px}
+  .toc{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:16px 20px;margin:18px 0}
+  .toc a{color:var(--green-d);text-decoration:none} .toc ol{margin:.3em 0}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14.5px}
+  th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;vertical-align:top} th{background:var(--bg)}
+  code{background:#eef2f0;padding:1px 6px;border-radius:4px;font-size:14px}
+  footer{max-width:900px;margin:0 auto;padding:24px;color:var(--soft);font-size:13px;border-top:1px solid var(--line)}
+  .dot{display:inline-block;width:11px;height:11px;border-radius:50%;vertical-align:middle;margin:0 2px}
+  .dot.r{background:#dc2626}.dot.a{background:#f59e0b}.dot.g{background:#16a34a}
+  /* facility access photos */
+  .acc{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin:14px 0 6px}
+  .acol{text-align:center}
+  .apill{display:inline-block;background:var(--green);color:#fff;font-weight:800;font-size:14px;border-radius:999px;padding:4px 15px}
+  .acol img{display:block;margin:9px auto 0;max-height:300px;max-width:100%;border-radius:11px;border:1px solid var(--line)}
+  .acap{margin:8px auto 0;font-size:15px;max-width:330px}
+
+  /* phone mockups */
+  .shots{display:flex;flex-wrap:wrap;gap:18px;justify-content:center;margin:16px 0 6px}
+  .shot{width:230px;text-align:center}
+  .shot .cap{font-size:13px;color:var(--soft);margin-top:7px}
+  .phone{width:230px;background:#0b1226;border-radius:24px;padding:8px;border:1px solid #d7dedb;box-shadow:0 6px 16px rgba(15,46,35,.16)}
+  .scr{position:relative;background:var(--screen);border-radius:17px;overflow:hidden;height:400px}
+  .em-head{background:linear-gradient(135deg,var(--green),var(--green-d));color:#fff;padding:14px 11px 10px;text-align:center;position:relative}
+  .em-head.blue{background:linear-gradient(135deg,#3b82f6,#4f46e5)}
+  .em-head.amber{background:linear-gradient(135deg,#f59e0b,#d97706)}
+  .em-head .t{font-size:13px;font-weight:800}.em-head .s{font-size:9px;opacity:.92;margin-top:1px}
+  .em-x{position:absolute;top:9px;right:10px;width:16px;height:16px;border-radius:50%;background:rgba(255,255,255,.25);color:#fff;font-size:10px;display:flex;align-items:center;justify-content:center}
+  .pad{padding:10px 11px;color:#cbd5e1}
+  .lab{font-size:8.5px;font-weight:700;color:var(--label);margin:7px 0 3px}
+  .fld{background:var(--field);border:1px solid var(--fieldbd);border-radius:7px;min-height:22px;display:flex;align-items:center;padding:5px 8px;color:var(--ph);font-size:9px}
+  .fld.sel{color:#e2e8f0}
+  .opts{display:flex;gap:5px;margin-top:3px}
+  .opt{flex:1;text-align:center;font-size:9px;border-radius:6px;padding:6px 0;background:#1e293b;color:#94a3b8;border:1px solid #334155}
+  .opt.on{background:var(--green);color:#fff;border-color:var(--green);font-weight:700}
+  .btn{background:linear-gradient(135deg,var(--green),var(--green-d));color:#fff;text-align:center;font-weight:800;font-size:10.5px;border-radius:8px;padding:9px;margin-top:10px}
+  .btn.blue{background:linear-gradient(135deg,#3b82f6,#4f46e5)}
+  .btn.ghost{background:#1e293b;color:#cbd5e1;border:1px solid #334155}
+  .rowb{display:flex;gap:6px;margin-top:9px}.rowb>div{flex:1}
+  .slot{background:#0b1226;border:1px solid #334155;border-radius:8px;padding:7px;margin-top:6px;text-align:left}
+  .slot .sh{display:flex;justify-content:space-between;font-size:8.5px;color:#94a3b8}
+  .slot .sa{font-size:10px;color:#e2e8f0;font-weight:700;margin-top:2px}
+  .slot .dur{font-size:8.5px;color:#6ee7b7;margin-top:2px}
+  .add{margin-top:8px;border:1px dashed #3f7a63;border-radius:8px;text-align:center;color:#6ee7b7;font-size:9.5px;font-weight:700;padding:7px}
+  .timeline{text-align:left;margin-top:6px}
+  .tlrow{display:flex;align-items:center;gap:6px;font-size:9px;padding:4px 6px;border-radius:6px;margin-top:4px}
+  .tlrow.al{background:rgba(220,38,38,.18);color:#fecaca}
+  .tlrow.gap{background:repeating-linear-gradient(45deg,#3a2f12,#3a2f12 4px,#2c2410 4px,#2c2410 8px);color:#fcd34d}
+  .pillrow{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
+  .chip{display:inline-flex;align-items:center;gap:3px;background:var(--green);color:#fff;font-size:8.5px;font-weight:700;border-radius:99px;padding:2px 8px}
+  .av{width:18px;height:18px;border-radius:50%;background:var(--green);color:#fff;font-size:9px;display:flex;align-items:center;justify-content:center;font-weight:700}
+  .arow{display:flex;align-items:center;gap:7px;background:#0b1226;border:1px solid #334155;border-radius:8px;padding:6px;margin-top:6px}
+  .arow .nm{font-size:9.5px;color:#e2e8f0;font-weight:700;flex:1;text-align:left}
+  .arow .lk{font-size:8px;color:#6ee7b7}
+  .strip{display:flex;gap:3px;margin-top:4px}
+  .day{flex:1;text-align:center;font-size:7.5px;color:#cbd5e1;background:#1e293b;border-radius:6px;padding:4px 0}
+  .day.sel{background:var(--green);color:#fff;font-weight:700}
+  .day .d2{display:block;margin-top:2px}
+  .card2{background:#0b1226;border:1px solid #334155;border-radius:9px;padding:8px;margin-top:8px;text-align:left}
+  .card2 .hd{display:flex;justify-content:space-between;font-size:10px;color:#e2e8f0;font-weight:800}
+  .card2 .code{font-size:8.5px;color:#6ee7b7;margin-top:2px}
+  .acts{display:flex;gap:5px;margin-top:7px}
+  .acts div{flex:1;text-align:center;font-size:8.5px;border-radius:6px;padding:5px 0;border:1px solid #334155;color:#cbd5e1}
+  .sumg{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px}
+  .sc{background:#0b1226;border:1px solid #334155;border-radius:8px;padding:7px;text-align:left}
+  .sc .k{font-size:7px;color:#94a3b8;font-weight:700;letter-spacing:.03em}
+  .sc .v{font-size:13px;color:#e2e8f0;font-weight:800;margin-top:2px}
+  .sc.owe .v{color:#fbbf24}
+  .ledg{margin-top:7px;font-size:8px}
+  .ledg .lr{display:flex;justify-content:space-between;border-bottom:1px solid #1e293b;padding:4px 2px;color:#cbd5e1}
+  .tag{font-size:7px;border-radius:4px;padding:1px 5px;font-weight:700}
+  .tag.b{background:#1e3a8a;color:#bfdbfe}.tag.p{background:#14532d;color:#bbf7d0}
+  .vmid{padding:14px;text-align:center;color:#cbd5e1}.vmid .ico{font-size:30px}.vmid p{font-size:9px;margin:7px 4px}
+  @media print{header{-webkit-print-color-adjust:exact;print-color-adjust:exact}h2{page-break-after:avoid}.shots,.phone,table{page-break-inside:avoid}}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <span class="badge">🏏 CRICKET REVOLUTION · COACH GUIDE</span>
+  <h1>Coaching at Cricket Revolution</h1>
+  <p class="lead">Book your lanes, add your athletes to each session, and manage your roster — all from your phone.</p>
+</div></header>
+<main>
+
+<h2 id="access" style="margin-top:.3em">Getting in &amp; out at the facility</h2>
+<div class="acc">
+  <div class="acol">
+    <span class="apill">Getting in</span>
+    <img src="s4-ann.jpg" alt="Use the silver Sebury keypad">
+    <p class="acap">Use the <b>silver Sebury keypad</b> (not the black intercom). Enter your
+    <b>door code, then press&nbsp;#</b> — the roller door opens, then closes automatically on a
+    <b>30-second timer</b> once the entrance is clear.</p>
+  </div>
+  <div class="acol">
+    <span class="apill">Getting out</span>
+    <img src="exit-ann.jpg" alt="Press the green button to exit">
+    <p class="acap">Press the green <b>“PRESS TO OPEN DOOR”</b> button on the wall — the roller door
+    opens to let you out, then closes again on a <b>30-second timer</b> once the entrance is clear.</p>
+  </div>
+</div>
+<div class="tip">Your door code is in your booking confirmation. Full facility instructions &amp; house rules:
+<b>cricketrevolution.com.au/facility-instructions</b></div>
+
+<div class="note">This guide is for <b>coaches</b>. You book lanes at your coach rate (no online payment — settled on your
+statement), then <b>allocate your athletes</b> to each session so they get their own door code and reminders. Athletes/parents
+must pick you as their coach (or you add them) before they appear in your lists.</div>
+
+<div class="toc"><strong>On this page</strong>
+  <ol>
+    <li><a href="#access">Getting in &amp; out at the facility</a></li>
+    <li><a href="#book">Booking a lane</a></li>
+    <li><a href="#allocate">Adding athletes to a session</a> — the main one</li>
+    <li><a href="#roster">Your athlete roster (add &amp; invite)</a></li>
+    <li><a href="#schedule">Your schedule &amp; coverage dots</a></li>
+    <li><a href="#repeat">Repeating a session</a></li>
+    <li><a href="#change">Changing or cancelling</a></li>
+    <li><a href="#statements">Statements &amp; earnings</a></li>
+    <li><a href="#notify">What athletes &amp; parents get told</a></li>
+  </ol>
+</div>
+
+<!-- 1 BOOKING -->
+<h2 id="book">1. Booking a lane</h2>
+<p>Open <b>Book a Net</b>, pick your day, then tap an open cell on the lane you want. As a coach you book on
+<b>whole hours</b> (plus the <b>3:30pm</b> weekday after-school slot). There's <b>no online payment</b> — your
+sessions are billed to your statement.</p>
+<p>You can book any open slot within your booking window; newly released slots open <b>Sunday&nbsp;5pm</b>.</p>
+<div class="shots">
+  <div class="shot">
+    <div class="phone"><div class="scr">
+      <div class="em-head"><div class="em-x">✕</div><div class="t">New Booking</div><div class="s">BM1 · Mon 8 · 3:30pm start</div></div>
+      <div class="pad">
+        <div class="lab">Session length</div>
+        <div class="opts"><div class="opt on">1 hr</div><div class="opt">1.5 hr</div><div class="opt">2 hr</div></div>
+        <div class="lab" style="margin-top:11px">Lane</div>
+        <div class="fld sel">🏏 BM1 — Bowling Machine</div>
+        <div class="btn">Confirm booking</div>
+        <div style="font-size:8px;color:#94a3b8;margin-top:7px;text-align:center">No payment now — billed to your statement</div>
+      </div>
+    </div></div>
+    <div class="cap">Pick a length and confirm — no payment screen for coaches.</div>
+  </div>
+  <div class="shot">
+    <div class="phone"><div class="scr">
+      <div class="em-head"><div class="t">✓ Booking confirmed</div><div class="s">BM1 · Mon 8 · 3:30–5:00pm</div></div>
+      <div class="vmid"><div class="ico">🔑</div>
+        <p>Your door code<br><b style="font-size:15px;color:#6ee7b7">8 0 2 3</b></p>
+        <div class="btn">＋ Add athletes now</div>
+        <p style="font-size:8px">Add who you're coaching so they get their own code &amp; reminder.</p>
+      </div>
+    </div></div>
+    <div class="cap">You get a door code instantly. Tap <b>Add athletes</b> to allocate.</div>
+  </div>
+</div>
+
+<!-- 2 ALLOCATE -->
+<h2 id="allocate">2. Adding athletes to a session</h2>
+<p>This is the key step. Open a booking (from the confirmation, or tap the session on <b>My Bookings</b>) to open the
+<b>Athlete Allocations</b> editor. The app <b>pre-fills back-to-back slots</b> based on your default session length and how
+many athletes you coach at once — you just drop a name into each slot.</p>
+<ol>
+  <li>Tap a slot's <b>“Select an athlete…”</b> and pick from your list (type to search).</li>
+  <li>Adjust each athlete's <b>start time and length</b> (30 / 45 / 60 / 75 / 90 min) — the timeline shows gaps and overlaps.</li>
+  <li>Need someone not in your list yet? Tap <b>＋ Add athlete</b> (see §3).</li>
+  <li>Tap <b>Save</b>. Each allocated athlete (or their parent) gets the door code and a session reminder.</li>
+</ol>
+<div class="note"><b>Sequential vs at-once.</b> By default slots run <b>back-to-back</b> (one after another). If your profile is set to
+coach several at once, slots can <b>overlap</b> in the same lane. Set this on your profile / ask admin.</div>
+<div class="shots">
+  <div class="shot">
+    <div class="phone"><div class="scr">
+      <div class="em-head"><div class="em-x">✕</div><div class="t">🏏 Athlete Allocations</div><div class="s">3:30–5:00pm · 90 min booking</div></div>
+      <div class="pad">
+        <div class="slot"><div class="sh"><span>Athlete 1</span><span>Change</span></div><div class="sa">Liam Carter</div><div class="dur">3:30–4:30 · 60 min</div></div>
+        <div class="slot"><div class="sh"><span>Athlete 2</span><span>Remove</span></div><div class="sa" style="color:#94a3b8">Select an athlete…</div><div class="dur">4:30–5:00 · 30 min</div></div>
+        <div class="add">＋ Add athlete</div>
+        <div class="rowb"><div class="btn ghost">Cancel</div><div class="btn">Save</div></div>
+      </div>
+    </div></div>
+    <div class="cap">Slots are pre-laid out — drop an athlete into each.</div>
+  </div>
+  <div class="shot">
+    <div class="phone"><div class="scr">
+      <div class="em-head"><div class="em-x">✕</div><div class="t">Choose athlete</div></div>
+      <div class="pad">
+        <div class="fld">🔍 Type athlete name or email…</div>
+        <div class="arow"><span class="av">L</span><span class="nm">Liam Carter</span></div>
+        <div class="arow"><span class="av">M</span><span class="nm">Mia Nguyen</span></div>
+        <div class="arow"><span class="av">N</span><span class="nm">Noah Patel</span></div>
+        <div class="add">＋ Add a new athlete</div>
+      </div>
+    </div></div>
+    <div class="cap">Your roster, smart-sorted. Search or add a new one.</div>
+  </div>
+</div>
+
+<!-- 3 ROSTER -->
+<h2 id="roster">3. Your athlete roster (add &amp; invite)</h2>
+<p>Your athletes come from two places: athletes (or parents) who <b>pick you as their coach</b> when they sign up, and ones
+<b>you add yourself</b>. Manage them under <b>Profile → My Athletes</b>, or add on the fly from the allocation editor.</p>
+<h3>Adding someone</h3>
+<ul>
+  <li><b>Already have an account?</b> Enter their <b>parent email + athlete name</b> — they're added to your list straight away
+  (<i>“Added {name} — they're now in your list.”</i>).</li>
+  <li><b>No account yet?</b> The same form <b>sends them an invite</b> (<i>“Invite sent to {email}.”</i>). When they register they're
+  auto-linked to you.</li>
+</ul>
+<div class="note">A parent account can have several child athletes. You see the <b>athlete's name</b> and can allocate them; the parent
+manages the login, contact details and any payment.</div>
+<div class="shots">
+  <div class="shot">
+    <div class="phone"><div class="scr">
+      <div class="em-head"><div class="t">My Athletes</div><div class="s">People who train under you</div></div>
+      <div class="pad">
+        <div class="arow"><span class="av">L</span><span class="nm">Liam Carter</span><span class="lk">Rename · Remove</span></div>
+        <div class="arow"><span class="av">M</span><span class="nm">Mia Nguyen</span><span class="lk">Rename · Remove</span></div>
+        <div class="lab" style="margin-top:10px">Add an athlete</div>
+        <div class="rowb"><div class="fld">First name</div><div class="fld">Last name</div></div>
+        <div class="btn">Add athlete</div>
+      </div>
+    </div></div>
+    <div class="cap">Profile → My Athletes: add, rename, assign coaches.</div>
+  </div>
+  <div class="shot">
+    <div class="phone"><div class="scr">
+      <div class="em-head"><div class="em-x">✕</div><div class="t">＋ Add athlete</div><div class="s">to this session</div></div>
+      <div class="pad">
+        <div class="lab">Parent email</div><div class="fld">parent@email.com</div>
+        <div class="lab">Athlete name</div><div class="fld">Jack Doyle</div>
+        <div class="btn">Add athlete</div>
+        <p style="font-size:8px;color:#94a3b8;margin-top:8px;text-align:center">If they have no account yet we'll email them an invite — they're linked to you when they join.</p>
+      </div>
+    </div></div>
+    <div class="cap">Add/invite directly while allocating.</div>
+  </div>
+</div>
+
+<!-- 4 SCHEDULE -->
+<h2 id="schedule">4. Your schedule &amp; coverage dots</h2>
+<p><b>My Bookings</b> shows your week as a date strip with a coloured dot under each day, and the selected day's sessions below.
+Toggle <b>Week</b> / <b>List</b> at the top-right (List shows everything upcoming).</p>
+<p>The dot tells you, at a glance, how well a day is allocated:</p>
+<ul>
+  <li><span class="dot r"></span> <b>Red</b> — a session that day has <b>no athletes</b> yet.</li>
+  <li><span class="dot a"></span> <b>Amber</b> — there's an unallocated gap of 30 min or more.</li>
+  <li><span class="dot g"></span> <b>Green</b> — fully allocated.</li>
+</ul>
+<p>On each session card, your allocated time shows in <b>your coach colour</b> with athlete names; unallocated time shows as an
+<b>amber-striped gap</b>. Tap a gap to allocate it; tap a name to edit that slot.</p>
+<div class="note"><b>🔒 Managed by admin:</b> if admin created the booking for you, you can still <b>allocate athletes</b>, but Modify /
+Cancel / Repeat are hidden — contact admin to change the booking itself.</div>
+<div class="shots">
+  <div class="shot">
+    <div class="phone"><div class="scr">
+      <div class="em-head"><div class="t">My Bookings</div><div class="s">Week · tap a day</div></div>
+      <div class="pad">
+        <div class="strip">
+          <div class="day">Mon<span class="d2">8</span><span class="dot g"></span></div>
+          <div class="day sel">Tue<span class="d2">9</span><span class="dot a"></span></div>
+          <div class="day">Wed<span class="d2">10</span><span class="dot r"></span></div>
+          <div class="day">Thu<span class="d2">11</span></div>
+        </div>
+        <div class="card2">
+          <div class="hd"><span>BM1</span><span>3:30–5:00pm</span></div>
+          <div class="code">🔑 8023</div>
+          <div class="timeline">
+            <div class="tlrow al">Liam Carter · 3:30–4:30</div>
+            <div class="tlrow gap">▦ 30 min free — ＋ add athlete</div>
+          </div>
+          <div class="acts"><div>✏️ Modify</div><div>↻ Repeat</div><div>✕ Cancel</div></div>
+        </div>
+      </div>
+    </div></div>
+    <div class="cap">Dots show coverage; tap the amber gap to fill it.</div>
+  </div>
+</div>
+
+<!-- 5 REPEAT -->
+<h2 id="repeat">5. Repeating a session</h2>
+<p>Tap <b>↻ Repeat</b> on a session to book the <b>same slot next week</b> — same lane, time and athlete allocations. A preview
+shows exactly what will be booked. Repeat unlocks once next week is in your booking window.</p>
+<div class="shots">
+  <div class="shot">
+    <div class="phone"><div class="scr">
+      <div class="em-head blue"><div class="em-x">✕</div><div class="t">↻ Repeat session</div></div>
+      <div class="pad">
+        <p style="font-size:9.5px">Books the same session into next week with its athletes:</p>
+        <div class="card2"><div class="hd"><span>BM1</span><span>Mon 15 · 3:30–5:00pm</span></div>
+          <div class="timeline"><div class="tlrow al">Liam Carter · 60 min</div></div></div>
+        <div class="rowb"><div class="btn ghost">Cancel</div><div class="btn blue">Confirm booking</div></div>
+      </div>
+    </div></div>
+    <div class="cap">Preview, then confirm — allocations clone across.</div>
+  </div>
+</div>
+<div class="tip">If an athlete has left your roster since last week, they're skipped and the preview tells you. A fresh door code
+is issued for the new session.</div>
+
+<!-- 6 CHANGE -->
+<h2 id="change">6. Changing or cancelling</h2>
+<p>From a session card, <b>✏️ Modify</b> lets you change lane, date, time or length; <b>✕ Cancel</b> cancels it. Coaches have no
+late-cancel lock, but cancelling within the admin-set window is still charged to your statement.</p>
+<ul>
+  <li><b>Keep-what-fits:</b> if you shorten or move a session, athletes who still fit are kept; any dropped get a “session changed/removed” email automatically.</li>
+  <li>Allocated athletes are always notified of a reschedule or cancellation (with the new time + door code).</li>
+</ul>
+
+<!-- 7 STATEMENTS -->
+<h2 id="statements">7. Statements &amp; earnings</h2>
+<p>Open <b>Statements</b> (in the menu) to see your sessions and payments reconciled. Every coach booking is charged automatically
+at your session price; <b>admin enters your payments</b> and any adjustments. The <b>Outstanding balance</b> is booked − paid.</p>
+<div class="shots">
+  <div class="shot">
+    <div class="phone"><div class="scr">
+      <div class="em-head"><div class="t">Statements</div><div class="s">Bookings &amp; payments</div></div>
+      <div class="pad">
+        <div class="sumg">
+          <div class="sc"><div class="k">BOOKED (MONTH)</div><div class="v">$540</div></div>
+          <div class="sc"><div class="k">PAID (MONTH)</div><div class="v">$390</div></div>
+          <div class="sc"><div class="k">LIFETIME BOOKED</div><div class="v">$6,120</div></div>
+          <div class="sc owe"><div class="k">OUTSTANDING</div><div class="v">$150</div></div>
+        </div>
+        <div class="ledg">
+          <div class="lr"><span><span class="tag b">Booking</span> BM1 · Mon 8</span><span>$45</span></div>
+          <div class="lr"><span><span class="tag p">Payment</span> Weekly settle</span><span>−$150</span></div>
+          <div class="lr"><span><span class="tag b">Booking</span> RU4 · Wed 10</span><span>$45</span></div>
+        </div>
+      </div>
+    </div></div>
+    <div class="cap">Booked vs paid, with a full activity ledger.</div>
+  </div>
+</div>
+<div class="note">Bookings are recorded automatically from your session prices. Payments and adjustments are entered by admin —
+contact admin for any correction.</div>
+
+<!-- 8 NOTIFY -->
+<h2 id="notify">8. What athletes &amp; parents get told</h2>
+<p>When you allocate or change a session, the app emails the athlete's parent account (addressed to the child). These are
+<b>automatic and mandatory</b>, and siblings are combined into one email per family.</p>
+<table>
+  <tr><th>When you…</th><th>The parent/athlete gets…</th></tr>
+  <tr><td>Allocate an athlete to a session</td><td>Session details + <b>door code</b> + add-to-calendar + facility instructions link</td></tr>
+  <tr><td>Add an athlete to your roster</td><td>A note that you've added them as their coach</td></tr>
+  <tr><td>Invite a parent with no account</td><td>An invite to register (auto-links them to you)</td></tr>
+  <tr><td>Reschedule a session</td><td>The new date/time + new door code</td></tr>
+  <tr><td>Remove an athlete from a session</td><td>A “removed from session” note</td></tr>
+  <tr><td>Cancel a session</td><td>A cancellation note to every allocated athlete</td></tr>
+</table>
+
+</main>
+<footer>
+  Cricket Revolution — Coach Guide. &nbsp;·&nbsp; Questions? info@cricketrevolution.com.au &nbsp;·&nbsp;
+  Facility access (getting in &amp; out): cricketrevolution.com.au/facility-instructions
+</footer>
+</body>
+</html>
