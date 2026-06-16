@@ -9,6 +9,7 @@ import {
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
 import { resolveLaneAt } from '../lib/lanes'
+import MultiDatePicker from './MultiDatePicker'
 
 type PaymentMode = 'comp' | 'offline' | 'request'
 
@@ -20,7 +21,7 @@ export interface AdminCustomerOption {
   role: string
 }
 
-type Recurrence = 'none' | 'weekly' | 'fortnightly' | 'monthly'
+type Recurrence = 'none' | 'weekly' | 'fortnightly' | 'monthly' | 'custom'
 
 export interface BookingConfirmResult {
   succeeded: number
@@ -78,6 +79,17 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   const [duration, setDuration] = useState<number>(() => availableDurations[0] ?? 60)
   const [recurrence, setRecurrence] = useState<Recurrence>('none')
   const [occurrences, setOccurrences] = useState<number>(4)
+  // 'custom' (pick-specific-dates) mode: the set of date keys to book on. Always
+  // includes the primary clicked date (locked). Lets an admin replicate a session
+  // onto an arbitrary, irregular set of dates in one go.
+  const [customDates, setCustomDates] = useState<Set<string>>(new Set())
+  const toggleCustomDate = (dk: string) => {
+    setCustomDates(prev => {
+      const next = new Set(prev)
+      if (next.has(dk)) next.delete(dk); else next.add(dk)
+      return next
+    })
+  }
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -130,21 +142,32 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   const effectivePricePerLane = priceOverride !== null ? priceOverride : pricePerLane
   const price = effectivePricePerLane * selectedLaneCount
   const endHour = startHour + duration / 60
-  const totalSessions = recurrence === 'none' ? 1 : occurrences
 
   const occurrenceInfo = useMemo(() => {
-    const list: { date: Date; dateKey: string; conflict: boolean }[] = []
-    for (let i = 0; i < totalSessions; i++) {
-      const d = recurrence === 'none' ? date : addOccurrence(date, recurrence, i)
-      const dk = formatDateKey(d)
-      const allLanes = [lane.id, ...additionalLaneIds]
-      // DI-3: Check all occurrences for conflicts (including the first one)
-      const conflict = allLanes.some(lid => hasConflict(existingBookings, lid, dk, startHour, duration))
-      list.push({ date: d, dateKey: dk, conflict })
+    // The list of date-keys to book: a picked set ('custom'), the single clicked
+    // date ('none'), or N recurrence steps.
+    let dateKeys: string[]
+    if (recurrence === 'custom') {
+      dateKeys = [...customDates].sort()
+    } else if (recurrence === 'none') {
+      dateKeys = [dateKey]
+    } else {
+      dateKeys = []
+      for (let i = 0; i < occurrences; i++) dateKeys.push(formatDateKey(addOccurrence(date, recurrence, i)))
     }
-    return list
-  }, [recurrence, totalSessions, date, lane.id, additionalLaneIds, startHour, duration, existingBookings])
+    const allLanes = [lane.id, ...additionalLaneIds]
+    return dateKeys.map(dk => {
+      const [y, m, dd] = dk.split('-').map(Number)
+      const d = new Date(y, m - 1, dd)
+      // DI-3: Check all occurrences for conflicts (including the first one). The
+      // server (createBooking) re-checks, so far-future dates not in the loaded
+      // window still get rejected + reported as failed.
+      const conflict = allLanes.some(lid => hasConflict(existingBookings, lid, dk, startHour, duration))
+      return { date: d, dateKey: dk, conflict }
+    })
+  }, [recurrence, customDates, occurrences, date, dateKey, lane.id, additionalLaneIds, startHour, duration, existingBookings])
 
+  const totalSessions = occurrenceInfo.length
   const conflictCount = occurrenceInfo.filter(o => o.conflict).length
 
   const handleConfirm = async () => {
@@ -349,14 +372,19 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
 
           <div>
             <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">🔁 Recurrence</label>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               {([
                 { value: 'none', label: 'One-time' },
                 { value: 'weekly', label: 'Weekly' },
                 { value: 'fortnightly', label: 'Fortnightly' },
                 { value: 'monthly', label: 'Monthly' },
+                { value: 'custom', label: '📅 Pick dates' },
               ] as { value: Recurrence; label: string }[]).map(opt => (
-                <button key={opt.value} onClick={() => setRecurrence(opt.value)}
+                <button key={opt.value} onClick={() => {
+                    setRecurrence(opt.value)
+                    // Seed the picked set with the primary clicked date so 'custom' always books at least it.
+                    if (opt.value === 'custom' && customDates.size === 0) setCustomDates(new Set([dateKey]))
+                  }}
                   className={`px-2 py-2 rounded-lg text-[11px] font-semibold transition-all border-2 ${
                     recurrence === opt.value
                       ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400'
@@ -369,10 +397,16 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
 
             {recurrence !== 'none' && (
               <div className="mt-3 space-y-2">
+                {recurrence === 'custom' ? (
+                  <MultiDatePicker selected={customDates} onToggle={toggleCustomDate} baseDate={date} lockedDate={dateKey} />
+                ) : (
+                <>
                 <label className="text-xs font-semibold text-gray-600 dark:text-gray-400 block">
                   Number of sessions: <span className="text-emerald-600 dark:text-emerald-400">{occurrences}</span>
                 </label>
                 <input type="range" min={2} max={26} value={occurrences} onChange={e => setOccurrences(Number(e.target.value))} className="w-full accent-emerald-500" />
+                </>
+                )}
                 <div className="max-h-32 overflow-y-auto bg-gray-50 dark:bg-gray-800 rounded-lg p-2 space-y-1">
                   {occurrenceInfo.map((o, i) => (
                     <div key={i} className={`flex items-center justify-between text-[11px] px-2 py-1 rounded ${o.conflict ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400' : 'text-gray-600 dark:text-gray-400'}`}>
