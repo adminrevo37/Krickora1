@@ -25,6 +25,7 @@ import type * as broadcast from "../broadcast.js";
 import type * as closures from "../closures.js";
 import type * as crons from "../crons.js";
 import type * as digestAction from "../digestAction.js";
+import type * as display from "../display.js";
 import type * as emails from "../emails.js";
 import type * as faults from "../faults.js";
 import type * as googleCalendar from "../googleCalendar.js";
@@ -99,6 +100,7 @@ declare const fullApi: ApiFromModules<{
   closures: typeof closures;
   crons: typeof crons;
   digestAction: typeof digestAction;
+  display: typeof display;
   emails: typeof emails;
   faults: typeof faults;
   googleCalendar: typeof googleCalendar;

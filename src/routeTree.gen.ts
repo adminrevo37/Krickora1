@@ -19,6 +19,7 @@ import { Route as BookingsRouteImport } from './routes/bookings'
 import { Route as AddMateRouteImport } from './routes/add-mate'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as RevOps7k2pAnalyticsRouteImport } from './routes/rev-ops-7k2p.analytics'
+import { Route as DisplayTokenRouteImport } from './routes/display.$token'
 import { Route as CheckoutSuccessRouteImport } from './routes/checkout/success'
 
 const StatementsRoute = StatementsRouteImport.update({
@@ -71,6 +72,11 @@ const RevOps7k2pAnalyticsRoute = RevOps7k2pAnalyticsRouteImport.update({
   path: '/analytics',
   getParentRoute: () => RevOps7k2pRoute,
 } as any)
+const DisplayTokenRoute = DisplayTokenRouteImport.update({
+  id: '/display/$token',
+  path: '/display/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CheckoutSuccessRoute = CheckoutSuccessRouteImport.update({
   id: '/checkout/success',
   path: '/checkout/success',
@@ -88,6 +94,7 @@ export interface FileRoutesByFullPath {
   '/rev-ops-7k2p': typeof RevOps7k2pRouteWithChildren
   '/statements': typeof StatementsRoute
   '/checkout/success': typeof CheckoutSuccessRoute
+  '/display/$token': typeof DisplayTokenRoute
   '/rev-ops-7k2p/analytics': typeof RevOps7k2pAnalyticsRoute
 }
 export interface FileRoutesByTo {
@@ -101,6 +108,7 @@ export interface FileRoutesByTo {
   '/rev-ops-7k2p': typeof RevOps7k2pRouteWithChildren
   '/statements': typeof StatementsRoute
   '/checkout/success': typeof CheckoutSuccessRoute
+  '/display/$token': typeof DisplayTokenRoute
   '/rev-ops-7k2p/analytics': typeof RevOps7k2pAnalyticsRoute
 }
 export interface FileRoutesById {
@@ -115,6 +123,7 @@ export interface FileRoutesById {
   '/rev-ops-7k2p': typeof RevOps7k2pRouteWithChildren
   '/statements': typeof StatementsRoute
   '/checkout/success': typeof CheckoutSuccessRoute
+  '/display/$token': typeof DisplayTokenRoute
   '/rev-ops-7k2p/analytics': typeof RevOps7k2pAnalyticsRoute
 }
 export interface FileRouteTypes {
@@ -130,6 +139,7 @@ export interface FileRouteTypes {
     | '/rev-ops-7k2p'
     | '/statements'
     | '/checkout/success'
+    | '/display/$token'
     | '/rev-ops-7k2p/analytics'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -143,6 +153,7 @@ export interface FileRouteTypes {
     | '/rev-ops-7k2p'
     | '/statements'
     | '/checkout/success'
+    | '/display/$token'
     | '/rev-ops-7k2p/analytics'
   id:
     | '__root__'
@@ -156,6 +167,7 @@ export interface FileRouteTypes {
     | '/rev-ops-7k2p'
     | '/statements'
     | '/checkout/success'
+    | '/display/$token'
     | '/rev-ops-7k2p/analytics'
   fileRoutesById: FileRoutesById
 }
@@ -170,6 +182,7 @@ export interface RootRouteChildren {
   RevOps7k2pRoute: typeof RevOps7k2pRouteWithChildren
   StatementsRoute: typeof StatementsRoute
   CheckoutSuccessRoute: typeof CheckoutSuccessRoute
+  DisplayTokenRoute: typeof DisplayTokenRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -244,6 +257,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RevOps7k2pAnalyticsRouteImport
       parentRoute: typeof RevOps7k2pRoute
     }
+    '/display/$token': {
+      id: '/display/$token'
+      path: '/display/$token'
+      fullPath: '/display/$token'
+      preLoaderRoute: typeof DisplayTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/checkout/success': {
       id: '/checkout/success'
       path: '/checkout/success'
@@ -277,6 +297,7 @@ const rootRouteChildren: RootRouteChildren = {
   RevOps7k2pRoute: RevOps7k2pRouteWithChildren,
   StatementsRoute: StatementsRoute,
   CheckoutSuccessRoute: CheckoutSuccessRoute,
+  DisplayTokenRoute: DisplayTokenRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
