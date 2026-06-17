@@ -8,7 +8,8 @@ import {
   generateGoogleCalendarUrl, roundCoachBookingDuration, getMinCoachDurationFromAthletes,
   type Booking, type Lane, type LaneVariant, type AthleteSlot,
 } from '../lib/booking-data'
-import { createCheckoutSession, type CheckoutSessionRequest } from '../lib/stripe'
+import { createCheckoutSession, cancelUnpaidCheckout, type CheckoutSessionRequest } from '../lib/stripe'
+import EmbeddedCheckoutModal from './EmbeddedCheckoutModal'
 import { getSettingsStore } from '../lib/settings-store'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
 import { resolveLaneAt, getLaneWarning, variantLabel, variantRatePerHour } from '../lib/lanes'
@@ -83,6 +84,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const [error, setError] = useState<string | null>(null)
   const [confirmedBooking, setConfirmedBooking] = useState<Booking | null>(null)
   const [showAuth, setShowAuth] = useState(false)
+  // SPEC_EMBEDDED_CHECKOUT — when set, render the in-app Stripe payment modal.
+  const [embeddedCheckout, setEmbeddedCheckout] = useState<{ clientSecret: string; bookingId: string } | null>(null)
   const [applyCredit, setApplyCredit] = useState(false)
 
   // Discount code state
@@ -522,11 +525,19 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       }
       const session = await createCheckoutSession(checkoutReq)
 
+      // SPEC_EMBEDDED_CHECKOUT — preferred: render Stripe Checkout in-app. Credit
+      // is deducted server-side when the webhook confirms the booking — NOT here;
+      // if the customer abandons, the slot is released and no credit is spent.
+      if (session.clientSecret) {
+        trackFunnelStep('checkout_embedded', { totalPrice })
+        setEmbeddedCheckout({ clientSecret: session.clientSecret, bookingId: bookingId as string })
+        setIsSubmitting(false)
+        return
+      }
+
+      // Fallback (no publishable key / old backend): hosted redirect. Keep the
+      // flowId across the redirect; /checkout/success closes the funnel.
       if (session.url) {
-        // Credit is deducted server-side when the Stripe webhook confirms the
-        // booking (confirmBookingPayment) — NOT here. If the customer abandons
-        // checkout, the slot is released and no credit is spent.
-        // Funnel: keep the flowId across the redirect; /checkout/success closes it.
         funnelRedirectingRef.current = true
         trackFunnelStep('checkout_redirect', { totalPrice })
         window.location.assign(session.url)
@@ -543,6 +554,29 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     }
   }
 
+  // SPEC_EMBEDDED_CHECKOUT — Stripe reports the in-app payment complete. The
+  // checkout.session.completed webhook is the source of truth (confirms the
+  // booking, deducts credit, assigns the door code, emails). Show the in-app
+  // success state and refresh; the door code arrives by email + in My Bookings.
+  const handleEmbeddedComplete = () => {
+    setEmbeddedCheckout(null)
+    funnelConfirmedRef.current = true
+    try { trackFunnelStep('booking_confirmed', { kind: 'paid' }); clearBookingFlow() } catch { /* ignore */ }
+    setConfirmedBooking(null)
+    setStep('success')
+    setTimeout(() => onConfirm({} as Booking), 3500)
+  }
+
+  // Customer backed out of the embedded payment → release the unpaid slot
+  // immediately (expire session + free slot), then return to the confirm step.
+  const handleEmbeddedClose = async () => {
+    const ec = embeddedCheckout
+    setEmbeddedCheckout(null)
+    setStep('confirm')
+    setIsSubmitting(false)
+    if (ec?.bookingId) { try { await cancelUnpaidCheckout(ec.bookingId) } catch { /* backstops will catch it */ } }
+  }
+
   const googleCalUrl = confirmedBooking ? generateGoogleCalendarUrl({
     laneName: resolvedLaneName, variantName: selectedVariant?.name, date: confirmedBooking.date,
     startHour: confirmedBooking.startHour, duration: confirmedBooking.duration,
@@ -554,6 +588,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   if (showAuth) return <AuthModal onClose={() => setShowAuth(false)} onSuccess={() => { setShowAuth(false); setStep('confirm') }} />
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={step !== 'processing' && step !== 'success' ? onClose : undefined} />
       <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-md overflow-hidden max-h-[90vh] overflow-y-auto">
@@ -561,7 +596,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
         <div className={`p-5 text-white transition-all duration-500 ${step === 'success' ? 'bg-gradient-to-r from-green-500 to-emerald-500' : step === 'processing' ? (isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500' : totalPrice === 0 ? 'bg-gradient-to-r from-purple-500 to-indigo-500' : 'bg-gradient-to-r from-blue-500 to-indigo-500') : isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500' : 'bg-gradient-to-r from-emerald-500 to-green-500'}`}>
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-bold">{step === 'success' ? 'Booking Confirmed!' : step === 'processing' ? (totalPrice === 0 ? 'Confirming Booking...' : 'Redirecting to Payment...') : 'Book a Session'}</h3>
+              <h3 className="text-lg font-bold">{step === 'success' ? 'Booking Confirmed!' : step === 'processing' ? (totalPrice === 0 ? 'Confirming Booking...' : 'Opening Payment...') : 'Book a Session'}</h3>
               <p className="text-white/80 text-sm mt-0.5">{step === 'success' ? 'Your session is booked' : step === 'processing' ? 'Please wait...' : date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
               {isCoach && step === 'details' && <span className="inline-block mt-1 text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-semibold">🏅 Coach Rate &middot; Rolling 8-Day Window</span>}
             </div>
@@ -575,8 +610,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
         {step === 'processing' && (
           <div className="p-8 flex flex-col items-center justify-center space-y-4">
             <div className="relative"><div className={`w-16 h-16 border-4 ${isCoach ? 'border-orange-200' : totalPrice === 0 ? 'border-purple-200' : 'border-blue-200'} rounded-full`} /><div className={`absolute inset-0 w-16 h-16 border-4 border-transparent ${isCoach ? 'border-t-orange-500' : totalPrice === 0 ? 'border-t-purple-500' : 'border-t-blue-500'} rounded-full animate-spin`} /></div>
-            <p className="font-semibold text-gray-800 dark:text-gray-200">{isCoach ? 'Confirming booking...' : totalPrice === 0 ? 'Confirming booking...' : 'Redirecting to Stripe...'}</p>
-            {!isCoach && totalPrice !== 0 && <p className="text-xs text-gray-500 dark:text-gray-400">You will be redirected to Stripe to complete your payment securely.</p>}
+            <p className="font-semibold text-gray-800 dark:text-gray-200">{isCoach ? 'Confirming booking...' : totalPrice === 0 ? 'Confirming booking...' : 'Opening secure payment...'}</p>
+            {!isCoach && totalPrice !== 0 && <p className="text-xs text-gray-500 dark:text-gray-400">Loading the secure Stripe payment form…</p>}
           </div>
         )}
 
@@ -957,12 +992,21 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               <button onClick={() => { setStep('details'); setError(null) }} className="flex-1 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all">← Back</button>
               <button onClick={handleStripeCheckout} disabled={isSubmitting}
                 className="flex-[2] py-3 bg-[#635BFF] hover:bg-[#5851e0] text-white font-semibold rounded-xl shadow-lg transition-all disabled:opacity-70 flex items-center justify-center gap-2">
-                {isSubmitting ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Redirecting...</> : <>Pay ${totalPrice} with Stripe</>}
+                {isSubmitting ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Loading payment...</> : <>Pay ${totalPrice} with Stripe</>}
               </button>
             </div>
           </div>
         )}
       </div>
     </div>
+    {/* SPEC_EMBEDDED_CHECKOUT — in-app Stripe payment overlay */}
+    {embeddedCheckout && (
+      <EmbeddedCheckoutModal
+        clientSecret={embeddedCheckout.clientSecret}
+        onComplete={handleEmbeddedComplete}
+        onClose={handleEmbeddedClose}
+      />
+    )}
+    </>
   )
 }

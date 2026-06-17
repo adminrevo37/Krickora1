@@ -7,6 +7,9 @@ import {
   type Booking,
 } from '../lib/booking-data'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
+// SPEC_EMBEDDED_CHECKOUT — in-app Stripe payment for the extend/modify top-up.
+import { cancelUnpaidCheckout } from '../lib/stripe'
+import EmbeddedCheckoutModal from './EmbeddedCheckoutModal'
 
 // Result shape returned by the unified modifyBooking mutation (via useBookingStore).
 export interface ModifyResult {
@@ -75,6 +78,8 @@ export default function ModifyBookingModal({ booking, allBookings, creditBalance
   const [step, setStep] = useState<'select' | 'confirm' | 'processing' | 'success'>('select')
   const [error, setError] = useState<string | null>(null)
   const [resultNote, setResultNote] = useState<string | null>(null)
+  // SPEC_EMBEDDED_CHECKOUT — in-app payment overlay for the price-increase top-up.
+  const [embeddedTopUp, setEmbeddedTopUp] = useState<{ clientSecret: string; bookingId: string } | null>(null)
 
   const selectedLane = LANES.find(l => l.id === selectedLaneId) ?? originalLane
 
@@ -189,6 +194,10 @@ export default function ModifyBookingModal({ booking, allBookings, creditBalance
           customerEmail: booking.customerEmail,
           topUpAmountCents: res.topUpAmountCents as number,
         })
+        // SPEC_EMBEDDED_CHECKOUT — pay the difference in-app when available; else
+        // hosted redirect (unchanged fallback). The modification is already applied
+        // server-side (pending the top-up); the webhook confirms on payment.
+        if (session?.clientSecret) { setEmbeddedTopUp({ clientSecret: session.clientSecret, bookingId: booking.id }); return }
         if (session?.url) { window.location.href = session.url; return }
         setError('Could not start checkout. Please try again.')
         setStep('confirm')
@@ -221,6 +230,7 @@ export default function ModifyBookingModal({ booking, allBookings, creditBalance
   }
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={step !== 'processing' ? onClose : undefined} />
       <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-lg overflow-hidden max-h-[90vh] overflow-y-auto">
@@ -430,7 +440,7 @@ export default function ModifyBookingModal({ booking, allBookings, creditBalance
                   <>
                     {creditToApply > 0 && <div className="flex justify-between"><span className="text-blue-500">Account credit</span><span className="font-medium text-blue-600">-${creditToApply.toFixed(2)}</span></div>}
                     <div className="flex justify-between border-t border-violet-200 dark:border-violet-700 pt-1"><span className="font-semibold">You pay</span><span className="font-bold text-red-600">${estimatedTopUp.toFixed(2)}</span></div>
-                    {estimatedTopUp > 0 && <p className="text-[10px] text-gray-500 mt-1">You'll be redirected to Stripe to pay the difference.</p>}
+                    {estimatedTopUp > 0 && <p className="text-[10px] text-gray-500 mt-1">You'll pay the difference securely with Stripe.</p>}
                   </>
                 ) : priceDiff < 0 ? (
                   <div className="flex justify-between border-t border-violet-200 dark:border-violet-700 pt-1"><span className="font-semibold">Account credit added</span><span className="font-bold text-green-600">+${decreaseCredit.toFixed(2)}</span></div>
@@ -522,5 +532,21 @@ export default function ModifyBookingModal({ booking, allBookings, creditBalance
         )}
       </div>
     </div>
+    {/* SPEC_EMBEDDED_CHECKOUT — in-app payment for the top-up. onComplete: the
+        webhook confirms the modification. onClose (abandon): mirror the old
+        cancel_url leg (cancelUnpaidCheckout) and return to the confirm step. */}
+    {embeddedTopUp && (
+      <EmbeddedCheckoutModal
+        clientSecret={embeddedTopUp.clientSecret}
+        onComplete={() => { setEmbeddedTopUp(null); setResultNote('Top-up paid — your booking is updated.'); setStep('success'); setTimeout(() => onClose(), 3000) }}
+        onClose={() => {
+          const ec = embeddedTopUp
+          setEmbeddedTopUp(null)
+          setStep('confirm')
+          if (ec?.bookingId) { cancelUnpaidCheckout(ec.bookingId).catch(() => { /* backstops will catch it */ }) }
+        }}
+      />
+    )}
+    </>
   )
 }

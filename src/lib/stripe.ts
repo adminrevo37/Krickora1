@@ -1,6 +1,24 @@
 // Stripe checkout integration via Convex backend
 import type { ConvexReactClient } from "convex/react";
+import { loadStripe, type Stripe as StripeJs } from "@stripe/stripe-js";
 import { api } from "../../convex/_generated/api";
+
+// SPEC_EMBEDDED_CHECKOUT — Stripe.js publishable-key loader (singleton). Embedded
+// Checkout renders payment in-app instead of redirecting. If the publishable key
+// is not configured, getStripePromise() is null and the checkout flow falls back
+// to the hosted redirect (createCheckoutSession then returns a `url`, not a
+// clientSecret). Publishable keys are not secrets — they ship in the client bundle.
+const STRIPE_PUBLISHABLE_KEY = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY as string | undefined;
+let _stripePromise: Promise<StripeJs | null> | null | undefined;
+export function getStripePromise(): Promise<StripeJs | null> | null {
+  if (_stripePromise === undefined) {
+    _stripePromise = STRIPE_PUBLISHABLE_KEY ? loadStripe(STRIPE_PUBLISHABLE_KEY) : null;
+  }
+  return _stripePromise ?? null;
+}
+export function isEmbeddedCheckoutAvailable(): boolean {
+  return !!STRIPE_PUBLISHABLE_KEY;
+}
 
 // IMPORTANT: use the app's SHARED, AUTHENTICATED ConvexReactClient (created in
 // main.tsx and wrapped by ConvexBetterAuthProvider) — NOT a fresh
@@ -34,6 +52,10 @@ export interface CheckoutSessionRequest {
 export interface CheckoutSessionResponse {
   sessionId: string
   url: string
+  // SPEC_EMBEDDED_CHECKOUT — present when an embedded session was created (mount
+  // EmbeddedCheckoutModal with it). Empty string when the backend returned a
+  // hosted redirect URL instead (fallback). Exactly one of url / clientSecret is set.
+  clientSecret: string
 }
 
 export function formatBookingDescription(req: CheckoutSessionRequest): string {
@@ -59,6 +81,12 @@ export async function createCheckoutSession(req: CheckoutSessionRequest): Promis
     throw new Error('Payment system not configured. Please contact support.')
   }
 
+  // SPEC_EMBEDDED_CHECKOUT — request the in-app embedded session ONLY when a
+  // publishable key is configured; otherwise the backend returns a hosted url and
+  // the caller redirects (graceful fallback). The `embedded` arg is OMITTED (not
+  // sent as false) when not wanted, so the request stays valid against a backend
+  // that predates this arg — keeping the frontend safe to deploy in any order.
+  // Embedded only turns on once both the Convex deploy AND the key are live.
   const result = await convex.action(api.stripe.createCheckoutSession, {
     laneName: req.laneName,
     variantName: req.variantName ?? undefined,
@@ -71,11 +99,13 @@ export async function createCheckoutSession(req: CheckoutSessionRequest): Promis
     additionalLanes: req.additionalLanes,
     isCoachBooking: req.isCoachBooking,
     bookingId: req.bookingId,
+    ...(isEmbeddedCheckoutAvailable() ? { embedded: true } : {}),
   })
 
   return {
     sessionId: result.sessionId,
     url: result.url ?? '',
+    clientSecret: (result as { clientSecret?: string | null }).clientSecret ?? '',
   }
 }
 

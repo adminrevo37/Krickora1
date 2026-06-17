@@ -24,6 +24,11 @@ export const createCheckoutSession = action({
     additionalLanes: v.optional(v.array(v.string())),
     isCoachBooking: v.optional(v.boolean()),
     bookingId: v.optional(v.string()),
+    // SPEC_EMBEDDED_CHECKOUT — when true, create an embedded-UI session (rendered
+    // in-app via Stripe Embedded Checkout) and return a clientSecret instead of a
+    // hosted redirect URL. Optional + defaulting to the hosted flow keeps the
+    // deploy non-breaking: an old frontend (no arg) still gets a redirect URL.
+    embedded: v.optional(v.boolean()),
   },
   // Explicit return type breaks the circular inference introduced by the
   // internal.queries.* runQuery below (TS7022/7023), matching the pattern used
@@ -31,7 +36,7 @@ export const createCheckoutSession = action({
   handler: async (
     ctx,
     args
-  ): Promise<{ sessionId: string; url: string | null; description: string }> => {
+  ): Promise<{ sessionId: string; url: string | null; clientSecret: string | null; description: string }> => {
     const stripe = getStripe();
 
     // R1 — SERVER-AUTHORITATIVE CHARGE. Never charge the client-supplied price.
@@ -98,7 +103,7 @@ export const createCheckoutSession = action({
 
     const siteUrl = process.env.SITE_URL || "http://localhost:5173";
 
-    const session = await stripe.checkout.sessions.create({
+    const common: Stripe.Checkout.SessionCreateParams = {
       payment_method_types: ["card"],
       mode: "payment",
       // Stripe minimum is 30 min from now. When it lapses, the
@@ -129,12 +134,29 @@ export const createCheckoutSession = action({
         customerEmail: args.customerEmail,
         isCoachBooking: args.isCoachBooking ? "true" : "false",
       },
-      success_url: `${siteUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
-      // SPEC_CHECKOUT_ABANDONMENT (layer 2) — backing out of Stripe lands on a
-      // route that releases this booking's slot immediately, instead of leaving an
-      // "Awaiting payment" slot stuck until the timer/cron.
-      cancel_url: `${siteUrl}/checkout/cancel?b=${encodeURIComponent(args.bookingId)}`,
-    });
+    };
+
+    // SPEC_EMBEDDED_CHECKOUT — embedded mode renders Stripe Checkout inside our own
+    // modal (no redirect). It returns a clientSecret instead of a hosted URL, and
+    // has no success/cancel URLs (redirect_on_completion:"never" → the client's
+    // onComplete fires; the checkout.session.completed webhook stays the source of
+    // truth). Abandonment is handled by the modal close → cancelUnpaidCheckout +
+    // the existing quick-cancel/cron/expiry backstops. The hosted branch is the
+    // unchanged redirect flow, kept as a deploy/no-publishable-key fallback.
+    const session = args.embedded
+      ? await stripe.checkout.sessions.create({
+          ...common,
+          ui_mode: "embedded",
+          redirect_on_completion: "never",
+        })
+      : await stripe.checkout.sessions.create({
+          ...common,
+          success_url: `${siteUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
+          // SPEC_CHECKOUT_ABANDONMENT (layer 2) — backing out of Stripe lands on a
+          // route that releases this booking's slot immediately, instead of leaving
+          // an "Awaiting payment" slot stuck until the timer/cron.
+          cancel_url: `${siteUrl}/checkout/cancel?b=${encodeURIComponent(args.bookingId)}`,
+        });
 
     // SPEC_CHECKOUT_ABANDONMENT — record the session on the booking, then schedule
     // a quick auto-cancel. expireUnpaidCheckout expires THIS session (so the slot
@@ -154,6 +176,7 @@ export const createCheckoutSession = action({
     return {
       sessionId: session.id,
       url: session.url,
+      clientSecret: session.client_secret ?? null,
       description,
     };
   },

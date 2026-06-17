@@ -20,6 +20,8 @@ import { trackCodeView } from '../lib/tracker'
 import { getErrorMessage } from '../lib/errors'
 // SPEC_CHECKOUT_ABANDONMENT — resume payment / cancel an unpaid booking.
 import { createCheckoutSession, cancelUnpaidCheckout } from '../lib/stripe'
+// SPEC_EMBEDDED_CHECKOUT — in-app Stripe payment (Pay-now / resume).
+import EmbeddedCheckoutModal from './EmbeddedCheckoutModal'
 import AuthModal from './AuthModal'
 import AthleteAllocationEditor from './AthleteAllocationEditor'
 // SPEC_COACH_PLANNER_RETIRE_AND_VIEW §6: allocation-coverage timeline + 3-state.
@@ -138,6 +140,8 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   // SPEC_CHECKOUT_ABANDONMENT — Pay-now / cancel-unpaid in-flight state.
   const [pendingPayId, setPendingPayId] = useState<string | null>(null)
   const [pendingPayError, setPendingPayError] = useState<string | null>(null)
+  // SPEC_EMBEDDED_CHECKOUT — in-app payment overlay for the Pay-now resume flow.
+  const [embeddedPay, setEmbeddedPay] = useState<{ clientSecret: string; bookingId: string } | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [showAuth, setShowAuth] = useState(false)
   const [modifyBookingData, setModifyBookingData] = useState<Booking | null>(null)
@@ -361,6 +365,8 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
         additionalLanes: (booking.additionalLaneIds ?? []).map(id => getLane(id)?.name ?? id),
         bookingId: booking.id,
       })
+      // SPEC_EMBEDDED_CHECKOUT — pay in-app when available; else hosted redirect.
+      if (session.clientSecret) { setEmbeddedPay({ clientSecret: session.clientSecret, bookingId: booking.id }); return }
       if (session.url) { window.location.assign(session.url); return }
       setPendingPayError('Could not start payment. Please try again.')
     } catch (err: any) {
@@ -1289,6 +1295,21 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           defaultSessionDuration={(customerRecord as any)?.defaultSessionDuration ?? undefined}
           athleteCapacity={(customerRecord as any)?.athleteCapacity ?? undefined}
           coachesSimultaneously={(customerRecord as any)?.coachesSimultaneously ?? false}
+        />
+      )}
+
+      {/* SPEC_EMBEDDED_CHECKOUT — in-app Stripe payment (Pay-now resume). The
+          webhook confirms the booking; the reactive query flips the card from
+          "Awaiting payment" to confirmed. Closing the overlay releases the slot. */}
+      {embeddedPay && (
+        <EmbeddedCheckoutModal
+          clientSecret={embeddedPay.clientSecret}
+          onComplete={() => setEmbeddedPay(null)}
+          onClose={() => {
+            const ec = embeddedPay
+            setEmbeddedPay(null)
+            if (ec?.bookingId) { cancelUnpaidCheckout(ec.bookingId).catch(() => { /* backstops will catch it */ }) }
+          }}
         />
       )}
 
