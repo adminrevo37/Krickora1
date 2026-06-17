@@ -916,6 +916,42 @@ export const getBookingOwner = internalQuery({
   },
 });
 
+// SPEC_CHECKOUT_ABANDONMENT — payment/lifecycle state for an unpaid checkout
+// booking, read by the Stripe node action that expires + releases it. Returning
+// the stored sessionId lets the expiry action skip a booking whose session was
+// superseded by a "Pay now" resume (a newer session id).
+export const getBookingPaymentState = internalQuery({
+  args: { bookingId: v.string() },
+  handler: async (
+    ctx,
+    args
+  ): Promise<{ status: string; paymentStatus: string | null; stripeSessionId: string | null } | null> => {
+    const booking = await ctx.db.get(args.bookingId as Id<"bookings">);
+    if (!booking) return null;
+    const b = booking as any;
+    return {
+      status: String(b.status ?? ""),
+      paymentStatus: b.paymentStatus ?? null,
+      stripeSessionId: b.stripeSessionId ?? null,
+    };
+  },
+});
+
+// SPEC_CHECKOUT_ABANDONMENT — how long after a checkout session is created the
+// unpaid booking is auto-cancelled (admin-tunable; default 10 min). The session
+// is actively expired at this point so the customer can't pay a freed slot.
+export const getQuickCheckoutMs = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<number> => {
+    const s = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    const minutes = (s as any)?.abandonedCheckoutQuickMinutes ?? 10;
+    return Math.max(2, minutes) * 60 * 1000;
+  },
+});
+
 // Is the given email an admin (by the customers table)? Internal — used by node
 // actions (createPaymentLink) that can't run requireAdmin's DB fallback directly.
 // Matches getCallerContext's admin resolution, avoiding the user.role-only drift.

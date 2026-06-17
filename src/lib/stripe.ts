@@ -139,6 +139,16 @@ export async function createTopUpCheckoutSession(params: {
   })
 }
 
+// SPEC_CHECKOUT_ABANDONMENT — cancel an unpaid ("Awaiting payment") booking:
+// expires its Stripe session so it can't be paid, then frees the slot. Used by
+// the Awaiting-payment card's Cancel button and the /checkout/cancel route.
+export async function cancelUnpaidCheckout(bookingId: string): Promise<boolean> {
+  const convex = getConvex()
+  if (!convex) return false
+  const result = await convex.action(api.stripe.cancelUnpaidCheckout, { bookingId })
+  return !!result?.released
+}
+
 // List recent Stripe payments
 export async function listRecentStripePayments(limit?: number) {
   const convex = getConvex()

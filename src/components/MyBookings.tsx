@@ -18,6 +18,8 @@ import {
 import { formatAccessCode } from '../lib/access-code'
 import { trackCodeView } from '../lib/tracker'
 import { getErrorMessage } from '../lib/errors'
+// SPEC_CHECKOUT_ABANDONMENT — resume payment / cancel an unpaid booking.
+import { createCheckoutSession, cancelUnpaidCheckout } from '../lib/stripe'
 import AuthModal from './AuthModal'
 import AthleteAllocationEditor from './AthleteAllocationEditor'
 // SPEC_COACH_PLANNER_RETIRE_AND_VIEW §6: allocation-coverage timeline + 3-state.
@@ -133,6 +135,9 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const [activeTab, setActiveTab] = useState<'schedule' | 'past' | 'waitlist' | 'coaches'>('schedule')
   const [cancellingId, setCancellingId] = useState<string | null>(null)
   const [cancelError, setCancelError] = useState<string | null>(null)
+  // SPEC_CHECKOUT_ABANDONMENT — Pay-now / cancel-unpaid in-flight state.
+  const [pendingPayId, setPendingPayId] = useState<string | null>(null)
+  const [pendingPayError, setPendingPayError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [showAuth, setShowAuth] = useState(false)
   const [modifyBookingData, setModifyBookingData] = useState<Booking | null>(null)
@@ -332,6 +337,52 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     setCancellingId(bookingId)
     await cancelBooking(bookingId, user?.id)
     setCancellingId(null)
+  }
+
+  // SPEC_CHECKOUT_ABANDONMENT — resume payment for an unpaid booking. The server
+  // recomputes the authoritative charge from the booking (R1), so the price passed
+  // here is display-only. Creating a fresh session supersedes the old one.
+  const handlePayNow = async (booking: Booking) => {
+    setPendingPayError(null)
+    setPendingPayId(booking.id)
+    try {
+      const lane = getLane(booking.laneId)
+      const session = await createCheckoutSession({
+        laneId: booking.laneId,
+        laneName: lane?.name ?? booking.laneId,
+        variantId: booking.variantId ?? null,
+        variantName: getVariantName(booking) ?? null,
+        date: booking.date,
+        startHour: booking.startHour,
+        duration: booking.duration,
+        customerName: booking.customerName,
+        customerEmail: booking.customerEmail,
+        price: getBookingPrice(booking),
+        additionalLanes: (booking.additionalLaneIds ?? []).map(id => getLane(id)?.name ?? id),
+        bookingId: booking.id,
+      })
+      if (session.url) { window.location.assign(session.url); return }
+      setPendingPayError('Could not start payment. Please try again.')
+    } catch (err: any) {
+      setPendingPayError(getErrorMessage(err) ?? 'Could not start payment. Please try again.')
+    } finally {
+      setPendingPayId(null)
+    }
+  }
+
+  // SPEC_CHECKOUT_ABANDONMENT — cancel an unpaid booking (expire session + free
+  // slot). Distinct from handleCancel, which enforces the confirmed-booking
+  // cancellation window — an unpaid hold has no such policy.
+  const handleCancelPending = async (booking: Booking) => {
+    setPendingPayError(null)
+    setPendingPayId(booking.id)
+    try {
+      await cancelUnpaidCheckout(booking.id)
+    } catch (err: any) {
+      setPendingPayError(getErrorMessage(err) ?? 'Could not cancel. Please try again.')
+    } finally {
+      setPendingPayId(null)
+    }
   }
 
   const handleModify = async (booking: Booking, opts: {
@@ -624,6 +675,55 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     const lane = getLane(booking.laneId)
     const variantName = getVariantName(booking)
     const price = getBookingPrice(booking)
+
+    // SPEC_CHECKOUT_ABANDONMENT (layer 1) — an unpaid booking is NOT a confirmed
+    // booking. Show it as "Awaiting payment" (amber) with Pay now / Cancel, never
+    // as a normal "Booked" card, so the customer is never misled into thinking a
+    // failed/abandoned payment secured the slot.
+    if (booking.status === 'pending_payment') {
+      const busy = pendingPayId === booking.id
+      return (
+        <div key={booking.id} className="rounded-xl border-2 border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/10 p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-2 mb-2">
+            <div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-base font-bold text-gray-900 dark:text-white">
+                  {formatTime(booking.startHour)} – {formatTime(booking.startHour + booking.duration / 60)}
+                </span>
+                <span className="text-[10px] font-semibold bg-amber-200 dark:bg-amber-800/50 text-amber-800 dark:text-amber-200 px-1.5 py-0.5 rounded-full uppercase tracking-wide">Awaiting payment</span>
+              </div>
+              <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                {lane?.icon} {lane?.name ?? booking.laneId}
+                {variantName && <span className="ml-1">· {variantName}</span>}
+                <span className="ml-1">· {formatDuration(booking.duration)}</span>
+              </div>
+            </div>
+            <span className="text-lg">⏳</span>
+          </div>
+          <p className="text-[11px] text-amber-700 dark:text-amber-300 mb-2.5">
+            This slot isn't confirmed yet — it's held for you until you pay. Pay now to confirm it, or cancel to release it.
+          </p>
+          {pendingPayError && <p className="text-[11px] text-red-500 mb-2">{pendingPayError}</p>}
+          <div className="flex gap-1.5 flex-wrap">
+            <button
+              onClick={() => handlePayNow(booking)}
+              disabled={busy}
+              className="text-[11px] px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white font-semibold transition-colors"
+            >
+              {busy ? '…' : 'Pay now →'}
+            </button>
+            <button
+              onClick={() => handleCancelPending(booking)}
+              disabled={busy}
+              className="text-[11px] px-2.5 py-1.5 rounded-lg border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )
+    }
+
     const cancelCheck = canCancel(booking.id)
     const calParams = { laneName: lane?.name ?? booking.laneId, variantName: variantName ?? undefined, date: booking.date, startHour: booking.startHour, duration: booking.duration, customerName: booking.customerName, accessCode: booking.accessCode }
     return (

@@ -613,6 +613,9 @@ export default defineSchema({
     // Abandoned-checkout backstop (SPEC_PAYMENTS_AND_CREDIT #3). A pending_payment
     // booking's slot is released this many minutes after creation if unpaid.
     abandonedCheckoutMinutes: v.optional(v.number()),    // default 10
+    // SPEC_CHECKOUT_ABANDONMENT — minutes after a Stripe session is created before
+    // an unpaid booking is auto-cancelled AND its session expired (default 10).
+    abandonedCheckoutQuickMinutes: v.optional(v.number()),
     // Waitlist first-refusal offer hold (SPEC_WAITLIST_OFFER_REDESIGN #3). How
     // long a freed slot is reserved exclusively for the next waitlisted member
     // before the offer rolls to the person behind them. Default 15.

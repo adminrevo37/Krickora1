@@ -3504,6 +3504,21 @@ export const useCoachInvite = mutation({
 // STRIPE PAYMENT MUTATIONS
 // ============================================================================
 
+// SPEC_CHECKOUT_ABANDONMENT — store the live Stripe Checkout session id on an
+// unpaid booking so the abandonment-expiry action can (a) actively expire that
+// exact session and (b) detect a "Pay now" resume that created a newer session.
+// Only writes while the booking is still awaiting payment.
+export const setBookingCheckoutSession = internalMutation({
+  args: { bookingId: v.string(), sessionId: v.string() },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId as any);
+    if (!booking) return;
+    const b = booking as any;
+    if (b.status !== "pending_payment" && b.status !== "pending") return;
+    await ctx.db.patch(args.bookingId as any, { stripeSessionId: args.sessionId } as any);
+  },
+});
+
 // Create a new stripePayment (user-facing — triggered by checkout flow)
 // R4 — INTERNAL ONLY. Records the authoritative payment row that analytics reads.
 // Previously this was a PUBLIC mutation that trusted client status/amount → anyone

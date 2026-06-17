@@ -21,6 +21,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as RevOps7k2pAnalyticsRouteImport } from './routes/rev-ops-7k2p.analytics'
 import { Route as DisplayTokenRouteImport } from './routes/display.$token'
 import { Route as CheckoutSuccessRouteImport } from './routes/checkout/success'
+import { Route as CheckoutCancelRouteImport } from './routes/checkout/cancel'
 
 const StatementsRoute = StatementsRouteImport.update({
   id: '/statements',
@@ -82,6 +83,11 @@ const CheckoutSuccessRoute = CheckoutSuccessRouteImport.update({
   path: '/checkout/success',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CheckoutCancelRoute = CheckoutCancelRouteImport.update({
+  id: '/checkout/cancel',
+  path: '/checkout/cancel',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -93,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/reset-password': typeof ResetPasswordRoute
   '/rev-ops-7k2p': typeof RevOps7k2pRouteWithChildren
   '/statements': typeof StatementsRoute
+  '/checkout/cancel': typeof CheckoutCancelRoute
   '/checkout/success': typeof CheckoutSuccessRoute
   '/display/$token': typeof DisplayTokenRoute
   '/rev-ops-7k2p/analytics': typeof RevOps7k2pAnalyticsRoute
@@ -107,6 +114,7 @@ export interface FileRoutesByTo {
   '/reset-password': typeof ResetPasswordRoute
   '/rev-ops-7k2p': typeof RevOps7k2pRouteWithChildren
   '/statements': typeof StatementsRoute
+  '/checkout/cancel': typeof CheckoutCancelRoute
   '/checkout/success': typeof CheckoutSuccessRoute
   '/display/$token': typeof DisplayTokenRoute
   '/rev-ops-7k2p/analytics': typeof RevOps7k2pAnalyticsRoute
@@ -122,6 +130,7 @@ export interface FileRoutesById {
   '/reset-password': typeof ResetPasswordRoute
   '/rev-ops-7k2p': typeof RevOps7k2pRouteWithChildren
   '/statements': typeof StatementsRoute
+  '/checkout/cancel': typeof CheckoutCancelRoute
   '/checkout/success': typeof CheckoutSuccessRoute
   '/display/$token': typeof DisplayTokenRoute
   '/rev-ops-7k2p/analytics': typeof RevOps7k2pAnalyticsRoute
@@ -138,6 +147,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/rev-ops-7k2p'
     | '/statements'
+    | '/checkout/cancel'
     | '/checkout/success'
     | '/display/$token'
     | '/rev-ops-7k2p/analytics'
@@ -152,6 +162,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/rev-ops-7k2p'
     | '/statements'
+    | '/checkout/cancel'
     | '/checkout/success'
     | '/display/$token'
     | '/rev-ops-7k2p/analytics'
@@ -166,6 +177,7 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/rev-ops-7k2p'
     | '/statements'
+    | '/checkout/cancel'
     | '/checkout/success'
     | '/display/$token'
     | '/rev-ops-7k2p/analytics'
@@ -181,6 +193,7 @@ export interface RootRouteChildren {
   ResetPasswordRoute: typeof ResetPasswordRoute
   RevOps7k2pRoute: typeof RevOps7k2pRouteWithChildren
   StatementsRoute: typeof StatementsRoute
+  CheckoutCancelRoute: typeof CheckoutCancelRoute
   CheckoutSuccessRoute: typeof CheckoutSuccessRoute
   DisplayTokenRoute: typeof DisplayTokenRoute
 }
@@ -271,6 +284,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof CheckoutSuccessRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/checkout/cancel': {
+      id: '/checkout/cancel'
+      path: '/checkout/cancel'
+      fullPath: '/checkout/cancel'
+      preLoaderRoute: typeof CheckoutCancelRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -296,6 +316,7 @@ const rootRouteChildren: RootRouteChildren = {
   ResetPasswordRoute: ResetPasswordRoute,
   RevOps7k2pRoute: RevOps7k2pRouteWithChildren,
   StatementsRoute: StatementsRoute,
+  CheckoutCancelRoute: CheckoutCancelRoute,
   CheckoutSuccessRoute: CheckoutSuccessRoute,
   DisplayTokenRoute: DisplayTokenRoute,
 }

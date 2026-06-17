@@ -619,6 +619,10 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                     (booked.customerEmail?.toLowerCase() === user.email?.toLowerCase()) || booked.userId === user.id
                   )
                   const useBlueBlock = isOwnBooking
+                  // SPEC_CHECKOUT_ABANDONMENT — the owner's OWN unpaid booking shows
+                  // amber "Awaiting payment", never a plain "Booked" (others still
+                  // see it held as red — it's a real hold until it auto-cancels).
+                  const isOwnPending = isOwnBooking && booked?.status === 'pending_payment'
 
                   if (isLaneInactiveAtHalfHour) {
                     return (
@@ -673,13 +677,13 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                         </div>
                       )}
                       {renderBlockHere && booked && !ownCoachBooking && (
-                        <div className={`absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border ${useBlueBlock ? 'bg-gradient-to-br from-blue-100 to-blue-50 border-blue-200' : 'bg-gradient-to-br from-red-100 to-red-50 border-red-200'}`}
+                        <div className={`absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border ${isOwnPending ? 'bg-gradient-to-br from-amber-100 to-amber-50 border-amber-300' : useBlueBlock ? 'bg-gradient-to-br from-blue-100 to-blue-50 border-blue-200' : 'bg-gradient-to-br from-red-100 to-red-50 border-red-200'}`}
                           style={{ height: `${visualSpan * 32 - 4}px` }}>
-                          <div className={`text-[9px] font-semibold truncate ${useBlueBlock ? 'text-blue-700' : 'text-red-700'}`}>
-                            {isAdmin ? booked.customerName : isOwnBooking ? 'Your booking' : 'Booked'}
+                          <div className={`text-[9px] font-semibold truncate ${isOwnPending ? 'text-amber-700' : useBlueBlock ? 'text-blue-700' : 'text-red-700'}`}>
+                            {isOwnPending ? '⏳ Awaiting payment' : isAdmin ? booked.customerName : isOwnBooking ? 'Your booking' : 'Booked'}
                             {booked.status === 'cancelled' && <span className="ml-1 text-orange-500">(cancelled)</span>}
                           </div>
-                          <div className={`text-[8px] ${useBlueBlock ? 'text-blue-500' : 'text-red-500'}`}>
+                          <div className={`text-[8px] ${isOwnPending ? 'text-amber-600' : useBlueBlock ? 'text-blue-500' : 'text-red-500'}`}>
                             {formatTime(booked.startHour)}-{formatTime(booked.startHour + booked.duration / 60)}
                             {isAdmin && booked.isCoachBooking && <span className="ml-1 text-orange-500">🏅</span>}
                           </div>

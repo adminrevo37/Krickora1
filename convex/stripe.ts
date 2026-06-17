@@ -1,6 +1,6 @@
 "use node";
 
-import { action } from "./_generated/server";
+import { action, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
 import Stripe from "stripe";
@@ -130,7 +130,25 @@ export const createCheckoutSession = action({
         isCoachBooking: args.isCoachBooking ? "true" : "false",
       },
       success_url: `${siteUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: siteUrl,
+      // SPEC_CHECKOUT_ABANDONMENT (layer 2) — backing out of Stripe lands on a
+      // route that releases this booking's slot immediately, instead of leaving an
+      // "Awaiting payment" slot stuck until the timer/cron.
+      cancel_url: `${siteUrl}/checkout/cancel?b=${encodeURIComponent(args.bookingId)}`,
+    });
+
+    // SPEC_CHECKOUT_ABANDONMENT — record the session on the booking, then schedule
+    // a quick auto-cancel. expireUnpaidCheckout expires THIS session (so the slot
+    // can't be paid after release) and frees the slot if still unpaid. A "Pay now"
+    // resume overwrites stripeSessionId, so this scheduled run no-ops (session
+    // mismatch). The 30-min Stripe expiry + 5-min cron remain as backstops.
+    await ctx.runMutation(internal.mutations.setBookingCheckoutSession, {
+      bookingId: args.bookingId,
+      sessionId: session.id,
+    });
+    const quickMs = await ctx.runQuery(internal.queries.getQuickCheckoutMs, {});
+    await ctx.scheduler.runAfter(quickMs, internal.stripe.expireUnpaidCheckout, {
+      bookingId: args.bookingId,
+      sessionId: session.id,
     });
 
     return {
@@ -138,6 +156,105 @@ export const createCheckoutSession = action({
       url: session.url,
       description,
     };
+  },
+});
+
+// SPEC_CHECKOUT_ABANDONMENT — expire an unpaid checkout's Stripe session and free
+// its slot. Money-safe quick-cancel: actively expiring the session means a
+// customer who left the payment tab open can't pay a slot we've already released
+// (Stripe's minimum session lifetime is 30 min — it can't be shortened, so we
+// must expire it ourselves to cancel sooner). Idempotent; safe to run twice.
+export const expireUnpaidCheckout = internalAction({
+  args: { bookingId: v.string(), sessionId: v.string() },
+  handler: async (ctx, args): Promise<{ released: boolean; reason?: string }> => {
+    const state = await ctx.runQuery(internal.queries.getBookingPaymentState, {
+      bookingId: args.bookingId,
+    });
+    if (!state) return { released: false, reason: "not_found" };
+    // Paid or already past the awaiting-payment phase → leave it alone.
+    if (state.paymentStatus === "paid") return { released: false, reason: "paid" };
+    if (state.status !== "pending_payment" && state.status !== "pending")
+      return { released: false, reason: "not_pending" };
+    // Superseded by a "Pay now" resume that created a newer session.
+    if (state.stripeSessionId && state.stripeSessionId !== args.sessionId)
+      return { released: false, reason: "superseded" };
+
+    const sid = state.stripeSessionId ?? args.sessionId;
+    // Inverse-race guard: the payment may have SUCCEEDED on Stripe while the
+    // confirming webhook is still in flight (our DB still shows pending). Check
+    // Stripe's authoritative status first — if it's paid, do NOT release; the
+    // webhook will confirm it. Only release a genuinely-unpaid session.
+    if (await stripeSessionIsPaid(sid)) return { released: false, reason: "paid_pending_webhook" };
+    try {
+      await getStripe().checkout.sessions.expire(sid);
+    } catch {
+      // already expired/unknown — release anyway (idempotent).
+    }
+    await ctx.runMutation(internal.slotHolds.releaseCheckoutBooking, {
+      bookingId: args.bookingId,
+    });
+    return { released: true };
+  },
+});
+
+// True if the Stripe Checkout session has actually been paid/completed. Used to
+// avoid cancelling a booking whose payment succeeded but whose webhook is lagging.
+async function stripeSessionIsPaid(sessionId: string): Promise<boolean> {
+  try {
+    const s = await getStripe().checkout.sessions.retrieve(sessionId);
+    return s.payment_status === "paid" || s.status === "complete";
+  } catch {
+    return false; // unknown session → treat as unpaid (safe to release)
+  }
+}
+
+// SPEC_CHECKOUT_ABANDONMENT (layers 1+2) — owner/admin-triggered cancel of an
+// unpaid booking (the "Cancel" button on an Awaiting-payment card, and the Stripe
+// cancel_url route). Expires the session so it can never be paid, then frees the
+// slot. Refuses to touch a paid booking (use cancelBooking for those).
+export const cancelUnpaidCheckout = action({
+  args: { bookingId: v.string() },
+  handler: async (ctx, args): Promise<{ released: boolean }> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError("Please sign in.");
+    const owner = await ctx.runQuery(internal.queries.getBookingOwner, {
+      bookingId: args.bookingId,
+    });
+    if (!owner) return { released: false };
+    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
+    const isOwner =
+      (owner.userId != null && owner.userId === identity.subject) ||
+      (!!callerEmail && callerEmail === owner.customerEmail);
+    let isAdmin = false;
+    if (!isOwner && callerEmail) {
+      isAdmin = await ctx.runQuery(internal.queries.isAdminEmail, { email: callerEmail });
+    }
+    if (!isOwner && !isAdmin) throw new ConvexError("You can only cancel your own booking.");
+
+    const state = await ctx.runQuery(internal.queries.getBookingPaymentState, {
+      bookingId: args.bookingId,
+    });
+    if (!state) return { released: false };
+    if (state.paymentStatus === "paid") throw new ConvexError("This booking is already paid.");
+    if (state.status === "cancelled") return { released: true };
+    if (state.status !== "pending_payment" && state.status !== "pending")
+      throw new ConvexError("This booking is not awaiting payment.");
+
+    if (state.stripeSessionId) {
+      // Same inverse-race guard as the timer path: don't cancel a slot whose
+      // payment actually went through but whose webhook hasn't landed yet.
+      if (await stripeSessionIsPaid(state.stripeSessionId))
+        throw new ConvexError("Your payment is being confirmed — please refresh in a moment.");
+      try {
+        await getStripe().checkout.sessions.expire(state.stripeSessionId);
+      } catch {
+        /* best-effort */
+      }
+    }
+    await ctx.runMutation(internal.slotHolds.releaseCheckoutBooking, {
+      bookingId: args.bookingId,
+    });
+    return { released: true };
   },
 });
 
