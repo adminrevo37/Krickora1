@@ -4,9 +4,72 @@
 import { mutation, query } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { components } from "./_generated/api";
-import { requireAdmin, requireAdminUnlocked, writeRoleAudit } from "./lib/adminGuard";
+import { requireAdmin, requireAdminUnlocked, writeRoleAudit, getAuthUserSafe } from "./lib/adminGuard";
+import { enforceRateLimit } from "./lib/rateLimit";
 import { composeName } from "./lib/names";
 import { validateLocationIfProvided, normalizePostcode, normalizeSuburb } from "./lib/locations";
+
+// Self-service email correction for an UNVERIFIED account (mistyped email at
+// signup). Only an authenticated, NOT-yet-verified user may change their own
+// email this way: there's no verified identity to protect, the credential
+// account is keyed by userId (not email — see adminPassword.ts) so sign-in is
+// unaffected, and the client sends a fresh verification link to the new address
+// afterwards. Rejects collisions with another account; rate-limited.
+export const correctUnverifiedEmail = mutation({
+  args: { newEmail: v.string() },
+  handler: async (ctx, { newEmail }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError("Authentication required.");
+    const authUser = await getAuthUserSafe(ctx);
+    if (!authUser) throw new ConvexError("Authentication required.");
+    if (authUser.emailVerified === true) {
+      throw new ConvexError("Your email is already verified.");
+    }
+    await enforceRateLimit(
+      ctx,
+      { action: "correct-email", identifier: String(authUser._id), max: 5, windowMs: 60 * 60_000 },
+      "Too many email changes — please wait a little and try again."
+    );
+    const oldEmail = (authUser.email ?? "").toLowerCase().trim();
+    const email = newEmail.toLowerCase().trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new ConvexError("Please enter a valid email address.");
+    }
+    if (email === oldEmail) {
+      throw new ConvexError("That's the same address — check the spelling and try again.");
+    }
+    // Reject if the new email already belongs to another account (auth or customers).
+    const existingAuth: any = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+      model: "user",
+      where: [{ field: "email", value: email }],
+    });
+    if (existingAuth && String(existingAuth._id) !== String(authUser._id)) {
+      throw new ConvexError("That email is already in use by another account.");
+    }
+    const collision = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", email))
+      .first();
+    if (collision && (collision.email ?? "").toLowerCase() !== oldEmail) {
+      throw new ConvexError("That email is already in use by another account.");
+    }
+    // 1) Better Auth user record (stays unverified).
+    await ctx.runMutation(components.betterAuth.adapter.updateOne, {
+      input: {
+        model: "user",
+        where: [{ field: "_id", value: authUser._id }],
+        update: { email, emailVerified: false } as any,
+      },
+    });
+    // 2) Our customers row (linked by email) — keep the two stores in step.
+    const customer = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", oldEmail))
+      .first();
+    if (customer) await ctx.db.patch(customer._id, { email });
+    return { ok: true, email };
+  },
+});
 
 // Recent role / permission / tier changes — admin only (SPEC_SECURITY_HARDENING
 // #3 audit trail; surfaced in the admin role-management UI).
