@@ -4,9 +4,10 @@
 // for this coach (L1 rolling window / L2 Sunday-5pm release). Confirm preview
 // before booking (previewRepeatCoachBooking → repeatCoachBooking).
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
+import MultiDatePicker from './MultiDatePicker'
 import { useAuth } from '../hooks/useAuth'
 import { useSettings } from '../hooks/useSettings'
 import { getErrorMessage } from '../lib/errors'
@@ -46,6 +47,8 @@ export default function RepeatBookingButton({ booking, compact }: { booking: Boo
   const { customerRecord } = useAuth()
   const settings = useSettings()
   const [open, setOpen] = useState(false)
+  const [openDates, setOpenDates] = useState(false)
+  const isAdmin = (customerRecord as any)?.role === 'admin'
 
   const coachTier: 'L1' | 'L2' =
     ((customerRecord as any)?.coachTier === 'L2' || (customerRecord as any)?.coachTier === 'BowlingL2') ? 'L2' : 'L1'
@@ -97,7 +100,23 @@ export default function RepeatBookingButton({ booking, compact }: { booking: Boo
       >
         {compact ? '↻' : '↻ Repeat'}
       </button>
+      {/* Admin-only: repeat onto an arbitrary picked set of dates (irregular programs). */}
+      {isAdmin && booking.isCoachBooking && (
+        <button
+          onClick={(e) => { e.stopPropagation(); setOpenDates(true) }}
+          title="Repeat this session onto specific dates you pick"
+          className={
+            compact
+              ? 'flex items-center justify-center w-6 h-6 rounded-md border text-[12px] leading-none border-sky-300 bg-white/90 text-sky-600 hover:bg-sky-50 shadow-sm transition-colors'
+              : 'text-[11px] px-2.5 py-1 rounded-lg border border-sky-200 dark:border-sky-800 text-sky-600 dark:text-sky-400 hover:bg-sky-50 dark:hover:bg-sky-900/20 transition-colors'
+          }
+          aria-label="Repeat to selected dates"
+        >
+          {compact ? '📅' : '📅 Dates'}
+        </button>
+      )}
       {open && <RepeatConfirmModal booking={booking} onClose={() => setOpen(false)} />}
+      {openDates && <RepeatToDatesModal booking={booking} onClose={() => setOpenDates(false)} />}
     </>
   )
 }
@@ -190,6 +209,98 @@ function RepeatConfirmModal({ booking, onClose }: { booking: Booking; onClose: (
                 className="flex-1 py-2 rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-40 text-white text-sm font-semibold"
               >
                 {busy ? 'Booking…' : 'Confirm booking'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Admin-only: copy this session onto an arbitrary picked set of dates.
+function RepeatToDatesModal({ booking, onClose }: { booking: Booking; onClose: () => void }) {
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const repeat = useMutation(api.mutations.repeatCoachBookingToDates)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState<string | null>(null)
+
+  const datesArr = useMemo(() => [...selected].sort(), [selected])
+  const preview = useQuery(
+    api.mutations.previewRepeatCoachBookingToDates,
+    datesArr.length > 0 ? { bookingId: booking.id as any, dates: datesArr } : 'skip'
+  )
+
+  const toggle = (dk: string) =>
+    setSelected((prev) => { const n = new Set(prev); if (n.has(dk)) n.delete(dk); else n.add(dk); return n })
+
+  const okCount = preview?.results.filter((r) => r.status === 'ok').length ?? 0
+  const skipCount = preview ? preview.results.length - okCount : 0
+
+  const handleConfirm = async () => {
+    setBusy(true); setError(null)
+    try {
+      const res = await repeat({ bookingId: booking.id as any, dates: datesArr })
+      const dropped = res.droppedTotal ? ` (${res.droppedTotal} athlete slot(s) skipped)` : ''
+      const skip = res.skipped.length ? ` ${res.skipped.length} date(s) skipped.` : ''
+      setDone(`Created ${res.createdCount} booking(s)${dropped}.${skip}`)
+      setSelected(new Set())
+    } catch (err: any) {
+      setError(getErrorMessage(err) ?? 'Could not repeat this booking.')
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-sm rounded-2xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 shadow-xl p-5 max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-base font-bold text-gray-900 dark:text-white">📅 Repeat to selected dates</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
+        </div>
+
+        {done ? (
+          <div className="py-2">
+            <div className="text-sm font-semibold text-emerald-600 dark:text-emerald-400 mb-4">✓ {done}</div>
+            <button onClick={onClose} className="w-full py-2 rounded-lg bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-semibold">Done</button>
+          </div>
+        ) : (
+          <>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+              Copies this session ({fmtLongDate(booking.date)}) onto every date you pick — each gets its own door code. Already-booked / closed dates are skipped.
+            </p>
+            <MultiDatePicker selected={selected} onToggle={toggle} baseDate={parseDateKey(booking.date)} />
+
+            {datesArr.length > 0 && preview && (
+              <div className="mt-3 max-h-40 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700 p-2 space-y-1">
+                {preview.results.map((r, i) => (
+                  <div key={i} className={`flex items-center justify-between text-[11px] px-2 py-1 rounded ${r.status === 'ok' ? 'text-gray-600 dark:text-gray-300' : 'bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'}`}>
+                    <span>{fmtLongDate(r.date)}</span>
+                    <span className="font-semibold">{r.status === 'ok' ? '✓ will create' : `⚠️ ${r.reason ?? r.status}`}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {datesArr.length > 0 && preview && (
+              <div className="mt-2 text-[11px] text-gray-500 dark:text-gray-400">
+                {okCount} will be created{skipCount ? `, ${skipCount} skipped` : ''}.
+              </div>
+            )}
+            {error && (
+              <div className="mt-2 text-[11px] text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-2.5 py-2">{error}</div>
+            )}
+
+            <div className="flex gap-2 mt-3">
+              <button onClick={onClose} className="flex-1 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm font-semibold text-gray-700 dark:text-gray-300">Cancel</button>
+              <button
+                onClick={handleConfirm}
+                disabled={busy || okCount === 0}
+                className="flex-1 py-2 rounded-lg bg-sky-600 hover:bg-sky-700 disabled:opacity-40 text-white text-sm font-semibold"
+              >
+                {busy ? 'Creating…' : `Create ${okCount} booking${okCount === 1 ? '' : 's'}`}
               </button>
             </div>
           </>

@@ -2901,6 +2901,85 @@ export const repeatCoachBooking = mutation({
   },
 });
 
+// ----------------------------------------------------------------------------
+// Multi-date Repeat (admin) — copy a coach session onto an ARBITRARY set of
+// picked dates in one go (irregular programs the +7 repeat can't express).
+// Reuses analyzeCoachSessionCopy + writeCoachSessionCopy per date; conflicts /
+// closures / out-of-hours are skipped and reported, never thrown. Auth = the
+// same coach-owner-OR-admin gate as the single repeat; the UI only exposes this
+// to admins (it deliberately bypasses the coach booking-window gating).
+// ----------------------------------------------------------------------------
+
+export const previewRepeatCoachBookingToDates = query({
+  args: { bookingId: v.id("bookings"), dates: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const { src, coach } = await loadCoachBookingForRepeat(ctx, args.bookingId);
+    const settings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    const dailyHours: any = (settings as any)?.dailyHours;
+    const coachIdForms = new Set<string>([coach._id as string, coach.email]);
+
+    const seen = new Set<string>();
+    const results: Array<{ date: string; status: string; reason?: string; droppedCount: number }> = [];
+    for (const date of [...args.dates].sort()) {
+      if (date === src.date) { results.push({ date, status: "duplicate", reason: "source date", droppedCount: 0 }); continue; }
+      if (seen.has(date)) continue;
+      seen.add(date);
+      const a = await analyzeCoachSessionCopy(ctx, { src, coach, targetDate: date, dailyHours, coachIdForms });
+      results.push({ date, status: a.status, reason: a.reason, droppedCount: a.droppedCount });
+    }
+    return {
+      sourceDate: src.date,
+      startHour: src.startHour,
+      duration: src.duration,
+      laneNameSnapshot: src.laneNameSnapshot ?? null,
+      laneCount: 1 + (src.additionalLaneIds?.length ?? 0),
+      results,
+    };
+  },
+});
+
+export const repeatCoachBookingToDates = mutation({
+  args: { bookingId: v.id("bookings"), dates: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    if (args.dates.length === 0) throw new ConvexError("Pick at least one date.");
+    if (args.dates.length > 60) throw new ConvexError("Too many dates (max 60 per repeat).");
+    const { src, coach, callerCustomer } = await loadCoachBookingForRepeat(ctx, args.bookingId);
+
+    const settings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    const coachPerHour = (settings as any)?.coachPerHour ?? PRICE_DEFAULTS.coachPerHour;
+    const dailyHours: any = (settings as any)?.dailyHours;
+    const coachIdForms = new Set<string>([coach._id as string, coach.email]);
+    const existingCodes = await collectActiveAccessCodes(ctx);
+    const reserved = await getReservedCodes(ctx);
+
+    const createdIds: string[] = [];
+    const skipped: Array<{ date: string; reason: string }> = [];
+    let droppedTotal = 0;
+    // Chronological, deduped. Each created booking is inserted before the next
+    // analysis runs, so generateServerAccessCode + the conflict read stay consistent.
+    for (const date of [...new Set(args.dates)].sort()) {
+      if (date === src.date) { skipped.push({ date, reason: "source date" }); continue; }
+      const a = await analyzeCoachSessionCopy(ctx, { src, coach, targetDate: date, dailyHours, coachIdForms });
+      if (a.status !== "ok") { skipped.push({ date, reason: a.reason ?? a.status }); continue; }
+      const id = await writeCoachSessionCopy(ctx, {
+        src, coach, targetDate: date, coachPerHour, analysis: a,
+        existingCodes, reserved,
+        actorUserId: callerCustomer?._id ?? coach._id,
+        actorName: coach.name,
+      });
+      createdIds.push(id);
+      droppedTotal += a.droppedCount;
+    }
+    return { createdCount: createdIds.length, createdIds, skipped, droppedTotal };
+  },
+});
+
 // ============================================================================
 // CUSTOMER MUTATIONS
 // ============================================================================
