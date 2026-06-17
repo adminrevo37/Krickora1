@@ -1,9 +1,19 @@
 // Stripe checkout integration via Convex backend
-import { ConvexHttpClient } from "convex/browser";
+import type { ConvexReactClient } from "convex/react";
 import { api } from "../../convex/_generated/api";
 
-const convexUrl = import.meta.env.VITE_CONVEX_URL;
-const convex = convexUrl ? new ConvexHttpClient(convexUrl) : null;
+// IMPORTANT: use the app's SHARED, AUTHENTICATED ConvexReactClient (created in
+// main.tsx and wrapped by ConvexBetterAuthProvider) — NOT a fresh
+// ConvexHttpClient. The Stripe actions require an authenticated identity
+// (createCheckoutSession asserts the caller owns the booking; createPaymentLink
+// / listRecentPayments are admin-gated). A bare ConvexHttpClient carries no auth
+// token, so every action threw "Please sign in to check out." while the booking
+// had already been created → orphaned "booked but unpaid" slot. Reusing the
+// authed client makes all Stripe flows work for the signed-in user.
+function getConvex(): ConvexReactClient | null {
+  const g = globalThis as unknown as { __KRICKORA_CONVEX__?: ConvexReactClient | null };
+  return g.__KRICKORA_CONVEX__ ?? null;
+}
 
 export interface CheckoutSessionRequest {
   laneId: string
@@ -44,6 +54,7 @@ export function formatBookingDescription(req: CheckoutSessionRequest): string {
 
 // Create a checkout session via Convex backend
 export async function createCheckoutSession(req: CheckoutSessionRequest): Promise<CheckoutSessionResponse> {
+  const convex = getConvex()
   if (!convex) {
     throw new Error('Payment system not configured. Please contact support.')
   }
@@ -70,6 +81,7 @@ export async function createCheckoutSession(req: CheckoutSessionRequest): Promis
 
 // Verify a checkout session completed successfully
 export async function verifyCheckoutSession(sessionId: string): Promise<boolean> {
+  const convex = getConvex()
   if (!convex) return false
   try {
     const result = await convex.action(api.stripe.verifySession, { sessionId })
@@ -81,6 +93,7 @@ export async function verifyCheckoutSession(sessionId: string): Promise<boolean>
 
 // Create a payment link for admin to send to customers
 export async function createPaymentLink(req: CheckoutSessionRequest): Promise<{ url: string; description: string }> {
+  const convex = getConvex()
   if (!convex) {
     throw new Error('Payment system not configured.')
   }
@@ -128,6 +141,7 @@ export async function createTopUpCheckoutSession(params: {
 
 // List recent Stripe payments
 export async function listRecentStripePayments(limit?: number) {
+  const convex = getConvex()
   if (!convex) return []
   try {
     return await convex.action(api.stripe.listRecentPayments, { limit })
