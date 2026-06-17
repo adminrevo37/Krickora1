@@ -214,6 +214,14 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     return map
   }, [displayBookings, dateKey])
 
+  // Valid start times for coaches on the selected day (whole hours + weekday
+  // half-hours 7:30am–3:30pm + L1 6:30am). Defined here (before visibleTimeSlots)
+  // so the row filter can show empty coach half-hour rows as bookable.
+  const validCoachStartsForDay = useMemo(
+    () => (userIsCoach ? getValidCoachStartTimes(selectedDay, coachTierNorm) : []),
+    [userIsCoach, selectedDay, coachTierNorm]
+  )
+
   const visibleTimeSlots = useMemo(() => {
     const base = allTimeSlots.filter(slot => {
       if (slot.hour === Math.floor(slot.hour)) return true
@@ -223,14 +231,13 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       // customers so it renders as "Booked" — making the 3:00–3:30 gap-fill read
       // correctly. Empty 3:30 cells on other lanes still render as inactive "–", never a
       // "+", so no bookable 3:30 start leaks.
-      if (slot.hour === 15.5) {
-        if (userIsCoach && isWeekday(selectedDay)) return true
-        for (const activeSet of laneActiveHalfHours.values()) {
-          if (activeSet.has(15.5)) return true
-        }
-        return false
-      }
-      // Other half-hours: show if any lane is active there (e.g. a 30-min coach slot).
+      // Coach weekday half-hour starts (7:30am–3:30pm) are bookable start rows for
+      // coaches — show them empty so the coach can pick the slot. (Generalises the
+      // old 3:30pm-only rule.) Customers never see them empty; from 4pm onwards
+      // there are no coach half-hour starts, so those rows stay hidden unless occupied.
+      if (userIsCoach && validCoachStartsForDay.includes(slot.hour)) return true
+      // Other half-hours: show if any lane is active there (e.g. a 30-min coach slot,
+      // or a customer 30-min gap-fill rendering as "Booked").
       for (const activeSet of laneActiveHalfHours.values()) {
         if (activeSet.has(slot.hour)) return true
       }
@@ -250,19 +257,13 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       return base.filter(s => (s.hour + 1) > nowHour)
     }
     return base
-  }, [allTimeSlots, laneActiveHalfHours, userIsCoach, isL1Coach, selectedDay])
+  }, [allTimeSlots, laneActiveHalfHours, userIsCoach, isL1Coach, selectedDay, validCoachStartsForDay])
 
   const laneStartTimes = useMemo(() => {
     const map = new Map<string, number[]>()
     for (const lane of LANES) map.set(lane.id, getAvailableStartTimes(displayBookings, lane.id, dateKey))
     return map
   }, [displayBookings, dateKey])
-
-  // Valid start times for coaches on the selected day (every open hour + 3:30pm on weekdays)
-  const validCoachStartsForDay = useMemo(
-    () => (userIsCoach ? getValidCoachStartTimes(selectedDay, coachTierNorm) : []),
-    [userIsCoach, selectedDay, coachTierNorm]
-  )
 
   const handleSlotClick = (lane: Lane, slot: TimeSlot) => {
     if (isPast(selectedDay, slot.hour)) return
@@ -553,7 +554,11 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   const booked = isSlotBooked(displayBookings, lane.id, dateKey, slot.hour)
                   const blocked = !booked ? isLaneBlocked(lane.id, dateKey, slot.hour) : null
                   const past = isPast(selectedDay, slot.hour)
-                  const isLaneInactiveAtHalfHour = isHalfHour && !laneActiveSet.has(slot.hour) && !booked && !blocked
+                  // A half-hour cell is "inactive" (renders "–") unless a booking is
+                  // active there — EXCEPT a coach valid half-hour start (e.g. weekday
+                  // 7:30am–3:30pm), which must render as a bookable "+" for coaches.
+                  const isCoachHalfStart = userIsCoach && validCoachStartsForDay.includes(slot.hour)
+                  const isLaneInactiveAtHalfHour = isHalfHour && !laneActiveSet.has(slot.hour) && !booked && !blocked && !isCoachHalfStart
                   // SPEC_RECONFIGURABLE_LANES: per-segment colour band + band-start tag
                   const band = bandClassForSlot(lane.id, dateKey, slot.hour)
                   const bs = bandStart(lane.id, dateKey, slot.hour)

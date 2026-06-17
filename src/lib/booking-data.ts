@@ -432,21 +432,30 @@ export function getAvailableStartTimes(bookings: Booking[], laneId: string, date
   return times
 }
 
-// Coach start times — every whole hour within the day's opening hours, all days,
-// PLUS an extra 3:30pm start on weekdays (after-school slot, ALL coaches), PLUS a
-// 6:30am pre-open slot for L1 coaches ONLY (SPEC_MOBILE_BOOKING_UPDATES §7.1/§7.2).
-// tier is optional so legacy callers (no tier) just get whole hours + 3:30pm.
+// Coach start times. Whole hours within the day's opening hours, every day.
+// WEEKDAYS (Mon–Fri): ALSO every half hour from 7:00am–3:30pm (daytime/after-school
+// coaching, ALL coaches → 7:30, 8:30 … 3:30pm); from 4:00pm onwards whole hours
+// ONLY. PLUS a 6:30am pre-open slot for L1 coaches ONLY (weekdays).
+// WEEKENDS (Sat/Sun): whole hours only, on the hour.
+// (2026-06-17: extended the old weekday-3:30pm-only rule to the full 7am–3:30pm
+// half-hour range; 6:30am restricted to weekdays. tier optional — legacy callers
+// without a tier get the non-6:30 set.)
 export function getValidCoachStartTimes(date: Date, tier?: 'L1' | 'L2'): number[] {
   const { open, close } = getHoursForDate(getSettingsStore().get(), date)
   const times: number[] = []
   for (let h = Math.ceil(open); h < close; h++) times.push(h)
-  // 3:30pm after-school slot — all coaches, weekdays only.
-  if (isWeekday(date) && 15.5 >= open && 15.5 < close && !times.includes(15.5)) {
-    times.push(15.5)
-  }
-  // 6:30am pre-open slot — L1 coaches only; allowed even if before opening.
-  if (tier === 'L1' && 6.5 < close && !times.includes(6.5)) {
-    times.push(6.5)
+  if (isWeekday(date)) {
+    // Half-hour starts 7:30am–3:30pm — weekdays, all coaches. The whole hours are
+    // already added above, so this fills in the :30 positions (7.5 … 15.5). After
+    // 4pm there are no half-hour starts (the loop stops at 15).
+    for (let h = 7; h <= 15; h++) {
+      const half = h + 0.5
+      if (half >= open && half < close && !times.includes(half)) times.push(half)
+    }
+    // 6:30am pre-open slot — L1 coaches only; allowed even if before opening.
+    if (tier === 'L1' && 6.5 < close && !times.includes(6.5)) {
+      times.push(6.5)
+    }
   }
   times.sort((a, b) => a - b)
   return times

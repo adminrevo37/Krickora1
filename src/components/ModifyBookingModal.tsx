@@ -94,7 +94,8 @@ export default function ModifyBookingModal({ booking, allBookings, creditBalance
     const { open, close } = getHoursForDate(settings, selectedDate)
     const candidateHours: number[] = isCoach
       ? getValidCoachStartTimes(new Date(selectedDate + 'T00:00:00')).filter(h => h >= open && h < close)
-      : (() => { const t: number[] = []; for (let h = open; h < close; h += 0.5) t.push(h); return t })()
+      // Customers may only start on the whole hour (no half-hour starts in modify).
+      : (() => { const t: number[] = []; for (let h = Math.ceil(open); h < close; h += 1) t.push(h); return t })()
     for (const h of candidateHours) {
       const occupied = laneBookings.some(b => { const e = b.startHour + b.duration / 60; return h >= b.startHour && h < e })
       if (!occupied) slots.push(h)

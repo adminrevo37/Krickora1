@@ -764,9 +764,10 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
         <div className="flex gap-1.5 flex-wrap">
           <a href={generateGoogleCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">📅 Google</a>
           <a href={generateOutlookCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors">📆 Outlook</a>
-          {cancelCheck.allowed && (
-            <button onClick={() => setModifyBookingData(booking)} className="text-[11px] px-2.5 py-1 rounded-lg border border-violet-200 dark:border-violet-800 text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors">✏️ Modify</button>
-          )}
+          {/* Modify stays available inside the cancellation window — the modify flow
+              has its own carve-out (extend / move earlier) that the server enforces;
+              gating it on canCancel wrongly hid it and blocked allowed extensions. */}
+          <button onClick={() => setModifyBookingData(booking)} className="text-[11px] px-2.5 py-1 rounded-lg border border-violet-200 dark:border-violet-800 text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors">✏️ Modify</button>
           {/* SPEC_ADD_A_MATE: one-tap to the Add-a-Mate page (customer bookings only). */}
           <Link to="/add-mate" search={{ bookingId: booking.id }} className="text-[11px] px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors">👥 Add a Mate</Link>
           <button

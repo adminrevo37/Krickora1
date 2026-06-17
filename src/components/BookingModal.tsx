@@ -76,7 +76,10 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   }, [existingBookings, lane.id, dkForSeg, startHour, isCoach, seg.endHour])
 
   const [duration, setDuration] = useState<number>(() => availableDurations.length > 0 ? availableDurations[0] : 60)
-  const validCoachStarts = useMemo(() => getValidCoachStartTimes(date), [date])
+  // Pass the coach's tier so validation matches the calendar (weekday half-hours
+  // for all coaches; the 6:30am pre-open slot for L1 only).
+  const coachTierNorm: 'L1' | 'L2' = ((customerRecord as any)?.coachTier === 'L2' || (customerRecord as any)?.coachTier === 'BowlingL2') ? 'L2' : 'L1'
+  const validCoachStarts = useMemo(() => getValidCoachStartTimes(date, coachTierNorm), [date, coachTierNorm])
   const isValidCoachStart = !isCoach || validCoachStarts.includes(startHour)
 
   const [isSubmitting, setIsSubmitting] = useState(false)
