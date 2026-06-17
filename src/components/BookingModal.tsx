@@ -706,6 +706,14 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               <div><div className="font-semibold text-gray-800 dark:text-gray-200">{resolvedLaneName}</div><div className="text-xs text-gray-500">{formatTime(startHour)} start</div></div>
             </div>
 
+            {/* Run-up lanes: facility safety rule — max 3 people per lane. */}
+            {seg.mode === 'RU' && (
+              <div className="flex items-center gap-2.5 bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border-2 border-red-300 dark:border-red-700/70">
+                <span className="text-lg">⚠️</span>
+                <p className="text-sm font-bold text-red-700 dark:text-red-300 uppercase tracking-wide">Strict maximum 3 people per lane</p>
+              </div>
+            )}
+
             {user && (
               <div className={`flex items-center gap-3 rounded-xl p-3 border ${isCoach ? 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800/50' : 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800/50'}`}>
                 <div className={`w-8 h-8 ${isCoach ? 'bg-orange-500' : 'bg-emerald-500'} rounded-full flex items-center justify-center text-white text-sm font-bold`}>{user.name.charAt(0).toUpperCase()}</div>
