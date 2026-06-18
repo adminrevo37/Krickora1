@@ -123,7 +123,7 @@ function DisplayBoard() {
             Cricket Revolution
           </span>
         </div>
-        <div className="font-black tabular-nums leading-none" style={{ fontSize: 'clamp(4rem,21vh,18rem)', letterSpacing: '-0.02em' }}>
+        <div className="font-black tabular-nums leading-none whitespace-nowrap" style={{ fontSize: 'clamp(7rem, min(42vh, 21.5vw), 34rem)', letterSpacing: '-0.02em' }}>
           {now.clock}
         </div>
         <div className="text-white/45" style={{ fontSize: 'clamp(1rem,3vh,2.4rem)', marginTop: 'clamp(0.5rem,1.5vh,1.5rem)' }}>
