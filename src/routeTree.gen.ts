@@ -15,6 +15,7 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as PaymentsRouteImport } from './routes/payments'
 import { Route as JoinRouteImport } from './routes/join'
+import { Route as FacilityRouteImport } from './routes/facility'
 import { Route as BookingsRouteImport } from './routes/bookings'
 import { Route as AddMateRouteImport } from './routes/add-mate'
 import { Route as IndexRouteImport } from './routes/index'
@@ -51,6 +52,11 @@ const PaymentsRoute = PaymentsRouteImport.update({
 const JoinRoute = JoinRouteImport.update({
   id: '/join',
   path: '/join',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FacilityRoute = FacilityRouteImport.update({
+  id: '/facility',
+  path: '/facility',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BookingsRoute = BookingsRouteImport.update({
@@ -93,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/add-mate': typeof AddMateRoute
   '/bookings': typeof BookingsRoute
+  '/facility': typeof FacilityRoute
   '/join': typeof JoinRoute
   '/payments': typeof PaymentsRoute
   '/profile': typeof ProfileRoute
@@ -108,6 +115,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/add-mate': typeof AddMateRoute
   '/bookings': typeof BookingsRoute
+  '/facility': typeof FacilityRoute
   '/join': typeof JoinRoute
   '/payments': typeof PaymentsRoute
   '/profile': typeof ProfileRoute
@@ -124,6 +132,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/add-mate': typeof AddMateRoute
   '/bookings': typeof BookingsRoute
+  '/facility': typeof FacilityRoute
   '/join': typeof JoinRoute
   '/payments': typeof PaymentsRoute
   '/profile': typeof ProfileRoute
@@ -141,6 +150,7 @@ export interface FileRouteTypes {
     | '/'
     | '/add-mate'
     | '/bookings'
+    | '/facility'
     | '/join'
     | '/payments'
     | '/profile'
@@ -156,6 +166,7 @@ export interface FileRouteTypes {
     | '/'
     | '/add-mate'
     | '/bookings'
+    | '/facility'
     | '/join'
     | '/payments'
     | '/profile'
@@ -171,6 +182,7 @@ export interface FileRouteTypes {
     | '/'
     | '/add-mate'
     | '/bookings'
+    | '/facility'
     | '/join'
     | '/payments'
     | '/profile'
@@ -187,6 +199,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AddMateRoute: typeof AddMateRoute
   BookingsRoute: typeof BookingsRoute
+  FacilityRoute: typeof FacilityRoute
   JoinRoute: typeof JoinRoute
   PaymentsRoute: typeof PaymentsRoute
   ProfileRoute: typeof ProfileRoute
@@ -240,6 +253,13 @@ declare module '@tanstack/react-router' {
       path: '/join'
       fullPath: '/join'
       preLoaderRoute: typeof JoinRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/facility': {
+      id: '/facility'
+      path: '/facility'
+      fullPath: '/facility'
+      preLoaderRoute: typeof FacilityRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/bookings': {
@@ -310,6 +330,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AddMateRoute: AddMateRoute,
   BookingsRoute: BookingsRoute,
+  FacilityRoute: FacilityRoute,
   JoinRoute: JoinRoute,
   PaymentsRoute: PaymentsRoute,
   ProfileRoute: ProfileRoute,

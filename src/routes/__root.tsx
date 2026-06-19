@@ -74,6 +74,18 @@ function RootComponent() {
                   <span className="text-base leading-none">🏏</span>
                   <span>Book a Net</span>
                 </Link>
+                {/* Facility access quick-link — customers only (coaches/admins know the
+                    site). Icon-only on mobile to keep the header from wrapping. */}
+                {!isAdmin && !isCoach && (
+                  <Link
+                    to="/facility"
+                    title="How to find us"
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-xl bg-amber-50 border border-amber-200 hover:bg-amber-100 active:scale-95 transition-all text-amber-700 whitespace-nowrap"
+                  >
+                    <span className="text-base leading-none">📍</span>
+                    <span className="text-sm font-medium hidden sm:inline">Facility</span>
+                  </Link>
+                )}
                 <div className="relative">
                   <button
                     onClick={() => setShowUserMenu(!showUserMenu)}
