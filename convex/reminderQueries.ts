@@ -120,3 +120,107 @@ export const markReminderSent = internalMutation({
     await ctx.db.patch(args.bookingId, { reminderSent: true });
   },
 });
+
+// FACILITY_ACCESS_PUSH — confirmed CUSTOMER bookings starting in ~1 hour that are
+// the customer's FIRST-EVER session and haven't had the one-time "how to find us"
+// push yet. Excludes coach sessions and coach/admin accounts. Window is wide on the
+// near side (fires on the first 5-min tick under ~63 min out) and the per-customer
+// `facilityAccessPushSent` flag stops repeats — same robust pattern as the reminder.
+export const getFirstVisitBookingsForFacilityPush = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const now = new Date();
+    const awstOffset = 8 * 60 * 60 * 1000;
+    const awstNow = new Date(now.getTime() + awstOffset + now.getTimezoneOffset() * 60 * 1000);
+
+    const todayStr = `${awstNow.getFullYear()}-${String(awstNow.getMonth() + 1).padStart(2, "0")}-${String(awstNow.getDate()).padStart(2, "0")}`;
+    const tomorrow = new Date(awstNow);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
+
+    const todayBookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.eq("date", todayStr))
+      .collect();
+    const tomorrowBookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.eq("date", tomorrowStr))
+      .collect();
+    const allBookings = [...todayBookings, ...tomorrowBookings];
+
+    const currentHourAWST = awstNow.getHours() + awstNow.getMinutes() / 60;
+
+    const candidates = allBookings.filter((b: any) => {
+      if (b.status !== "confirmed") return false;
+      if (!b.customerEmail) return false;
+      if (b.isCoachBooking) return false; // customer first-visits only
+
+      const [bYear, bMonth, bDay] = b.date.split("-").map(Number);
+      const bookingDate = new Date(bYear, bMonth - 1, bDay);
+      const awstDate = new Date(awstNow.getFullYear(), awstNow.getMonth(), awstNow.getDate());
+      const daysDiff = (bookingDate.getTime() - awstDate.getTime()) / (1000 * 60 * 60 * 24);
+
+      let hoursUntil: number;
+      if (daysDiff === 0) hoursUntil = b.startHour - currentHourAWST;
+      else if (daysDiff === 1) hoursUntil = 24 - currentHourAWST + b.startHour;
+      else return false;
+
+      // Fire ~1 hour before — first tick under ~63 min; the per-customer flag dedups.
+      return hoursUntil > 0 && hoursUntil <= 1.05;
+    });
+
+    const result: Array<{
+      bookingId: any;
+      customerId: any;
+      customerEmail: string;
+      customerName: string;
+      laneName: string;
+      timeSlot: string;
+      date: string;
+    }> = [];
+
+    for (const b of candidates) {
+      const cust = await ctx.db
+        .query("customers")
+        .withIndex("by_email", (q: any) => q.eq("email", b.customerEmail))
+        .first();
+      if (!cust) continue;
+      if (cust.role === "coach" || cust.role === "admin") continue; // customers only
+      if (cust.facilityAccessPushSent === true) continue; // one-time per account
+
+      // FIRST-EVER session: no other non-cancelled booking by this email starts before it.
+      const priors = await ctx.db
+        .query("bookings")
+        .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", b.customerEmail))
+        .collect();
+      const startsBefore = priors.some((p: any) => {
+        if (p._id === b._id) return false;
+        if (p.status === "cancelled") return false;
+        if (p.date < b.date) return true;
+        if (p.date === b.date && p.startHour < b.startHour) return true;
+        return false;
+      });
+      if (startsBefore) continue;
+
+      result.push({
+        bookingId: b._id,
+        customerId: cust._id,
+        customerEmail: b.customerEmail,
+        customerName: b.customerName,
+        laneName: getLaneName(b.laneId),
+        timeSlot: formatHourToTime(b.startHour),
+        date: b.date,
+      });
+    }
+
+    return result;
+  },
+});
+
+// Mark a customer's one-time facility-access push as sent (never reset).
+export const markFacilityAccessPushSent = internalMutation({
+  args: { customerId: v.id("customers") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.customerId, { facilityAccessPushSent: true });
+  },
+});

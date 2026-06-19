@@ -232,6 +232,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
               ["Paid", d.amount],
             ]) +
             codeBox(d.accessCode) +
+            linkLine("How to find us — directions, parking & getting in:", `${SITE}/access`) +
             linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),
       };
@@ -270,6 +271,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
               ["Duration", d.newDuration],
             ]) +
             codeBox(d.accessCode) +
+            linkLine("How to find us — directions, parking & getting in:", `${SITE}/access`) +
             linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),
       };
@@ -288,6 +290,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
               ["Duration", d.duration],
             ]) +
             codeBox(d.accessCode) +
+            linkLine("How to find us — directions, parking & getting in:", `${SITE}/access`) +
             linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),
       };
@@ -347,6 +350,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
               ["Duration", d.duration],
             ]) +
             codeBox(d.accessCode) +
+            linkLine("How to find us — directions, parking & getting in:", `${SITE}/access`) +
             linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),
       };
@@ -428,6 +432,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
               ["Duration", d.duration],
             ]) +
             codeBox(d.accessCode) +
+            linkLine("How to find us — directions, parking & getting in:", `${SITE}/access`) +
             linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),
       };
@@ -448,6 +453,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
               ["Duration", d.duration],
             ]) +
             codeBox(d.accessCode) +
+            linkLine("How to find us — directions, parking & getting in:", `${SITE}/access`) +
             linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),
       };
@@ -514,6 +520,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
               ["Duration", d.newDuration],
             ]) +
             codeBox(d.accessCode) +
+            linkLine("How to find us — directions, parking & getting in:", `${SITE}/access`) +
             linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),
       };

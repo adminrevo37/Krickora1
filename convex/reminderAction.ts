@@ -57,6 +57,38 @@ export const sendBookingReminders = internalAction({
       }
     }
 
+    // ── Phase 2: FACILITY ACCESS push — ~1 h before a customer's FIRST-ever session.
+    // One-time per customer: "how to find us" with a deep link to the /access page
+    // (directions, parking, getting in). Separate opt-out category "facility-access".
+    try {
+      const firstVisits: any[] = await ctx.runQuery(
+        internal.reminderQueries.getFirstVisitBookingsForFacilityPush,
+        {}
+      );
+      for (const fv of firstVisits) {
+        try {
+          await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+            email: fv.customerEmail,
+            category: "facility-access",
+            title: "Welcome — how to find us 🏏",
+            body: `Your first session is in ~1 hour (${fv.laneName} ${fv.timeSlot}). Tap for directions, parking & getting in.`,
+            url: "https://cricketrevolution.com.au/access",
+            tag: `facility-access-${fv.customerId}`,
+          });
+          // Mark sent regardless of device availability so we don't re-query every
+          // 5 min for an account with no push device (matches the reminder pattern).
+          await ctx.runMutation(
+            internal.reminderQueries.markFacilityAccessPushSent,
+            { customerId: fv.customerId }
+          );
+        } catch (e) {
+          console.error(`Failed facility-access push for ${fv.customerEmail}:`, e);
+        }
+      }
+    } catch (e) {
+      console.error("facility-access push phase failed:", e);
+    }
+
     return { sent, total: bookings.length };
   },
 });

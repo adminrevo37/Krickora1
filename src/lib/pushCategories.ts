@@ -4,6 +4,7 @@
 export type PushCategoryKey =
   | 'booking-confirmation'
   | 'session-reminders'
+  | 'facility-access'
   | 'booking-changes'
   | 'waitlist-offers'
   | 'mate-alerts'
@@ -23,6 +24,7 @@ export interface PushCategory {
 export const PUSH_CATEGORIES: PushCategory[] = [
   { key: 'booking-confirmation', label: 'Booking confirmation & door code', description: 'When a booking is confirmed, with your door access code.', roles: ['customer'] },
   { key: 'session-reminders', label: 'Session reminders', description: 'A nudge before your booked session starts.', roles: ['customer'] },
+  { key: 'facility-access', label: 'Facility access (first visit)', description: 'Before your first session — how to find us, parking and getting in.', roles: ['customer'] },
   { key: 'booking-changes', label: 'Booking changes & cancellations', description: 'When a booking is changed or cancelled.', roles: ['customer'] },
   { key: 'waitlist-offers', label: 'Waitlist offers', description: "When a slot you're waitlisted for opens up for you.", roles: ['customer'] },
   { key: 'mate-alerts', label: 'Shared-booking (mate) alerts', description: "When you're added to, removed from, or a shared booking changes.", roles: ['customer'] },

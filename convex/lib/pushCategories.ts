@@ -9,6 +9,7 @@
 export type PushCategoryKey =
   | "booking-confirmation"
   | "session-reminders"
+  | "facility-access"
   | "booking-changes"
   | "waitlist-offers"
   | "mate-alerts"
@@ -36,6 +37,12 @@ export const PUSH_CATEGORIES: PushCategory[] = [
     key: "session-reminders",
     label: "Session reminders",
     description: "A nudge before your booked session starts.",
+    roles: ["customer"],
+  },
+  {
+    key: "facility-access",
+    label: "Facility access (first visit)",
+    description: "Before your first session — how to find us, parking and getting in.",
     roles: ["customer"],
   },
   {

@@ -160,6 +160,10 @@ export default defineSchema({
     // survivor; this marker records which account it folded into (audit + the
     // never-delete rule). Survivor rows never carry it.
     mergedIntoCustomerId: v.optional(v.id("customers")),
+    // FACILITY_ACCESS_PUSH (2026-06): true once the one-time "how to find us" push
+    // has been sent ~1 h before this customer's FIRST-ever session — guards against
+    // re-sending on later bookings. Additive/optional → no migration.
+    facilityAccessPushSent: v.optional(v.boolean()),
     createdAt: v.string(),
   })
     .index("by_email", ["email"])
