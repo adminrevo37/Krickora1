@@ -26,8 +26,13 @@ const SECURITY_HEADERS: Record<string, string> = {
     "Cache-Control, Pragma, " +
     "baggage, sentry-trace, traceparent, tracestate, " +
     "*",
+  // set-auth-token / set-auth-jwt MUST be exposed or the browser hides them from
+  // cross-origin JS — the client reads set-auth-token to persist the bearer session
+  // token (the cookie-free path iOS Safari/ITP relies on). Without this, iOS PWAs
+  // lose their session on every cold launch (cross-site cookies are ITP-blocked and
+  // the bearer token was never captured). Desktop masked it via cookies.
   "Access-Control-Expose-Headers":
-    "Set-Cookie, Content-Type, Content-Length, X-Request-Id",
+    "Set-Cookie, Content-Type, Content-Length, X-Request-Id, set-auth-token, set-auth-jwt",
   "Access-Control-Max-Age": "86400",
 };
 
@@ -96,7 +101,12 @@ authComponent.registerRoutes(http, createAuth, {
       "Cache-Control", "Pragma",
       "baggage", "sentry-trace", "traceparent", "tracestate",
     ],
-    exposedHeaders: ["Set-Cookie", "Content-Type", "Content-Length"],
+    // set-auth-token (bearer session token) + set-auth-jwt (Convex identity JWT)
+    // MUST be exposed cross-origin so the client can read + persist them. Without
+    // set-auth-token the localStorage bearer fallback is never populated, so iOS
+    // Safari/PWA (where ITP blocks the cross-site session cookie) logs out on every
+    // cold launch. This is the auth-route CORS (governs /api/auth/*).
+    exposedHeaders: ["Set-Cookie", "Content-Type", "Content-Length", "set-auth-token", "set-auth-jwt"],
   },
 });
 
