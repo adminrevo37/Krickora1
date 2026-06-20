@@ -1484,6 +1484,20 @@ export const updateBooking = mutation({
       ((cleanUpdates as any).duration !== undefined && (cleanUpdates as any).duration !== (existing as any).duration) ||
       ((cleanUpdates as any).laneId !== undefined && (cleanUpdates as any).laneId !== (existing as any).laneId)
     );
+    // Any other field the calendar event / activity feed reflects — so a variant /
+    // code / name / status edit also re-syncs the event + logs (previously only a
+    // date/time/lane/duration change did anything).
+    const _fieldChanged = (f: string) =>
+      existing != null && (cleanUpdates as any)[f] !== undefined && (cleanUpdates as any)[f] !== (existing as any)[f];
+    const variantChanged = _fieldChanged("variantId");
+    const eventAffected =
+      schedulingChanged ||
+      variantChanged ||
+      _fieldChanged("accessCode") ||
+      _fieldChanged("customerName") ||
+      _fieldChanged("customerPhone") ||
+      _fieldChanged("status") ||
+      (cleanUpdates as any).athleteSlots !== undefined;
 
     // DI-1: Conflict check when scheduling fields change
     if (schedulingChanged && effNewDate && effNewStartHour != null && effNewDuration != null && effNewLaneId) {
@@ -1525,9 +1539,107 @@ export const updateBooking = mutation({
       }
     }
 
+    // SPEC_RECONFIGURABLE_LANES: recompute the date-resolved lane/variant snapshot
+    // when lane/variant/date/start changes, so the booking record + its calendar
+    // event show the correct name after an admin lane swap (was left stale).
+    let newSnap: { laneNameSnapshot: string; variantLabelSnapshot: string } | null = null;
+    if (existing && (schedulingChanged || variantChanged) && effNewDate && effNewStartHour != null && effNewLaneId) {
+      newSnap = await resolveLaneSnapshot(
+        ctx,
+        effNewLaneId,
+        (cleanUpdates as any).variantId ?? (existing as any).variantId,
+        effNewDate,
+        effNewStartHour
+      );
+      (cleanUpdates as any).laneNameSnapshot = newSnap.laneNameSnapshot;
+      (cleanUpdates as any).variantLabelSnapshot = newSnap.variantLabelSnapshot;
+    }
+
     await ctx.db.patch(id, cleanUpdates);
 
-    // DI-2 / MF-2: GCal sync + customer notification when scheduling changes
+    // Analytics (WS-C live feed) — record the admin modify. Was MISSING entirely, so
+    // admin booking edits never appeared in the Activity / live feed.
+    if (existing && eventAffected) {
+      await recordBookingEvent(ctx, {
+        type: "modified",
+        bookingId: id.toString(),
+        customerName: (cleanUpdates as any).customerName ?? (existing as any).customerName ?? "Unknown",
+        actorName: (adminUser as any)?.name ?? (adminUser as any)?.email ?? "Admin",
+        isCoachBooking: (existing as any).isCoachBooking,
+        before: {
+          date: (existing as any).date,
+          startHour: (existing as any).startHour,
+          duration: (existing as any).duration,
+          lane: (existing as any).laneNameSnapshot ?? (existing as any).laneId ?? "",
+          variant: (existing as any).variantLabelSnapshot ?? undefined,
+        },
+        after: {
+          date: effNewDate,
+          startHour: effNewStartHour,
+          duration: effNewDuration,
+          lane: newSnap?.laneNameSnapshot ?? (cleanUpdates as any).laneNameSnapshot ?? (existing as any).laneNameSnapshot ?? defaultLaneName(effNewLaneId),
+          variant: newSnap?.variantLabelSnapshot ?? (existing as any).variantLabelSnapshot ?? undefined,
+        },
+      });
+    }
+
+    // Google Calendar resync — broadened from "scheduling only" to ANY event-affecting
+    // change, and now UPDATES the event IN PLACE when the lane set is unchanged; only a
+    // real lane MOVE does delete+create. Mirrors applyBookingChange and passes the
+    // recomputed snapshot so the event name is correct. (Old code: always delete+create
+    // on a scheduling change, never re-synced a variant/name edit, never passed the
+    // snapshot — which left a stale name and, on a lane swap, an orphaned delete.)
+    if (existing && eventAffected && effNewDate && effNewStartHour != null && effNewDuration != null && effNewLaneId) {
+      const hadEvents =
+        !!(existing as any).googleCalendarEventId ||
+        (Array.isArray((existing as any).googleCalendarEventIds) && (existing as any).googleCalendarEventIds.length > 0);
+      const calSlots = ((cleanUpdates as any).athleteSlots ?? (existing as any).athleteSlots ?? []).map((s: any) => ({
+        athleteName: s.athleteName,
+        startHour: s.startHour,
+        durationMinutes: s.durationMinutes,
+      }));
+      const calArgs = {
+        laneId: effNewLaneId,
+        variantId: (cleanUpdates as any).variantId ?? (existing as any).variantId,
+        date: effNewDate,
+        startHour: effNewStartHour,
+        duration: effNewDuration,
+        customerName: (cleanUpdates as any).customerName ?? (existing as any).customerName,
+        customerEmail: (cleanUpdates as any).customerEmail ?? (existing as any).customerEmail,
+        customerPhone: (cleanUpdates as any).customerPhone ?? (existing as any).customerPhone,
+        status: (cleanUpdates as any).status ?? (existing as any).status,
+        isCoachBooking: (existing as any).isCoachBooking,
+        accessCode: (cleanUpdates as any).accessCode ?? (existing as any).accessCode,
+        additionalLaneIds: effNewAdditionalLanes,
+        athleteSlots: calSlots,
+        laneNameSnapshot: (cleanUpdates as any).laneNameSnapshot ?? (existing as any).laneNameSnapshot,
+        variantLabelSnapshot: (cleanUpdates as any).variantLabelSnapshot ?? (existing as any).variantLabelSnapshot,
+      };
+      const oldKey = [(existing as any).laneId, ...(((existing as any).additionalLaneIds ?? []) as string[])].slice().sort().join(",");
+      const newKey = [effNewLaneId, ...effNewAdditionalLanes].slice().sort().join(",");
+      const laneSetChanged = oldKey !== newKey;
+
+      if (hadEvents && !laneSetChanged) {
+        await ctx.scheduler.runAfter(0, internal.googleCalendar.updateCalendarEvent, {
+          googleCalendarEventId: (existing as any).googleCalendarEventId ?? "",
+          laneCalendarEventIds: (existing as any).googleCalendarEventIds,
+          ...calArgs,
+        });
+      } else {
+        if (hadEvents) {
+          await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
+            googleCalendarEventId: (existing as any).googleCalendarEventId ?? "",
+            laneCalendarEventIds: (existing as any).googleCalendarEventIds,
+          });
+        }
+        await ctx.scheduler.runAfter(500, internal.googleCalendar.createCalendarEvent, {
+          bookingId: id.toString(),
+          ...calArgs,
+        });
+      }
+    }
+
+    // Customer notification — only on a genuine reschedule (date/time/lane/duration).
     if (schedulingChanged && existing && effNewDate && effNewStartHour != null && effNewDuration != null && effNewLaneId) {
       const fmtTUpd = (h: number) => {
         const w = Math.floor(h); const m = Math.round((h - w) * 60);
@@ -1537,29 +1649,6 @@ export const updateBooking = mutation({
       const fmtDUpd = (d: number) => d === 60 ? "1 hour" : d === 90 ? "1.5 hours" : d === 30 ? "30 minutes" : `${d} min`;
       const notifyEmail = ((cleanUpdates as any).customerEmail ?? (existing as any).customerEmail ?? "") as string;
 
-      if ((existing as any).googleCalendarEventId) {
-        await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-          googleCalendarEventId: (existing as any).googleCalendarEventId,
-          laneCalendarEventIds: (existing as any).googleCalendarEventIds,
-        });
-        await ctx.scheduler.runAfter(500, internal.googleCalendar.createCalendarEvent, {
-          bookingId: id.toString(),
-          laneId: effNewLaneId,
-          variantId: (cleanUpdates as any).variantId ?? (existing as any).variantId,
-          date: effNewDate,
-          startHour: effNewStartHour,
-          duration: effNewDuration,
-          customerName: (cleanUpdates as any).customerName ?? (existing as any).customerName,
-          customerEmail: notifyEmail,
-          customerPhone: (cleanUpdates as any).customerPhone ?? (existing as any).customerPhone,
-          status: (cleanUpdates as any).status ?? (existing as any).status,
-          isCoachBooking: (existing as any).isCoachBooking,
-          accessCode: (cleanUpdates as any).accessCode ?? (existing as any).accessCode,
-          additionalLaneIds: effNewAdditionalLanes,
-          athleteSlots: (cleanUpdates as any).athleteSlots ?? (existing as any).athleteSlots,
-        });
-      }
-
       if (notifyEmail) {
         await ctx.scheduler.runAfter(0, internal.emails.sendBookingRescheduled, {
           to: notifyEmail,
@@ -1567,7 +1656,7 @@ export const updateBooking = mutation({
           oldLaneName: (existing as any).laneNameSnapshot || defaultLaneName((existing as any).laneId),
           oldDate: (existing as any).date,
           oldTimeSlot: fmtTUpd((existing as any).startHour),
-          newLaneName: defaultLaneName(effNewLaneId),
+          newLaneName: newSnap?.laneNameSnapshot ?? defaultLaneName(effNewLaneId),
           newDate: effNewDate,
           newTimeSlot: fmtTUpd(effNewStartHour),
           newDuration: fmtDUpd(effNewDuration),
@@ -1579,7 +1668,7 @@ export const updateBooking = mutation({
             email: notifyEmail,
             category: "booking-changes",
             title: "Booking updated",
-            body: `${defaultLaneName(effNewLaneId)} · ${fmtAwstDateLabel(effNewDate)}, ${fmtTUpd(effNewStartHour)}`,
+            body: `${newSnap?.laneNameSnapshot ?? defaultLaneName(effNewLaneId)} · ${fmtAwstDateLabel(effNewDate)}, ${fmtTUpd(effNewStartHour)}`,
             url: "/bookings",
             tag: `booking-${id.toString()}`,
           });
