@@ -2324,6 +2324,162 @@ async function getReservedCodes(ctx: any): Promise<Set<string>> {
   return new Set<string>((s as any)?.reservedAccessCodes ?? DEFAULT_RESERVED_CODES);
 }
 
+// ── Admin: set a SPECIFIC front-door code on a booking (per-booking + bulk) ──────
+// Lets an admin override the auto-generated PIN with a chosen code (e.g. one
+// memorable recurring code for a coach) and PUSH it to Google Calendar so HA loads
+// it. The C3 client-code ban (customers can't pick their own PIN) does NOT apply
+// here — these are admin-gated (requireAdmin), so a verified admin is trusted.
+// Lightweight vs modifyBooking: changes ONLY the code + resyncs the calendar — no
+// price / email / waitlist side-effects, so it's safe to run across many bookings.
+// For a booking that never synced (e.g. migrated), the resync CREATES the event.
+function validateAdminDoorCode(raw: string, reserved: Set<string>): string {
+  const code = (raw ?? "").trim();
+  if (!/^\d{4,6}$/.test(code)) {
+    throw new ConvexError("Door code must be 4 to 6 digits.");
+  }
+  if (reserved.has(code)) {
+    throw new ConvexError(`${code} is a reserved staff code — choose a different code.`);
+  }
+  return code;
+}
+
+async function applyDoorCodeChange(
+  ctx: any,
+  booking: any,
+  code: string,
+  delayMs = 0
+): Promise<void> {
+  // Athletes share the booking's single front-door code.
+  const newSlots = (booking.athleteSlots ?? []).map((s: any) => ({
+    ...s,
+    accessCode: code,
+    codeGeneratedAt: new Date().toISOString(),
+  }));
+  await ctx.db.patch(booking._id, {
+    accessCode: code,
+    ...(booking.athleteSlots ? { athleteSlots: newSlots } : {}),
+  });
+
+  const calStatus = booking.status === "pending_edit_payment" ? "confirmed" : booking.status;
+  const calAthleteSlots = newSlots.map((s: any) => ({
+    athleteName: s.athleteName,
+    startHour: s.startHour,
+    durationMinutes: s.durationMinutes,
+  }));
+  const hadEvents =
+    !!booking.googleCalendarEventId ||
+    (Array.isArray(booking.googleCalendarEventIds) && booking.googleCalendarEventIds.length > 0);
+
+  if (hadEvents) {
+    await ctx.scheduler.runAfter(delayMs, internal.googleCalendar.updateCalendarEvent, {
+      googleCalendarEventId: booking.googleCalendarEventId ?? "",
+      laneId: booking.laneId,
+      variantId: booking.variantId,
+      date: booking.date,
+      startHour: booking.startHour,
+      duration: booking.duration,
+      customerName: booking.customerName,
+      customerEmail: booking.customerEmail,
+      customerPhone: booking.customerPhone,
+      status: calStatus,
+      isCoachBooking: booking.isCoachBooking,
+      accessCode: code,
+      additionalLaneIds: booking.additionalLaneIds,
+      athleteSlots: calAthleteSlots,
+      laneCalendarEventIds: booking.googleCalendarEventIds,
+      laneNameSnapshot: booking.laneNameSnapshot,
+      variantLabelSnapshot: booking.variantLabelSnapshot,
+    });
+  } else {
+    await ctx.scheduler.runAfter(delayMs, internal.googleCalendar.createCalendarEvent, {
+      bookingId: booking._id.toString(),
+      laneId: booking.laneId,
+      variantId: booking.variantId,
+      date: booking.date,
+      startHour: booking.startHour,
+      duration: booking.duration,
+      customerName: booking.customerName,
+      customerEmail: booking.customerEmail,
+      customerPhone: booking.customerPhone,
+      status: calStatus,
+      isCoachBooking: booking.isCoachBooking,
+      accessCode: code,
+      additionalLaneIds: booking.additionalLaneIds,
+      athleteSlots: calAthleteSlots,
+      laneNameSnapshot: booking.laneNameSnapshot,
+      variantLabelSnapshot: booking.variantLabelSnapshot,
+    });
+  }
+}
+
+export const adminSetBookingDoorCode = mutation({
+  args: { bookingId: v.id("bookings"), code: v.string() },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const code = validateAdminDoorCode(args.code, await getReservedCodes(ctx));
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new ConvexError("Booking not found.");
+    if ((booking as any).status === "cancelled") {
+      throw new ConvexError("This booking is cancelled.");
+    }
+    await applyDoorCodeChange(ctx, booking, code);
+    return { ok: true, code };
+  },
+});
+
+export const adminBulkSetBookingDoorCode = mutation({
+  args: { bookingIds: v.array(v.id("bookings")), code: v.string() },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const code = validateAdminDoorCode(args.code, await getReservedCodes(ctx));
+    let updated = 0;
+    let skipped = 0;
+    let i = 0;
+    for (const id of args.bookingIds) {
+      const booking = await ctx.db.get(id);
+      if (!booking || (booking as any).status === "cancelled") {
+        skipped++;
+        continue;
+      }
+      // Stagger calendar writes so a large batch doesn't burst the Google API.
+      await applyDoorCodeChange(ctx, booking, code, i * 600);
+      updated++;
+      i++;
+    }
+    return { ok: true, code, updated, skipped };
+  },
+});
+
+// Upcoming (today-onward) confirmed bookings for one customer — powers the bulk
+// "apply this code to all of [customer]'s upcoming bookings" admin action.
+export const adminListCustomerUpcomingBookings = query({
+  args: { email: v.string(), fromDate: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const todayKey = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const from = args.fromDate ?? todayKey;
+    const email = (args.email ?? "").toLowerCase().trim();
+    if (!email) return [];
+    const rows = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.gte("date", from))
+      .collect();
+    return rows
+      .filter(
+        (b: any) =>
+          b.status !== "cancelled" && (b.customerEmail ?? "").toLowerCase() === email
+      )
+      .map((b: any) => ({
+        id: b._id,
+        date: b.date,
+        startHour: b.startHour,
+        lane: b.laneNameSnapshot ?? b.laneId ?? "",
+        accessCode: b.accessCode ?? null,
+      }))
+      .sort((a: any, b: any) => a.date.localeCompare(b.date) || a.startHour - b.startHour);
+  },
+});
+
 // Update athlete slots on an existing booking (coach only)
 export const updateBookingAthleteSlots = mutation({
   args: {

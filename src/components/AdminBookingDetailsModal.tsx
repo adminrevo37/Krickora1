@@ -262,6 +262,10 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                 {booking.discountCode && <Field label="Discount" value={booking.discountCode} />}
               </div>
 
+              {/* Admin: set/override the front-door code (per-booking + bulk). Writes
+                  Krickora + pushes to Google Calendar (creates the event if missing). */}
+              {status !== 'cancelled' && <DoorCodeEditor booking={booking} />}
+
               {/* Last-modified strip — shows most recent history entry at a glance */}
               {lastHistoryEntry && (
                 <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-800/60 rounded-lg px-3 py-1.5 text-[11px]">
@@ -572,6 +576,83 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+// Admin door-code editor — set a specific front-door PIN on this booking, or bulk
+// across all of the customer's upcoming bookings. Writes Krickora's stored code AND
+// pushes it to Google Calendar (so HA loads it); creates the calendar event if the
+// booking never synced. Backend is admin-gated (adminSetBookingDoorCode / bulk).
+function DoorCodeEditor({ booking }: { booking: Booking }) {
+  const setCodeMut = useMutation((api.mutations as any).adminSetBookingDoorCode)
+  const bulkMut = useMutation((api.mutations as any).adminBulkSetBookingDoorCode)
+  const [open, setOpen] = useState(false)
+  const [code, setCode] = useState(booking.accessCode ?? '')
+  const [applyAll, setApplyAll] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  const upcoming = useQuery(
+    (api.mutations as any).adminListCustomerUpcomingBookings,
+    open && booking.customerEmail ? { email: booking.customerEmail } : 'skip',
+  ) as Array<{ id: string; date: string; startHour: number; lane: string; accessCode: string | null }> | undefined
+
+  const valid = /^\d{4,6}$/.test(code.trim())
+  const count = upcoming?.length ?? 0
+  const firstName = (booking.customerName ?? 'this customer').split(' ')[0]
+
+  const save = async () => {
+    setBusy(true); setErr(null); setMsg(null)
+    try {
+      if (applyAll && count > 0) {
+        const r: any = await bulkMut({ bookingIds: (upcoming ?? []).map(u => u.id), code: code.trim() })
+        setMsg(`Set to ${code.trim()} on ${r.updated} booking${r.updated === 1 ? '' : 's'}. Google Calendar is updating (a few seconds).`)
+      } else {
+        await setCodeMut({ bookingId: booking.id as any, code: code.trim() })
+        setMsg(`Set to ${code.trim()}. Google Calendar is updating.`)
+      }
+    } catch (e: any) {
+      setErr(getErrorMessage(e) ?? 'Failed to set the door code.')
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800/40 rounded-lg p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] uppercase font-semibold text-indigo-700 dark:text-indigo-300 tracking-wide">🔑 Door code (admin)</span>
+        {!open && (
+          <button onClick={() => { setOpen(true); setCode(booking.accessCode ?? ''); setMsg(null); setErr(null) }} className="text-xs font-semibold text-indigo-600 dark:text-indigo-300 hover:underline">
+            ✏️ Edit
+          </button>
+        )}
+      </div>
+      {open && (
+        <>
+          <div className="flex items-center gap-2">
+            <input
+              value={code}
+              onChange={e => setCode(e.target.value.replace(/[^\d]/g, '').slice(0, 6))}
+              inputMode="numeric"
+              placeholder="4–6 digits"
+              className="w-28 px-2.5 py-1.5 text-sm font-mono bg-white dark:bg-gray-800 border border-indigo-200 dark:border-indigo-800 rounded-lg outline-none text-gray-800 dark:text-gray-200"
+            />
+            <button onClick={save} disabled={!valid || busy} className="px-3 py-1.5 rounded-lg bg-indigo-500 text-white text-sm font-semibold hover:bg-indigo-600 transition-colors disabled:opacity-50">
+              {busy ? 'Saving…' : 'Update'}
+            </button>
+          </div>
+          <label className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
+            <input type="checkbox" checked={applyAll} onChange={e => setApplyAll(e.target.checked)} />
+            Apply to all of {firstName}'s upcoming bookings{upcoming ? ` (${count})` : '…'}
+          </label>
+          <p className="text-[10px] text-indigo-600/80 dark:text-indigo-300/70">
+            Updates Krickora and pushes the code to Google Calendar (HA reads it). 4–6 digits, not a reserved staff code.
+          </p>
+        </>
+      )}
+      {msg && <div className="text-xs text-emerald-600 dark:text-emerald-400">{msg}</div>}
+      {err && <div className="text-xs text-red-600 dark:text-red-400">{err}</div>}
     </div>
   )
 }
