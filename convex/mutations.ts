@@ -1728,6 +1728,14 @@ export const cancelBooking = mutation({
     const awstNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Australia/Perth" }));
     const hoursUntil = (bookingStart.getTime() - awstNow.getTime()) / (1000 * 60 * 60);
 
+    // Once a session has STARTED it can no longer be cancelled retrospectively by
+    // the customer OR the coach — only an admin can (no-show / clean-up handling).
+    // "Begun" = the start time has been reached. Mirrors the modifyBooking
+    // `hoursUntilOriginal <= 0` guard so cancel + modify behave consistently.
+    if (hoursUntil <= 0 && !cancelIsAdmin) {
+      throw new ConvexError("This session has already started and can no longer be cancelled.");
+    }
+
     // Time-based policy enforcement for customer bookings
     if (!booking.isCoachBooking) {
       const customerCancellationHours = (cancelSettings as any)?.customerCancellationHours ?? cancelSettings?.cancellationHoursBefore ?? 2;

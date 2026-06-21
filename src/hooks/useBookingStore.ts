@@ -157,6 +157,12 @@ export function useBookings() {
       const now = getAWSTNow()
       const hoursUntil =
         (bookingStart.getTime() - now.getTime()) / (1000 * 60 * 60)
+      // Once the session has STARTED, neither coach nor customer can cancel it
+      // retrospectively (admins handle any post-start clean-up server-side). This
+      // sits above the coach/customer branches so it applies to both.
+      if (hoursUntil <= 0) {
+        return { allowed: false, reason: 'This session has already started and can no longer be cancelled.' }
+      }
       // Coach bookings can always be cancelled, but will be charged within the
       // admin-configured late-cancel window (SSOT: coachLateCancellationHours).
       if (booking.isCoachBooking) {
