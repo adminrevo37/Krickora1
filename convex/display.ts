@@ -30,6 +30,20 @@ import {
 // chars => unguessable; effectively the password. Change here + redeploy to rotate.
 const DISPLAY_TOKEN = "1jjmuCmarm6juZXsU2mY9BJti";
 
+// Privacy: the board is a public TV screen, so it shows only first name + last
+// initial (e.g. "Dean H.") for BOTH customers AND coaches. The full surname is
+// truncated HERE, server-side, so it never reaches the public client/network.
+// NB the board intentionally carries NO athlete/allocation info — coach bookings
+// show only the coach's short name + "Coaching", never any child/athlete detail.
+function shortName(full: unknown): string {
+  const s = String(full ?? "").trim();
+  if (!s) return "Booked";
+  const parts = s.split(/\s+/);
+  if (parts.length === 1) return parts[0];
+  const lastInitial = parts[parts.length - 1].charAt(0).toUpperCase();
+  return `${parts[0]} ${lastInitial}.`;
+}
+
 /** Lane layout rows for the board (seeded `lanes` table, else defaults). */
 async function loadLaneRowsForDisplay(ctx: any): Promise<LaneRow[]> {
   const stored = await ctx.db.query("lanes").collect();
@@ -95,7 +109,7 @@ export const getLaneDisplay = query({
             (b.additionalLaneIds ?? []).includes(row.laneId)
         )
         .map((b: any) => ({
-          name: String(b.customerName ?? "Booked"),
+          name: shortName(b.customerName),
           startHour: b.startHour as number,
           endHour: (b.startHour as number) + (b.duration as number) / 60,
           isCoach: b.isCoachBooking === true,
