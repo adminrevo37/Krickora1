@@ -209,12 +209,44 @@ function HourBoard({ lanes, hour }: { lanes: Lane[]; hour: number }) {
                 const visible = lane.bookings.filter((b) => b.endHour > gridStart + 1e-6 && b.startHour < gridEnd - 1e-6)
                 return (
                   <div key={lane.laneId} className="flex-1 relative border-l border-white/[0.06]">
-                    {visible.map((b, i) => {
+                    {visible.flatMap((b, i) => {
+                      const c = blockColors(lane, b)
+                      if (b.isCoach) {
+                        // One block per visible hour slot — never reveals full booking extent
+                        const slots: React.ReactElement[] = []
+                        for (let slotH = gridStart; slotH < gridEnd; slotH++) {
+                          if (b.startHour >= slotH + 1 || b.endHour <= slotH) continue
+                          const isNow = slotH <= hour && hour < slotH + 1
+                          slots.push(
+                            <div
+                              key={`${i}-${slotH}`}
+                              className="rounded-lg overflow-hidden"
+                              style={{
+                                position: 'absolute',
+                                top: (slotH - gridStart) * pph + 2,
+                                height: Math.max(24, pph - 8),
+                                left: 5,
+                                right: 5,
+                                background: c.bg,
+                                padding: '8px 10px',
+                                boxShadow: isNow ? '0 0 0 3px #fff inset' : undefined,
+                              }}
+                            >
+                              <div style={{ color: c.name, fontWeight: 700, lineHeight: 1.15, fontSize: 'clamp(1rem,1.7vw,1.7rem)' }}>
+                                {b.name}
+                              </div>
+                              <div style={{ color: c.sub, fontSize: 'clamp(0.75rem,1.1vw,1.15rem)' }}>
+                                Coaching
+                              </div>
+                            </div>
+                          )
+                        }
+                        return slots
+                      }
                       const top = (Math.max(b.startHour, gridStart) - gridStart) * pph
                       const h = (Math.min(b.endHour, gridEnd) - Math.max(b.startHour, gridStart)) * pph
                       const isNow = b === current
-                      const c = blockColors(lane, b)
-                      return (
+                      return [(
                         <div
                           key={i}
                           className="rounded-lg overflow-hidden"
@@ -233,10 +265,10 @@ function HourBoard({ lanes, hour }: { lanes: Lane[]; hour: number }) {
                             {b.name}
                           </div>
                           <div style={{ color: c.sub, fontSize: 'clamp(0.75rem,1.1vw,1.15rem)' }}>
-                            {b.isCoach ? 'Coaching' : `${fmtTime(b.startHour)} – ${fmtTime(b.endHour)}`}
+                            {`${fmtTime(b.startHour)} – ${fmtTime(b.endHour)}`}
                           </div>
                         </div>
-                      )
+                      )]
                     })}
 
                     {!current && (
