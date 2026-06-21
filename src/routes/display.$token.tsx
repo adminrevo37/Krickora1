@@ -233,8 +233,7 @@ function HourBoard({ lanes, hour }: { lanes: Lane[]; hour: number }) {
                             {b.name}
                           </div>
                           <div style={{ color: c.sub, fontSize: 'clamp(0.75rem,1.1vw,1.15rem)' }}>
-                            {fmtTime(b.startHour)} – {fmtTime(b.endHour)}
-                            {b.isCoach && ' · Coaching'}
+                            {b.isCoach ? 'Coaching' : `${fmtTime(b.startHour)} – ${fmtTime(b.endHour)}`}
                           </div>
                         </div>
                       )
