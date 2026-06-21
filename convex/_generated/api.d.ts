@@ -9,6 +9,7 @@
  */
 
 import type * as accountMerge from "../accountMerge.js";
+import type * as adminCleanup from "../adminCleanup.js";
 import type * as adminGate from "../adminGate.js";
 import type * as adminGateActions from "../adminGateActions.js";
 import type * as adminPassword from "../adminPassword.js";
@@ -84,6 +85,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   accountMerge: typeof accountMerge;
+  adminCleanup: typeof adminCleanup;
   adminGate: typeof adminGate;
   adminGateActions: typeof adminGateActions;
   adminPassword: typeof adminPassword;

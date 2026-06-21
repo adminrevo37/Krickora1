@@ -458,6 +458,45 @@ export const getCatchmentReport = query({
   },
 });
 
+// ============================================================================
+// CUSTOMER SUBURB MAP — distribution of EVERY customer account by the suburb on
+// their PROFILE, straight from the customers table. Unlike getCatchmentReport
+// (which counts booking USAGE), this is the registration footprint: it counts
+// accounts whether or not they have ever booked, with no date window. Staff
+// (coach/admin) and merged/deactivated tombstones are excluded. Admin only.
+// ============================================================================
+export const getCustomerSuburbMap = query({
+  args: {},
+  handler: async (ctx) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.isAdmin) return null;
+
+    const customers = await ctx.db.query("customers").collect();
+    const agg = new Map<string, { suburb: string; postcode: string; customers: number }>();
+    let unknown = 0;        // a customer account with no suburb on file
+    let totalCustomers = 0; // all non-staff, non-tombstone accounts
+    let placed = 0;         // accounts that have a suburb (i.e. plottable)
+    for (const c of customers) {
+      const role = (c as any).role;
+      if (role === "coach" || role === "admin") continue;            // staff excluded
+      if ((c as any).deactivatedAt || (c as any).mergedIntoCustomerId) continue; // merged/retired
+      totalCustomers++;
+      const suburb = ((c as any).suburb || "").trim();
+      const postcode = ((c as any).postcode || "").trim();
+      if (!suburb) { unknown++; continue; }
+      const key = `${suburb.toUpperCase()}|${postcode}`;
+      const row = agg.get(key) ?? { suburb, postcode, customers: 0 };
+      row.customers++;
+      agg.set(key, row);
+      placed++;
+    }
+    const bySuburb = Array.from(agg.values()).sort(
+      (a, b) => b.customers - a.customers || a.suburb.localeCompare(b.suburb)
+    );
+    return { bySuburb, unknown, totalCustomers, placed };
+  },
+});
+
 // SPEC_ANALYTICS_ATHLETE_CATCHMENT — a SECOND catchment table shown beside the
 // customer one above. Tallies ATHLETES allocated to coach bookings by THEIR home
 // suburb (= their parent/account holder's postcode/suburb), read from the snapshot
