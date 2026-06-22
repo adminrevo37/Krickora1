@@ -4327,6 +4327,56 @@ export const updatePayment = mutation({
   },
 });
 
+// SPEC_STATEMENTS_EDITING — admin edits a coach BOOKING-charge line item directly
+// on the statement (the booking's coach charge = coachPrice, which the ledger reads).
+// Admin only; audited to modificationHistory; no GCal/email side-effects.
+export const adminSetCoachPrice = mutation({
+  args: { bookingId: v.id("bookings"), coachPrice: v.number() },
+  handler: async (ctx, args) => {
+    const admin = await requireAdmin(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new ConvexError("Booking not found.");
+    if (args.coachPrice < 0) throw new ConvexError("Charge can't be negative.");
+    const identity = await ctx.auth.getUserIdentity();
+    const oldValue = (booking as any).coachPrice ?? 0;
+    const history = Array.isArray((booking as any).modificationHistory)
+      ? [...(booking as any).modificationHistory]
+      : [];
+    history.push({
+      changes: [{ field: "coachPrice", oldValue, newValue: args.coachPrice }],
+      modifiedAt: new Date().toISOString(),
+      modifiedByName: (admin as any).name ?? "Admin",
+      modifiedByUserId: identity?.subject ?? "",
+    });
+    await ctx.db.patch(args.bookingId, { coachPrice: args.coachPrice, modificationHistory: history } as any);
+    return args.bookingId;
+  },
+});
+
+// SPEC_STATEMENTS_EDITING — admin removes (or restores) a coach booking-charge line
+// from the statement. Reversible: the booking + its data are preserved; the charge
+// is just excluded from the statement ledger (treated as $0). Admin only; audited.
+export const adminSetBookingStatementExcluded = mutation({
+  args: { bookingId: v.id("bookings"), excluded: v.boolean() },
+  handler: async (ctx, args) => {
+    const admin = await requireAdmin(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new ConvexError("Booking not found.");
+    const identity = await ctx.auth.getUserIdentity();
+    const history = Array.isArray((booking as any).modificationHistory)
+      ? [...(booking as any).modificationHistory]
+      : [];
+    history.push({
+      changes: [{ field: "statementExcluded", oldValue: (booking as any).statementExcluded === true, newValue: args.excluded }],
+      modifiedAt: new Date().toISOString(),
+      modifiedByName: (admin as any).name ?? "Admin",
+      modifiedByUserId: identity?.subject ?? "",
+    });
+    await ctx.db.patch(args.bookingId, { statementExcluded: args.excluded, modificationHistory: history } as any);
+    return args.bookingId;
+  },
+});
+
 // ============================================================================
 // CUSTOMER CREDIT MUTATIONS — ADMIN ONLY
 // ============================================================================

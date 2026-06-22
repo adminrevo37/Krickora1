@@ -28,6 +28,8 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName, ed
   const addAdjustment = useMutation((api as any).statements.addStatementAdjustment)
   const updateAdjustment = useMutation((api as any).statements.updateStatementAdjustment)
   const deleteAdjustment = useMutation((api as any).statements.deleteStatementAdjustment)
+  const setCoachPrice = useMutation((api.mutations as any).adminSetCoachPrice)
+  const setBookingExcluded = useMutation((api.mutations as any).adminSetBookingStatementExcluded)
 
   const { todayStr, monthStart } = todayAndMonthStart()
   const ledger = buildCoachLedger({
@@ -72,6 +74,27 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName, ed
     setBusy(true)
     try { await deleteAdjustment({ id } as any) }
     catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to delete adjustment') }
+    finally { setBusy(false) }
+  }
+  const saveChargeEdit = async (bookingId: string, coachPrice: number) => {
+    setBusy(true)
+    try {
+      await setCoachPrice({ bookingId, coachPrice } as any)
+      setEditKey(null)
+    } catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to update charge') }
+    finally { setBusy(false) }
+  }
+  const removeBooking = async (bookingId: string) => {
+    if (!confirm('Remove this session\'s charge from the statement? It won\'t count toward the balance. You can restore it later.')) return
+    setBusy(true)
+    try { await setBookingExcluded({ bookingId, excluded: true } as any) }
+    catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to remove charge') }
+    finally { setBusy(false) }
+  }
+  const restoreBooking = async (bookingId: string) => {
+    setBusy(true)
+    try { await setBookingExcluded({ bookingId, excluded: false } as any) }
+    catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to restore charge') }
     finally { setBusy(false) }
   }
 
@@ -165,6 +188,9 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName, ed
                     onDeletePayment={removePayment}
                     onSaveAdjust={saveAdjustEdit}
                     onDeleteAdjust={removeAdjust}
+                    onSaveCharge={saveChargeEdit}
+                    onRemoveBooking={removeBooking}
+                    onRestoreBooking={restoreBooking}
                   />
                 ))}
               </tbody>
@@ -243,6 +269,7 @@ function AddAdjustmentForm({
 function LedgerTableRow({
   r, editable, busy, isEditing, onEdit, onCancelEdit,
   onSavePayment, onDeletePayment, onSaveAdjust, onDeleteAdjust,
+  onSaveCharge, onRemoveBooking, onRestoreBooking,
 }: {
   r: LedgerRow
   editable: boolean
@@ -254,15 +281,23 @@ function LedgerTableRow({
   onDeletePayment: (id: string) => Promise<void>
   onSaveAdjust: (id: string, delta: number, label: string, note: string, date: string) => Promise<void>
   onDeleteAdjust: (id: string) => Promise<void>
+  onSaveCharge: (bookingId: string, coachPrice: number) => Promise<void>
+  onRemoveBooking: (bookingId: string) => Promise<void>
+  onRestoreBooking: (bookingId: string) => Promise<void>
 }) {
   const isFuture = r.future === true
-  const canEdit = editable && (r.kind === 'payment' || r.kind === 'adjustment')
+  const isExcluded = r.excluded === true
+  // Booking charge lines are editable too (change the $) and removable (reversible).
+  const canEdit = editable && (r.kind === 'payment' || r.kind === 'adjustment' || r.kind === 'booking')
 
   if (isEditing && r.kind === 'payment') {
     return <PaymentEditRow r={r} busy={busy} onCancel={onCancelEdit} onSave={onSavePayment} />
   }
   if (isEditing && r.kind === 'adjustment') {
     return <AdjustmentEditRow r={r} busy={busy} onCancel={onCancelEdit} onSave={onSaveAdjust} />
+  }
+  if (isEditing && r.kind === 'booking') {
+    return <BookingChargeEditRow r={r} busy={busy} onCancel={onCancelEdit} onSave={onSaveCharge} />
   }
 
   const typeBadge =
@@ -276,12 +311,19 @@ function LedgerTableRow({
     : r.kind === 'payment' ? `${r.label} (${r.method})`
     : r.raw?.note ? `${r.label} — ${r.raw.note}` : r.label
 
+  const origCharge = Number(r.raw?.coachPrice || 0)
   return (
-    <tr className={`border-t border-gray-100 ${isFuture ? 'opacity-50' : ''}`}>
+    <tr className={`border-t border-gray-100 ${isFuture ? 'opacity-50' : ''} ${isExcluded ? 'bg-gray-50' : ''}`}>
       <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{r.date || '—'}</td>
-      <td className="px-5 py-3">{typeBadge}</td>
-      <td className="px-5 py-3 text-gray-700">{desc}</td>
-      <td className="px-5 py-3 text-right text-gray-900">{r.charge > 0 ? `$${r.charge.toFixed(2)}` : ''}</td>
+      <td className="px-5 py-3">
+        {typeBadge}
+        {isExcluded && <span className="ml-2 inline-flex px-2 py-0.5 rounded-full bg-red-100 text-red-600 text-xs font-medium">Removed</span>}
+      </td>
+      <td className={`px-5 py-3 ${isExcluded ? 'text-gray-400 line-through' : 'text-gray-700'}`}>{desc}</td>
+      <td className="px-5 py-3 text-right text-gray-900">
+        {isExcluded ? (origCharge > 0 ? <span className="text-gray-400 line-through">${origCharge.toFixed(2)}</span> : '')
+          : r.charge > 0 ? `$${r.charge.toFixed(2)}` : ''}
+      </td>
       <td className="px-5 py-3 text-right text-emerald-700">{r.payment > 0 ? `−$${r.payment.toFixed(2)}` : ''}</td>
       <td className={`px-5 py-3 text-right font-semibold ${isFuture ? 'text-gray-400' : r.balance > 0 ? 'text-amber-700' : 'text-gray-900'}`}>
         {isFuture ? '—' : `$${r.balance.toFixed(2)}`}
@@ -289,10 +331,21 @@ function LedgerTableRow({
       {editable && (
         <td className="px-5 py-3 text-right whitespace-nowrap">
           {canEdit && (
-            <span className="inline-flex gap-3">
-              <button disabled={busy} onClick={onEdit} className="text-xs text-blue-600 hover:underline disabled:opacity-50">Edit</button>
-              <button disabled={busy} onClick={() => r.kind === 'payment' ? onDeletePayment(r.raw._id) : onDeleteAdjust(r.raw._id)} className="text-xs text-red-600 hover:underline disabled:opacity-50">Delete</button>
-            </span>
+            r.kind === 'booking' ? (
+              isExcluded ? (
+                <button disabled={busy} onClick={() => onRestoreBooking(r.raw._id)} className="text-xs text-blue-600 hover:underline disabled:opacity-50">Restore</button>
+              ) : (
+                <span className="inline-flex gap-3">
+                  <button disabled={busy} onClick={onEdit} className="text-xs text-blue-600 hover:underline disabled:opacity-50">Edit</button>
+                  <button disabled={busy} onClick={() => onRemoveBooking(r.raw._id)} className="text-xs text-red-600 hover:underline disabled:opacity-50">Remove</button>
+                </span>
+              )
+            ) : (
+              <span className="inline-flex gap-3">
+                <button disabled={busy} onClick={onEdit} className="text-xs text-blue-600 hover:underline disabled:opacity-50">Edit</button>
+                <button disabled={busy} onClick={() => r.kind === 'payment' ? onDeletePayment(r.raw._id) : onDeleteAdjust(r.raw._id)} className="text-xs text-red-600 hover:underline disabled:opacity-50">Delete</button>
+              </span>
+            )
           )}
         </td>
       )}
@@ -376,6 +429,36 @@ function AdjustmentEditRow({
             if (sign !== 'note') { const amt = parseFloat(amount); if (!amt || amt <= 0) { alert('Enter a valid amount'); return } delta = sign === 'charge' ? amt : -amt }
             onSave(r.raw._id, delta, label.trim(), note.trim(), date)
           }} className="text-xs text-emerald-600 font-semibold hover:underline disabled:opacity-50">Save</button>
+          <button disabled={busy} onClick={onCancel} className="text-xs text-gray-500 hover:underline disabled:opacity-50">Cancel</button>
+        </span>
+      </td>
+    </tr>
+  )
+}
+
+// SPEC_STATEMENTS_EDITING — inline editor for a coach BOOKING-charge line (admin
+// changes the $ charged for that session). Date/description are read-only; 0 is
+// a valid charge (waives the session while keeping the line).
+function BookingChargeEditRow({
+  r, busy, onCancel, onSave,
+}: {
+  r: LedgerRow
+  busy: boolean
+  onCancel: () => void
+  onSave: (bookingId: string, coachPrice: number) => Promise<void>
+}) {
+  const [amount, setAmount] = useState(String(Number(r.raw?.coachPrice ?? 0) || ''))
+  return (
+    <tr className="border-t border-gray-100 bg-blue-50/40">
+      <td className="px-5 py-2 text-gray-700 whitespace-nowrap text-xs">{r.date || '—'}</td>
+      <td className="px-5 py-2"><span className="inline-flex px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">Booking</span></td>
+      <td className="px-5 py-2 text-gray-600 text-xs">{r.lane} • {r.label}</td>
+      <td className="px-5 py-2 text-right"><input type="number" step="0.01" min="0" value={amount} onChange={e => setAmount(e.target.value)} className="px-2 py-1 border border-gray-200 rounded text-xs w-24 text-right" /></td>
+      <td className="px-5 py-2" />
+      <td className="px-5 py-2" />
+      <td className="px-5 py-2 text-right whitespace-nowrap">
+        <span className="inline-flex gap-3">
+          <button disabled={busy} onClick={() => { const amt = parseFloat(amount); if (isNaN(amt) || amt < 0) { alert('Enter a valid charge ($0 or more)'); return } onSave(r.raw._id, amt) }} className="text-xs text-emerald-600 font-semibold hover:underline disabled:opacity-50">Save</button>
           <button disabled={busy} onClick={onCancel} className="text-xs text-gray-500 hover:underline disabled:opacity-50">Cancel</button>
         </span>
       </td>

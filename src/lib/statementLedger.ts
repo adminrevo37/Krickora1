@@ -28,6 +28,7 @@ export type LedgerRow = {
   isNote: boolean // a zero-delta adjustment (note only)
   balance: number
   future?: boolean
+  excluded?: boolean // a booking charge the admin removed from the statement (shown $0, struck through)
   raw: any
 }
 
@@ -43,7 +44,8 @@ export type CoachLedger = {
   displayRows: LedgerRow[]
 }
 
-const bookingCost = (b: any) => Number(b.coachPrice || 0)
+// A booking the admin "removed" from the statement contributes $0 (SPEC_STATEMENTS_EDITING).
+const bookingCost = (b: any) => (b.statementExcluded === true ? 0 : Number(b.coachPrice || 0))
 
 // Filter a raw bookings list (from listBookingsByEmail) down to this coach's
 // charged sessions. Matches the long-standing inline filter in both views.
@@ -101,6 +103,7 @@ export function buildCoachLedger(input: {
       charge: bookingCost(b),
       payment: 0,
       isNote: false,
+      excluded: b.statementExcluded === true,
       raw: b,
     })
   }
@@ -150,6 +153,7 @@ export function buildCoachLedger(input: {
       isNote: false,
       balance: 0,
       future: true,
+      excluded: b.statementExcluded === true,
       raw: b,
     })),
     ...futureAdjust.map((a: any) => {

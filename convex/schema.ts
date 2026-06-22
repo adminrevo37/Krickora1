@@ -361,6 +361,11 @@ export default defineSchema({
     // mode/amount captured in modificationHistory + creditLedger (reason "refund").
     refunded: v.optional(v.boolean()),
     refundedAt: v.optional(v.string()),
+    // SPEC_STATEMENTS_EDITING — admin "removed" this coach booking's charge from the
+    // statement. Reversible: the booking + its data are kept; the charge just drops
+    // off the coach statement (treated as $0 in the ledger). Set via
+    // mutations.adminSetBookingStatementExcluded. Absent = charged normally.
+    statementExcluded: v.optional(v.boolean()),
     // Set by the Stripe webhook when a payment confirms for an already-cancelled
     // booking (audit 2026-06-10 money-hole #1 backstop). The customer was charged
     // but has no live booking → admin must refund. Surfaced via an admin alert.
