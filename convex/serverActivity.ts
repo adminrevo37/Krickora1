@@ -201,3 +201,59 @@ export const getServerActivity = query({
     return top;
   },
 });
+
+// New-customer registration feed — accounts newest-first (by Convex _creationTime),
+// each flagged with whether they've LINKED A COACH (any of their athletes, incl.
+// their own self-athlete, has an assigned coach). Reactive: a new row appears the
+// instant someone registers; the coach badge flips the instant they link a coach.
+// Companion to LiveFeedTab (bookings) + ServerActivityTab (page/push/email). Admin only.
+export const getNewCustomers = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.isAdmin) return null;
+    const limit = Math.min(Math.max(args.limit ?? 50, 1), 200);
+
+    // Newest-registered first (Convex's default order is by _creationTime). Pull a
+    // few extra so filtering out staff/merged rows still yields `limit` customers.
+    const recent = await ctx.db.query("customers").order("desc").take(limit * 2 + 10);
+    const customers = recent
+      .filter((c: any) => c.role !== "coach" && c.role !== "admin")
+      .filter((c: any) => !c.deactivatedAt && !c.mergedIntoCustomerId)
+      .slice(0, limit);
+
+    // Coach links: which accounts have an athlete with an assigned coach.
+    const athletes = await ctx.db.query("athletes").collect();
+    const coachIdsByAccount = new Map<string, Set<string>>();
+    for (const a of athletes) {
+      const ids = ((a as any).assignedCoachIds ?? []).filter(Boolean);
+      if (!ids.length) continue;
+      const key = String(a.accountCustomerId);
+      const set = coachIdsByAccount.get(key) ?? new Set<string>();
+      for (const id of ids) set.add(String(id));
+      coachIdsByAccount.set(key, set);
+    }
+    // Coach id -> display name.
+    const coaches = await ctx.db
+      .query("customers")
+      .withIndex("by_role", (q: any) => q.eq("role", "coach"))
+      .collect();
+    const coachName = new Map<string, string>();
+    for (const c of coaches) coachName.set(String(c._id), (c as any).name ?? c.email);
+
+    return customers.map((c: any) => {
+      const ids = [...(coachIdsByAccount.get(String(c._id)) ?? [])];
+      return {
+        id: String(c._id),
+        at: c._creationTime as number,
+        name: c.name ?? (`${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || c.email),
+        email: c.email,
+        suburb: c.suburb ?? null,
+        postcode: c.postcode ?? null,
+        referralSource: c.referralSource ?? null,
+        hasLinkedCoach: ids.length > 0,
+        coachNames: ids.map((id) => coachName.get(id)).filter(Boolean) as string[],
+      };
+    });
+  },
+});

@@ -11,6 +11,7 @@ import { type AnalyticsRange, AnalyticsRangePicker, defaultAnalyticsRange, clamp
 const OverviewTab = lazy(() => import('./analytics/OverviewTab'))
 const LiveFeedTab = lazy(() => import('./analytics/LiveFeedTab'))
 const ServerActivityTab = lazy(() => import('./analytics/ServerActivityTab'))
+const NewCustomersTab = lazy(() => import('./analytics/NewCustomersTab'))
 const BookingsTab = lazy(() => import('./analytics/BookingsTab'))
 const RevenueTab = lazy(() => import('./analytics/RevenueTab'))
 const CompareTab = lazy(() => import('./analytics/CompareTab'))
@@ -28,6 +29,7 @@ const TABS = [
   { id: 'overview', label: 'Overview', icon: '📊', range: true, subDay: false },
   { id: 'livefeed', label: 'Live Feed', icon: '🔴', range: false, subDay: false },
   { id: 'activity', label: 'Activity', icon: '⚡', range: false, subDay: false },
+  { id: 'newcustomers', label: 'New Customers', icon: '🆕', range: false, subDay: false },
   { id: 'bookings', label: 'Bookings', icon: '📋', range: true, subDay: false },
   { id: 'revenue', label: 'Revenue', icon: '💰', range: true, subDay: false },
   { id: 'compare', label: 'Compare', icon: '📈', range: false, subDay: false },
@@ -77,6 +79,7 @@ export default function AdminAnalyticsDashboard() {
         {tab === 'overview' && <OverviewTab range={tabRange} />}
         {tab === 'livefeed' && <LiveFeedTab />}
         {tab === 'activity' && <ServerActivityTab />}
+        {tab === 'newcustomers' && <NewCustomersTab />}
         {tab === 'bookings' && <BookingsTab range={tabRange} />}
         {tab === 'revenue' && <RevenueTab range={tabRange} />}
         {tab === 'compare' && <CompareTab />}
