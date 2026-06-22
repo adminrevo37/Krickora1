@@ -50,6 +50,10 @@ function RevenueSingle({ range }: { range: AnalyticsRange }) {
   // Seed/drive the initial window from the global picker (range.from/range.to)
   // so the page-level range still applies on first paint.
   const [win, setWin] = useState(() => ({ from: range.from, to: range.to }))
+  // Custom "show N days back + M days ahead (future)" window control. Seeded from
+  // the per-granularity SPAN defaults (which already bias to include some future).
+  const [daysBack, setDaysBack] = useState(SPAN.day.back)
+  const [daysFwd, setDaysFwd] = useState(SPAN.day.fwd)
 
   // Follow the global picker when it changes — drives the window from
   // range.from/range.to (also covers the initial seed via the state initialiser).
@@ -64,9 +68,19 @@ function RevenueSingle({ range }: { range: AnalyticsRange }) {
   useEffect(() => {
     if (firstGran.current) { firstGran.current = false; return }
     const t = todayKey()
+    setDaysBack(SPAN[gran].back); setDaysFwd(SPAN[gran].fwd)
     setWin({ from: addDaysKey(t, -SPAN[gran].back), to: addDaysKey(t, SPAN[gran].fwd) })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gran])
+
+  // Apply a custom window: N days back .. M days ahead, centred on today.
+  const applyWindow = (back: number, fwd: number) => {
+    const b = Math.max(0, Math.min(3650, Math.round(back) || 0))
+    const f = Math.max(0, Math.min(3650, Math.round(fwd) || 0))
+    setDaysBack(b); setDaysFwd(f)
+    const t = todayKey()
+    setWin({ from: addDaysKey(t, -b), to: addDaysKey(t, f) })
+  }
 
   const bounds = useQuery(api.analyticsAdmin.getBookingDateBounds, {})
   const series = useQuery(api.analyticsAdmin.getBookingRevenueSeries, {
@@ -115,6 +129,20 @@ function RevenueSingle({ range }: { range: AnalyticsRange }) {
             <button onClick={() => shift(1)} className="px-3 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50">Later ›</button>
           </div>
         )}
+      </div>
+      {/* Custom window — choose how many days to show, including future days */}
+      <div className="flex items-center gap-2 flex-wrap text-sm -mt-1">
+        <span className="text-gray-500 font-medium">Window:</span>
+        <input type="number" min={0} max={3650} value={daysBack}
+          onChange={(e) => applyWindow(Number(e.target.value), daysFwd)}
+          className="w-16 px-2 py-1 border border-gray-200 rounded-lg text-right tabular-nums" />
+        <span className="text-gray-500">days back</span>
+        <span className="text-gray-300">+</span>
+        <input type="number" min={0} max={3650} value={daysFwd}
+          onChange={(e) => applyWindow(daysBack, Number(e.target.value))}
+          className="w-16 px-2 py-1 border border-gray-200 rounded-lg text-right tabular-nums" />
+        <span className="text-gray-500">days ahead <span className="text-gray-400">(future)</span></span>
+        <span className="ml-1 text-xs text-gray-400 tabular-nums">{win.from} → {win.to} · {daysBack + daysFwd + 1} days</span>
       </div>
       {bounds && (bounds.min || bounds.max) && (
         <p className="text-[11px] text-gray-400 -mt-2">
