@@ -4343,7 +4343,8 @@ export const adminSetCoachPrice = mutation({
       ? [...(booking as any).modificationHistory]
       : [];
     history.push({
-      changes: [{ field: "coachPrice", oldValue, newValue: args.coachPrice }],
+      // schema requires oldValue/newValue to be strings.
+      changes: [{ field: "coachPrice", oldValue: String(oldValue), newValue: String(args.coachPrice) }],
       modifiedAt: new Date().toISOString(),
       modifiedByName: (admin as any).name ?? "Admin",
       modifiedByUserId: identity?.subject ?? "",
@@ -4367,7 +4368,8 @@ export const adminSetBookingStatementExcluded = mutation({
       ? [...(booking as any).modificationHistory]
       : [];
     history.push({
-      changes: [{ field: "statementExcluded", oldValue: (booking as any).statementExcluded === true, newValue: args.excluded }],
+      // schema requires oldValue/newValue to be strings.
+      changes: [{ field: "statementExcluded", oldValue: String((booking as any).statementExcluded === true), newValue: String(args.excluded) }],
       modifiedAt: new Date().toISOString(),
       modifiedByName: (admin as any).name ?? "Admin",
       modifiedByUserId: identity?.subject ?? "",
