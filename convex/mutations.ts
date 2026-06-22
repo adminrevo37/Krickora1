@@ -4379,6 +4379,50 @@ export const adminSetBookingStatementExcluded = mutation({
   },
 });
 
+// BUGFIX 2026-06-22 backfill — confirmBookingPayment used to skip creating the
+// Google Calendar event, so Stripe-paid CUSTOMER bookings have no event (no door
+// code / no machine power in HA). This one-off creates the missing events for all
+// CONFIRMED, non-coach, TODAY-or-FUTURE bookings that have no googleCalendarEventId.
+// Past sessions are skipped (moot). Idempotent: re-running skips any that now have
+// an event. Staggered ~1.5s apart to respect the Google Calendar API.
+export const backfillMissingCalendarEvents = mutation({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+    const todayStr = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // AWST
+    const all = await ctx.db.query("bookings").collect();
+    let scheduled = 0;
+    const fixed: string[] = [];
+    for (const b of all as any[]) {
+      if (b.status !== "confirmed") continue;
+      if (b.isCoachBooking === true) continue;       // coaches get their event at create time
+      if (b.googleCalendarEventId) continue;          // already synced
+      if ((b.date || "") < todayStr) continue;        // past sessions are moot
+      await ctx.scheduler.runAfter(scheduled * 1500, internal.googleCalendar.createCalendarEvent, {
+        bookingId: b._id.toString(),
+        laneId: b.laneId,
+        variantId: b.variantId,
+        date: b.date,
+        startHour: b.startHour,
+        duration: b.duration,
+        customerName: b.customerName ?? "Customer",
+        customerEmail: b.customerEmail ?? "",
+        customerPhone: b.customerPhone,
+        status: "confirmed",
+        isCoachBooking: false,
+        accessCode: b.accessCode,
+        additionalLaneIds: b.additionalLaneIds,
+        laneNameSnapshot: b.laneNameSnapshot,
+        variantLabelSnapshot: b.variantLabelSnapshot,
+        athleteSlots: b.athleteSlots,
+      });
+      scheduled++;
+      fixed.push(`${b.customerName ?? b.customerEmail} · ${b.laneNameSnapshot ?? b.laneId} ${b.date} ${b.startHour}:00`);
+    }
+    return { scheduled, fixed };
+  },
+});
+
 // ============================================================================
 // CUSTOMER CREDIT MUTATIONS — ADMIN ONLY
 // ============================================================================

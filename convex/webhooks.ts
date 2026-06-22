@@ -160,6 +160,35 @@ export const confirmBookingPayment = internalMutation({
 
     await ctx.db.patch(booking._id, patch);
 
+    // BUGFIX 2026-06-22: create the Google Calendar event now that payment has
+    // confirmed. Customer Stripe bookings are created as `pending_payment` with NO
+    // calendar event (createBooking only syncs CONFIRMED bookings); coach bookings
+    // confirm instantly so they got their event at create time. This step was
+    // missing here, so every Stripe-paid customer booking had no GCal event → HA
+    // never loaded the door code and never fired the bowling-machine power. Mirrors
+    // the createBooking sync. Idempotent: the `paymentStatus === "paid"` guard above
+    // means this runs exactly once per booking, so no duplicate events.
+    if (patch.status === "confirmed") {
+      await ctx.scheduler.runAfter(0, internal.googleCalendar.createCalendarEvent, {
+        bookingId: booking._id.toString(),
+        laneId: b.laneId,
+        variantId: b.variantId,
+        date: b.date,
+        startHour: b.startHour,
+        duration: b.duration,
+        customerName: b.customerName ?? "Customer",
+        customerEmail: b.customerEmail ?? "",
+        customerPhone: b.customerPhone,
+        status: "confirmed",
+        isCoachBooking: b.isCoachBooking === true,
+        accessCode: b.accessCode,
+        additionalLaneIds: b.additionalLaneIds,
+        laneNameSnapshot: b.laneNameSnapshot,
+        variantLabelSnapshot: b.variantLabelSnapshot,
+        athleteSlots: b.athleteSlots,
+      });
+    }
+
     // SPEC_PAYMENTS_AND_CREDIT #1/#3: deduct any account credit applied to this
     // booking ATOMICALLY on confirmation (never on the abandoned path), and free
     // the checkout slot hold now that the booking is confirmed.
