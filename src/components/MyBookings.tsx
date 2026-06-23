@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
-import { useBookings } from '../hooks/useBookingStore'
+import { useMyBookings, useBookingActions, evaluateCancellation } from '../hooks/useBookingStore'
 import { useAuth } from '../hooks/useAuth'
 import { useSettings } from '../hooks/useSettings'
 import {
@@ -112,14 +112,15 @@ function formatDate(dateStr: string): string {
 // ── component ─────────────────────────────────────────────────────────────────
 
 export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: string } = {}) {
-  const {
-    bookings, cancelBooking, canCancel,
-    modifyBooking, updateAthleteSlots,
-  } = useBookings()
+  const { cancelBooking, modifyBooking, updateAthleteSlots } = useBookingActions()
   const { user, isCoach, isCustomer, isAdmin, getAllCoaches, assignCoach, removeCoach, customerRecord, getCreditBalance } = useAuth()
   const { settings } = useSettings()
   // When impersonating, filter bookings by the impersonated user's email
   const effectiveEmail = impersonatedEmail ?? user?.email
+  // COST-1: source the user's OWN bookings from owner-scoped indexed queries (full
+  // past + future), independent of the narrow shared grid window so My Bookings
+  // history is never truncated by the calendar's reactive window.
+  const { myBookings } = useMyBookings({ email: effectiveEmail, userId: user?.id, impersonating: !!impersonatedEmail })
 
   const now = new Date()
   const todayKey = formatDateKey(now)
@@ -193,6 +194,37 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     [myAthletes],
   )
 
+  // SPEC_ATHLETE_SESSION_VISIBILITY_2026-06 — sessions THIS account's athletes are
+  // allocated to inside a COACH's booking. The booking is owned by the coach, whose
+  // athleteSlots are stripped server-side for non-owners (stripBookingPII), so these
+  // never reach My Bookings via the shared grid OR the owner-scoped useMyBookings.
+  // This auth-scoped query is the only path that surfaces them. Skipped while
+  // impersonating (it would resolve to the admin's own athletes, not the viewed user).
+  const athleteSessionRows = (useQuery(
+    api.queries.listMyAthleteSessions,
+    (user && !impersonatedEmail) ? {} : 'skip',
+  ) ?? []) as any[]
+  const myAthleteSessions: Booking[] = useMemo(
+    () => athleteSessionRows.map((d) => ({
+      id: String(d._id),
+      laneId: d.laneId,
+      variantId: d.variantId ?? null,
+      date: d.date,
+      startHour: d.startHour,
+      duration: d.duration,
+      customerName: d.customerName,
+      customerEmail: '',          // the coach's email is never surfaced to the athlete
+      customerPhone: undefined,
+      userId: undefined,          // not owned by the caller → renders via the athlete-slot card
+      status: d.status,
+      isCoachBooking: true,
+      additionalLaneIds: d.additionalLaneIds,
+      athleteSlots: d.athleteSlots,
+      accessCode: d.accessCode,
+    } as Booking)),
+    [athleteSessionRows],
+  )
+
   const slotIsMine = (s: { athleteId?: string; athleteName: string }) =>
     (s.athleteId != null && myAthleteIds.has(s.athleteId)) ||
     athleteNameCandidates.includes(s.athleteName.toLowerCase().trim())
@@ -202,15 +234,26 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     return b.athleteSlots.some(slotIsMine)
   }
 
+  // Owner-scoped bookings ∪ allocated-athlete sessions, de-duped by id (prefer the
+  // owned copy, which carries full data — the athlete-session copy is the privacy
+  // projection). The coach-self edge (a coach's own self-athlete in their own
+  // booking) is therefore rendered as the owned coach card, not double-listed.
+  const sourceBookings: Booking[] = useMemo(() => {
+    const map = new Map<string, Booking>()
+    for (const b of myBookings) map.set(b.id, b)
+    for (const b of myAthleteSessions) if (!map.has(b.id)) map.set(b.id, b)
+    return [...map.values()]
+  }, [myBookings, myAthleteSessions])
+
   const userBookings = useMemo(() => (user || impersonatedEmail)
-    ? bookings.filter(b =>
+    ? sourceBookings.filter(b =>
         (effectiveEmail && b.customerEmail.toLowerCase() === effectiveEmail.toLowerCase()) ||
         (!impersonatedEmail && b.userId === user?.id) ||
         (!impersonatedEmail && isAthleteInBooking(b))
       ).sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour)
     : [],
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  [bookings, user, athleteNameCandidates, myAthleteIds, effectiveEmail, impersonatedEmail])
+  [sourceBookings, user, athleteNameCandidates, myAthleteIds, effectiveEmail, impersonatedEmail])
 
   // SPEC_SCHEDULE_DAY_VIEW §2.5: whole-day model. "Upcoming" = any non-cancelled
   // booking dated today or later (no time-of-day test). Today's already-finished
@@ -334,12 +377,12 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
 
   // ── actions ─────────────────────────────────────────────────────────────────
 
-  const handleCancel = async (bookingId: string) => {
+  const handleCancel = async (booking: Booking) => {
     setCancelError(null)
-    const check = canCancel(bookingId)
+    const check = evaluateCancellation(booking)
     if (!check.allowed) { setCancelError(check.reason ?? 'Cannot cancel this booking.'); return }
-    setCancellingId(bookingId)
-    await cancelBooking(bookingId, user?.id)
+    setCancellingId(booking.id)
+    await cancelBooking(booking.id, user?.id)
     setCancellingId(null)
   }
 
@@ -516,7 +559,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const renderCoachBookingCard = (booking: Booking) => {
     const lane = getLane(booking.laneId)
     const variantName = getVariantName(booking)
-    const cancelCheck = canCancel(booking.id)
+    const cancelCheck = evaluateCancellation(booking)
     // §6: allocation-coverage. §1D — card shell tints by coverage state.
     const cov = coverageSummary(booking)
     // §2.13: an admin-managed coach booking is view+allocate only — hide
@@ -584,7 +627,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             )}
             {booking.isCoachBooking && booking.status !== 'cancelled' && <RepeatBookingButton booking={booking} />}
             <button
-              onClick={() => handleCancel(booking.id)}
+              onClick={() => handleCancel(booking)}
               disabled={cancellingId === booking.id || !cancelCheck.allowed}
               title={!cancelCheck.allowed ? cancelCheck.reason : 'Cancel booking'}
               className={`text-[11px] px-2.5 py-1 rounded-lg border transition-colors disabled:opacity-40 ${
@@ -730,7 +773,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       )
     }
 
-    const cancelCheck = canCancel(booking.id)
+    const cancelCheck = evaluateCancellation(booking)
     const calParams = { laneName: lane?.name ?? booking.laneId, variantName: variantName ?? undefined, date: booking.date, startHour: booking.startHour, duration: booking.duration, customerName: booking.customerName, accessCode: booking.accessCode }
     return (
       <div key={booking.id} className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm">
@@ -771,7 +814,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           {/* SPEC_ADD_A_MATE: one-tap to the Add-a-Mate page (customer bookings only). */}
           <Link to="/add-mate" search={{ bookingId: booking.id }} className="text-[11px] px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors">👥 Add a Mate</Link>
           <button
-            onClick={() => handleCancel(booking.id)}
+            onClick={() => handleCancel(booking)}
             disabled={cancellingId === booking.id || !cancelCheck.allowed}
             title={!cancelCheck.allowed ? cancelCheck.reason : 'Cancel booking'}
             className={`text-[11px] px-2.5 py-1 rounded-lg border transition-colors disabled:opacity-40 ${
@@ -1274,7 +1317,6 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       {modifyBookingData && (
         <ModifyBookingModal
           booking={modifyBookingData}
-          allBookings={bookings}
           creditBalance={user ? getCreditBalance(user.id) : 0}
           onClose={() => setModifyBookingData(null)}
           onModify={opts => handleModify(modifyBookingData, opts)}

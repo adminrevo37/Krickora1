@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from 'react'
-import { useAction } from 'convex/react'
+import { useAction, useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
 import {
@@ -154,6 +154,27 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   const price = effectivePricePerLane * selectedLaneCount
   const endHour = startHour + duration / 60
 
+  // FEA-6 (audit 2026-06): the parent now passes only the SELECTED day's bookings, so
+  // for a multi-date booking (recurrence / "Pick dates") fetch bookings across the
+  // occurrence date span and conflict-check the preview against THAT. The primary-date
+  // duration/lane computations above keep using the selected-day `existingBookings`.
+  // The server (createBooking) stays authoritative + reports per-date failures.
+  const occurrenceSpan = useMemo(() => {
+    let keys: string[]
+    if (recurrence === 'none') return null
+    else if (recurrence === 'custom') keys = [...customDates]
+    else { keys = []; for (let i = 0; i < occurrences; i++) keys.push(formatDateKey(addOccurrence(date, recurrence, i))) }
+    if (keys.length === 0) return null
+    const sorted = [...keys].sort()
+    return { from: sorted[0], to: sorted[sorted.length - 1] }
+  }, [recurrence, customDates, occurrences, date])
+  const spanBookingsRaw = useQuery(api.queries.listBookings, occurrenceSpan ?? 'skip')
+  const spanBookings: Booking[] = useMemo(() => {
+    if (!occurrenceSpan) return existingBookings
+    if (spanBookingsRaw === undefined) return existingBookings // brief, until the span loads
+    return (spanBookingsRaw as any[]).map((b: any) => ({ ...b, id: String(b._id) }) as Booking)
+  }, [occurrenceSpan, spanBookingsRaw, existingBookings])
+
   const occurrenceInfo = useMemo(() => {
     // The list of date-keys to book: a picked set ('custom'), the single clicked
     // date ('none'), or N recurrence steps.
@@ -173,10 +194,10 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
       // DI-3: Check all occurrences for conflicts (including the first one). The
       // server (createBooking) re-checks, so far-future dates not in the loaded
       // window still get rejected + reported as failed.
-      const conflict = allLanes.some(lid => hasConflict(existingBookings, lid, dk, startHour, duration))
+      const conflict = allLanes.some(lid => hasConflict(spanBookings, lid, dk, startHour, duration))
       return { date: d, dateKey: dk, conflict }
     })
-  }, [recurrence, customDates, occurrences, date, dateKey, lane.id, additionalLaneIds, startHour, duration, existingBookings])
+  }, [recurrence, customDates, occurrences, date, dateKey, lane.id, additionalLaneIds, startHour, duration, spanBookings])
 
   const totalSessions = occurrenceInfo.length
   const conflictCount = occurrenceInfo.filter(o => o.conflict).length

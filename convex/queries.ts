@@ -174,6 +174,95 @@ export const listPublicAvailability = query({
   },
 });
 
+// SPEC_ATHLETE_SESSION_VISIBILITY_2026-06 — the sessions the CALLER'S OWN athletes
+// (self + children) are allocated to inside a COACH's booking. The booking is owned
+// by the coach, so the shared grid (listBookings) and the owner-scoped useMyBookings
+// both strip / never carry those athleteSlots for the allocated athlete (a parent or
+// coached adult who neither booked nor owns the row). This auth-scoped query is the
+// ONLY path that surfaces them in My Bookings.
+//
+// It deliberately bypasses stripBookingPII and returns a HAND-BUILT, privacy-safe
+// projection: only the caller's own athletes' slots (never other families' children),
+// the coach's display name + the door code the caller is already emailed for their own
+// session, and NO coach financials / event ids / notes. Bounded by the by_date index
+// (never a full scan); only runs for accounts that actually have athletes.
+export const listMyAthleteSessions = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return [];
+    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
+    if (!callerEmail) return [];
+    // Resolve the caller's CANONICAL account row (athletes are keyed by the
+    // canonical customers _id; a drifted duplicate must not split the match).
+    const account = await resolveCanonicalCustomerByEmail(ctx, callerEmail);
+    if (!account) return [];
+
+    // The account's athlete ids (self-athlete + any children).
+    const myAthletes = await ctx.db
+      .query("athletes")
+      .withIndex("by_account", (q: any) => q.eq("accountCustomerId", account._id))
+      .collect();
+    if (myAthletes.length === 0) return [];
+    const myAthleteIds = new Set<string>(myAthletes.map((a: any) => String(a._id)));
+
+    // Bounded read via by_date — never a full scan. A coach's athleteSlots are
+    // embedded in the COACH-owned row, so (unlike the owner's own history, which is
+    // index-served by email/userId) this MUST date-scan. To avoid re-introducing the
+    // broad reactive subscription COST-1 just removed (this query re-runs for every
+    // athlete-account viewer on any booking write in range), the window is bounded to
+    // [-120d .. +200d] AWST: covers a season of Past sessions + the longest coach
+    // repeat horizon (~3 months, e.g. Paolo's block), not the full ±400d of listBookings.
+    const awstDay = (offsetDays: number) =>
+      new Date(Date.now() + 8 * 3600 * 1000 + offsetDays * 24 * 3600 * 1000)
+        .toISOString()
+        .slice(0, 10);
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.gte("date", awstDay(-120)).lte("date", awstDay(200)))
+      .collect();
+
+    const out: any[] = [];
+    for (const b of bookings as any[]) {
+      if (b.isCoachBooking !== true) continue;
+      if (b.status === "cancelled") continue;
+      // ONLY the caller's own athletes' slots — never return another client's
+      // child's name/time/code to this caller.
+      const mySlots = (b.athleteSlots ?? []).filter(
+        (s: any) => s.athleteId && myAthleteIds.has(String(s.athleteId))
+      );
+      if (mySlots.length === 0) continue;
+      out.push({
+        _id: b._id,
+        date: b.date,
+        startHour: b.startHour,
+        duration: b.duration,
+        laneId: b.laneId,
+        variantId: b.variantId ?? null,
+        additionalLaneIds: b.additionalLaneIds,
+        laneNameSnapshot: b.laneNameSnapshot,
+        variantLabelSnapshot: b.variantLabelSnapshot,
+        // Coach's display name — not private; already in the allocation email. The
+        // coach's email/phone are deliberately NOT returned (customerEmail stays "").
+        customerName: b.customerName,
+        isCoachBooking: true,
+        status: b.status,
+        // The booking door code — the caller is entitled to it for their own
+        // session (it's already in their allocation email).
+        accessCode: b.accessCode,
+        athleteSlots: mySlots.map((s: any) => ({
+          athleteId: s.athleteId,
+          athleteName: s.athleteName,
+          startHour: s.startHour,
+          durationMinutes: s.durationMinutes,
+          accessCode: s.accessCode ?? b.accessCode,
+        })),
+      });
+    }
+    return out;
+  },
+});
+
 // ============================================================================
 // STRIPE PAYMENT QUERIES
 // ============================================================================
@@ -683,6 +772,69 @@ export const listPaymentsByCoach = query({
       .query("payments")
       .withIndex("by_coachId", (q: any) => q.eq("coachId", args.coachId))
       .collect();
+  },
+});
+
+// FEA-8 (audit 2026-06): all coach balances in ONE admin query, replacing the two
+// reactive queries fired PER coach row (24+ live subscriptions that shipped each
+// coach's full booking + payment history just to total a balance badge). Replicates
+// the exact client filter that CoachBalanceCells used:
+//   CHARGES  = Σ coachPrice over a coach's non-cancelled coach bookings dated today
+//              or earlier (bookings link to a coach by customerEmail);
+//   PAYMENTS = Σ payments.amount by coachId; last-paid = newest dateReceived.
+export const listCoachBalances = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireAdmin(ctx);
+    const todayKey = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+
+    // Coach charges grouped by the coach's lowercased email. Read only bookings dated
+    // up to today via the by_date index (future bookings aren't billed yet), matching
+    // the old client filter ((b.date || '') > todayStr → excluded).
+    const chargedByEmail = new Map<string, number>();
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.lte("date", todayKey))
+      .collect();
+    for (const b of bookings) {
+      if (b.status === "cancelled") continue;
+      const isCoachCharge =
+        b.isCoachBooking === true ||
+        (typeof b.coachPrice === "number" && b.coachPrice > 0);
+      if (!isCoachCharge) continue;
+      const email = (b.customerEmail ?? "").toLowerCase().trim();
+      if (!email) continue;
+      chargedByEmail.set(email, (chargedByEmail.get(email) ?? 0) + (Number(b.coachPrice) || 0));
+    }
+
+    // Payments + last-paid grouped by coachId.
+    const payments = await ctx.db.query("payments").collect();
+    const paidByCoach = new Map<string, number>();
+    const lastPaidByCoach = new Map<string, string>();
+    for (const p of payments as any[]) {
+      const cid = String(p.coachId ?? "");
+      if (!cid) continue;
+      paidByCoach.set(cid, (paidByCoach.get(cid) ?? 0) + (Number(p.amount) || 0));
+      const dr = p.dateReceived ?? "";
+      if (dr > (lastPaidByCoach.get(cid) ?? "")) lastPaidByCoach.set(cid, dr);
+    }
+
+    const coaches = await ctx.db
+      .query("customers")
+      .withIndex("by_role", (q: any) => q.eq("role", "coach"))
+      .collect();
+    return coaches.map((c: any) => {
+      const cid = String(c._id);
+      const totalCharged = chargedByEmail.get((c.email ?? "").toLowerCase().trim()) ?? 0;
+      const totalPaid = paidByCoach.get(cid) ?? 0;
+      return {
+        coachId: cid,
+        totalCharged,
+        totalPaid,
+        balance: totalCharged - totalPaid,
+        lastPaidDate: lastPaidByCoach.get(cid) ?? null,
+      };
+    });
   },
 });
 

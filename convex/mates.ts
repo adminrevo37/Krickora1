@@ -129,9 +129,17 @@ export const listSavedMates = query({
       .collect();
     if (friendships.length === 0) return [];
 
-    // One booking scan; compute shared-session counts for all mates at once.
+    // COL-1 (audit 2026-06): bound the shared-session scan to a rolling window via the
+    // by_date index instead of scanning the WHOLE bookings table on every booking
+    // write (this query is reactive for every My-Bookings/Add-a-Mate viewer). The
+    // displayed "x shared sessions" is therefore a rolling ~13-month count (soft cap),
+    // which is the relevant signal for ordering recent mates.
+    const sinceKey = new Date(Date.now() + 8 * 3600 * 1000 - 400 * 86400 * 1000)
+      .toISOString()
+      .slice(0, 10);
     const allBookings = await ctx.db
       .query("bookings")
+      .withIndex("by_date", (q: any) => q.gte("date", sinceKey))
       .filter((q: any) => q.neq(q.field("status"), "cancelled"))
       .collect();
 
@@ -221,8 +229,13 @@ export const listMateBookings = query({
   handler: async (ctx) => {
     const caller = await getCallerCustomer(ctx);
     if (!caller) return [];
+    // FEB-2 (audit 2026-06): only UPCOMING bookings are ever rendered as "shared with
+    // you" (MyBookings filters date >= today), so read just today-onwards via the
+    // by_date index instead of scanning the whole table on every booking write.
+    const todayKey = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
     const bookings = await ctx.db
       .query("bookings")
+      .withIndex("by_date", (q: any) => q.gte("date", todayKey))
       .filter((q: any) => q.neq(q.field("status"), "cancelled"))
       .collect();
     const mine = bookings.filter((b: any) => isMateOnBooking(b, caller._id));

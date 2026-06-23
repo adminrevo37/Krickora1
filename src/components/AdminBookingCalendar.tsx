@@ -8,7 +8,7 @@ import {
 } from '../lib/booking-data'
 import { getHoursForDate } from '../lib/settings-store'
 import { useSettings } from '../hooks/useSettings'
-import { useBookings } from '../hooks/useBookingStore'
+import { useBookingActions } from '../hooks/useBookingStore'
 import AdminManualBookingModal, { type AdminCustomerOption, type BookingConfirmResult } from './AdminManualBookingModal'
 import AdminBookingDetailsModal from './AdminBookingDetailsModal'
 import LaneBlockModal from './LaneBlockModal'
@@ -37,7 +37,7 @@ function generateAdminDays(monthsBack: number = 12, monthsAhead: number = 12): D
 export default function AdminBookingCalendar() {
   const { settings } = useSettings()
   useLaneConfigState() // SPEC_RECONFIGURABLE_LANES: re-render on layout changes
-  const { bookings, addBooking } = useBookings()
+  const { addBooking } = useBookingActions()
   const deleteBookingMut = useMutation(api.mutations.deleteBooking)
   const handleDeleteBooking = async (bookingId: string, customerName: string) => {
     if (!confirm(`Permanently delete booking for ${customerName}? This cannot be undone.`)) return
@@ -123,6 +123,16 @@ export default function AdminBookingCalendar() {
   }, [selectedDay, settings])
   const dateKey = formatDateKey(selectedDay)
 
+  // FEA-6: the admin calendar is decoupled from the shared (customer) grid hook so
+  // narrowing the customer window never blanks the admin's day/month view. The
+  // SELECTED day's bookings come from the indexed per-day query (admin → full data);
+  // the month-grid badge counts come from a month-windowed query below.
+  const selectedDayRaw = useQuery(api.queries.listBookingsByDate, { date: dateKey })
+  const selectedDayBookings: Booking[] = useMemo(
+    () => ((selectedDayRaw ?? []) as any[]).map((d) => ({ ...d, id: String(d._id) }) as Booking),
+    [selectedDayRaw],
+  )
+
   // Build month groups for navigation
   const monthGroups = useMemo(() => {
     const groups: { key: string; label: string; days: Date[] }[] = []
@@ -147,6 +157,23 @@ export default function AdminBookingCalendar() {
     return `${today.getFullYear()}-${today.getMonth()}`
   })
   const activeMonth = monthGroups.find(m => m.key === activeMonthKey) ?? monthGroups[0]
+
+  // FEA-6: month-windowed booking counts for the date-grid badges — one query for the
+  // visible month, instead of holding the whole table in the shared hook.
+  const monthRange = useMemo(() => {
+    if (!activeMonth) return null
+    const [yr, mo] = activeMonth.key.split('-').map(Number)
+    return { from: formatDateKey(new Date(yr, mo, 1)), to: formatDateKey(new Date(yr, mo + 1, 0)) }
+  }, [activeMonth])
+  const monthBookingsRaw = useQuery(api.queries.listBookings, monthRange ?? 'skip')
+  const monthCountByDate = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const b of ((monthBookingsRaw ?? []) as any[])) {
+      if (b.status === 'cancelled') continue
+      m.set(b.date, (m.get(b.date) ?? 0) + 1)
+    }
+    return m
+  }, [monthBookingsRaw])
 
   // True month-grid layout: fixed Mon–Sun columns, each date placed under its
   // weekday with blank leading cells (e.g. 1 May 2026 is a Friday → Mon–Thu of
@@ -190,7 +217,7 @@ export default function AdminBookingCalendar() {
       alert('Please select a customer or coach first to make a booking on their behalf.')
       return
     }
-    const booked = isSlotBooked(bookings, lane.id, dateKey, slot.hour)
+    const booked = isSlotBooked(selectedDayBookings, lane.id, dateKey, slot.hour)
     if (booked) return
     setSelectedSlot({ lane, date: selectedDay, startHour: slot.hour })
     setModalOpen(true)
@@ -223,7 +250,7 @@ export default function AdminBookingCalendar() {
     return { succeeded, failed, failedDates, createdIds }
   }
 
-  const dayBookings = bookings.filter(b => b.date === dateKey && b.status !== 'cancelled')
+  const dayBookings = selectedDayBookings.filter(b => b.date === dateKey && b.status !== 'cancelled')
 
   // Lane blocks for selected date
   const laneBlocks = (useQuery(api.laneBlocks.listByDate, { date: dateKey }) ?? []) as any[]
@@ -337,7 +364,7 @@ export default function AdminBookingCalendar() {
             {monthGrid.days.map(day => {
               const active = formatDateKey(day) === formatDateKey(selectedDay)
               const today = isToday(day)
-              const dayBookCount = bookings.filter(b => b.date === formatDateKey(day) && b.status !== 'cancelled').length
+              const dayBookCount = monthCountByDate.get(formatDateKey(day)) ?? 0
               return (
                 <button
                   key={formatDateKey(day)}
@@ -532,7 +559,7 @@ export default function AdminBookingCalendar() {
               visibleTimeSlots.forEach((slot, rowIdx) => {
                 if (skippedRows.has(rowIdx)) return
 
-                const booked = isSlotBooked(bookings, lane.id, dateKey, slot.hour)
+                const booked = isSlotBooked(selectedDayBookings, lane.id, dateKey, slot.hour)
                 const block  = !booked ? getBlockForSlot(lane.id, slot.hour) : undefined
 
                 if (booked) {
@@ -707,7 +734,7 @@ export default function AdminBookingCalendar() {
           date={selectedSlot.date}
           startHour={selectedSlot.startHour}
           customer={selectedCustomer}
-          existingBookings={bookings}
+          existingBookings={selectedDayBookings}
           onClose={() => { setModalOpen(false); setSelectedSlot(null) }}
           onConfirm={handleBookingConfirm}
         />

@@ -1,7 +1,6 @@
 import React, { useState } from 'react'
 import { createFileRoute, useNavigate, Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { useAuth } from '../hooks/useAuth'
-import { getAWSTNow } from '../lib/booking-data'
 import { getErrorMessage } from '../lib/errors'
 import { sendPasswordReset } from '../lib/auth-client'
 import { useImpersonation } from '../hooks/useImpersonation'
@@ -1185,25 +1184,19 @@ class BalanceBoundary extends React.Component<
 
 type BalVal = { label: string; cls: string }
 
-// Computes and renders the Balance + Last Paid cells for a single coach using
-// only the two queries that already exist in production Convex.
-// Lives in its own component so useQuery hooks don't violate the rules-of-hooks
-// when called in a loop, and so BalanceBoundary can isolate any query errors.
+// Renders the Balance + Last Paid cells for a single coach from a PRECOMPUTED value
+// (FEA-8). The whole roster's balances now arrive in one admin query (listCoachBalances)
+// instead of 2 reactive queries per row. Still its own component so BalanceBoundary can
+// isolate a render error per row.
 function CoachBalanceCells({
-  coachId, coachEmail, fmtBalance, fmtLastPaid,
+  bal, balLoading, fmtBalance, fmtLastPaid,
 }: {
-  coachId: string
-  coachEmail: string
+  bal?: { balance: number; lastPaidDate: string | null }
+  balLoading: boolean
   fmtBalance: (n: number) => BalVal
   fmtLastPaid: (d: string | null) => string
 }) {
-  const payments = useQuery(api.queries.listPaymentsByCoach, coachId ? { coachId } : 'skip')
-  const bookings = useQuery(
-    api.queries.listBookingsByEmail,
-    coachEmail ? { email: coachEmail } : 'skip'
-  )
-
-  if (payments === undefined || bookings === undefined) {
+  if (balLoading) {
     return (
       <>
         <td className="px-5 py-3 text-gray-300 text-xs">…</td>
@@ -1212,32 +1205,16 @@ function CoachBalanceCells({
     )
   }
 
-  const now = getAWSTNow()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
-
-  const totalCharged = (bookings as any[]).reduce((sum: number, b: any) => {
-    if (b.status === 'cancelled') return sum
-    if (!(b.isCoachBooking === true || (typeof b.coachPrice === 'number' && b.coachPrice > 0))) return sum
-    if ((b.date || '') > todayStr) return sum
-    return sum + (Number(b.coachPrice) || 0)
-  }, 0)
-
-  const totalPaid = (payments as any[]).reduce((sum: number, p: any) => sum + (Number(p.amount) || 0), 0)
-  const balance = totalCharged - totalPaid
-
-  const lastPayment = (payments as any[]).reduce((latest: any, p: any) =>
-    !latest || (p.dateReceived || '') > (latest.dateReceived || '') ? p : latest
-  , null)
-
-  const bal = fmtBalance(balance)
-  const lastPaid = fmtLastPaid(lastPayment?.dateReceived ?? null)
+  // A coach with no charges and no payments simply isn't in the result map → balance 0
+  // (identical to the old per-row computation, which summed empty arrays to 0).
+  const balCell = fmtBalance(bal?.balance ?? 0)
+  const lastPaid = fmtLastPaid(bal?.lastPaidDate ?? null)
 
   return (
     <>
       <td className="px-5 py-3">
-        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${bal.cls}`}>
-          {bal.label}
+        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${balCell.cls}`}>
+          {balCell.label}
         </span>
       </td>
       <td className="px-5 py-3 text-sm text-gray-500 whitespace-nowrap">{lastPaid}</td>
@@ -1246,12 +1223,14 @@ function CoachBalanceCells({
 }
 
 function CoachRow({
-  c, setEditingCoach, fmtBalance, fmtLastPaid,
+  c, setEditingCoach, fmtBalance, fmtLastPaid, bal, balLoading,
 }: {
   c: any
   setEditingCoach: (c: any) => void
   fmtBalance: (n: number) => BalVal
   fmtLastPaid: (d: string | null) => string
+  bal?: { balance: number; lastPaidDate: string | null }
+  balLoading: boolean
 }) {
   const { impersonate } = useImpersonation()
   const navigate = useNavigate()
@@ -1279,8 +1258,8 @@ function CoachRow({
       </td>
       <BalanceBoundary fallback={fallbackCells}>
         <CoachBalanceCells
-          coachId={c._id}
-          coachEmail={c.email || ''}
+          bal={bal}
+          balLoading={balLoading}
           fmtBalance={fmtBalance}
           fmtLastPaid={fmtLastPaid}
         />
@@ -1383,6 +1362,15 @@ function CoachesTab() {
     if (!dateStr) return 'Never'
     const d = new Date(dateStr + 'T00:00:00')
     return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
+  }
+
+  // FEA-8 (audit 2026-06): ONE admin query for every coach's balance, instead of 2
+  // reactive queries per coach row. Build a coachId→balance map for the rows below.
+  const coachBalancesRaw = useQuery((api.queries as any).listCoachBalances)
+  const balancesLoading = coachBalancesRaw === undefined
+  const balByCoach = new Map<string, { balance: number; lastPaidDate: string | null }>()
+  for (const r of ((coachBalancesRaw ?? []) as any[])) {
+    balByCoach.set(String(r.coachId), { balance: Number(r.balance) || 0, lastPaidDate: r.lastPaidDate ?? null })
   }
 
   // Merge consecutive bookings
@@ -1610,6 +1598,8 @@ function CoachesTab() {
                     setEditingCoach={setEditingCoach}
                     fmtBalance={fmtBalance}
                     fmtLastPaid={fmtLastPaid}
+                    bal={balByCoach.get(String(c._id))}
+                    balLoading={balancesLoading}
                   />
                 ))}
               </tbody>

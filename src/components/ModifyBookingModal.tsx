@@ -1,4 +1,6 @@
 import { useState, useMemo } from 'react'
+import { useQuery } from 'convex/react'
+import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
 import {
   LANES, formatDateKey, formatTime, canBookSlot, getCustomerPrice, getCoachPrice,
@@ -26,7 +28,6 @@ export interface ModifyResult {
 
 interface ModifyBookingModalProps {
   booking: Booking
-  allBookings: Booking[]
   creditBalance: number
   onClose: () => void
   onModify: (opts: {
@@ -40,7 +41,7 @@ interface ModifyBookingModalProps {
   onEditAllocation?: () => void
 }
 
-export default function ModifyBookingModal({ booking, allBookings, creditBalance, onClose, onModify, isCoach, onEditAllocation }: ModifyBookingModalProps) {
+export default function ModifyBookingModal({ booking, creditBalance, onClose, onModify, isCoach, onEditAllocation }: ModifyBookingModalProps) {
   const originalLane = LANES.find(l => l.id === booking.laneId)
   const settings = getSettingsStore().get()
 
@@ -83,9 +84,18 @@ export default function ModifyBookingModal({ booking, allBookings, creditBalance
 
   const selectedLane = LANES.find(l => l.id === selectedLaneId) ?? originalLane
 
+  // COST-1 / FEA-6: availability is computed for the SELECTED target date only, so
+  // fetch just that day via the indexed per-day query instead of subscribing to the
+  // whole-table grid array. Every date the modal can move to is reachable here; the
+  // server is authoritative on conflicts. listBookingsByDate returns the caller's own
+  // bookings in full + others' scheduling fields (lane/time/duration) — exactly what
+  // the availability helpers below need.
+  const dayBookingsRaw = useQuery(api.queries.listBookingsByDate, { date: selectedDate })
   const otherBookings = useMemo(() =>
-    allBookings.filter(b => b.id !== booking.id && b.status !== 'cancelled'),
-    [allBookings, booking.id]
+    (dayBookingsRaw ?? [])
+      .filter((b: any) => String(b._id) !== booking.id && b.status !== 'cancelled')
+      .map((b: any) => ({ ...b, id: String(b._id) }) as Booking),
+    [dayBookingsRaw, booking.id]
   )
 
   const availableSlots = useMemo(() => {

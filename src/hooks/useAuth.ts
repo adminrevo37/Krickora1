@@ -119,7 +119,15 @@ export function useAuth() {
     ? ((betterAuthUser as any).customer ?? null)
     : undefined
 
-  const allCoachRecords = useQuery(api.queries.listCustomersByRole, { role: 'coach' }) ?? []
+  // INF-1 (audit 2026-06): only coaches + admins consume the coach roster
+  // (getAllCoaches). useAuth runs on every page for every user, so an ungated
+  // subscription re-streamed the whole coach roster to every customer on any
+  // coach-row write. Gate it on the viewer's own role (customerRecord is in scope
+  // here; the later `isCoach` is not, to avoid a TDZ). Returns [] for customers.
+  const allCoachRecords = useQuery(
+    api.queries.listCustomersByRole,
+    (customerRecord?.role === 'coach' || customerRecord?.role === 'admin') ? { role: 'coach' } : 'skip',
+  ) ?? []
   // SEC-1: listCustomers / listCoachInvites are admin-only — they throw "Unauthenticated"
   // for logged-out and non-admin callers. useAuth runs on every page, so calling them
   // unconditionally crashes the whole app at the root. Gate them on the viewer actually

@@ -222,16 +222,21 @@ export const getNewCustomers = query({
       .filter((c: any) => !c.deactivatedAt && !c.mergedIntoCustomerId)
       .slice(0, limit);
 
-    // Coach links: which accounts have an athlete with an assigned coach.
-    const athletes = await ctx.db.query("athletes").collect();
+    // LEAK-4/COST-9 (audit 2026-06): fetch only the DISPLAYED accounts' athletes via
+    // the by_account index, instead of scanning the whole athletes table on every
+    // customer/athlete write (this query is reactive in the admin live feed). Coach
+    // links: which displayed accounts have an athlete with an assigned coach.
     const coachIdsByAccount = new Map<string, Set<string>>();
-    for (const a of athletes) {
-      const ids = ((a as any).assignedCoachIds ?? []).filter(Boolean);
-      if (!ids.length) continue;
-      const key = String(a.accountCustomerId);
-      const set = coachIdsByAccount.get(key) ?? new Set<string>();
-      for (const id of ids) set.add(String(id));
-      coachIdsByAccount.set(key, set);
+    for (const c of customers) {
+      const accountAthletes = await ctx.db
+        .query("athletes")
+        .withIndex("by_account", (q: any) => q.eq("accountCustomerId", c._id))
+        .collect();
+      const set = new Set<string>();
+      for (const a of accountAthletes) {
+        for (const id of ((a as any).assignedCoachIds ?? []).filter(Boolean)) set.add(String(id));
+      }
+      if (set.size > 0) coachIdsByAccount.set(String(c._id), set);
     }
     // Coach id -> display name.
     const coaches = await ctx.db

@@ -217,8 +217,9 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
         return
       }
 
-      await new Promise(resolve => setTimeout(resolve, 200))
-
+      // INF-5 (audit 2026-06): no fixed pre-sync sleep — the ensureCustomer retry loop
+      // below already absorbs the brief token-lag race, so an upfront 200 ms delay just
+      // slowed every signup's happy path.
       // SPEC_NAME_SPLIT: the signup databaseHook created the row from the composed
       // name (best-effort split). Now persist the PRECISE first/last the user
       // typed (correct for multi-word surnames). Non-fatal — the row already
@@ -246,7 +247,9 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
             })
             synced = true
           } catch (nameErr) {
-            await new Promise(resolve => setTimeout(resolve, 700))
+            // INF-5: exponential backoff (was a flat 700 ms) — the common single-retry
+            // token-lag case resolves ~550 ms sooner while keeping an ample total budget.
+            await new Promise(resolve => setTimeout(resolve, Math.min(150 * 2 ** attempt, 800)))
             if (attempt === 7) console.warn('[Auth] profile sync after signup failed (non-fatal):', nameErr)
           }
         }
@@ -266,7 +269,7 @@ export default function AuthModal({ onClose, onSuccess, initialMode = 'signup', 
               })
               athletesSynced = true
             } catch (athErr) {
-              await new Promise(resolve => setTimeout(resolve, 700))
+              await new Promise(resolve => setTimeout(resolve, Math.min(150 * 2 ** attempt, 800)))
               if (attempt === 7) console.warn('[Auth] athlete setup after signup failed (non-fatal):', athErr)
             }
           }

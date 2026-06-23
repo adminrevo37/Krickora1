@@ -31,6 +31,22 @@ function inRange(date: string, from?: string, to?: string): boolean {
   return true;
 }
 
+// FEA-2/COST-6 (audit 2026-06): read bookings through the by_date index when a window
+// is supplied, instead of scanning the WHOLE table then JS-filtering. Result-identical
+// for callers that gate every row through inRange(date, from, to). With no window it
+// falls back to a full index scan (same rows as the old .collect()).
+async function rangeBookings(ctx: any, from?: string, to?: string) {
+  return await ctx.db
+    .query("bookings")
+    .withIndex("by_date", (q: any) => {
+      let r = q;
+      if (from) r = r.gte("date", from);
+      if (to) r = r.lte("date", to);
+      return r;
+    })
+    .collect();
+}
+
 async function isAdmin(ctx: any): Promise<boolean> {
   const caller = await getCallerContext(ctx);
   return caller.isAdmin;
@@ -151,7 +167,7 @@ export const getBookingRevenueSeries = query({
   },
   handler: async (ctx, args) => {
     if (!(await isAdmin(ctx))) return null;
-    const all = await ctx.db.query("bookings").collect();
+    const all = await rangeBookings(ctx, args.from, args.to);
     const g = args.granularity;
 
     type Bucket = {
@@ -270,7 +286,7 @@ export const getOccupancy = query({
     const lanesRows = await ctx.db.query("lanes").collect();
     const laneCount = lanesRows.length > 0 ? lanesRows.length : LANE_IDS.length;
 
-    const all = (await ctx.db.query("bookings").collect()).filter(
+    const all = (await rangeBookings(ctx, args.from, args.to)).filter(
       (b: any) => b.status === "confirmed" && inRange(b.date, args.from, args.to)
     );
 
@@ -454,7 +470,7 @@ export const getCustomerValue = query({
   args: { from: v.optional(v.string()), to: v.optional(v.string()), limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     if (!(await isAdmin(ctx))) return null;
-    const all = (await ctx.db.query("bookings").collect()).filter(
+    const all = (await rangeBookings(ctx, args.from, args.to)).filter(
       (b: any) => !b.isCoachBooking && b.status === "confirmed" && b.customerEmail && inRange(b.date, args.from, args.to)
     );
     const byEmail = new Map<string, { email: string; name: string; bookings: number; revenue: number; firstDate: string; lastDate: string }>();
@@ -721,7 +737,7 @@ export const getBookingLeadTime = query({
   args: { from: v.optional(v.string()), to: v.optional(v.string()) },
   handler: async (ctx, args) => {
     if (!(await isAdmin(ctx))) return null;
-    const all = await ctx.db.query("bookings").collect();
+    const all = await rangeBookings(ctx, args.from, args.to);
     const leadsH: number[] = []; // hours ahead
     const custLeadsH: number[] = [];
     const buckets = { walk_in: 0, lt2h: 0, h2_24: 0, d1_3: 0, d3_7: 0, d7_14: 0, gt14: 0 };
@@ -767,7 +783,7 @@ export const getCancellationAnalytics = query({
       .first();
     const lateWindowH = settings?.customerCancellationHours ?? settings?.cancellationHoursBefore ?? 2;
 
-    const all = await ctx.db.query("bookings").collect();
+    const all = await rangeBookings(ctx, args.from, args.to);
     const leadsH: number[] = [];
     const buckets = { gt48h: 0, h24_48: 0, h6_24: 0, h2_6: 0, lt2h: 0, after_start: 0 };
     let cancelled = 0;
@@ -851,7 +867,7 @@ export const getLaneWeekly = query({
   args: { from: v.optional(v.string()), to: v.optional(v.string()) },
   handler: async (ctx, args) => {
     if (!(await isAdmin(ctx))) return null;
-    const all = (await ctx.db.query("bookings").collect()).filter(
+    const all = (await rangeBookings(ctx, args.from, args.to)).filter(
       (b: any) => b.status === "confirmed" && inRange(b.date, args.from, args.to)
     );
     // weekKey -> { label, mondayMs, lanes: {laneId: hours}, total }

@@ -505,14 +505,17 @@ type CatchmentData = {
 function CatchmentReports() {
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
-  const customerData = useQuery(api.analytics.getCatchmentReport, {
-    from: from || undefined,
-    to: to || undefined,
-  })
-  const athleteData = useQuery(api.analytics.getAthleteCatchmentReport, {
-    from: from || undefined,
-    to: to || undefined,
-  })
+  // FEA-4 (audit 2026-06): the catchment reports full-scan bookings/athletes. Don't
+  // fire them on mount of the default analytics tab — gate behind an explicit expand.
+  const [expanded, setExpanded] = useState(false)
+  const customerData = useQuery(
+    api.analytics.getCatchmentReport,
+    expanded ? { from: from || undefined, to: to || undefined } : 'skip',
+  )
+  const athleteData = useQuery(
+    api.analytics.getAthleteCatchmentReport,
+    expanded ? { from: from || undefined, to: to || undefined } : 'skip',
+  )
 
   return (
     <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
@@ -524,22 +527,33 @@ function CatchmentReports() {
           </p>
         </div>
         <div className="flex items-end gap-2 flex-wrap">
-          <label className="text-xs text-gray-500">
-            From
-            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
-              className="block mt-0.5 px-2 py-1.5 border border-gray-200 rounded-lg text-sm" />
-          </label>
-          <label className="text-xs text-gray-500">
-            To
-            <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
-              className="block mt-0.5 px-2 py-1.5 border border-gray-200 rounded-lg text-sm" />
-          </label>
-          {(from || to) && (
-            <button onClick={() => { setFrom(''); setTo('') }}
-              className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-800 underline">Clear</button>
+          {expanded && (
+            <>
+              <label className="text-xs text-gray-500">
+                From
+                <input type="date" value={from} onChange={(e) => setFrom(e.target.value)}
+                  className="block mt-0.5 px-2 py-1.5 border border-gray-200 rounded-lg text-sm" />
+              </label>
+              <label className="text-xs text-gray-500">
+                To
+                <input type="date" value={to} onChange={(e) => setTo(e.target.value)}
+                  className="block mt-0.5 px-2 py-1.5 border border-gray-200 rounded-lg text-sm" />
+              </label>
+              {(from || to) && (
+                <button onClick={() => { setFrom(''); setTo('') }}
+                  className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-800 underline">Clear</button>
+              )}
+            </>
           )}
+          <button
+            onClick={() => setExpanded((e) => !e)}
+            className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 self-end"
+          >
+            {expanded ? 'Hide' : 'Show report'}
+          </button>
         </div>
       </div>
+      {expanded && (
       <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-gray-100">
         <CatchmentTable
           title="Customers — unique customers by suburb"
@@ -559,6 +573,7 @@ function CatchmentReports() {
           csvHeader="athleteSessions"
         />
       </div>
+      )}
     </div>
   )
 }

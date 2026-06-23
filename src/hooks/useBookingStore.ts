@@ -40,61 +40,60 @@ function toBooking(doc: any): Booking {
   }
 }
 
-export function useBookings() {
-  // useQuery returns `undefined` until the first server result arrives. Coercing
-  // straight to [] makes the calendar render a FULLY EMPTY day during that window
-  // (the "empty calendar flash"). Track the loading state so the UI can hold the
-  // grid back until real booking data is in.
-  // E1: bound the calendar's booking query to a wide window (≈13 months back → 4
-  // months ahead) so it stops scanning the whole table at scale. Computed once per
-  // mount → stable args (no refetch loop). Covers all realistic calendar + My
-  // Bookings history; only bookings older than ~400 days fall outside it.
-  const bookingWindow = useMemo(() => {
-    const key = (offsetDays: number) => {
-      const d = new Date(Date.now() + 8 * 3600000 + offsetDays * 86400000)
-      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+// ── Cancellation policy (pure) ───────────────────────────────────────────────
+// Given a booking object, may the caller cancel it now? Extracted as a pure
+// function so screens that source bookings OUTSIDE the shared grid subscription
+// (My Bookings → owner-scoped queries) can evaluate it without a lookup into the
+// narrow grid array. Mirrors the server-enforced windows (SSOT settings).
+export function evaluateCancellation(
+  booking: Booking | undefined,
+): { allowed: boolean; reason?: string; willBeCharged?: boolean } {
+  if (!booking) return { allowed: false, reason: 'Booking not found.' }
+  if (booking.status === 'cancelled')
+    return { allowed: false, reason: 'Already cancelled.' }
+  const [year, month, day] = booking.date.split('-').map(Number)
+  const whole = Math.floor(booking.startHour)
+  const mins = Math.round((booking.startHour - whole) * 60)
+  const bookingStart = new Date(year, month - 1, day, whole, mins, 0)
+  const now = getAWSTNow()
+  const hoursUntil = (bookingStart.getTime() - now.getTime()) / (1000 * 60 * 60)
+  // Once the session has STARTED, neither coach nor customer can cancel it
+  // retrospectively (admins handle any post-start clean-up server-side).
+  if (hoursUntil <= 0) {
+    return { allowed: false, reason: 'This session has already started and can no longer be cancelled.' }
+  }
+  // Coach bookings can always be cancelled, but will be charged within the
+  // admin-configured late-cancel window (SSOT: coachLateCancellationHours).
+  if (booking.isCoachBooking) {
+    const coachLateHours = getSettingsStore().get().coachLateCancellationHours ?? 24
+    if (hoursUntil < coachLateHours) {
+      return { allowed: true, willBeCharged: true, reason: `Cancellation within ${coachLateHours} hour${coachLateHours !== 1 ? 's' : ''} of booking — you will still be charged to your statement.` }
     }
-    return { from: key(-400), to: key(120) }
-  }, [])
-  const rawBookingsResult = useQuery(api.queries.listBookings, bookingWindow)
-  const bookingsLoading = rawBookingsResult === undefined
-  const rawBookings = rawBookingsResult ?? []
-  const { user, isAdmin } = useAuth()
-  // isAdmin is derived from customerRecord.role (real auth, not impersonated role) — correct under impersonation
-  // betterAuthUser.id is always the real session user ID (correct under impersonation too)
-  const currentUserId = user?.id
-  const currentUserEmail = user?.email?.toLowerCase()
+    return { allowed: true }
+  }
+  // SSOT: the server enforces customerCancellationHours (falling back to the
+  // legacy cancellationHoursBefore). Mirror that precedence here.
+  const cs = getSettingsStore().get()
+  const cancellationHours = cs.customerCancellationHours ?? cs.cancellationHoursBefore ?? 2
+  if (hoursUntil < cancellationHours) {
+    return {
+      allowed: false,
+      reason: `Bookings can only be cancelled or changed at least ${cancellationHours} hour${cancellationHours !== 1 ? 's' : ''} before the session starts.`,
+    }
+  }
+  return { allowed: true }
+}
+
+// ── Booking write actions (no subscription) ──────────────────────────────────
+// Create / cancel / update / modify / allocate WITHOUT subscribing to the grid
+// array, so screens that don't render the grid (My Bookings, the admin booking
+// modals) can mutate without pulling the reactive booking window (COST-1 / FEA-6).
+export function useBookingActions() {
   const createBookingMut = useMutation(api.mutations.createBooking)
   const updateBookingMut = useMutation(api.mutations.updateBooking)
   const cancelBookingMut = useMutation(api.mutations.cancelBooking)
   const modifyMut = useMutation(api.mutations.modifyBooking)
   const updateAthleteSlotsMut = useMutation(api.mutations.updateBookingAthleteSlots)
-
-  const bookings: Booking[] = useMemo(() => {
-    return rawBookings.map(doc => {
-      const b = toBooking(doc)
-      // Admins see full data for all bookings.
-      // Everyone else only gets PII for their own bookings — other users'
-      // bookings are stripped to scheduling fields only (lane/time/status)
-      // so the calendar can still show occupancy without exposing customer data.
-      if (isAdmin) return b
-      // A booking is "mine" if the auth subject matches OR the email matches.
-      // N-9: admin-created manual bookings store userId = customers._id (not the
-      // auth subject), so a userId-only check stripped the owner's own booking to
-      // "Booked"/'' and it then failed My Bookings' email filter — invisible to the
-      // customer. The email match mirrors the backend's own ownership logic.
-      const mine =
-        (currentUserId && b.userId === currentUserId) ||
-        (currentUserEmail && b.customerEmail?.toLowerCase() === currentUserEmail)
-      if (mine) return b
-      return {
-        ...b,
-        customerName: 'Booked',
-        customerEmail: '',
-        customerPhone: undefined,
-      }
-    })
-  }, [rawBookings, isAdmin, currentUserId, currentUserEmail])
 
   const addBooking = useCallback(
     async (booking: Booking) => {
@@ -144,93 +143,6 @@ export function useBookings() {
     [cancelBookingMut]
   )
 
-  const canCancel = useCallback(
-    (bookingId: string) => {
-      const booking = bookings.find((b) => b.id === bookingId)
-      if (!booking) return { allowed: false, reason: 'Booking not found.' }
-      if (booking.status === 'cancelled')
-        return { allowed: false, reason: 'Already cancelled.' }
-      const [year, month, day] = booking.date.split('-').map(Number)
-      const whole = Math.floor(booking.startHour)
-      const mins = Math.round((booking.startHour - whole) * 60)
-      const bookingStart = new Date(year, month - 1, day, whole, mins, 0)
-      const now = getAWSTNow()
-      const hoursUntil =
-        (bookingStart.getTime() - now.getTime()) / (1000 * 60 * 60)
-      // Once the session has STARTED, neither coach nor customer can cancel it
-      // retrospectively (admins handle any post-start clean-up server-side). This
-      // sits above the coach/customer branches so it applies to both.
-      if (hoursUntil <= 0) {
-        return { allowed: false, reason: 'This session has already started and can no longer be cancelled.' }
-      }
-      // Coach bookings can always be cancelled, but will be charged within the
-      // admin-configured late-cancel window (SSOT: coachLateCancellationHours).
-      if (booking.isCoachBooking) {
-        const coachLateHours = getSettingsStore().get().coachLateCancellationHours ?? 24
-        if (hoursUntil < coachLateHours) {
-          return { allowed: true, willBeCharged: true, reason: `Cancellation within ${coachLateHours} hour${coachLateHours !== 1 ? 's' : ''} of booking — you will still be charged to your statement.` }
-        }
-        return { allowed: true }
-      }
-      // SSOT: the server enforces customerCancellationHours (falling back to the
-      // legacy cancellationHoursBefore). Mirror that precedence here so the
-      // displayed/enforced cutoff matches the server.
-      const cs = getSettingsStore().get()
-      const cancellationHours = cs.customerCancellationHours ?? cs.cancellationHoursBefore ?? 2
-      if (hoursUntil < cancellationHours) {
-        return {
-          allowed: false,
-          reason: `Bookings can only be cancelled or changed at least ${cancellationHours} hour${cancellationHours !== 1 ? 's' : ''} before the session starts.`,
-        }
-      }
-      return { allowed: true }
-    },
-    [bookings]
-  )
-
-  const canBookTime = useCallback(
-    (date: string, startHour: number) => {
-      const [year, month, day] = date.split('-').map(Number)
-      const whole = Math.floor(startHour)
-      const mins = Math.round((startHour - whole) * 60)
-      const bookingStart = new Date(year, month - 1, day, whole, mins, 0)
-      const now = getAWSTNow()
-      const minutesUntil =
-        (bookingStart.getTime() - now.getTime()) / (1000 * 60)
-      const noticeMinutes = getSettingsStore().get().minBookingNoticeMinutes ?? 10
-      if (minutesUntil < noticeMinutes) {
-        return {
-          allowed: false,
-          reason: `Bookings must be made at least ${noticeMinutes} minute${noticeMinutes !== 1 ? 's' : ''} before the session starts.`,
-        }
-      }
-      return { allowed: true }
-    },
-    []
-  )
-
-  const getBookingsForDate = useCallback(
-    (dateKey: string) => {
-      return bookings.filter(
-        (b) => b.date === dateKey && b.status !== 'cancelled'
-      )
-    },
-    [bookings]
-  )
-
-  const getBookingsByEmail = useCallback(
-    (email: string) => {
-      return bookings.filter(
-        (b) => b.customerEmail.toLowerCase() === email.toLowerCase()
-      )
-    },
-    [bookings]
-  )
-
-  const getAllIncludingCancelled = useCallback(() => {
-    return bookings
-  }, [bookings])
-
   const updateBooking = useCallback(
     async (bookingId: string, updates: Partial<Booking>) => {
       const convexUpdates: Record<string, any> = {}
@@ -253,9 +165,9 @@ export function useBookings() {
         id: bookingId as Id<"bookings">,
         ...convexUpdates,
       })
-      return bookings.find((b) => b.id === bookingId) ?? null
+      return null
     },
-    [updateBookingMut, bookings]
+    [updateBookingMut]
   )
 
   // Unified modify (SPEC_MODIFY_BOOKING_UPGRADE) — one path for lane/variant/date/
@@ -325,18 +237,161 @@ export function useBookings() {
     [updateAthleteSlotsMut]
   )
 
+  return { addBooking, cancelBooking, updateBooking, modifyBooking, updateAthleteSlots }
+}
+
+// ── My Bookings source (owner-scoped, full history) ──────────────────────────
+// The caller's OWN bookings — full past + future — sourced from the owner-scoped
+// indexed queries (listBookingsByEmail ∪ listBookingsByUserId), INDEPENDENT of the
+// narrow grid window. Narrowing the shared grid subscription therefore does NOT
+// shorten a user's My Bookings history (COST-1 / FEB-1).
+//
+// Both queries are auth-gated to self/admin and return full owner PII. When
+// impersonating (admin viewing a customer) only the email query runs, mirroring
+// MyBookings' existing impersonation filter.
+//
+// The parent/athlete case is unaffected: a child inside a COACH's booking lives on
+// a row owned by the coach, whose athleteSlots are already stripped server-side for
+// non-owners (stripBookingPII) — so that row never carried allocations through the
+// shared array either. No regression.
+export function useMyBookings(opts: { email?: string; userId?: string; impersonating: boolean }) {
+  const byEmailRes = useQuery(
+    api.queries.listBookingsByEmail,
+    opts.email ? { email: opts.email } : 'skip'
+  )
+  const byUserIdRes = useQuery(
+    api.queries.listBookingsByUserId,
+    (!opts.impersonating && opts.userId) ? { userId: opts.userId } : 'skip'
+  )
+  const myBookingsLoading = opts.email != null && byEmailRes === undefined
+  const myBookings: Booking[] = useMemo(() => {
+    const map = new Map<string, Booking>()
+    for (const d of (byEmailRes ?? [])) map.set(String((d as any)._id), toBooking(d))
+    for (const d of (byUserIdRes ?? [])) {
+      const k = String((d as any)._id)
+      if (!map.has(k)) map.set(k, toBooking(d))
+    }
+    return [...map.values()]
+  }, [byEmailRes, byUserIdRes])
+  return { myBookings, myBookingsLoading }
+}
+
+export function useBookings() {
+  // useQuery returns `undefined` until the first server result arrives. Coercing
+  // straight to [] makes the calendar render a FULLY EMPTY day during that window
+  // (the "empty calendar flash"). Track the loading state so the UI can hold the
+  // grid back until real booking data is in.
+  //
+  // COST-1 (audit 2026-06): the reactive GRID subscription is bounded to roughly the
+  // VISIBLE calendar range, not the whole table. Every booking write re-streams this
+  // window to every connected client, so a narrow window is the single biggest Convex
+  // saving at scale. The customer/coach grid never shows more than ~8 days ahead (or
+  // the admin-set coachBookingWindowDays) plus ≤2 weeks of coach past review, so
+  // [today-21 .. today + max(35, coachWindow + 7)] covers every GRID consumer.
+  // My Bookings own/past history is sourced separately (useMyBookings) from the
+  // owner-scoped indexed queries, so narrowing this does NOT shorten a user's history.
+  const bookingWindow = useMemo(() => {
+    const key = (offsetDays: number) => {
+      const d = new Date(Date.now() + 8 * 3600000 + offsetDays * 86400000)
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+    }
+    let coachWindow = 8
+    try { coachWindow = getSettingsStore().get().coachBookingWindowDays ?? 8 } catch { /* settings not ready yet */ }
+    const futureDays = Math.max(35, coachWindow + 7)
+    return { from: key(-21), to: key(futureDays) }
+  }, [])
+  const rawBookingsResult = useQuery(api.queries.listBookings, bookingWindow)
+  const bookingsLoading = rawBookingsResult === undefined
+  const rawBookings = rawBookingsResult ?? []
+  const { user, isAdmin } = useAuth()
+  // isAdmin is derived from customerRecord.role (real auth, not impersonated role) — correct under impersonation
+  // betterAuthUser.id is always the real session user ID (correct under impersonation too)
+  const currentUserId = user?.id
+  const currentUserEmail = user?.email?.toLowerCase()
+  const actions = useBookingActions()
+
+  const bookings: Booking[] = useMemo(() => {
+    return rawBookings.map(doc => {
+      const b = toBooking(doc)
+      // Admins see full data for all bookings.
+      // Everyone else only gets PII for their own bookings — other users'
+      // bookings are stripped to scheduling fields only (lane/time/status)
+      // so the calendar can still show occupancy without exposing customer data.
+      if (isAdmin) return b
+      // A booking is "mine" if the auth subject matches OR the email matches.
+      // N-9: admin-created manual bookings store userId = customers._id (not the
+      // auth subject), so a userId-only check stripped the owner's own booking to
+      // "Booked"/'' and it then failed My Bookings' email filter — invisible to the
+      // customer. The email match mirrors the backend's own ownership logic.
+      const mine =
+        (currentUserId && b.userId === currentUserId) ||
+        (currentUserEmail && b.customerEmail?.toLowerCase() === currentUserEmail)
+      if (mine) return b
+      return {
+        ...b,
+        customerName: 'Booked',
+        customerEmail: '',
+        customerPhone: undefined,
+      }
+    })
+  }, [rawBookings, isAdmin, currentUserId, currentUserEmail])
+
+  const canCancel = useCallback(
+    (bookingId: string) => evaluateCancellation(bookings.find((b) => b.id === bookingId)),
+    [bookings]
+  )
+
+  const canBookTime = useCallback(
+    (date: string, startHour: number) => {
+      const [year, month, day] = date.split('-').map(Number)
+      const whole = Math.floor(startHour)
+      const mins = Math.round((startHour - whole) * 60)
+      const bookingStart = new Date(year, month - 1, day, whole, mins, 0)
+      const now = getAWSTNow()
+      const minutesUntil =
+        (bookingStart.getTime() - now.getTime()) / (1000 * 60)
+      const noticeMinutes = getSettingsStore().get().minBookingNoticeMinutes ?? 10
+      if (minutesUntil < noticeMinutes) {
+        return {
+          allowed: false,
+          reason: `Bookings must be made at least ${noticeMinutes} minute${noticeMinutes !== 1 ? 's' : ''} before the session starts.`,
+        }
+      }
+      return { allowed: true }
+    },
+    []
+  )
+
+  const getBookingsForDate = useCallback(
+    (dateKey: string) => {
+      return bookings.filter(
+        (b) => b.date === dateKey && b.status !== 'cancelled'
+      )
+    },
+    [bookings]
+  )
+
+  const getBookingsByEmail = useCallback(
+    (email: string) => {
+      return bookings.filter(
+        (b) => b.customerEmail.toLowerCase() === email.toLowerCase()
+      )
+    },
+    [bookings]
+  )
+
+  const getAllIncludingCancelled = useCallback(() => {
+    return bookings
+  }, [bookings])
+
   return {
     bookings,
     bookingsLoading,
-    addBooking,
-    cancelBooking,
+    ...actions,
     canCancel,
     canBookTime,
     getBookingsForDate,
     getBookingsByEmail,
     getAllIncludingCancelled,
-    updateBooking,
-    modifyBooking,
-    updateAthleteSlots,
   }
 }

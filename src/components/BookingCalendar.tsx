@@ -312,6 +312,30 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     })
   }
 
+  // FEB-3 (audit 2026-06): getCustomerDurations is O(slots×5×bookings) and was called
+  // PER grid cell on EVERY render (scroll, hover, the 1 Hz release tick, waitlist
+  // state…). Precompute it once per [bookings, day, slots, settings] change into a
+  // lane→hour→durations map; cells just look up. Pure function → identical values.
+  const custByLaneHour = useMemo(() => {
+    const m = new Map<string, Map<number, number[]>>()
+    for (const lane of LANES) {
+      const inner = new Map<number, number[]>()
+      for (const s of visibleTimeSlots) inner.set(s.hour, getCustomerDurations(displayBookings, lane.id, dateKey, s.hour))
+      m.set(lane.id, inner)
+    }
+    return m
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayBookings, dateKey, visibleTimeSlots, settings])
+
+  // FEB-4: isTimeSlotFullyBooked (a 5-lane scan) was recomputed per cell for the
+  // full-row check + the waitlist-band probe. Memoize once per row.
+  const fullyBookedByHour = useMemo(() => {
+    const m = new Map<number, boolean>()
+    for (const s of visibleTimeSlots) m.set(s.hour, isTimeSlotFullyBooked(dateKey, s.hour))
+    return m
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleTimeSlots, dateKey, displayBookings, laneActiveHalfHours])
+
   const handleAuthSuccess = () => {
     setAuthModalOpen(false)
     if (pendingAction?.type === 'book') {
@@ -522,7 +546,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
             // merely "inactive" there, not bookable, so offering a waitlist for a time we
             // don't normally sell is confusing. Half-hour rows always render per-lane (so
             // the coach booking shows as "Booked" and empty cells stay blank).
-            const rowFull = !rowPast && !isSelectedDayClosed && isTimeSlotFullyBooked(dateKey, slot.hour)
+            const rowFull = !rowPast && !isSelectedDayClosed && (fullyBookedByHour.get(slot.hour) ?? false)
             const showWaitlistBand = rowFull && !isAdmin && !userIsCoach && !isHalfHour
             const hourWaitCount = waitlistByHour.count.get(slot.hour) ?? 0
             const myQueuePos = myWaitlistPositions[String(slot.hour)]
@@ -573,7 +597,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   const bookingEndHour = booked ? booked.startHour + booked.duration / 60 : 0
                   const isWaitlistBandRow = (h: number) =>
                     !isAdmin && !userIsCoach && h === Math.floor(h) &&
-                    !isPast(selectedDay, h) && !isSelectedDayClosed && isTimeSlotFullyBooked(dateKey, h)
+                    !isPast(selectedDay, h) && !isSelectedDayClosed && (fullyBookedByHour.get(h) ?? false)
                   let renderBlockHere = false
                   if (booked) {
                     for (const vs of visibleTimeSlots) {
@@ -589,12 +613,12 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   // option is [30] is an unavoidable 30-min gap (before a half-hour coach booking
                   // or against closing) — render it distinctly so it reads as a short slot, not a
                   // normal hour. Computed once and reused by canBook/hasDurations below.
-                  const custDurations = !isSelectedDayClosed && !past && !booked && isValidStart ? getCustomerDurations(bookings, lane.id, dateKey, slot.hour) : []
+                  const custDurations = !isSelectedDayClosed && !past && !booked && isValidStart ? (custByLaneHour.get(lane.id)?.get(slot.hour) ?? []) : []
                   const isGapFillSlot = !userIsCoach && !isAdmin && custDurations.length === 1 && custDurations[0] === 30
                   // Probe the 30-min minimum unit (not a full hour) so a valid 30-min gap-fill
                   // slot is bookable. The real gating is isValidStart + hasDurations (which only
                   // expose a 30-min slot for an unavoidable gap); this is just the space check.
-                  const canBook = !isSelectedDayClosed && !past && !booked && !blocked && isValidStart && canBookSlot(bookings, lane.id, dateKey, slot.hour, 30)
+                  const canBook = !isSelectedDayClosed && !past && !booked && !blocked && isValidStart && canBookSlot(displayBookings, lane.id, dateKey, slot.hour, 30)
                   const hasDurations = !isSelectedDayClosed && !past && !booked && isValidStart ? custDurations.length > 0 || (userIsCoach && validCoachStartsForDay.includes(slot.hour)) || isAdmin : false
                   const timeCheck = canBookTime(dateKey, slot.hour)
                   const tooLate = !past && !booked && !timeCheck.allowed
@@ -768,12 +792,23 @@ function formatReleaseHour(h: number): string {
 function ReleaseBanner({ role, tier, settings, nextWeekOpen, lastDay }: {
   role: 'coach' | 'customer'; tier: 'L1' | 'L2'; settings: any; nextWeekOpen: boolean; lastDay: Date
 }) {
-  // Tick every second so the countdown stays live.
+  // FEB-7 (audit 2026-06): keep the countdown live, but tick every SECOND only while a
+  // sub-day countdown (seconds visible) is actually shown. Otherwise — d/h/m display, or
+  // the banner rendering null because release is beyond the visibility window — tick
+  // every 30 s, so this isn't a forever 1 Hz re-render for nothing.
   const [, setTick] = useState(0)
   useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 1000)
-    return () => clearInterval(id)
-  }, [])
+    let id: ReturnType<typeof setTimeout>
+    const schedule = () => {
+      const release = getNextReleaseDate(role, tier, settings)
+      const totalSec = Math.max(0, Math.floor((release.getTime() - getAWSTNow().getTime()) / 1000))
+      const visibleWithinSec = (settings.releaseCountdownHours ?? 24) * 3600
+      const showsSeconds = !nextWeekOpen && totalSec <= visibleWithinSec && totalSec < 86400
+      id = setTimeout(() => { setTick((t) => t + 1); schedule() }, showsSeconds ? 1000 : 30000)
+    }
+    schedule()
+    return () => clearTimeout(id)
+  }, [role, tier, settings, nextWeekOpen])
 
   if (nextWeekOpen) {
     return (

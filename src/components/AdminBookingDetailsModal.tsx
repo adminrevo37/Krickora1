@@ -5,7 +5,7 @@ import type { Id } from '../../convex/_generated/dataModel'
 import { getErrorMessage } from '../lib/errors'
 import { LANES, formatTime, getCoachPrice, getCustomerPrice, canBookSlot, getAWSTNow, type Booking } from '../lib/booking-data'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
-import { useBookings } from '../hooks/useBookingStore'
+import { useBookingActions } from '../hooks/useBookingStore'
 import { useAuth } from '../hooks/useAuth'
 
 interface Props {
@@ -38,7 +38,7 @@ function generateHoursForDate(dateKey: string): number[] {
 }
 
 export default function AdminBookingDetailsModal({ booking, onClose, onSave }: Props) {
-  const { updateBooking, bookings } = useBookings()
+  const { updateBooking } = useBookingActions()
   const { user } = useAuth()
   const cancelMut = useMutation(api.mutations.cancelBooking)
   const resendMut = useMutation((api.mutations as any).resendBookingConfirmation)
@@ -64,6 +64,11 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
   const [status, setStatus] = useState<string>(booking.status)
   const [coachPrice, setCoachPrice] = useState(booking.coachPrice ?? 0)
   const [notes, setNotes] = useState(booking.notes ?? '')
+
+  // FEA-6: conflict-check the EDITED target date via the indexed per-day query (admin
+  // → full data) instead of the whole-table grid array. The server (updateBooking) is
+  // authoritative on conflicts + holds; this is the client-side pre-check.
+  const targetDayRaw = useQuery(api.queries.listBookingsByDate, { date })
 
   const displayLane = LANES.find(l => l.id === laneId)
   const hours = useMemo(() => generateHoursForDate(date), [date])
@@ -122,7 +127,9 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
       laneId !== booking.laneId
     if (schedulingChanged) {
       // Exclude the current booking so it doesn't conflict with itself
-      const otherBookings = bookings.filter(b => b.id !== booking.id)
+      const otherBookings = ((targetDayRaw ?? []) as any[])
+        .map(b => ({ ...b, id: String(b._id) }))
+        .filter(b => b.id !== booking.id)
       if (!canBookSlot(otherBookings, laneId, date, startHour, duration)) {
         setError('This time slot is already taken. Please choose a different time or lane.')
         setSaving(false)
