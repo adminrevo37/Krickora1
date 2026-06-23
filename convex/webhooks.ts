@@ -190,7 +190,13 @@ export const confirmBookingPayment = internalMutation({
         additionalLaneIds: b.additionalLaneIds,
         laneNameSnapshot: b.laneNameSnapshot,
         variantLabelSnapshot: b.variantLabelSnapshot,
-        athleteSlots: b.athleteSlots,
+        // CAL-1: strip to the validator's shape (raw stored slots carry athleteId/
+        // suburb that fail createCalendarEvent's arg validation → no event).
+        athleteSlots: (b.athleteSlots as any[] | undefined)?.map((s: any) => ({
+          athleteName: s.athleteName,
+          startHour: s.startHour,
+          durationMinutes: s.durationMinutes,
+        })),
       });
     }
 

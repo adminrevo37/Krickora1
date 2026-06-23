@@ -1375,7 +1375,17 @@ export const createBooking = mutation({
         isCoachBooking: effectiveIsCoachBooking,
         accessCode: bookingAccessCode,
         additionalLaneIds: args.additionalLaneIds,
-        athleteSlots: normalizedAthleteSlots,
+        // CAL-1 (audit 2026-06-23): strip stored slots to exactly the validator's
+        // shape — normalizedAthleteSlots carry athleteId/accessCode/codeGeneratedAt/
+        // postcode/suburb, which Convex's strict v.object() REJECTS → the scheduled
+        // createCalendarEvent throws at run time → a coach booking with athletes
+        // pre-allocated at create time silently gets NO event (HA never loads the
+        // door code). Every other create path already strips; this one was missed.
+        athleteSlots: normalizedAthleteSlots?.map((s: any) => ({
+          athleteName: s.athleteName,
+          startHour: s.startHour,
+          durationMinutes: s.durationMinutes,
+        })),
         laneNameSnapshot: laneSnap.laneNameSnapshot,
         variantLabelSnapshot: laneSnap.variantLabelSnapshot,
       });
@@ -1662,6 +1672,13 @@ export const updateBooking = mutation({
             googleCalendarEventId: (existing as any).googleCalendarEventId ?? "",
             laneCalendarEventIds: (existing as any).googleCalendarEventIds,
           });
+          // CAL-4 (audit 2026-06-23): on a lane MOVE, clear the stale ids before the
+          // create below — otherwise setBookingLaneCalendarEventIds MERGES the new
+          // lane's entry alongside the now-deleted old-lane entry (stale id + 404s
+          // on later syncs). applyBookingChange already does this; updateBooking didn't.
+          if (laneSetChanged) {
+            await ctx.db.patch(id, { googleCalendarEventId: undefined, googleCalendarEventIds: undefined });
+          }
         }
         await ctx.scheduler.runAfter(500, internal.googleCalendar.createCalendarEvent, {
           bookingId: id.toString(),
@@ -1861,10 +1878,15 @@ export const cancelBooking = mutation({
     // pending SMS invites. Fires for owner AND admin cancellations (same path).
     await notifyMatesOnCancel(ctx, booking);
 
-    // Sync cancellation to Google Calendar
-    if (booking.googleCalendarEventId) {
+    // Sync cancellation to Google Calendar. CAL-3 (audit 2026-06-23): gate on
+    // PRIMARY *or* per-lane ids — a partially-synced multi-lane booking can have
+    // per-lane events with no primary id; gating on the primary alone left those
+    // events orphaned on the lane calendar after cancel (HA still powers the
+    // machine / loads the code for a ghost session). deleteCalendarEvent deletes
+    // every per-lane event from laneCalendarEventIds.
+    if (booking.googleCalendarEventId || (booking.googleCalendarEventIds?.length ?? 0) > 0) {
       await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-        googleCalendarEventId: booking.googleCalendarEventId,
+        googleCalendarEventId: booking.googleCalendarEventId ?? "",
         laneCalendarEventIds: booking.googleCalendarEventIds,
       });
     }
@@ -1951,10 +1973,11 @@ export const deleteBooking = mutation({
         }
       }
 
-      // DI-7: Clean up Google Calendar event
-      if ((delBooking as any).googleCalendarEventId) {
+      // DI-7: Clean up Google Calendar event. CAL-3: gate on PRIMARY *or* per-lane
+      // ids so a partially-synced multi-lane booking doesn't leave orphaned events.
+      if ((delBooking as any).googleCalendarEventId || (((delBooking as any).googleCalendarEventIds?.length ?? 0) > 0)) {
         await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-          googleCalendarEventId: (delBooking as any).googleCalendarEventId,
+          googleCalendarEventId: (delBooking as any).googleCalendarEventId ?? "",
           laneCalendarEventIds: (delBooking as any).googleCalendarEventIds,
         });
       }
@@ -2779,10 +2802,24 @@ export const updateBookingAthleteSlots = mutation({
       after: finalSlots,
     });
 
-    // Trigger Google Calendar update if calendar event exists
-    if (booking.googleCalendarEventId) {
+    // Push the new athlete list to Google Calendar so HA/staff see the right
+    // athletes + per-slot times. CAL-2 (audit 2026-06-23): mirror the door-code
+    // editor's gold-standard pattern — UPDATE in place when an event exists (by
+    // PRIMARY or per-lane id), but CREATE one when the booking has no event yet (a
+    // migrated booking, or one whose async create silently failed). The old code
+    // gated on the primary id only, so re-allocating athletes on such a booking did
+    // nothing to the calendar (stale/empty athlete list in HA, never self-created).
+    const calAthleteSlots = finalSlots.map((s) => ({
+      athleteName: s.athleteName,
+      startHour: s.startHour,
+      durationMinutes: s.durationMinutes,
+    }));
+    const hadEvents =
+      !!booking.googleCalendarEventId ||
+      (Array.isArray(booking.googleCalendarEventIds) && booking.googleCalendarEventIds.length > 0);
+    if (hadEvents) {
       await ctx.scheduler.runAfter(0, internal.googleCalendar.updateCalendarEvent, {
-        googleCalendarEventId: booking.googleCalendarEventId,
+        googleCalendarEventId: booking.googleCalendarEventId ?? "",
         laneId: booking.laneId,
         variantId: booking.variantId,
         date: booking.date,
@@ -2795,14 +2832,29 @@ export const updateBookingAthleteSlots = mutation({
         isCoachBooking: booking.isCoachBooking,
         accessCode: booking.accessCode,
         additionalLaneIds: booking.additionalLaneIds,
-        // Calendar validator accepts only these 3 fields — strip athleteId /
-        // accessCode / codeGeneratedAt before scheduling.
-        athleteSlots: finalSlots.map((s) => ({
-          athleteName: s.athleteName,
-          startHour: s.startHour,
-          durationMinutes: s.durationMinutes,
-        })),
+        athleteSlots: calAthleteSlots,
         laneCalendarEventIds: booking.googleCalendarEventIds,
+        laneNameSnapshot: booking.laneNameSnapshot,
+        variantLabelSnapshot: booking.variantLabelSnapshot,
+      });
+    } else {
+      await ctx.scheduler.runAfter(0, internal.googleCalendar.createCalendarEvent, {
+        bookingId: booking._id.toString(),
+        laneId: booking.laneId,
+        variantId: booking.variantId,
+        date: booking.date,
+        startHour: booking.startHour,
+        duration: booking.duration,
+        customerName: booking.customerName,
+        customerEmail: booking.customerEmail,
+        customerPhone: booking.customerPhone,
+        status: booking.status,
+        isCoachBooking: booking.isCoachBooking,
+        accessCode: booking.accessCode,
+        additionalLaneIds: booking.additionalLaneIds,
+        athleteSlots: calAthleteSlots,
+        laneNameSnapshot: booking.laneNameSnapshot,
+        variantLabelSnapshot: booking.variantLabelSnapshot,
       });
     }
 
@@ -3055,6 +3107,11 @@ async function writeCoachSessionCopy(
       startHour: s.startHour,
       durationMinutes: s.durationMinutes,
     })),
+    // CAL-5 (audit 2026-06-23): thread the target-date snapshot so a repeated
+    // session's event title shows the right lane name if the lane was reconfigured
+    // (BM↔RU / override) at the target date — every other create call passes these.
+    laneNameSnapshot: analysis.laneNameSnapshot,
+    variantLabelSnapshot: analysis.variantLabelSnapshot,
   });
 
   return newId.toString();
