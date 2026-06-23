@@ -4,7 +4,7 @@ import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
 import {
   formatDateKey, formatTime, getCustomerPrice, getCoachPrice,
-  getCustomerDurations, getCoachDurations, bookingOccupiesLane, LANES, type Lane, type LaneVariant, type Booking,
+  getCustomerDurations, getCoachDurations, getMaxDuration, bookingOccupiesLane, LANES, type Lane, type LaneVariant, type Booking,
 } from '../lib/booking-data'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
@@ -70,6 +70,17 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   const segEndHour = resolveLaneAt(lane.id, dateKey, startHour).segment.endHour
 
   const availableDurations = useMemo(() => {
+    // Admin gap-fill override: when only a 30-min slot physically fits (e.g. between
+    // two back-to-back coach bookings, or against closing), offer it for EITHER a
+    // customer or a coach session. The customer helper already returns [30] there,
+    // but getCoachDurations starts at 60 and returns [] — and admins are
+    // server-exempt from the customer-only 30-min rule (createBooking gates the
+    // restriction on `!isAdminCaller`), so an admin must be able to fill the gap
+    // with either booker. Still respect the segment boundary.
+    const maxMins = getMaxDuration(existingBookings, lane.id, dateKey, startHour, isCoach)
+    if (maxMins === 30) {
+      return startHour + 0.5 <= segEndHour + 1e-9 ? [30] : []
+    }
     const base = isCoach
       ? getCoachDurations(existingBookings, lane.id, dateKey, startHour)
       : getCustomerDurations(existingBookings, lane.id, dateKey, startHour)
