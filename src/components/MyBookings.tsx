@@ -200,9 +200,11 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   // never reach My Bookings via the shared grid OR the owner-scoped useMyBookings.
   // This auth-scoped query is the only path that surfaces them. Skipped while
   // impersonating (it would resolve to the admin's own athletes, not the viewed user).
+  // When impersonating, pass forEmail so the server resolves the VIEWED customer's
+  // athletes (admin-only) — otherwise it would resolve the admin's own.
   const athleteSessionRows = (useQuery(
     api.queries.listMyAthleteSessions,
-    (user && !impersonatedEmail) ? {} : 'skip',
+    user ? (impersonatedEmail ? { forEmail: impersonatedEmail } : {}) : 'skip',
   ) ?? []) as any[]
   const myAthleteSessions: Booking[] = useMemo(
     () => athleteSessionRows.map((d) => ({
@@ -221,8 +223,16 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       additionalLaneIds: d.additionalLaneIds,
       athleteSlots: d.athleteSlots,
       accessCode: d.accessCode,
-    } as Booking)),
+      // The server already scoped athleteSlots to this account's athletes (handles a
+      // stale slot athleteId AND works under admin impersonation) → render as-is,
+      // do NOT re-filter with the frontend's own athlete list.
+      __athleteSession: true,
+    } as any as Booking)),
     [athleteSessionRows],
+  )
+  const athleteSessionIds = useMemo(
+    () => new Set(myAthleteSessions.map(b => b.id)),
+    [myAthleteSessions],
   )
 
   const slotIsMine = (s: { athleteId?: string; athleteName: string }) =>
@@ -234,26 +244,26 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     return b.athleteSlots.some(slotIsMine)
   }
 
-  // Owner-scoped bookings ∪ allocated-athlete sessions, de-duped by id (prefer the
-  // owned copy, which carries full data — the athlete-session copy is the privacy
-  // projection). The coach-self edge (a coach's own self-athlete in their own
-  // booking) is therefore rendered as the owned coach card, not double-listed.
-  const sourceBookings: Booking[] = useMemo(() => {
-    const map = new Map<string, Booking>()
-    for (const b of myBookings) map.set(b.id, b)
-    for (const b of myAthleteSessions) if (!map.has(b.id)) map.set(b.id, b)
-    return [...map.values()]
-  }, [myBookings, myAthleteSessions])
-
-  const userBookings = useMemo(() => (user || impersonatedEmail)
-    ? sourceBookings.filter(b =>
-        (effectiveEmail && b.customerEmail.toLowerCase() === effectiveEmail.toLowerCase()) ||
-        (!impersonatedEmail && b.userId === user?.id) ||
-        (!impersonatedEmail && isAthleteInBooking(b))
-      ).sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour)
-    : [],
+  const userBookings = useMemo(() => {
+    if (!user && !impersonatedEmail) return []
+    // Bookings the account OWNS (booked themselves; or — legacy — an owned grid row
+    // that carries the caller's athlete).
+    const owned = myBookings.filter(b =>
+      (effectiveEmail && b.customerEmail.toLowerCase() === effectiveEmail.toLowerCase()) ||
+      (!impersonatedEmail && b.userId === user?.id) ||
+      (!impersonatedEmail && isAthleteInBooking(b))
+    )
+    // Allocated-athlete sessions are already privacy-scoped server-side (to the
+    // viewed account's athletes) → include directly, de-duped against owned. This is
+    // independent of the frontend slotIsMine, so it works under admin impersonation
+    // and when a slot's athleteId is stale (the Alex Szigligeti case). The coach-self
+    // edge (a coach's own athlete in their own booking) prefers the owned copy.
+    const seen = new Set(owned.map(b => b.id))
+    const merged = [...owned]
+    for (const b of myAthleteSessions) if (!seen.has(b.id)) merged.push(b)
+    return merged.sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  [sourceBookings, user, athleteNameCandidates, myAthleteIds, effectiveEmail, impersonatedEmail])
+  }, [myBookings, myAthleteSessions, user, athleteNameCandidates, myAthleteIds, effectiveEmail, impersonatedEmail])
 
   // SPEC_SCHEDULE_DAY_VIEW §2.5: whole-day model. "Upcoming" = any non-cancelled
   // booking dated today or later (no time-of-day test). Today's already-finished
@@ -662,14 +672,17 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     )
   }
 
-  const renderAthleteSlotCard = (booking: Booking) => {
+  const renderAthleteSlotCard = (booking: Booking, preScoped = false) => {
     // Child-athlete(s) of THIS account are allocated inside a coach's booking
     // (SPEC_PARENT_ATHLETE_MODEL). The slot name is the child's; the account
     // holder (parent) sees it here. Renders ONE card per matching child so a
     // booking with two siblings shows both their sessions, grouped by child.
+    // preScoped = the slots already came pre-filtered from listMyAthleteSessions
+    // (server-scoped to this account's athletes) → use them as-is, since the
+    // frontend slotIsMine may miss a stale slot athleteId / is wrong under impersonation.
     const lane = getLane(booking.laneId)
     const variantName = getVariantName(booking)
-    const mySlots = (booking.athleteSlots ?? []).filter(slotIsMine)
+    const mySlots = preScoped ? (booking.athleteSlots ?? []) : (booking.athleteSlots ?? []).filter(slotIsMine)
     if (mySlots.length === 0) return null
     return mySlots.map((mySlot, idx) => {
       const childName = mySlot.athleteName
@@ -877,6 +890,9 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   }
 
   const renderBookingCard = (booking: Booking) => {
+    // Server-scoped allocated-athlete session → render the athlete-slot card with
+    // its slots as-is (already filtered to this account's athletes server-side).
+    if (athleteSessionIds.has(booking.id)) return renderAthleteSlotCard(booking, true)
     const isOwner = !!user && (
       booking.customerEmail.toLowerCase() === user.email.toLowerCase() ||
       booking.userId === user.id

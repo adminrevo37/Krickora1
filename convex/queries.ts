@@ -187,24 +187,41 @@ export const listPublicAvailability = query({
 // session, and NO coach financials / event ids / notes. Bounded by the by_date index
 // (never a full scan); only runs for accounts that actually have athletes.
 export const listMyAthleteSessions = query({
-  args: {},
-  handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
-    if (!callerEmail) return [];
-    // Resolve the caller's CANONICAL account row (athletes are keyed by the
+  // forEmail: ADMIN-ONLY override to inspect another account's athlete sessions —
+  // powers admin impersonation ("view as customer") + the audit. Ignored for
+  // non-admin callers (they always resolve to their own account).
+  args: { forEmail: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return [];
+    const targetEmail =
+      args.forEmail && caller.isAdmin
+        ? args.forEmail.toLowerCase().trim()
+        : caller.email;
+    if (!targetEmail) return [];
+    // Resolve the target's CANONICAL account row (athletes are keyed by the
     // canonical customers _id; a drifted duplicate must not split the match).
-    const account = await resolveCanonicalCustomerByEmail(ctx, callerEmail);
+    const account = await resolveCanonicalCustomerByEmail(ctx, targetEmail);
     if (!account) return [];
 
-    // The account's athlete ids (self-athlete + any children).
+    // The account's athletes (self-athlete + any children). Match slots by id OR
+    // by name: an allocation can store a STALE athleteId (the athlete row was later
+    // replaced/re-created — observed on Alex Szigligeti, whose slot id no longer
+    // matched his live athlete), but athleteName is denormalised on the slot, so a
+    // name match against THIS account's own athletes recovers it. Name matching is
+    // scoped to the account's own athlete names → never surfaces another family's.
     const myAthletes = await ctx.db
       .query("athletes")
       .withIndex("by_account", (q: any) => q.eq("accountCustomerId", account._id))
       .collect();
     if (myAthletes.length === 0) return [];
     const myAthleteIds = new Set<string>(myAthletes.map((a: any) => String(a._id)));
+    const myAthleteNames = new Set<string>(
+      myAthletes.map((a: any) => String(a.name ?? "").toLowerCase().trim()).filter(Boolean)
+    );
+    const slotIsMine = (s: any) =>
+      (s.athleteId && myAthleteIds.has(String(s.athleteId))) ||
+      (s.athleteName && myAthleteNames.has(String(s.athleteName).toLowerCase().trim()));
 
     // Bounded read via by_date — never a full scan. A coach's athleteSlots are
     // embedded in the COACH-owned row, so (unlike the owner's own history, which is
@@ -226,11 +243,9 @@ export const listMyAthleteSessions = query({
     for (const b of bookings as any[]) {
       if (b.isCoachBooking !== true) continue;
       if (b.status === "cancelled") continue;
-      // ONLY the caller's own athletes' slots — never return another client's
-      // child's name/time/code to this caller.
-      const mySlots = (b.athleteSlots ?? []).filter(
-        (s: any) => s.athleteId && myAthleteIds.has(String(s.athleteId))
-      );
+      // ONLY the target account's own athletes' slots — never return another
+      // client's child's name/time/code.
+      const mySlots = (b.athleteSlots ?? []).filter(slotIsMine);
       if (mySlots.length === 0) continue;
       out.push({
         _id: b._id,
