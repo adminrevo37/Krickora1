@@ -324,6 +324,16 @@ export const createCalendarEvent = internalAction({
       });
     }
 
+    // SPEC_CALENDAR_SYNC_RELIABILITY_2026-06 (fix #3) — flag the outcome so a
+    // silently-failed Google write becomes VISIBLE instead of leaving the booking
+    // with a stored door code but no event (the 2026-06-23 lockout class). 'synced'
+    // only when the PRIMARY lane event landed (that's the door-code lane HA reads);
+    // 'failed' otherwise → the daily reconcile cron re-creates it next run.
+    await ctx.runMutation(internal.googleCalendarMutations.setBookingCalendarSyncStatus, {
+      bookingId: args.bookingId,
+      status: primaryEventId ? "synced" : "failed",
+    });
+
     return primaryEventId;
   },
 });
@@ -627,5 +637,172 @@ export const bulkSyncBookings = action({
     }
 
     return { synced, skipped, failed };
+  },
+});
+
+// ============================================================================
+// CALENDAR SYNC RECONCILIATION (SPEC_CALENDAR_SYNC_RELIABILITY_2026-06 fix #2)
+// ============================================================================
+// The booking's stored accessCode is written transactionally (always lands), but
+// the Google Calendar write is a fire-and-forget scheduled action whose failures
+// were caught-and-logged — so a transient Google error left a booking with a door
+// code but NO event (HA never loads the code → lockout), or a failed modify left a
+// STALE code on the event. This daily reconcile is the structural self-heal:
+//   • no event  → createCalendarEvent (re-create on the lane calendar);
+//   • code drift → updateCalendarEvent (re-push the DB code, the source of truth).
+// The DB accessCode is authoritative; GCal is reconciled to it.
+
+const DOOR_CODE_RE = /DOOR CODE:\s*([0-9 ]+)/i;
+
+// GET a Google event and parse its "🔑 DOOR CODE: NNNN" out of the description.
+async function fetchEventDoorCode(
+  accessToken: string,
+  calendarId: string,
+  eventId: string
+): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!res.ok) return null; // can't read → treat as unknown, leave untouched
+    const ev = await res.json();
+    const m = DOOR_CODE_RE.exec(ev.description ?? "");
+    return m ? m[1].replace(/\s+/g, "") : null;
+  } catch {
+    return null;
+  }
+}
+
+interface ReconcileResult {
+  scanned: number;
+  inSync: number;
+  missing: number;
+  staleCode: number;
+  repaired: number;
+  capped: boolean;
+  divergent: Array<{ bookingId: string; date: string; laneId: string; coach: string; storedCode: string; gcalCode: string | null; issue: "no-event" | "stale-code" }>;
+}
+
+// Shared core for the cron + any future admin tool. dryRun=true reports without
+// touching Google. Bound by the by_date index window; capped to a safety limit so a
+// runaway scan can't fire thousands of Google writes.
+async function runCalendarReconcile(
+  ctx: any,
+  opts: { fromDate: string; toDate: string; dryRun: boolean; limit?: number }
+): Promise<ReconcileResult> {
+  const empty: ReconcileResult = { scanned: 0, inSync: 0, missing: 0, staleCode: 0, repaired: 0, capped: false, divergent: [] };
+  const tokenInfo = await getValidToken(ctx);
+  if (!tokenInfo) {
+    console.warn("Calendar reconcile: Google not connected — skipping");
+    return empty;
+  }
+  const candidates: any[] = await ctx.runQuery(
+    internal.googleCalendarMutations.getReconcileCandidates,
+    { fromDate: opts.fromDate, toDate: opts.toDate }
+  );
+  const limit = opts.limit ?? 250;
+  const capped = candidates.length > limit;
+  const work = capped ? candidates.slice(0, limit) : candidates;
+
+  let inSync = 0, missing = 0, staleCode = 0, repaired = 0;
+  const divergent: ReconcileResult["divergent"] = [];
+
+  for (const b of work) {
+    const hasEvent = !!b.googleCalendarEventId || (b.googleCalendarEventIds?.length ?? 0) > 0;
+
+    if (!hasEvent) {
+      missing++;
+      divergent.push({ bookingId: b.bookingId, date: b.date, laneId: b.laneId, coach: b.customerName, storedCode: b.accessCode, gcalCode: null, issue: "no-event" });
+      if (!opts.dryRun) {
+        await ctx.runAction(internal.googleCalendar.createCalendarEvent, {
+          bookingId: b.bookingId,
+          laneId: b.laneId,
+          variantId: b.variantId,
+          date: b.date,
+          startHour: b.startHour,
+          duration: b.duration,
+          customerName: b.customerName,
+          customerEmail: b.customerEmail,
+          customerPhone: b.customerPhone,
+          status: "confirmed",
+          isCoachBooking: b.isCoachBooking,
+          accessCode: b.accessCode,
+          additionalLaneIds: b.additionalLaneIds,
+          laneNameSnapshot: b.laneNameSnapshot,
+          variantLabelSnapshot: b.variantLabelSnapshot,
+          athleteSlots: b.athleteSlots,
+        });
+        repaired++;
+      }
+      continue;
+    }
+
+    // Event exists — compare the door code on the PRIMARY lane event (the one HA
+    // reads for this booking). A failed lane mapping falls back to the primary id.
+    const entries = b.googleCalendarEventIds ?? [];
+    const primary = entries.find((e: any) => e.laneId === b.laneId) ?? entries[0];
+    let gcalCode: string | null = null;
+    if (primary) {
+      gcalCode = await fetchEventDoorCode(tokenInfo.accessToken, primary.calendarId, primary.eventId);
+    } else if (b.googleCalendarEventId) {
+      gcalCode = await fetchEventDoorCode(tokenInfo.accessToken, tokenInfo.calendarId, b.googleCalendarEventId);
+    }
+
+    if (gcalCode != null && gcalCode !== b.accessCode) {
+      staleCode++;
+      divergent.push({ bookingId: b.bookingId, date: b.date, laneId: b.laneId, coach: b.customerName, storedCode: b.accessCode, gcalCode, issue: "stale-code" });
+      if (!opts.dryRun) {
+        await ctx.runAction(internal.googleCalendar.updateCalendarEvent, {
+          googleCalendarEventId: b.googleCalendarEventId ?? primary?.eventId ?? "",
+          laneId: b.laneId,
+          variantId: b.variantId,
+          date: b.date,
+          startHour: b.startHour,
+          duration: b.duration,
+          customerName: b.customerName,
+          customerEmail: b.customerEmail,
+          customerPhone: b.customerPhone,
+          status: "confirmed",
+          isCoachBooking: b.isCoachBooking,
+          accessCode: b.accessCode,
+          additionalLaneIds: b.additionalLaneIds,
+          athleteSlots: b.athleteSlots,
+          laneCalendarEventIds: entries,
+          laneNameSnapshot: b.laneNameSnapshot,
+          variantLabelSnapshot: b.variantLabelSnapshot,
+        });
+        repaired++;
+      }
+    } else {
+      inSync++;
+    }
+  }
+
+  if (capped) console.warn(`Calendar reconcile: capped at ${limit} of ${candidates.length} candidates`);
+  return { scanned: work.length, inSync, missing, staleCode, repaired, capped, divergent };
+}
+
+// Daily reconcile cron target. Forward window: yesterday .. +14 days (AWST). A
+// silent sync failure only locks someone out near the session (door code activates
+// ~45 min before), so the near-term window is where repair matters; the small -1d
+// pad catches a booking created late the night before. Far-future anomalies (e.g.
+// the 29 Aug Paolo wrong-calendar event) are out of window and handled manually.
+export const reconcileCalendarInternal = internalAction({
+  args: {},
+  handler: async (ctx): Promise<ReconcileResult> => {
+    const awstDay = (off: number) =>
+      new Date(Date.now() + 8 * 3600 * 1000 + off * 86400000).toISOString().slice(0, 10);
+    const result = await runCalendarReconcile(ctx, {
+      fromDate: awstDay(-1),
+      toDate: awstDay(14),
+      dryRun: false,
+    });
+    if (result.missing > 0 || result.staleCode > 0) {
+      console.log(
+        `Calendar reconcile: repaired ${result.repaired} (missing=${result.missing}, stale=${result.staleCode}) of ${result.scanned} scanned`
+      );
+    }
+    return result;
   },
 });

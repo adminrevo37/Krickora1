@@ -4508,6 +4508,68 @@ export const backfillMissingCalendarEvents = mutation({
   },
 });
 
+// SPEC_CALENDAR_SYNC_RELIABILITY_2026-06 (fix #1) — one-off backfill for COACH
+// bookings whose Google Calendar event silently failed to write (the 13 found in
+// the 2026-06-23 prod audit: confirmed coach bookings with a stored door code but
+// NO event → HA never loads the code → lockout). The customer backfill above
+// deliberately skips coach bookings; this is its coach counterpart.
+//
+// ⚠️ Creating events has PHYSICAL effects (HA arms the door code + machine power for
+// these sessions) — that's the intended fix, but every row returned should be a
+// legitimate current booking. Run a count first, eyeball `fixed`, then it's done.
+// Idempotent: re-running skips any that now have an event. Detection is DB-only (no
+// Google reads). The daily reconcile cron also covers this going forward.
+export const backfillMissingCoachCalendarEvents = mutation({
+  // dryRun=true returns the list it WOULD fix without scheduling any event (no
+  // physical HA effect) — preview the rows first, then run for real.
+  args: { dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const todayStr = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10); // AWST
+    const all = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.gte("date", todayStr))
+      .collect();
+    let scheduled = 0;
+    const fixed: string[] = [];
+    for (const b of all as any[]) {
+      if (b.status !== "confirmed") continue;
+      if (b.isCoachBooking !== true) continue;            // customers handled by the sibling backfill
+      if (b.googleCalendarEventId) continue;              // already synced
+      if ((b.googleCalendarEventIds?.length ?? 0) > 0) continue; // partially/fully synced
+      if (!b.accessCode) continue;                        // nothing to load into HA without a code
+      scheduled++;
+      fixed.push(`${b.customerName ?? b.customerEmail} · ${b.laneNameSnapshot ?? b.laneId} ${b.date} ${b.startHour}:00 · code ${b.accessCode}`);
+      if (args.dryRun) continue;                          // preview only — no physical effect
+      await ctx.scheduler.runAfter((scheduled - 1) * 1500, internal.googleCalendar.createCalendarEvent, {
+        bookingId: b._id.toString(),
+        laneId: b.laneId,
+        variantId: b.variantId,
+        date: b.date,
+        startHour: b.startHour,
+        duration: b.duration,
+        customerName: b.customerName ?? "Coach",
+        customerEmail: b.customerEmail ?? "",
+        customerPhone: b.customerPhone,
+        status: "confirmed",
+        isCoachBooking: true,
+        accessCode: b.accessCode,
+        additionalLaneIds: b.additionalLaneIds,
+        laneNameSnapshot: b.laneNameSnapshot,
+        variantLabelSnapshot: b.variantLabelSnapshot,
+        // BUGM-4: strip stored slots to exactly createCalendarEvent's validator
+        // shape — raw slots carry athleteId/suburb which fail its arg validation.
+        athleteSlots: (b.athleteSlots as any[] | undefined)?.map((s: any) => ({
+          athleteName: s.athleteName,
+          startHour: s.startHour,
+          durationMinutes: s.durationMinutes,
+        })),
+      });
+    }
+    return { scheduled, fixed };
+  },
+});
+
 // ============================================================================
 // CUSTOMER CREDIT MUTATIONS — ADMIN ONLY
 // ============================================================================

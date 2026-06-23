@@ -344,6 +344,13 @@ export default defineSchema({
     bookingPostcode: v.optional(v.string()),
     bookingSuburb: v.optional(v.string()),
     googleCalendarEventId: v.optional(v.string()),
+    // SPEC_CALENDAR_SYNC_RELIABILITY_2026-06 — visibility flag set by
+    // createCalendarEvent: 'synced' when the primary lane event was created,
+    // 'failed' when the Google write silently failed (the class behind the
+    // 2026-06-23 missing-event lockouts). Additive/optional → no migration; the
+    // daily reconcile cron + the backfill target failed/missing rows. Absent on
+    // legacy rows (never marks them failed).
+    calendarSyncStatus: v.optional(v.string()), // 'synced' | 'failed'
     // Per-lane calendar event IDs (for multi-calendar sync)
     googleCalendarEventIds: v.optional(
       v.array(

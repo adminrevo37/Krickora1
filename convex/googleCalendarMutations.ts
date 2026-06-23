@@ -138,6 +138,58 @@ export const setBookingLaneCalendarEventIds = internalMutation({
   },
 });
 
+// SPEC_CALENDAR_SYNC_RELIABILITY_2026-06 — set the booking's calendar sync flag
+// (visibility for the reconcile cron / admin). createCalendarEvent calls this after
+// its per-lane write loop: 'synced' if the primary event landed, 'failed' otherwise.
+export const setBookingCalendarSyncStatus = internalMutation({
+  args: { bookingId: v.string(), status: v.string() },
+  handler: async (ctx, args) => {
+    const target = await ctx.db.get(args.bookingId as Id<"bookings">);
+    if (target) await ctx.db.patch(target._id, { calendarSyncStatus: args.status });
+  },
+});
+
+// SPEC_CALENDAR_SYNC_RELIABILITY_2026-06 — confirmed bookings in [fromDate, toDate]
+// that carry a stored door code, with the fields the reconcile action needs to
+// detect a MISSING event (no ids) or re-push a STALE code (compare against GCal).
+// Read via the by_date index — never a full scan. athleteSlots are pre-stripped to
+// exactly createCalendarEvent's validator shape (raw slots carry athleteId/suburb
+// which fail its arg validation — BUGM-4).
+export const getReconcileCandidates = internalQuery({
+  args: { fromDate: v.string(), toDate: v.string() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.gte("date", args.fromDate).lte("date", args.toDate))
+      .collect();
+    return rows
+      .filter((b: any) => b.status === "confirmed" && b.accessCode)
+      .map((b: any) => ({
+        bookingId: b._id.toString(),
+        laneId: b.laneId,
+        variantId: b.variantId,
+        date: b.date,
+        startHour: b.startHour,
+        duration: b.duration,
+        customerName: b.customerName ?? "Customer",
+        customerEmail: b.customerEmail ?? "",
+        customerPhone: b.customerPhone,
+        isCoachBooking: b.isCoachBooking === true,
+        accessCode: b.accessCode as string,
+        additionalLaneIds: b.additionalLaneIds,
+        laneNameSnapshot: b.laneNameSnapshot,
+        variantLabelSnapshot: b.variantLabelSnapshot,
+        googleCalendarEventId: b.googleCalendarEventId ?? null,
+        googleCalendarEventIds: b.googleCalendarEventIds ?? [],
+        athleteSlots: (b.athleteSlots as any[] | undefined)?.map((s: any) => ({
+          athleteName: s.athleteName,
+          startHour: s.startHour,
+          durationMinutes: s.durationMinutes,
+        })),
+      }));
+  },
+});
+
 // ============================================================================
 // LANE CALENDAR MAPPING MUTATIONS — ADMIN ONLY
 // ============================================================================

@@ -64,4 +64,15 @@ crons.hourly(
   internal.retention.runHourlyRetention
 );
 
+// SPEC_CALENDAR_SYNC_RELIABILITY_2026-06 (fix #2) — daily reconcile of upcoming
+// confirmed bookings against Google Calendar: re-create any MISSING event (the
+// 2026-06-23 silent-failure lockout class) and re-push any STALE door code so HA
+// always loads the booking's authoritative stored code. Forward ~14-day window,
+// by_date-bounded. 02:00 AWST = 18:00 UTC (after retention; quiet hours).
+crons.daily(
+  "calendar-reconcile",
+  { hourUTC: 18, minuteUTC: 0 },
+  internal.googleCalendar.reconcileCalendarInternal
+);
+
 export default crons;
