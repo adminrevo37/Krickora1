@@ -223,12 +223,26 @@ export default function AthleteAllocationEditor({
   }, [slots])
 
   const addSlot = () => {
-    const next = [...slots, {
-      athleteName: '',
-      startHour: bookingStartHour,
-      durationMinutes: defaultSlotDuration,
-    }]
-    setSlots(cascadeFrom(next, slots.length))
+    // Place the new athlete. A coach who coaches a group at once (coachesSimultaneously)
+    // — and the fallback below — places the slot at the booking START so athletes can
+    // be coached CONCURRENTLY (sharing the lane time); a sequential 1:1 coach lays the
+    // new slot back-to-back after the last one. FIX (2026-06-23): if the sequential
+    // cascade would leave NO usable room (e.g. a 60-min booking already filled by one
+    // 60-min athlete → the old code pushed the new slot to the booking end with an
+    // empty duration list, so a 2nd athlete couldn't be added), fall back to a
+    // concurrent slot at the booking start. The duration is snapped to a valid option
+    // so it's always selectable. Mirrors the fresh-booking flow's concurrent default.
+    const roomFrom = (s: number) => Math.round((bookingEndHour - s) * 60)
+    let start = bookingStartHour
+    if (!coachesSimultaneously && slots.length > 0) {
+      const lastEnd = Math.max(...slots.map(s => s.startHour + s.durationMinutes / 60))
+      const seqStart = roundToQuarter(Math.min(lastEnd, bookingEndHour))
+      if (roomFrom(seqStart) >= SESSION_FLOOR) start = seqStart // room left → back-to-back
+      // else keep start = bookingStartHour → concurrent fallback (always addable)
+    }
+    const room = roomFrom(start)
+    const dur = snapDuration(Math.min(defaultSlotDuration, room), room)
+    setSlots([...slots, { athleteName: '', startHour: roundToQuarter(start), durationMinutes: dur }])
     setError(null)
     setSuccessMsg(null)
     setActiveDropdown(slots.length)
