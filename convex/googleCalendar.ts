@@ -681,7 +681,9 @@ interface ReconcileResult {
   staleCode: number;
   repaired: number;
   capped: boolean;
-  divergent: Array<{ bookingId: string; date: string; laneId: string; coach: string; storedCode: string; gcalCode: string | null; issue: "no-event" | "stale-code" }>;
+  adminCreatedScanned: number;
+  adminModifiedScanned: number;
+  divergent: Array<{ bookingId: string; date: string; startHour: number; laneId: string; coach: string; isCoachBooking: boolean; createdByAdmin: boolean; modifiedCount: number; storedCode: string; gcalCode: string | null; issue: "no-event" | "stale-code" }>;
 }
 
 // Shared core for the cron + any future admin tool. dryRun=true reports without
@@ -691,7 +693,7 @@ async function runCalendarReconcile(
   ctx: any,
   opts: { fromDate: string; toDate: string; dryRun: boolean; limit?: number }
 ): Promise<ReconcileResult> {
-  const empty: ReconcileResult = { scanned: 0, inSync: 0, missing: 0, staleCode: 0, repaired: 0, capped: false, divergent: [] };
+  const empty: ReconcileResult = { scanned: 0, inSync: 0, missing: 0, staleCode: 0, repaired: 0, capped: false, adminCreatedScanned: 0, adminModifiedScanned: 0, divergent: [] };
   const tokenInfo = await getValidToken(ctx);
   if (!tokenInfo) {
     console.warn("Calendar reconcile: Google not connected — skipping");
@@ -706,14 +708,21 @@ async function runCalendarReconcile(
   const work = capped ? candidates.slice(0, limit) : candidates;
 
   let inSync = 0, missing = 0, staleCode = 0, repaired = 0;
+  let adminCreatedScanned = 0, adminModifiedScanned = 0;
   const divergent: ReconcileResult["divergent"] = [];
+  const meta = (b: any) => ({
+    startHour: b.startHour, isCoachBooking: b.isCoachBooking,
+    createdByAdmin: b.createdByAdmin === true, modifiedCount: b.modifiedCount ?? 0,
+  });
 
   for (const b of work) {
+    if (b.createdByAdmin === true) adminCreatedScanned++;
+    if ((b.modifiedCount ?? 0) > 0) adminModifiedScanned++;
     const hasEvent = !!b.googleCalendarEventId || (b.googleCalendarEventIds?.length ?? 0) > 0;
 
     if (!hasEvent) {
       missing++;
-      divergent.push({ bookingId: b.bookingId, date: b.date, laneId: b.laneId, coach: b.customerName, storedCode: b.accessCode, gcalCode: null, issue: "no-event" });
+      divergent.push({ bookingId: b.bookingId, date: b.date, laneId: b.laneId, coach: b.customerName, storedCode: b.accessCode, gcalCode: null, issue: "no-event", ...meta(b) });
       if (!opts.dryRun) {
         await ctx.runAction(internal.googleCalendar.createCalendarEvent, {
           bookingId: b.bookingId,
@@ -751,7 +760,7 @@ async function runCalendarReconcile(
 
     if (gcalCode != null && gcalCode !== b.accessCode) {
       staleCode++;
-      divergent.push({ bookingId: b.bookingId, date: b.date, laneId: b.laneId, coach: b.customerName, storedCode: b.accessCode, gcalCode, issue: "stale-code" });
+      divergent.push({ bookingId: b.bookingId, date: b.date, laneId: b.laneId, coach: b.customerName, storedCode: b.accessCode, gcalCode, issue: "stale-code", ...meta(b) });
       if (!opts.dryRun) {
         await ctx.runAction(internal.googleCalendar.updateCalendarEvent, {
           googleCalendarEventId: b.googleCalendarEventId ?? primary?.eventId ?? "",
@@ -780,8 +789,30 @@ async function runCalendarReconcile(
   }
 
   if (capped) console.warn(`Calendar reconcile: capped at ${limit} of ${candidates.length} candidates`);
-  return { scanned: work.length, inSync, missing, staleCode, repaired, capped, divergent };
+  return { scanned: work.length, inSync, missing, staleCode, repaired, capped, adminCreatedScanned, adminModifiedScanned, divergent };
 }
+
+// SPEC_CALENDAR_SYNC_RELIABILITY_2026-06 (fix #4) — admin-gated READ-ONLY audit of
+// booking → Google Calendar door-code correctness across a window. `requireAdminAction`
+// works from the authenticated admin app (unlike a CLI deploy key, which has no user
+// identity). dryRun defaults TRUE (report only); pass dryRun:false to also repair
+// (re-create missing events + re-push stale codes). Answers "are all bookings — incl.
+// admin-created / admin-modified ones — correctly synced to the calendar HA reads?".
+export const auditCalendarDoorCodeDrift = action({
+  args: { days: v.optional(v.number()), dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<ReconcileResult> => {
+    await requireAdminAction(ctx);
+    const awstDay = (off: number) =>
+      new Date(Date.now() + 8 * 3600 * 1000 + off * 86400000).toISOString().slice(0, 10);
+    const days = Math.max(1, Math.min(args.days ?? 60, 400));
+    return await runCalendarReconcile(ctx, {
+      fromDate: awstDay(-1),
+      toDate: awstDay(days),
+      dryRun: args.dryRun !== false, // default true (report only)
+      limit: 1000,
+    });
+  },
+});
 
 // Daily reconcile cron target. Forward window: yesterday .. +14 days (AWST). A
 // silent sync failure only locks someone out near the session (door code activates

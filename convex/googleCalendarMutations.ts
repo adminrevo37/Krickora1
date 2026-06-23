@@ -181,6 +181,12 @@ export const getReconcileCandidates = internalQuery({
         variantLabelSnapshot: b.variantLabelSnapshot,
         googleCalendarEventId: b.googleCalendarEventId ?? null,
         googleCalendarEventIds: b.googleCalendarEventIds ?? [],
+        // Audit metadata (SPEC_CALENDAR_SYNC_RELIABILITY audit tool): flag what admin
+        // touched so the report can answer "are admin-made / admin-modified bookings
+        // correctly synced?".
+        createdByAdmin: b.createdByAdmin === true,
+        modifiedCount: (b.modificationHistory?.length ?? 0),
+        calendarSyncStatus: b.calendarSyncStatus ?? null,
         athleteSlots: (b.athleteSlots as any[] | undefined)?.map((s: any) => ({
           athleteName: s.athleteName,
           startHour: s.startHour,
