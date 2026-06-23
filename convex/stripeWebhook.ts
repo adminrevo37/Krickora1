@@ -84,8 +84,11 @@ export const stripeWebhook = httpAction(async (ctx, request) => {
         const session = event.data.object as Stripe.Checkout.Session;
         const bookingId = session.metadata?.bookingId;
         if (bookingId) {
+          // MON-1: pass the EXPIRING session id so a stale expiry can't cancel a
+          // booking whose customer resumed with a newer "Pay now" session.
           await ctx.runMutation(internal.slotHolds.releaseCheckoutBooking, {
             bookingId,
+            stripeSessionId: session.id,
           });
         }
         break;

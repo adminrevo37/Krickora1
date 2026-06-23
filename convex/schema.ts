@@ -235,6 +235,11 @@ export default defineSchema({
   })
     .index("by_laneId_date", ["laneId", "date"])
     .index("by_bookingId", ["bookingId"])
+    // BUGM-1 (audit 2026-06): conflict checks must see a multi-lane hold via ANY of
+    // its lanes (additionalLaneIds), which by_laneId_date (primary lane only) can't
+    // do. by_date reads the whole day once, then the handler tests every hold's full
+    // lane set. Additive index — no migration.
+    .index("by_date", ["date"])
     .index("by_expiresAt", ["expiresAt"]),
 
   // Audit log for role / permission / tier changes (SEC decision #3).
@@ -555,6 +560,9 @@ export default defineSchema({
     .index("by_stripeSessionId", ["stripeSessionId"])
     .index("by_customerEmail", ["customerEmail"])
     .index("by_status", ["status"])
+    // MON-2 (audit 2026-06): recordStripePaymentInternal's per-booking idempotency
+    // check ran as a full-table .filter() on every payment confirm. Additive index.
+    .index("by_bookingId", ["bookingId"])
     .index("by_date", ["date"]),
 
   // Site-wide settings (singleton - only one document)

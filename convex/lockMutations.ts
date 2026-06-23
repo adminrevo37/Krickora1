@@ -1,6 +1,7 @@
 import { mutation, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { requireAdmin } from "./lib/adminGuard";
+import { Id } from "./_generated/dataModel";
 
 // ============================================================================
 // LOCK CODE MUTATIONS (internal - used by locks.ts actions)
@@ -73,8 +74,9 @@ export const updateBookingLockStatus = internalMutation({
     lockSyncStatus: v.string(),
   },
   handler: async (ctx, args) => {
-    const allBookings = await ctx.db.query("bookings").collect();
-    const target = allBookings.find(b => b._id.toString() === args.bookingId);
+    // ADM-3 (audit 2026-06): bookingId is a stringified bookings _id — direct get
+    // instead of a full-table scan on every lock-status update.
+    const target = await ctx.db.get(args.bookingId as Id<"bookings">);
     if (target) {
       await ctx.db.patch(target._id, {
         lockSyncStatus: args.lockSyncStatus,

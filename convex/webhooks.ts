@@ -60,7 +60,11 @@ export const confirmBookingPayment = internalMutation({
           customerName: b.customerName ?? "Customer",
           amount: args.amountPaid / 100,
           currency,
-          status: "paid",
+          // MON-5 (audit 2026-06): this charge is awaiting refund, NOT revenue. A
+          // distinct status keeps it out of getRevenueDashboard's paid/complete sum
+          // (the description already says REFUND DUE; the booking.needsRefund flag +
+          // admin alert still drive the refund workflow).
+          status: "refund_due",
           laneName,
           date: b.date,
           description: `REFUND DUE — payment received after booking cancelled (${b.date})`,

@@ -990,13 +990,19 @@ export const createBooking = mutation({
     // past closing). A 30-min booking is only legitimate when a 60-min would NOT fit.
     const sixtyEnd = args.startHour + 1;
     let sixtyMinWouldFit = isThirtyMin ? sixtyEnd <= CLOSING_HOUR : false;
+    // BUGM-1 (audit 2026-06): read the day's bookings ONCE and test overlap against
+    // each booking's FULL lane set (primary + additionalLaneIds). The old per-lane
+    // by_laneId_date scan only saw a booking via its PRIMARY lane, so a multi-lane
+    // booking never blocked its ADDITIONAL lanes → two bookings could be confirmed on
+    // the same physical lane (both issued door codes). occupiesLane closes that gap.
+    const dayBookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.eq("date", args.date))
+      .collect();
+    const occupiesLane = (b: any, lid: string) =>
+      b.laneId === lid || ((b.additionalLaneIds as string[]) ?? []).includes(lid);
     for (const lid of allLaneIds) {
-      const laneBookings = await ctx.db
-        .query("bookings")
-        .withIndex("by_laneId_date", (q: any) =>
-          q.eq("laneId", lid).eq("date", args.date)
-        )
-        .collect();
+      const laneBookings = dayBookings.filter((b: any) => occupiesLane(b, lid));
 
       const hasConflict = laneBookings.some((b) => {
         if (b.status === "cancelled") return false;
@@ -1267,7 +1273,12 @@ export const createBooking = mutation({
     // If a confirmed booking redeems account credit, deduct it now (atomic at
     // confirmation — never on the pending/abandoned path). Stripe-paid bookings
     // are deducted later in confirmBookingPayment.
-    if (effectiveStatus === "confirmed" && (args.creditApplied ?? 0) > 0 && args.customerEmail) {
+    // MONM-4 (audit 2026-06): only a CUSTOMER self-pay (or admin-manual customer)
+    // booking redeems account credit. A confirmed COACH booking must never deduct the
+    // coach's credit balance (coaches bill via statement, not credit) — added the
+    // !effectiveIsCoachBooking guard (redeemCredit already clamps to balance, but a
+    // coach booking should not touch credit at all).
+    if (effectiveStatus === "confirmed" && !effectiveIsCoachBooking && (args.creditApplied ?? 0) > 0 && args.customerEmail) {
       await redeemCredit(ctx, {
         email: args.customerEmail,
         amount: args.creditApplied as number,
@@ -1275,9 +1286,17 @@ export const createBooking = mutation({
       });
     }
 
-    // Record discount redemption for directly-confirmed bookings (free/comp/
-    // bypassStripe). Stripe-paid bookings are recorded in confirmBookingPayment.
-    if (effectiveStatus === "confirmed" && args.discountCode) {
+    // MON-4 (audit 2026-06): RESERVE the discount at CREATE (not at confirm) so
+    // concurrent checkouts can't overshoot a usageLimit/perCustomerLimit. This
+    // increments usedCount + inserts the redemption row (idempotent by bookingId); the
+    // discountCodes write makes Convex OCC serialize concurrent reservations, so the
+    // cap holds under load. confirmBookingPayment's later call is then a no-op (row
+    // exists), and an abandoned unpaid booking releases it via releaseAbandonedBooking.
+    // Reserve for both directly-confirmed (free/comp) and pending_payment (Stripe).
+    if (
+      args.discountCode &&
+      (effectiveStatus === "confirmed" || effectiveStatus === "pending_payment")
+    ) {
       await recordDiscountRedemption(ctx, {
         code: args.discountCode,
         customerEmail: args.customerEmail,
@@ -1396,7 +1415,9 @@ export const updateBooking = mutation({
         })
       )
     ),
-    creditApplied: v.optional(v.number()),
+    // MONM-1 (audit 2026-06): `creditApplied` arg removed — no caller ever sent it,
+    // and patching it verbatim could mint/drift redeemable credit with no creditLedger
+    // entry. Account-credit changes must route through issueCredit/redeemCredit.
     cancelledAt: v.optional(v.string()),
     cancelledByUserId: v.optional(v.string()),
     refilledMinutes: v.optional(v.number()),
@@ -1425,7 +1446,6 @@ export const updateBooking = mutation({
         "customerPhone",
         "status",
         "coachPrice",
-        "creditApplied",
         "discountCode",
         "variantId",
       ];
@@ -1503,13 +1523,19 @@ export const updateBooking = mutation({
     if (schedulingChanged && effNewDate && effNewStartHour != null && effNewDuration != null && effNewLaneId) {
       const endHourUpd = effNewStartHour + effNewDuration / 60;
       const allLanesUpd = [effNewLaneId, ...effNewAdditionalLanes];
+      // BUGM-1 (audit 2026-06): read the day once + test each booking's FULL lane set
+      // (primary + additionalLaneIds) so a move onto a lane held via another booking's
+      // additionalLaneIds is caught (the old per-lane by_laneId_date scan missed it).
+      const dayBookingsUpd = await ctx.db
+        .query("bookings")
+        .withIndex("by_date", (q: any) => q.eq("date", effNewDate))
+        .collect();
+      const occUpd = (b: any, lid: string) =>
+        b.laneId === lid || ((b.additionalLaneIds as string[]) ?? []).includes(lid);
       for (const lid of allLanesUpd) {
-        const laneBookingsUpd = await ctx.db
-          .query("bookings")
-          .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", effNewDate))
-          .collect();
-        const hasConflictUpd = laneBookingsUpd.some((b) => {
+        const hasConflictUpd = dayBookingsUpd.some((b: any) => {
           if (b._id === id || b.status === "cancelled") return false;
+          if (!occUpd(b, lid)) return false;
           const bEnd = b.startHour + b.duration / 60;
           return effNewStartHour < bEnd && endHourUpd > b.startHour;
         });
@@ -1517,27 +1543,32 @@ export const updateBooking = mutation({
           throw new ConvexError("Cannot update — the new time slot conflicts with an existing booking.");
         }
       }
-    }
-
-    // MF-1: Add account credit when admin reduces coach price
-    if (existing) {
-      const oldCoachPrice = (existing as any).coachPrice;
-      const newCoachPriceUpd = (cleanUpdates as any).coachPrice;
-      if (typeof oldCoachPrice === "number" && typeof newCoachPriceUpd === "number" && newCoachPriceUpd < oldCoachPrice) {
-        const creditAmt = Math.round((oldCoachPrice - newCoachPriceUpd) * 100) / 100;
-        if (creditAmt > 0) {
-          const credEmail = ((cleanUpdates as any).customerEmail ?? (existing as any).customerEmail ?? "").toLowerCase().trim();
-          if (credEmail) {
-            await issueCredit(ctx, {
-              email: credEmail,
-              amount: creditAmt,
-              reason: "modify_decrease",
-              bookingId: id.toString(),
-            });
-          }
-        }
+      // BUGM-2 (audit 2026-06): also fence off an in-flight checkout/waitlist hold
+      // (createBooking + modifyBooking already do this; admin updateBooking did not).
+      // bypassWaitlistHolds matches the non-customer convention (admins aren't fenced
+      // off by a customer's first-refusal offer; this mainly catches a residual
+      // checkout hold without a live booking row).
+      if (
+        await hasActiveHoldConflict(ctx, {
+          laneIds: allLanesUpd,
+          date: effNewDate,
+          startHour: effNewStartHour,
+          endHour: endHourUpd,
+          excludeBookingId: id.toString(),
+          bypassWaitlistHolds: true,
+        })
+      ) {
+        throw new ConvexError("Cannot update — the new time slot has an in-flight checkout. Please try again shortly.");
       }
     }
+
+    // BUGM-3 (audit 2026-06): removed the MF-1 "add account credit when admin reduces
+    // coachPrice" block. coachPrice only exists on COACH bookings, which bill via the
+    // weekly statement and have no redeemable-credit economy — issuing credit there
+    // minted spendable balance to the coach ON TOP of lowering their statement charge
+    // (cancel/delete already exclude coach bookings from credit). Reducing coachPrice
+    // now only lowers the statement line, which is the intended effect (admins use
+    // adminSetCoachPrice for statement edits).
 
     // SPEC_RECONFIGURABLE_LANES: recompute the date-resolved lane/variant snapshot
     // when lane/variant/date/start changes, so the booking record + its calendar
@@ -2098,13 +2129,19 @@ export const modifyBooking = mutation({
 
     // Conflict check on every lane (excluding this booking).
     const allNewLaneIds = [effLane, ...effAddl];
+    // BUGM-1 (audit 2026-06): read the day once + test each booking's FULL lane set
+    // (primary + additionalLaneIds) so a modify onto a lane held via another booking's
+    // additionalLaneIds is caught (the old per-lane by_laneId_date scan missed it).
+    const dayBookingsMod = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.eq("date", effDate))
+      .collect();
+    const occMod = (b: any, lid: string) =>
+      b.laneId === lid || ((b.additionalLaneIds as string[]) ?? []).includes(lid);
     for (const lid of allNewLaneIds) {
-      const laneBookings = await ctx.db
-        .query("bookings")
-        .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", effDate))
-        .collect();
-      const conflict = laneBookings.some((b: any) => {
+      const conflict = dayBookingsMod.some((b: any) => {
         if (b._id === args.id || b.status === "cancelled") return false;
+        if (!occMod(b, lid)) return false;
         const bEnd = b.startHour + b.duration / 60;
         return effStart < bEnd && newEndHour > b.startHour;
       });
@@ -2856,11 +2893,17 @@ async function analyzeCoachSessionCopy(
   // Lane availability (booking overlap + service blocks) + idempotency.
   let blocked = false;
   let duplicate = false;
+  // BUGM-1 (audit 2026-06): read the day once + test each booking's FULL lane set so a
+  // coach-session copy isn't placed on a lane already held via another booking's
+  // additionalLaneIds (the old per-lane by_laneId_date scan missed multi-lane holders).
+  const dayBookingsCopy = await ctx.db
+    .query("bookings")
+    .withIndex("by_date", (q: any) => q.eq("date", targetDate))
+    .collect();
+  const occCopy = (b: any, lid: string) =>
+    b.laneId === lid || ((b.additionalLaneIds as string[]) ?? []).includes(lid);
   for (const lid of lanes) {
-    const laneBookings = await ctx.db
-      .query("bookings")
-      .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", targetDate))
-      .collect();
+    const laneBookings = dayBookingsCopy.filter((b: any) => occCopy(b, lid));
     for (const b of laneBookings) {
       if (b.status === "cancelled") continue;
       const bEnd = b.startHour + b.duration / 60;
@@ -3798,9 +3841,11 @@ export const recordStripePaymentInternal = internalMutation({
   },
   handler: async (ctx, args) => {
     // Idempotency: don't double-record the same booking on webhook retry.
+    // MON-2 (audit 2026-06): use the by_bookingId index instead of a full-table
+    // .filter() scan (ran on every payment confirm; cost grew with the table).
     const existing = await ctx.db
       .query("stripePayments")
-      .filter((q: any) => q.eq(q.field("bookingId"), args.bookingId))
+      .withIndex("by_bookingId", (q: any) => q.eq("bookingId", args.bookingId))
       .first();
     if (existing) {
       // Backfill the receipt URL if it arrived on a retry and wasn't stored yet.
@@ -4057,7 +4102,35 @@ export const removeFromWaitlist = mutation({
         throw new ConvexError("You can only remove your own waitlist entries.");
       }
     }
+    // COL-2 (audit 2026-06): capture status before delete — an 'offered' entry also
+    // owns a live 'waitlist' slotHold + a scheduled roll-on.
+    const wasOffered = ((entry as any).status ?? "waiting") === "offered";
     await ctx.db.delete(args.id);
+
+    // COL-2: deleting an OFFERED entry alone orphans its waitlist hold — that hold
+    // keeps fencing the freed slot out of the pool (and the next member is never
+    // offered) until it expires. Mirror declineWaitlistOffer: drop this user's
+    // overlapping waitlist hold(s) (found via the slotHolds by_date index, lane-
+    // agnostic) and roll the offer to the next member immediately.
+    if (wasOffered) {
+      const slotEnd = entry.hour + 1;
+      const emailLc = entry.userEmail?.toLowerCase().trim();
+      const holds = await ctx.db
+        .query("slotHolds")
+        .withIndex("by_date", (q: any) => q.eq("date", entry.date))
+        .collect();
+      for (const h of holds) {
+        if (h.holdType !== "waitlist") continue;
+        if (h.userId !== entry.userId && h.userEmail?.toLowerCase().trim() !== emailLc) continue;
+        const hEnd = h.startHour + h.duration / 60;
+        if (entry.hour < hEnd && slotEnd > h.startHour) await ctx.db.delete(h._id);
+      }
+      await ctx.scheduler.runAfter(0, internal.waitlist.advanceWaitlistOffer, {
+        laneId: entry.laneId,
+        date: entry.date,
+        hour: entry.hour,
+      });
+    }
     return args.id;
   },
 });
@@ -4553,9 +4626,27 @@ export const voidBookingCharge = mutation({
       if (!booking.customerEmail) {
         throw new ConvexError("This booking has no customer email — cannot issue credit.");
       }
+      // MONM-2 (audit 2026-06): never mint more than was actually SETTLED — an admin
+      // typo could otherwise create spendable credit from nothing. Mirror exactly the
+      // cancelBooking C2 ceiling: CASH counts only when the booking was truly paid
+      // (paymentStatus "paid"; priceInCents holds the full price even when settled by
+      // credit, so it must be gated on paid), while REDEEMED account credit
+      // (creditApplied) is ALWAYS refundable — this covers credit-only bookings, which
+      // are confirmed with paymentStatus undefined. Clamp to that ceiling; reject only
+      // when there is genuinely nothing to refund (a never-paid, no-credit booking).
+      if ((booking as any).isCoachBooking) {
+        throw new ConvexError("Coach bookings aren't paid online — there is no charge to refund as credit.");
+      }
+      const wasPaid = (booking as any).paymentStatus === "paid";
+      const cashPaid = wasPaid && (booking as any).priceInCents != null ? (booking as any).priceInCents / 100 : 0;
+      const maxRefund = cashPaid + ((booking as any).creditApplied ?? 0);
+      const creditToIssue = Math.min(amount, maxRefund);
+      if (creditToIssue <= 0) {
+        throw new ConvexError("This booking has no paid charge or applied credit to refund.");
+      }
       amountCredited = await issueCredit(ctx, {
         email: booking.customerEmail,
-        amount,
+        amount: creditToIssue,
         reason: "refund",
         bookingId: args.bookingId.toString(),
         note: args.note ?? "Booking charge refunded as account credit (admin).",

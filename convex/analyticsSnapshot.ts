@@ -26,13 +26,25 @@ function openHoursForDate(settings: any, dateKey: string): number {
 }
 
 // Compute + upsert the snapshot row for one AWST date.
-async function snapshotDate(ctx: any, date: string): Promise<void> {
-  const settings = await ctx.db
-    .query("siteSettings")
-    .withIndex("by_key", (q: any) => q.eq("key", "global"))
-    .first();
-  const lanesRows = await ctx.db.query("lanes").collect();
-  const laneCount = lanesRows.length > 0 ? lanesRows.length : 5;
+// COST-10 (audit 2026-06): the backfill loop passes settings + laneCount in so they
+// aren't re-read once per day (~1200×). The cron caller omits them → read once here.
+async function snapshotDate(
+  ctx: any,
+  date: string,
+  settingsIn?: any,
+  laneCountIn?: number
+): Promise<void> {
+  const settings =
+    settingsIn !== undefined
+      ? settingsIn
+      : await ctx.db.query("siteSettings").withIndex("by_key", (q: any) => q.eq("key", "global")).first();
+  let laneCount: number;
+  if (laneCountIn !== undefined) {
+    laneCount = laneCountIn;
+  } else {
+    const lanesRows = await ctx.db.query("lanes").collect();
+    laneCount = lanesRows.length > 0 ? lanesRows.length : 5;
+  }
 
   const dayBookings = (
     await ctx.db.query("bookings").withIndex("by_date", (q: any) => q.eq("date", date)).collect()
@@ -97,13 +109,25 @@ export const backfillRevenueSnapshots = mutation({
   args: { fromDate: v.optional(v.string()) },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
-    const all = await ctx.db.query("bookings").collect();
+    // COST-10 (audit 2026-06): find the earliest date via an indexed ascending read
+    // instead of collecting the entire bookings table. snapshotDate filters to
+    // confirmed bookings, so starting a day or two early (this ignores status) only
+    // writes harmless idempotent zero rows.
     let earliest = args.fromDate ?? null;
-    for (const b of all as any[]) {
-      if (b.status === "cancelled") continue;
-      if (!earliest || b.date < earliest) earliest = b.date;
+    if (!earliest) {
+      const first = await ctx.db.query("bookings").withIndex("by_date").order("asc").first();
+      earliest = first?.date ?? null;
     }
     if (!earliest) return { written: 0 };
+
+    // Read settings + lane count ONCE and pass them into every snapshotDate call (was
+    // re-read from the DB ~1200× inside the loop).
+    const settings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    const lanesRows = await ctx.db.query("lanes").collect();
+    const laneCount = lanesRows.length > 0 ? lanesRows.length : 5;
 
     const startMs = Date.UTC(
       Number(earliest.slice(0, 4)),
@@ -114,7 +138,7 @@ export const backfillRevenueSnapshots = mutation({
 
     let written = 0;
     for (let ms = startMs; ms <= endMs; ms += DAY_MS) {
-      await snapshotDate(ctx, awstDateKey(ms));
+      await snapshotDate(ctx, awstDateKey(ms), settings, laneCount);
       written++;
       if (written > 1200) break; // ~3.3y guard
     }

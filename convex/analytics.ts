@@ -419,7 +419,21 @@ export const getCatchmentReport = query({
 
     const from = args.from?.trim() || undefined;
     const to = args.to?.trim() || undefined;
-    const all = await ctx.db.query("bookings").collect();
+    // COST-7 (audit 2026-06): when a window is supplied, read it via the by_date index
+    // instead of scanning the whole bookings table then JS-filtering. The unbounded
+    // default (no from/to — the OverviewTab all-time load) still needs a full collect.
+    const all =
+      from || to
+        ? await ctx.db
+            .query("bookings")
+            .withIndex("by_date", (q: any) => {
+              let r = q;
+              if (from) r = r.gte("date", from);
+              if (to) r = r.lte("date", to);
+              return r;
+            })
+            .collect()
+        : await ctx.db.query("bookings").collect();
 
     // bookings = session count; customers = DISTINCT account (by email) per suburb,
     // i.e. unique-user bookings — so 10 sessions from one family count as 1 customer.
@@ -512,7 +526,20 @@ export const getAthleteCatchmentReport = query({
 
     const from = args.from?.trim() || undefined;
     const to = args.to?.trim() || undefined;
-    const all = await ctx.db.query("bookings").collect();
+    // COST-7 (audit 2026-06): indexed window read when from/to supplied (see
+    // getCatchmentReport); unbounded default still does a full collect.
+    const all =
+      from || to
+        ? await ctx.db
+            .query("bookings")
+            .withIndex("by_date", (q: any) => {
+              let r = q;
+              if (from) r = r.gte("date", from);
+              if (to) r = r.lte("date", to);
+              return r;
+            })
+            .collect()
+        : await ctx.db.query("bookings").collect();
 
     const agg = new Map<string, { suburb: string; postcode: string; bookings: number }>();
     let unknown = 0; // slot with no resolvable suburb (legacy / deleted athlete / no postcode yet)

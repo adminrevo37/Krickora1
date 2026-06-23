@@ -1,6 +1,7 @@
 import { query, mutation, internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { requireAdmin, getAuthUserSafe, resolveIsAdmin } from "./lib/adminGuard";
+import { Id } from "./_generated/dataModel";
 
 // ============================================================================
 // GOOGLE CALENDAR TOKEN MUTATIONS (internal - used by googleCalendar.ts)
@@ -97,8 +98,9 @@ export const setBookingCalendarEventId = internalMutation({
     googleCalendarEventId: v.string(),
   },
   handler: async (ctx, args) => {
-    const booking = await ctx.db.query("bookings").collect();
-    const target = booking.find(b => b._id.toString() === args.bookingId);
+    // INT-1 (audit 2026-06): bookingId is always a stringified bookings _id, so a
+    // direct get replaces the full-table scan this ran on every calendar create/sync.
+    const target = await ctx.db.get(args.bookingId as Id<"bookings">);
     if (target) {
       await ctx.db.patch(target._id, {
         googleCalendarEventId: args.googleCalendarEventId,
@@ -119,8 +121,8 @@ export const setBookingLaneCalendarEventIds = internalMutation({
     ),
   },
   handler: async (ctx, args) => {
-    const booking = await ctx.db.query("bookings").collect();
-    const target = booking.find(b => b._id.toString() === args.bookingId);
+    // INT-1 (audit 2026-06): direct get instead of a full-table scan.
+    const target = await ctx.db.get(args.bookingId as Id<"bookings">);
     if (target) {
       const existing = target.googleCalendarEventIds ?? [];
       const merged = [...existing];
@@ -205,8 +207,12 @@ export const getLaneCalendarMappingsInternal = internalQuery({
 export const getAllActiveBookings = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const all = await ctx.db.query("bookings").collect();
-    return all.filter(b => b.status === "confirmed");
+    // INT-7 (audit 2026-06): read only confirmed rows via by_status instead of
+    // scanning the entire table (incl. every cancelled/past row) then JS-filtering.
+    return await ctx.db
+      .query("bookings")
+      .withIndex("by_status", (q: any) => q.eq("status", "confirmed"))
+      .collect();
   },
 });
 

@@ -97,3 +97,30 @@ export async function recordDiscountRedemption(
     at: new Date().toISOString(),
   });
 }
+
+/**
+ * MON-4 (audit 2026-06): release a discount RESERVATION made at booking-create time
+ * (recordDiscountRedemption) when the unpaid booking is abandoned/cancelled before it
+ * ever became a real, paid booking. Mirrors the record in reverse — decrement
+ * usedCount + delete the redemption row keyed by bookingId. No-op if there was no
+ * reservation. Idempotent (a second call finds no row). Without this, an abandoned
+ * checkout would permanently consume a usage slot of a limited/comp code.
+ */
+export async function releaseDiscountReservation(
+  ctx: any,
+  bookingId: string
+): Promise<void> {
+  const row = await ctx.db
+    .query("discountRedemptions")
+    .withIndex("by_bookingId", (q: any) => q.eq("bookingId", bookingId))
+    .first();
+  if (!row) return;
+  const doc = await ctx.db
+    .query("discountCodes")
+    .withIndex("by_code", (q: any) => q.eq("code", row.code))
+    .first();
+  if (doc) {
+    await ctx.db.patch(doc._id, { usedCount: Math.max(0, (doc.usedCount ?? 0) - 1) });
+  }
+  await ctx.db.delete(row._id);
+}

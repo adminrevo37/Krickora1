@@ -96,24 +96,27 @@ export async function hasActiveHoldConflict(
   }
 ): Promise<boolean> {
   const now = Date.now();
-  for (const laneId of args.laneIds) {
-    const holds = await ctx.db
-      .query("slotHolds")
-      .withIndex("by_laneId_date", (q: any) => q.eq("laneId", laneId).eq("date", args.date))
-      .collect();
-    const conflict = holds.some((h: any) => {
-      if (h.expiresAt <= now) return false; // expired — not blocking
-      if (args.excludeBookingId && h.bookingId === args.excludeBookingId) return false;
-      if (h.holdType === "waitlist") {
-        if (args.bypassWaitlistHolds) return false; // coach/admin not fenced off
-        if (args.callerUserId && h.userId === args.callerUserId) return false; // the offeree
-      }
-      const holdLanes = [h.laneId, ...((h.additionalLaneIds as string[]) ?? [])];
-      if (!holdLanes.includes(laneId)) return false;
-      const hEnd = h.startHour + h.duration / 60;
-      return args.startHour < hEnd && args.endHour > h.startHour;
-    });
-    if (conflict) return true;
-  }
-  return false;
+  // BUGM-1 (audit 2026-06): read the day's holds ONCE via by_date and test every
+  // hold's FULL lane set (primary + additionalLaneIds) against the requested lanes.
+  // The old per-lane by_laneId_date scan matched a hold only by its PRIMARY lane, so
+  // a multi-lane hold never fenced off its ADDITIONAL lanes — the holdLanes.includes
+  // check was unreachable for them, letting a booking land on a lane another booking
+  // was mid-checkout/waitlist-offer for.
+  const wantLanes = new Set(args.laneIds);
+  const holds = await ctx.db
+    .query("slotHolds")
+    .withIndex("by_date", (q: any) => q.eq("date", args.date))
+    .collect();
+  return holds.some((h: any) => {
+    if (h.expiresAt <= now) return false; // expired — not blocking
+    if (args.excludeBookingId && h.bookingId === args.excludeBookingId) return false;
+    if (h.holdType === "waitlist") {
+      if (args.bypassWaitlistHolds) return false; // coach/admin not fenced off
+      if (args.callerUserId && h.userId === args.callerUserId) return false; // the offeree
+    }
+    const holdLanes = [h.laneId, ...((h.additionalLaneIds as string[]) ?? [])];
+    if (!holdLanes.some((lid) => wantLanes.has(lid))) return false;
+    const hEnd = h.startHour + h.duration / 60;
+    return args.startHour < hEnd && args.endHour > h.startHour;
+  });
 }

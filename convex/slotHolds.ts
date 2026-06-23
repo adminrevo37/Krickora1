@@ -1,6 +1,7 @@
 import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { scheduleWaitlistAdvance } from "./waitlist";
+import { releaseDiscountReservation } from "./lib/discounts";
 
 /**
  * Abandoned-checkout slot release (SPEC_PAYMENTS_AND_CREDIT #3).
@@ -49,6 +50,30 @@ async function releaseAbandonedBooking(ctx: any, booking: any): Promise<boolean>
       paymentStatus: "failed",
       cancelledAt: new Date().toISOString(),
     });
+    // MON-4 (audit 2026-06): release the discount usage reserved at create — this
+    // booking never paid, so it must not consume a limited/comp code's quota.
+    if ((booking as any).discountCode) {
+      await releaseDiscountReservation(ctx, booking._id.toString());
+    }
+    // COL-4 (audit 2026-06): if this abandoning user had a waitlist entry marked
+    // 'booked' by consumeWaitlistHoldForBooking (the offeree accepted then never
+    // paid), revert it to 'waiting' so it stops showing a phantom accepted offer and
+    // can be re-offered later. Entries are keyed any-lane ('*'). Queue roll-on is
+    // handled by scheduleWaitlistAdvance below.
+    if (booking.userId) {
+      const bEnd = booking.startHour + booking.duration / 60;
+      const wlEntries = await ctx.db
+        .query("waitlist")
+        .withIndex("by_laneId_date", (q: any) => q.eq("laneId", "*").eq("date", booking.date))
+        .collect();
+      for (const e of wlEntries) {
+        if (e.userId !== booking.userId) continue;
+        if (((e as any).status ?? "waiting") !== "booked") continue;
+        if (booking.startHour < e.hour + 1 && bEnd > e.hour) {
+          await ctx.db.patch(e._id, { status: "waiting" });
+        }
+      }
+    }
   }
   // Always clear holds tied to this booking.
   const holds = await ctx.db
@@ -108,10 +133,26 @@ export const releaseExpiredHolds = internalMutation({
 
 /** Stripe checkout.session.expired → release this booking's slot immediately. */
 export const releaseCheckoutBooking = internalMutation({
-  args: { bookingId: v.string() },
+  args: { bookingId: v.string(), stripeSessionId: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.bookingId as any);
     if (!booking) return { released: false, reason: "not_found" };
+    // MON-1 (audit 2026-06): a stale `checkout.session.expired` for an ABANDONED
+    // session must not cancel a booking whose customer has since opened a NEW "Pay
+    // now" session. Stripe sessions live ≥30 min, so the original fires `expired`
+    // long after a resume overwrote stripeSessionId. No-op when the booking's current
+    // session id differs from the expiring one (mirrors expireUnpaidCheckout's
+    // superseded guard). Only skip when the booking HAS a current session id, so a
+    // booking with no recorded session still releases (no stuck Awaiting-payment slot).
+    // The OTHER caller (stripe.ts expireUnpaidCheckout) omits stripeSessionId — it
+    // does its own superseded + Stripe-paid checks first — so it is unaffected.
+    if (
+      args.stripeSessionId &&
+      (booking as any).stripeSessionId &&
+      (booking as any).stripeSessionId !== args.stripeSessionId
+    ) {
+      return { released: false, reason: "superseded" };
+    }
     const released = await releaseAbandonedBooking(ctx, booking);
     return { released };
   },

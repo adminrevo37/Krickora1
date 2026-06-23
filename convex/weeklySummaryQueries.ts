@@ -4,8 +4,13 @@ import { v } from "convex/values";
 export const getUpcomingBookingsForWeek = internalQuery({
   args: { startDate: v.string(), endDate: v.string() },
   handler: async (ctx, args) => {
-    const all = await ctx.db.query("bookings").collect();
-    return all.filter((b) => b.date >= args.startDate && b.date <= args.endDate);
+    // COST-8/INT-2 (audit 2026-06): read only the requested week via the by_date
+    // index instead of scanning the whole (ever-growing) bookings table. `date` is a
+    // zero-padded YYYY-MM-DD string, so lexicographic range == chronological range.
+    return await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.gte("date", args.startDate).lte("date", args.endDate))
+      .collect();
   },
 });
 

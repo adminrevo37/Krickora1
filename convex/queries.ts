@@ -35,14 +35,22 @@ export const listBookings = query({
   // scan (back-compat for any un-windowed caller).
   args: { from: v.optional(v.string()), to: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const bookings = args.from
-      ? await ctx.db
-          .query("bookings")
-          .withIndex("by_date", (q: any) =>
-            args.to ? q.gte("date", args.from).lte("date", args.to) : q.gte("date", args.from)
-          )
-          .collect()
-      : await ctx.db.query("bookings").collect();
+    // LEAK-2 (audit 2026-06): this query is PUBLIC. Never let a caller force a full
+    // scan of the (ever-growing) bookings table by omitting the window, nor scan
+    // all-time via an absurd range. Clamp to a bounded window and ALWAYS read via the
+    // by_date index. The real client window (today-400 .. today+120) fits inside.
+    const awstDay = (offsetDays: number) =>
+      new Date(Date.now() + 8 * 3600 * 1000 + offsetDays * 24 * 3600 * 1000)
+        .toISOString()
+        .slice(0, 10);
+    const minFrom = awstDay(-400);
+    const maxTo = awstDay(400);
+    const from = args.from && args.from > minFrom ? args.from : minFrom;
+    const to = args.to && args.to < maxTo ? args.to : maxTo;
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.gte("date", from).lte("date", to))
+      .collect();
     const identity = await ctx.auth.getUserIdentity();
 
     if (!identity) {
@@ -146,12 +154,13 @@ export const getBooking = query({
 export const listPublicAvailability = query({
   args: { date: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const bookings = args.date
-      ? await ctx.db
-          .query("bookings")
-          .withIndex("by_date", (q: any) => q.eq("date", args.date))
-          .collect()
-      : await ctx.db.query("bookings").collect();
+    // LEAK-2 (audit 2026-06): public + currently unused. Never serve an
+    // unauthenticated full-table scan — a single day must be requested.
+    if (!args.date) return [];
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.eq("date", args.date))
+      .collect();
     return bookings
       .filter((b: any) => b.status !== "cancelled")
       .map((b: any) => ({
@@ -776,7 +785,10 @@ export const getRevenueBreakdown = query({
     let custToday = 0, custWeek = 0, custMonth = 0;
     for (const p of payments) {
       const status = (p.status || "").toLowerCase();
-      if (status === "refunded" || status === "failed" || status === "canceled" || status === "cancelled") continue;
+      // MON-5 (audit 2026-06): count ONLY genuinely-paid rows. Allowlist (not a
+      // denylist) so non-revenue statuses — e.g. "refund_due" (paid-after-cancel
+      // orphan) and any future status — can never inflate revenue.
+      if (status !== "paid" && status !== "complete") continue;
       const amt = p.amount || 0;
       const dt = p.date || "";
       if (dt === todayStr) custToday += amt;
