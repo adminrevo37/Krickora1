@@ -1001,14 +1001,21 @@ export const listDiscountCodes = query({
   },
 });
 
-// Validate a discount code — public (returns null if invalid/expired/exhausted).
-// Pass customerEmail to also enforce the per-customer use limit.
+// Validate a discount code (returns null if invalid/expired/exhausted).
+// LEAK-5 (audit 2026-06): was unauthenticated + trusted a client-supplied
+// customerEmail → promo-code enumeration + a per-customer-cap oracle. Now requires
+// auth (the only caller is the logged-in booking modal) and derives the email from
+// the verified identity. The legacy `customerEmail` arg is kept (optional) but
+// IGNORED so a stale cached client doesn't get an arg-validation rejection.
 export const validateDiscountCode = query({
   args: { code: v.string(), customerEmail: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null; // booking requires sign-in; no public preview/oracle
+    const email = identity.email?.toLowerCase?.().trim?.() || undefined;
     // Shared server-authoritative validator — same logic createBooking enforces
     // in the money path (R1/R3), so the client preview and the server agree.
-    return await validateDiscount(ctx, args.code, args.customerEmail);
+    return await validateDiscount(ctx, args.code, email);
   },
 });
 

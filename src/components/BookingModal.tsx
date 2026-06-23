@@ -101,7 +101,9 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   // Live validation of discount code against Convex (fires only when pendingDiscountCode is set)
   const discountQueryResult = useQuery(
     api.queries.validateDiscountCode,
-    pendingDiscountCode !== null ? { code: pendingDiscountCode, customerEmail: user?.email ?? undefined } : 'skip'
+    // LEAK-5 (audit 2026-06): the server now derives the customer email from the
+    // authenticated identity — no longer passed from the client.
+    pendingDiscountCode !== null ? { code: pendingDiscountCode } : 'skip'
   )
   useEffect(() => {
     if (pendingDiscountCode === null) return

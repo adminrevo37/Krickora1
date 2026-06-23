@@ -4228,6 +4228,7 @@ export const updateSiteSettings = mutation({
     waitlistOfferHoldMinutes: v.optional(v.number()),
     maxMatesPerBooking: v.optional(v.number()),
     pushEnabledGlobal: v.optional(v.boolean()),
+    faultReportEmail: v.optional(v.string()), // EML-3 (audit 2026-06)
     dailyHours: v.optional(
       v.array(
         v.object({
@@ -4469,7 +4470,11 @@ export const backfillMissingCalendarEvents = mutation({
     for (const b of all as any[]) {
       if (b.status !== "confirmed") continue;
       if (b.isCoachBooking === true) continue;       // coaches get their event at create time
+      // INT-3 (audit 2026-06): a partially-synced booking can have per-lane event
+      // ids without a primary id — also skip it (re-invoking would duplicate the
+      // lanes that DID sync), not just the `googleCalendarEventId` case.
       if (b.googleCalendarEventId) continue;          // already synced
+      if ((b.googleCalendarEventIds?.length ?? 0) > 0) continue; // partially/fully synced
       if ((b.date || "") < todayStr) continue;        // past sessions are moot
       await ctx.scheduler.runAfter(scheduled * 1500, internal.googleCalendar.createCalendarEvent, {
         bookingId: b._id.toString(),
@@ -4487,7 +4492,14 @@ export const backfillMissingCalendarEvents = mutation({
         additionalLaneIds: b.additionalLaneIds,
         laneNameSnapshot: b.laneNameSnapshot,
         variantLabelSnapshot: b.variantLabelSnapshot,
-        athleteSlots: b.athleteSlots,
+        // BUGM-4 (audit 2026-06): strip stored slots to exactly the validator's
+        // shape — raw athleteSlots carry athleteId/suburb which fail
+        // createCalendarEvent's arg validation (silent backfill failure).
+        athleteSlots: (b.athleteSlots as any[] | undefined)?.map((s: any) => ({
+          athleteName: s.athleteName,
+          startHour: s.startHour,
+          durationMinutes: s.durationMinutes,
+        })),
       });
       scheduled++;
       fixed.push(`${b.customerName ?? b.customerEmail} · ${b.laneNameSnapshot ?? b.laneId} ${b.date} ${b.startHour}:00`);

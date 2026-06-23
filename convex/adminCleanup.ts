@@ -16,7 +16,7 @@
 import { mutation } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { components, internal } from "./_generated/api";
-import { requireAdmin } from "./lib/adminGuard";
+import { requireAdminUnlocked, writeRoleAudit } from "./lib/adminGuard";
 
 const norm = (e: string) => (e ?? "").toLowerCase().trim();
 
@@ -65,7 +65,10 @@ async function deleteAuthLogin(ctx: any, email: string): Promise<boolean> {
 export const adminDeleteCustomerCascade = mutation({
   args: { customerId: v.id("customers"), dryRun: v.optional(v.boolean()), confirm: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
-    const admin = await requireAdmin(ctx);
+    // ADM-5 (audit 2026-06): hard-deletes a customer + all their financial history.
+    // Stronger gate than the less-destructive account-merge → require the admin
+    // second-factor unlock, and audit the action (below) before any write.
+    const admin = await requireAdminUnlocked(ctx);
     const dryRun = args.dryRun !== false && args.confirm !== true; // default to dry-run unless explicitly confirmed
 
     const cust = await ctx.db.get(args.customerId);
@@ -137,6 +140,15 @@ export const adminDeleteCustomerCascade = mutation({
     };
 
     if (dryRun) return { dryRun: true, willDelete: counts };
+
+    // ADM-5: audit the destructive cascade BEFORE any write (best-effort, never blocks).
+    await writeRoleAudit(ctx, {
+      targetEmail: email,
+      field: "accountDeleted",
+      oldValue: (cust as any).role ?? "customer",
+      newValue: `cascade-delete (${ownBookings.size} bookings, ${athletes.length} athletes)`,
+      changedByEmail: (admin as any).email ?? "",
+    });
 
     // ── DELETE (confirm:true) ──────────────────────────────────────────────
     // 1. Google Calendar events on own bookings (best-effort, scheduled).

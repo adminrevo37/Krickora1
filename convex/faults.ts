@@ -137,8 +137,15 @@ export const submitFaultReport = mutation({
     const hh = a.getUTCHours();
     const t12 = `${(hh % 12) || 12}:${String(a.getUTCMinutes()).padStart(2, "0")}${hh >= 12 ? "pm" : "am"}`;
     const createdAtLabel = `${a.getUTCDate()}/${a.getUTCMonth() + 1}/${a.getUTCFullYear()} ${t12} AWST`;
+    // EML-3 (audit 2026-06): recipient is configurable via siteSettings; falls back
+    // to the hardcoded ops inbox so behaviour is unchanged until an admin sets it.
+    const settings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    const faultTo = (settings as any)?.faultReportEmail?.trim() || "admin@revolutionsports.com.au";
     await ctx.scheduler.runAfter(0, internal.emails.sendFaultReportEmail, {
-      to: "admin@revolutionsports.com.au",
+      to: faultTo,
       reporterName: reportedByName ?? "Someone",
       reporterEmail: reportedByEmail ?? "",
       reporterMobile: reportedByMobile ?? "",

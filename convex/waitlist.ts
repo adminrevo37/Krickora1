@@ -226,6 +226,44 @@ export const advanceWaitlistOffer = internalMutation({
       }
     };
 
+    // COL-3 (audit 2026-06): never hand out a slot the offeree can't actually
+    // book. Respect facility closures + per-lane service blocks exactly as
+    // createBooking does. If the whole day is closed there is no offerable lane —
+    // clear stale holds and stop (don't roll on; nothing to offer).
+    const closure = await ctx.db
+      .query("closures")
+      .withIndex("by_date", (q: any) => q.eq("date", date))
+      .first();
+    if (closure) {
+      // Don't leave a live offer pointing at a hold we're about to delete: an
+      // un-close before the scheduled roll-on would otherwise see status
+      // 'offered' (exp in future) and report offer_live with NO protecting hold,
+      // letting another customer book the lane out from under the offeree. Revert
+      // any outstanding offer to 'waiting' (the roll-on re-evaluates on reopen).
+      for (const e of entries) {
+        if (statusOf(e) === "offered") {
+          await ctx.db.patch(e._id, { status: "waiting", offerExpiresAt: undefined });
+        }
+      }
+      await deleteWaitlistHolds();
+      return { result: "closed" };
+    }
+    // Lanes with a service/repair block overlapping this hour aren't offerable.
+    const blockedLanes = new Set<string>();
+    for (const lid of ALL_LANES) {
+      const blocks = await ctx.db
+        .query("laneBlocks")
+        .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", date))
+        .collect();
+      if (
+        blocks.some(
+          (b: any) => slotStart < b.startHour + b.duration / 60 && slotEnd > b.startHour
+        )
+      ) {
+        blockedLanes.add(lid);
+      }
+    }
+
     // 1. Hour fully booked (every lane has a CONFIRMED booking) → queue dies
     // (decision #6). B-2: only a confirmed booking destroys the queue.
     const filled = ALL_LANES.every((lid) => laneConfirmed(lid));
@@ -256,7 +294,8 @@ export const advanceWaitlistOffer = internalMutation({
     // 3. Choose the lane to offer: prefer the freed lane, else any lane free this
     // hour. A lane is offerable if it has no confirmed booking and nothing
     // mid-checkout (a checkout hold corresponds to a pending booking = inFlight).
-    const isFree = (lid: string) => !laneConfirmed(lid) && !laneInFlight(lid);
+    const isFree = (lid: string) =>
+      !laneConfirmed(lid) && !laneInFlight(lid) && !blockedLanes.has(lid);
     const offerLane =
       preferLaneId !== "*" && isFree(preferLaneId)
         ? preferLaneId

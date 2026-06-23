@@ -385,7 +385,10 @@ export const updateCalendarEvent = internalAction({
           ? eventBody
           : { ...eventBody, summary: eventBody.summary.replace(laneName, lName) };
         try {
-          await fetch(
+          // INT-4 (audit 2026-06): check response.ok — a silently-failed PUT was
+          // the same class of bug as the 2026-06-23 missing-event incident (HA
+          // would keep loading stale lane/time/door-code data after a modify).
+          const res = await fetch(
             `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(entry.calendarId)}/events/${encodeURIComponent(entry.eventId)}`,
             {
               method: "PUT",
@@ -393,20 +396,36 @@ export const updateCalendarEvent = internalAction({
               body: JSON.stringify(perLaneBody),
             }
           );
+          if (!res.ok) {
+            console.error(
+              `Calendar update PUT failed (${res.status}) for event ${entry.eventId} in calendar ${entry.calendarId}:`,
+              await res.text().catch(() => "")
+            );
+          }
         } catch (e) {
           console.error(`Failed to update event ${entry.eventId} in calendar ${entry.calendarId}:`, e);
         }
       }
     } else {
       // Fallback: update single event in default calendar
-      await fetch(
-        `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(tokenInfo.calendarId)}/events/${encodeURIComponent(args.googleCalendarEventId)}`,
-        {
-          method: "PUT",
-          headers: { Authorization: `Bearer ${tokenInfo.accessToken}`, "Content-Type": "application/json" },
-          body: JSON.stringify(eventBody),
+      try {
+        const res = await fetch(
+          `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(tokenInfo.calendarId)}/events/${encodeURIComponent(args.googleCalendarEventId)}`,
+          {
+            method: "PUT",
+            headers: { Authorization: `Bearer ${tokenInfo.accessToken}`, "Content-Type": "application/json" },
+            body: JSON.stringify(eventBody),
+          }
+        );
+        if (!res.ok) {
+          console.error(
+            `Calendar update PUT (fallback) failed (${res.status}) for event ${args.googleCalendarEventId}:`,
+            await res.text().catch(() => "")
+          );
         }
-      );
+      } catch (e) {
+        console.error(`Calendar update PUT (fallback) errored for event ${args.googleCalendarEventId}:`, e);
+      }
     }
 
     return args.googleCalendarEventId;
@@ -424,22 +443,44 @@ export const deleteCalendarEvent = internalAction({
     const tokenInfo = await getValidToken(ctx);
     if (!tokenInfo) return null;
 
+    // INT-4 (audit 2026-06): treat 404/410 as success (event already gone); log
+    // anything else instead of swallowing it (was an empty catch{}).
+    const deleteOk = (status: number) => (status >= 200 && status < 300) || status === 404 || status === 410;
+
     // Delete per-lane events if available
     if (args.laneCalendarEventIds && args.laneCalendarEventIds.length > 0) {
       for (const entry of args.laneCalendarEventIds) {
         try {
-          await fetch(
+          const res = await fetch(
             `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(entry.calendarId)}/events/${encodeURIComponent(entry.eventId)}`,
             { method: "DELETE", headers: { Authorization: `Bearer ${tokenInfo.accessToken}` } }
           );
-        } catch {}
+          if (!deleteOk(res.status)) {
+            console.error(
+              `Calendar delete failed (${res.status}) for event ${entry.eventId} in calendar ${entry.calendarId}:`,
+              await res.text().catch(() => "")
+            );
+          }
+        } catch (e) {
+          console.error(`Error deleting event ${entry.eventId} in calendar ${entry.calendarId}:`, e);
+        }
       }
     } else {
       // Fallback: delete from default calendar
-      await fetch(
-        `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(tokenInfo.calendarId)}/events/${encodeURIComponent(args.googleCalendarEventId)}`,
-        { method: "DELETE", headers: { Authorization: `Bearer ${tokenInfo.accessToken}` } }
-      );
+      try {
+        const res = await fetch(
+          `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(tokenInfo.calendarId)}/events/${encodeURIComponent(args.googleCalendarEventId)}`,
+          { method: "DELETE", headers: { Authorization: `Bearer ${tokenInfo.accessToken}` } }
+        );
+        if (!deleteOk(res.status)) {
+          console.error(
+            `Calendar delete (fallback) failed (${res.status}) for event ${args.googleCalendarEventId}:`,
+            await res.text().catch(() => "")
+          );
+        }
+      } catch (e) {
+        console.error(`Error deleting event ${args.googleCalendarEventId} (fallback):`, e);
+      }
     }
     return true;
   },

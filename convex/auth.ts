@@ -619,7 +619,10 @@ export const setUserRole = mutation({
 export const deleteUser = mutation({
   args: { userId: v.string() },
   handler: async (ctx, { userId }) => {
-    await requireAdmin(ctx);
+    // SEC-2 (audit 2026-06): destructive account delete → require the admin
+    // second-factor unlock (matches users.adminDeleteUser; this path is currently
+    // unreferenced by the client but stays gated for defense-in-depth).
+    await requireAdminUnlocked(ctx);
     const sessions = await ctx.runQuery(
       components.betterAuth.adapter.findMany,
       {

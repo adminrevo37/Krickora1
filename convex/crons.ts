@@ -46,4 +46,22 @@ crons.daily(
   internal.analyticsSnapshot.runDailyRevenueSnapshot
 );
 
+// Audit 2026-06 (COST-4 / LEAK-3 / LEAK-6) — daily retention sweep of unbounded
+// append-only tables (analytics >90d, event/log tables >180d, past laneOverrides).
+// Batched indexed deletes that reschedule until drained. 01:00 AWST = 17:00 UTC,
+// after the snapshot above. revenueSnapshots + audit logs are kept forever.
+crons.daily(
+  "retention-daily",
+  { hourUTC: 17, minuteUTC: 0 },
+  internal.retention.runDailyRetention
+);
+
+// Audit 2026-06 (SEC-3) — hourly prune of stale rate-limit buckets (bounds the
+// table under rotating-key / XFF-spoof abuse).
+crons.hourly(
+  "retention-ratelimits",
+  { minuteUTC: 30 },
+  internal.retention.runHourlyRetention
+);
+
 export default crons;

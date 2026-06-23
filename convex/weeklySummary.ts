@@ -1,6 +1,9 @@
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { sendTemplateEmail } from "./lib/email";
+// EML-1 (audit 2026-06): shared snapshot-aware lane name (the local map below used
+// yet another spelling — "Run-up Lane N" — and ignored laneNameSnapshot).
+import { laneNameForBooking } from "./lib/lanes";
 
 // AWST = UTC+8, no DST
 function nowInAWST(): Date {
@@ -36,18 +39,6 @@ function formatHour(h: number): string {
   const period = hr >= 12 ? "PM" : "AM";
   const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
   return `${display}:${min.toString().padStart(2, "0")} ${period}`;
-}
-
-const LANE_NAMES: Record<string, string> = {
-  bm1: "Bowling Machine 1",
-  bm2: "Bowling Machine 2",
-  bm3: "Bowling Machine 3",
-  ru1: "Run-up Lane 1",
-  ru2: "Run-up Lane 2",
-};
-
-function laneName(id: string): string {
-  return LANE_NAMES[id] ?? id.toUpperCase();
 }
 
 export const sendWeeklyBookingSummaries = internalAction({
@@ -103,7 +94,7 @@ export const sendWeeklyBookingSummaries = internalAction({
         .map((b) => {
           const start = formatHour(b.startHour);
           const end = formatHour(b.startHour + b.duration / 60);
-          return `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:2px;"><tr><td style="padding:8px 0;border-bottom:1px solid #e2e6ea;"><p style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#6a7480;font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">${formatDateLong(b.date)}</p><p style="margin:2px 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#10151c;font-size:14.5px;font-weight:600;">${laneName(b.laneId)} · ${start} – ${end}</p></td></tr></table>`;
+          return `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:2px;"><tr><td style="padding:8px 0;border-bottom:1px solid #e2e6ea;"><p style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#6a7480;font-size:12.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">${formatDateLong(b.date)}</p><p style="margin:2px 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#10151c;font-size:14.5px;font-weight:600;">${laneNameForBooking(b)} · ${start} – ${end}</p></td></tr></table>`;
         })
         .join("");
 

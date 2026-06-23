@@ -44,14 +44,18 @@ export const correctUnverifiedEmail = mutation({
       where: [{ field: "email", value: email }],
     });
     if (existingAuth && String(existingAuth._id) !== String(authUser._id)) {
-      throw new ConvexError("That email is already in use by another account.");
+      // SEC-5 (audit 2026-06): generic message — don't confirm to an unverified
+      // caller that the address belongs to an existing account (enumeration oracle).
+      throw new ConvexError("We couldn't update to that email address. Please try a different one.");
     }
     const collision = await ctx.db
       .query("customers")
       .withIndex("by_email", (q: any) => q.eq("email", email))
       .first();
     if (collision && (collision.email ?? "").toLowerCase() !== oldEmail) {
-      throw new ConvexError("That email is already in use by another account.");
+      // SEC-5 (audit 2026-06): generic message — don't confirm to an unverified
+      // caller that the address belongs to an existing account (enumeration oracle).
+      throw new ConvexError("We couldn't update to that email address. Please try a different one.");
     }
     // 1) Better Auth user record (stays unverified).
     await ctx.runMutation(components.betterAuth.adapter.updateOne, {
@@ -118,7 +122,9 @@ export const makeAdmin = mutation({
 export const adminChangeEmail = mutation({
   args: { currentEmail: v.string(), newEmail: v.string() },
   handler: async (ctx, { currentEmail, newEmail }) => {
-    await requireAdmin(ctx);
+    // SEC-2 (audit 2026-06): changing a user's email is account-takeover-adjacent —
+    // require the admin second-factor unlock.
+    await requireAdminUnlocked(ctx);
     const oldE = currentEmail.toLowerCase().trim();
     const newE = newEmail.toLowerCase().trim();
     const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, {
@@ -142,8 +148,18 @@ export const adminChangeEmail = mutation({
 export const adminUpdateUserProfile = mutation({
   args: { email: v.string(), name: v.optional(v.string()), firstName: v.optional(v.string()), lastName: v.optional(v.string()), phone: v.optional(v.string()), role: v.optional(v.string()), coachTier: v.optional(v.string()), color: v.optional(v.string()), defaultSessionDuration: v.optional(v.number()), athleteCapacity: v.optional(v.number()), postcode: v.optional(v.string()), suburb: v.optional(v.string()), hideFromPublicCoachList: v.optional(v.boolean()) },
   handler: async (ctx, { email, name, firstName, lastName, phone, role, coachTier, color, defaultSessionDuration, athleteCapacity, postcode, suburb, hideFromPublicCoachList }) => {
-    const adminUser = await requireAdmin(ctx);
+    // SEC-2 (audit 2026-06): this writes `role` — privilege escalation. Gate it
+    // behind the admin second-factor (requireAdminUnlocked), not bare requireAdmin,
+    // so a hijacked admin session can't self-escalate without the password.
+    const adminUser = await requireAdminUnlocked(ctx);
     const normalizedEmail = email.toLowerCase().trim();
+    // SEC-2: validate role against an allowlist (never store an arbitrary string).
+    // "user" is the legacy default role still offered by the admin edit form and
+    // stored on older accounts — it MUST be permitted or saving any unedited
+    // legacy account fails. The allowlist only blocks arbitrary/garbage values.
+    if (role !== undefined && !["customer", "coach", "admin", "user"].includes(role)) {
+      throw new ConvexError("Invalid role.");
+    }
     // SPEC_PROFILE_POSTCODE_SUBURB: validate if either location field supplied.
     validateLocationIfProvided(postcode, suburb);
     // SPEC_NAME_SPLIT: when the admin edits first/last (customers), recompose the
@@ -291,7 +307,9 @@ export const adminDeleteUser = mutation({
 export const adminVerifyEmail = mutation({
   args: { email: v.string() },
   handler: async (ctx, { email }) => {
-    const admin = await requireAdmin(ctx);
+    // SEC-2 (audit 2026-06): force-verifying an email bypasses the verify gate that
+    // protects a user's first booking — require the admin second-factor unlock.
+    const admin = await requireAdminUnlocked(ctx);
     const normalizedEmail = email.toLowerCase().trim();
     const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, {
       model: "user",

@@ -1,18 +1,9 @@
 import { internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
-
-// Lane ID to display name mapping (matches src/lib/booking-data.ts)
-const LANE_NAMES: Record<string, string> = {
-  bm1: "Bowling Machine 1",
-  bm2: "Bowling Machine 2",
-  bm3: "Bowling Machine 3",
-  ru1: "9m Run Up 1",
-  ru2: "9m Run Up 2",
-};
-
-export function getLaneName(laneId: string): string {
-  return LANE_NAMES[laneId] ?? laneId;
-}
+// EML-1 (audit 2026-06): use the shared, snapshot-aware lane-name resolver instead
+// of a local hardcoded map (which used stale "Bowling Machine N"/"9m Run Up N"
+// names and ignored laneNameSnapshot → wrong names after a reconfigurable-lane flip).
+import { laneNameForBooking } from "./lib/lanes";
 
 export function formatHourToTime(hour: number): string {
   const whole = Math.floor(hour);
@@ -102,7 +93,7 @@ export const getBookingsNeedingReminder = internalQuery({
       customerEmail: b.customerEmail,
       customerName: b.customerName,
       laneId: b.laneId,
-      laneName: getLaneName(b.laneId),
+      laneName: laneNameForBooking(b),
       date: b.date,
       startHour: b.startHour,
       duration: b.duration,
@@ -207,7 +198,7 @@ export const getFirstVisitBookingsForFacilityPush = internalQuery({
         customerId: cust._id,
         customerEmail: b.customerEmail,
         customerName: b.customerName,
-        laneName: getLaneName(b.laneId),
+        laneName: laneNameForBooking(b),
         timeSlot: formatHourToTime(b.startHour),
         date: b.date,
       });

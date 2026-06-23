@@ -149,7 +149,7 @@ function layout(opts: { title: string; preheader: string; bodyHtml: string }): s
 ${opts.bodyHtml}
 <!-- footer -->
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px;"><tr><td style="border-top:1px solid ${C.rule};padding-top:14px;">
-<p style="margin:0 0 8px;font-family:${FONT};color:${C.faint};font-size:12px;line-height:1.55;">Have you turned on push notifications? <a href="${SITE}/profile" style="color:${C.faint};text-decoration:underline;">Click here</a> to turn off email notifications.</p>
+<p style="margin:0 0 8px;font-family:${FONT};color:${C.faint};font-size:12px;line-height:1.55;">Prefer push notifications? <a href="${SITE}/profile#email-notifications" style="color:${C.faint};text-decoration:underline;">Manage your email notifications</a> in your profile.</p>
 <p style="margin:0 0 3px;font-family:${FONT};color:${C.faint};font-size:12px;line-height:1.55;">Cricket Revolution &middot; 78 Jones St, Stirling WA</p>
 <p style="margin:0;font-family:${FONT};color:${C.faint};font-size:12px;"><a href="${SITE}" style="color:${C.faint};">cricketrevolution.com.au</a></p>
 </td></tr></table>

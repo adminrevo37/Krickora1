@@ -284,47 +284,18 @@ export const cancelUnpaidCheckout = action({
 export const verifySession = action({
   args: { sessionId: v.string() },
   handler: async (ctx, args) => {
+    // MON-3 (audit 2026-06): was unauthenticated — anyone with a (guessable/leaked
+    // via success_url/referrer) session id could trigger a confirmation email to
+    // that booking's customer and read back their PII. Now (a) auth-gated, (b) no
+    // longer sends email (the Stripe webhook already does so idempotently), and
+    // (c) returns only {paid,status} (no customer PII).
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError("Authentication required.");
     const stripe = getStripe();
     const session = await stripe.checkout.sessions.retrieve(args.sessionId);
-    const paid = session.payment_status === "paid";
-
-    // Send payment confirmation email on successful checkout (idempotent guard via Stripe metadata flag)
-    if (paid && session.customer_email && !session.metadata?.paymentEmailSent) {
-      try {
-        const amount = session.amount_total != null
-          ? `$${(session.amount_total / 100).toFixed(2)} ${(session.currency || "AUD").toUpperCase()}`
-          : "";
-        const description = session.metadata?.laneName
-          ? `${session.metadata.laneName} — ${session.metadata.date ?? ""}`
-          : "Krickora booking";
-        const customerName = session.metadata?.customerName || "there";
-        const paymentDate = new Date().toLocaleDateString("en-US", {
-          year: "numeric", month: "long", day: "numeric",
-        });
-        await ctx.runAction(internal.emails.sendPaymentConfirmation, {
-          to: session.customer_email,
-          customerName,
-          amount,
-          description,
-          reference: session.id,
-          paymentDate,
-        });
-        // Mark sent to avoid duplicates if verifySession is called again
-        await stripe.checkout.sessions.update(args.sessionId, {
-          metadata: { ...(session.metadata || {}), paymentEmailSent: "true" },
-        });
-      } catch (err) {
-        console.error("[payment-confirmation] Failed to send:", err);
-      }
-    }
-
     return {
-      paid,
+      paid: session.payment_status === "paid",
       status: session.status,
-      customerEmail: session.customer_email,
-      amountTotal: session.amount_total,
-      currency: session.currency,
-      metadata: session.metadata,
     };
   },
 });

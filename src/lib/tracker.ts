@@ -76,7 +76,17 @@ export function setTrackerUserId(userId: string | null) {
   currentUserId = userId;
 }
 
+// INF-6 (audit 2026-06): dedupe CONSECUTIVE identical pathnames. initTracker
+// fires a pageview AND the root effect re-fires on mount (React StrictMode
+// double-mounts in dev), so first load logged the same path 2× — pure write
+// amplification on the unbounded analytics table. A→B→A still logs the second A
+// (only an immediate repeat is suppressed). Query string changes are ignored on
+// purpose (the funnel uses dedicated event steps, not pageviews).
+let lastPageviewPath: string | null = null;
 export function trackPageView() {
+  const path = typeof window !== "undefined" ? window.location.pathname : "";
+  if (path === lastPageviewPath) return;
+  lastPageviewPath = path;
   track("pageview");
 }
 

@@ -276,7 +276,9 @@ function ProfilePage() {
         </div>
       )}
       {/* Bug 6: email notifications sit ABOVE push notifications. */}
-      <div className="mt-6">
+      {/* EML-4 (audit 2026-06): anchor target for the email footer's
+          "/profile#email-notifications" deep link. scroll-mt clears the sticky header. */}
+      <div id="email-notifications" className="mt-6 scroll-mt-24">
         <EmailNotificationsCard
           customerRecord={customerRecord}
           userEmail={user.email}

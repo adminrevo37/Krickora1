@@ -274,7 +274,12 @@ export default defineSchema({
     key: v.string(),
     windowStart: v.number(), // Unix ms — start of the current fixed window
     count: v.number(),
-  }).index("by_key", ["key"]),
+  })
+    .index("by_key", ["key"])
+    // SEC-3 (audit 2026-06): rows are abandoned once their window lapses (one per
+    // action:identifier; SEC-1 XFF spoofing can balloon distinct keys). The hourly
+    // retention cron range-deletes stale buckets via this index. Additive.
+    .index("by_window", ["windowStart"]),
 
   bookings: defineTable({
     laneId: v.string(),
@@ -644,6 +649,9 @@ export default defineSchema({
     // short-circuits — all push disabled instantly without a deploy (email
     // unaffected). Default true.
     pushEnabledGlobal: v.optional(v.boolean()),
+    // EML-3 (audit 2026-06) — where equipment/facility fault reports are emailed.
+    // Absent → falls back to the hardcoded ops inbox. Additive.
+    faultReportEmail: v.optional(v.string()),
   }).index("by_key", ["key"]),
 
   // ============================================================================
@@ -872,7 +880,11 @@ export default defineSchema({
     createdAt: v.string(),
   })
     .index("by_laneId", ["laneId"])
-    .index("by_startDate", ["startDate"]),
+    .index("by_startDate", ["startDate"])
+    // LEAK-6 (audit 2026-06): the public TV board collects this whole table every
+    // poll. The daily retention cron range-deletes fully-past overrides (endDate <
+    // today) via this index to keep it tiny. Additive.
+    .index("by_endDate", ["endDate"]),
 
   // ============================================================================
   // SMART LOCK TABLES

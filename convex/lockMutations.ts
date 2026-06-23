@@ -1,6 +1,6 @@
 import { mutation, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
-import { requireAdmin } from "./lib/adminGuard";
+import { requireAdmin, requireAdminUnlocked } from "./lib/adminGuard";
 import { Id } from "./_generated/dataModel";
 
 // ============================================================================
@@ -128,7 +128,7 @@ export const saveLockSettings = mutation({
     defaultDeviceIds: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx); // ADM-2: physical-access config → second-factor
     const existing = await ctx.db
       .query("lockSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
@@ -169,7 +169,7 @@ export const setLaneDeviceMapping = mutation({
     lockBrand: v.string(),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx); // ADM-2: physical-access config → second-factor
     const existing = await ctx.db
       .query("lockDeviceMappings")
       .withIndex("by_laneId", (q: any) => q.eq("laneId", args.laneId))
@@ -194,7 +194,7 @@ export const setLaneDeviceMapping = mutation({
 export const removeLaneDeviceMapping = mutation({
   args: { laneId: v.string() },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx); // ADM-2: physical-access config → second-factor
     const existing = await ctx.db
       .query("lockDeviceMappings")
       .withIndex("by_laneId", (q: any) => q.eq("laneId", args.laneId))

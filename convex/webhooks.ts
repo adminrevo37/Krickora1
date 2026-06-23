@@ -6,6 +6,7 @@ import { recordDiscountRedemption } from "./lib/discounts";
 import { releaseHoldForBooking } from "./lib/slotHolds";
 import { scheduleWaitlistAdvance } from "./waitlist";
 import { applyBookingChange } from "./mutations";
+import { laneNameForBooking } from "./lib/lanes";
 
 /**
  * Idempotent: marks a booking as paid/confirmed and sends the payment
@@ -231,16 +232,10 @@ export const confirmBookingPayment = internalMutation({
     if (b.customerEmail) {
       const currency = (args.currency ?? "AUD").toUpperCase();
       const amount = `$${(args.amountPaid / 100).toFixed(2)} ${currency}`;
-      const laneNameMap: Record<string, string> = {
-        bm1: "Bowling Machine Lane 1",
-        bm2: "Bowling Machine Lane 2",
-        bm3: "Bowling Machine Lane 3",
-        ru1: "Run-Up Lane 1",
-        ru2: "Run-Up Lane 2",
-      };
-      // C5: prefer the per-booking lane-name snapshot (covers BM3 + reconfigured lanes),
-      // matching the confirmation push below; fall back to the static map.
-      const laneName = b.laneNameSnapshot ?? laneNameMap[b.laneId] ?? String(b.laneId).toUpperCase();
+      // EML-1 (audit 2026-06): shared snapshot-aware resolver (was a 4th local
+      // lane-name map with yet another spelling — "Bowling Machine Lane 1"). Still
+      // snapshot-first; legacy snapshot-less rows now get the canonical default name.
+      const laneName = laneNameForBooking(b);
       const description = `${laneName} — ${b.date}`;
       const paymentDate = new Date().toLocaleDateString("en-US", {
         year: "numeric",
