@@ -276,7 +276,7 @@ export function useMyBookings(opts: { email?: string; userId?: string; impersona
   return { myBookings, myBookingsLoading }
 }
 
-export function useBookings() {
+export function useBookings(window?: { from: string; to: string }) {
   // useQuery returns `undefined` until the first server result arrives. Coercing
   // straight to [] makes the calendar render a FULLY EMPTY day during that window
   // (the "empty calendar flash"). Track the loading state so the UI can hold the
@@ -285,12 +285,18 @@ export function useBookings() {
   // COST-1 (audit 2026-06): the reactive GRID subscription is bounded to roughly the
   // VISIBLE calendar range, not the whole table. Every booking write re-streams this
   // window to every connected client, so a narrow window is the single biggest Convex
-  // saving at scale. The customer/coach grid never shows more than ~8 days ahead (or
-  // the admin-set coachBookingWindowDays) plus ≤2 weeks of coach past review, so
-  // [today-21 .. today + max(35, coachWindow + 7)] covers every GRID consumer.
+  // saving at scale.
+  //
+  // COST-1b (2026-06-23): the GRID now subscribes to EXACTLY the week the user is
+  // viewing — the caller (BookingCalendar) passes the date range of its visible week
+  // strip (L1 coach = rolling `coachBookingWindowDays`, L2 coach + customer = the
+  // Mon–Sun release week, or a past week under coach back-nav). Navigating weeks
+  // changes the window, so Convex drops the old subscription and subscribes the new
+  // one → only ~7–8 days are ever live per client. The legacy ~56-day window below is
+  // kept only as a fallback for any caller that doesn't pass a window.
   // My Bookings own/past history is sourced separately (useMyBookings) from the
   // owner-scoped indexed queries, so narrowing this does NOT shorten a user's history.
-  const bookingWindow = useMemo(() => {
+  const defaultWindow = useMemo(() => {
     const key = (offsetDays: number) => {
       const d = new Date(Date.now() + 8 * 3600000 + offsetDays * 86400000)
       return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
@@ -300,6 +306,7 @@ export function useBookings() {
     const futureDays = Math.max(35, coachWindow + 7)
     return { from: key(-21), to: key(futureDays) }
   }, [])
+  const bookingWindow = window ?? defaultWindow
   const rawBookingsResult = useQuery(api.queries.listBookings, bookingWindow)
   const bookingsLoading = rawBookingsResult === undefined
   const rawBookings = rawBookingsResult ?? []

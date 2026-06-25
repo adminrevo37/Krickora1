@@ -100,7 +100,15 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     for (let h = open; h < close; h += 0.5) slots.push({ hour: h, label: formatTime(h) })
     return slots
   }, [selectedDay, settings])
-  const { bookings, canBookTime, bookingsLoading } = useBookings()
+  // COST-1b: pull ONLY the date range of the week strip the user is currently
+  // viewing (L1 = rolling window, L2/customer = M–S release week, or a past week
+  // under coach back-nav). Navigating weeks re-windows the subscription, so each
+  // client holds ~7–8 days live instead of ~56. weekDays is ascending, so [0]..[last].
+  const gridWindow = useMemo(() => ({
+    from: formatDateKey(weekDays[0]),
+    to: formatDateKey(weekDays[weekDays.length - 1]),
+  }), [weekDays])
+  const { bookings, canBookTime, bookingsLoading } = useBookings(gridWindow)
   const { isLaneBlocked } = useLaneBlocks()
 
   const [modalOpen, setModalOpen] = useState(false)
