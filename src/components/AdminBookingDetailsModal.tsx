@@ -609,7 +609,17 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                   <div className="col-span-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg px-3 py-2 border border-blue-200 dark:border-blue-800/40">
                     <div className="text-[10px] uppercase font-semibold text-blue-600 dark:text-blue-400 tracking-wide">Session Price</div>
                     <div className="text-sm font-bold text-blue-800 dark:text-blue-200 mt-0.5">
-                      ${(calculatedCustomerPrice as number).toFixed(2)} <span className="text-[10px] font-normal text-blue-500">· reference only — already charged</span>
+                      ${(calculatedCustomerPrice as number).toFixed(2)}{' '}
+                      {/* Honest payment status (was a hardcoded "already charged" that was
+                          wrong on an extended-but-not-topped-up booking). Reflects what
+                          was ACTUALLY paid (priceInCents) vs the current price. */}
+                      <span className={`text-[10px] font-normal ${balanceDueDollars > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-blue-500'}`}>
+                        {(booking as any).paymentStatus === 'paid'
+                          ? balanceDueDollars > 0
+                            ? `· $${alreadyPaidDollars.toFixed(2)} paid · $${balanceDueDollars.toFixed(2)} still owing`
+                            : `· $${alreadyPaidDollars.toFixed(2)} paid`
+                          : '· not yet charged'}
+                      </span>
                     </div>
                   </div>
                 )}
