@@ -51,6 +51,10 @@ export const stripeWebhook = httpAction(async (ctx, request) => {
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
         const bookingId = session.metadata?.bookingId;
+        // A top-up (admin extended an existing, already-confirmed booking) must NOT
+        // run confirmBookingPayment — that path no-ops on an already-paid booking
+        // (so the extra payment would vanish) and would try to re-confirm/re-sync.
+        const isTopUp = session.metadata?.topup === "true";
         if (bookingId) {
           // Best-effort: pull the Stripe-hosted receipt URL off the charge so the
           // customer Payments screen can link to it. Never block confirmation on it.
@@ -67,13 +71,23 @@ export const stripeWebhook = httpAction(async (ctx, request) => {
           } catch (e: any) {
             console.warn("[stripe-webhook] could not fetch receipt_url:", e?.message);
           }
-          await ctx.runMutation(internal.webhooks.confirmBookingPayment, {
-            bookingId,
-            stripeSessionId: session.id,
-            amountPaid: session.amount_total ?? 0,
-            currency: session.currency ?? "aud",
-            receiptUrl,
-          });
+          if (isTopUp) {
+            await ctx.runMutation(internal.webhooks.recordTopUpPayment, {
+              bookingId,
+              stripeSessionId: session.id,
+              amountPaid: session.amount_total ?? 0,
+              currency: session.currency ?? "aud",
+              receiptUrl,
+            });
+          } else {
+            await ctx.runMutation(internal.webhooks.confirmBookingPayment, {
+              bookingId,
+              stripeSessionId: session.id,
+              amountPaid: session.amount_total ?? 0,
+              currency: session.currency ?? "aud",
+              receiptUrl,
+            });
+          }
         } else {
           console.warn("[stripe-webhook] checkout.session.completed without bookingId metadata");
         }

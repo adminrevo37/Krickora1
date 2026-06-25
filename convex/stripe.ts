@@ -311,6 +311,11 @@ export const createPaymentLink = action({
     customerEmail: v.string(),
     priceInCents: v.number(),
     bookingId: v.optional(v.string()),
+    // Top-up (e.g. an admin extended an existing booking): tags the link so the
+    // webhook records the EXTRA payment against the already-confirmed booking
+    // instead of re-running the confirm flow. emailToCustomer also sends the link.
+    topUp: v.optional(v.boolean()),
+    emailToCustomer: v.optional(v.boolean()),
   },
   handler: async (
     ctx,
@@ -362,12 +367,26 @@ export const createPaymentLink = action({
         bookingId: args.bookingId || "",
         customerName: args.customerName,
         customerEmail: args.customerEmail,
+        // The webhook reads this off the resulting checkout session to route a
+        // top-up to recordTopUpPayment (record + price bump) vs confirmBookingPayment.
+        topup: args.topUp ? "true" : "false",
       },
       after_completion: {
         type: "redirect",
         redirect: { url: `${siteUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}` },
       },
     });
+
+    // Optionally email the link straight to the customer (admin convenience).
+    if (args.emailToCustomer && args.customerEmail) {
+      await ctx.scheduler.runAfter(0, internal.emails.sendPaymentLink, {
+        to: args.customerEmail,
+        customerName: args.customerName,
+        amount: `$${(args.priceInCents / 100).toFixed(2)} AUD`,
+        description,
+        paymentUrl: paymentLink.url,
+      });
+    }
 
     return {
       url: paymentLink.url,

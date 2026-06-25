@@ -7,6 +7,9 @@ import { LANES, formatTime, getCoachPrice, getCustomerPrice, canBookSlot, getAWS
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 import { useBookingActions } from '../hooks/useBookingStore'
 import { useAuth } from '../hooks/useAuth'
+// SPEC_ADMIN_TOPUP — admin sends a customer a Stripe payment link for the price
+// difference after extending their booking.
+import { createPaymentLink } from '../lib/stripe'
 
 interface Props {
   booking: Booking
@@ -64,6 +67,13 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
   const [status, setStatus] = useState<string>(booking.status)
   const [coachPrice, setCoachPrice] = useState(booking.coachPrice ?? 0)
   const [notes, setNotes] = useState(booking.notes ?? '')
+  // SPEC_ADMIN_TOPUP — top-up payment link (customer bookings only).
+  const [topUpAmount, setTopUpAmount] = useState('')
+  const [topUpEmail, setTopUpEmail] = useState(false)
+  const [generatingLink, setGeneratingLink] = useState(false)
+  const [paymentLinkUrl, setPaymentLinkUrl] = useState<string | null>(null)
+  const [linkError, setLinkError] = useState<string | null>(null)
+  const [linkCopied, setLinkCopied] = useState(false)
 
   // FEA-6: conflict-check the EDITED target date via the indexed per-day query (admin
   // → full data) instead of the whole-table grid array. The server (updateBooking) is
@@ -94,6 +104,48 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
     if (!lane) return null
     return getCustomerPrice(lane, booking.variantId ?? null, duration)
   }, [booking.isCoachBooking, booking.variantId, laneId, duration])
+
+  // SPEC_ADMIN_TOPUP — what the customer has paid (the stored price) vs the new
+  // price at the edited duration; the balance is the top-up to collect.
+  const alreadyPaidDollars = ((booking as any).priceInCents ?? 0) / 100
+  const balanceDueDollars = useMemo(
+    () => Math.max(0, (calculatedCustomerPrice ?? 0) - alreadyPaidDollars),
+    [calculatedCustomerPrice, alreadyPaidDollars]
+  )
+  // Default the amount field to the live balance (re-fills when the duration changes).
+  useEffect(() => {
+    setTopUpAmount(balanceDueDollars > 0 ? balanceDueDollars.toFixed(2) : '')
+    setPaymentLinkUrl(null)
+    setLinkError(null)
+  }, [balanceDueDollars])
+
+  const handleGenerateTopUpLink = async () => {
+    setLinkError(null); setPaymentLinkUrl(null); setLinkCopied(false)
+    const amt = parseFloat(topUpAmount)
+    if (!amt || amt <= 0) { setLinkError('Enter an amount greater than $0.'); return }
+    if (!customerEmail) { setLinkError('This booking has no customer email to charge.'); return }
+    setGeneratingLink(true)
+    try {
+      const variantName = displayLane?.variants?.find(v => v.id === booking.variantId)?.name
+      const res = await createPaymentLink({
+        laneId,
+        laneName: displayLane?.name ?? laneId,
+        variantName,
+        date, startHour, duration,
+        customerName, customerEmail,
+        price: amt,
+        bookingId: booking.id,
+        topUp: true,
+        emailToCustomer: topUpEmail,
+      })
+      setPaymentLinkUrl(res.url)
+      if (topUpEmail) setActionNote(`Payment link emailed to ${customerEmail}.`)
+    } catch (err: any) {
+      setLinkError(getErrorMessage(err) ?? 'Could not create the payment link.')
+    } finally {
+      setGeneratingLink(false)
+    }
+  }
 
   const history = booking.modificationHistory ?? []
 
@@ -559,6 +611,41 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                     <div className="text-sm font-bold text-blue-800 dark:text-blue-200 mt-0.5">
                       ${(calculatedCustomerPrice as number).toFixed(2)} <span className="text-[10px] font-normal text-blue-500">· reference only — already charged</span>
                     </div>
+                  </div>
+                )}
+                {/* SPEC_ADMIN_TOPUP — collect the difference after extending a customer booking. */}
+                {!booking.isCoachBooking && calculatedCustomerPrice !== null && (
+                  <div className="col-span-2 bg-amber-50 dark:bg-amber-900/15 rounded-lg px-3 py-2.5 border border-amber-200 dark:border-amber-800/40 space-y-2">
+                    <div className="text-[10px] uppercase font-semibold text-amber-700 dark:text-amber-400 tracking-wide">💳 Top-up payment link</div>
+                    <div className="text-[11px] text-gray-600 dark:text-gray-400">
+                      Already paid <b>${alreadyPaidDollars.toFixed(2)}</b> · New price <b>${(calculatedCustomerPrice as number).toFixed(2)}</b> · Balance due <b>${balanceDueDollars.toFixed(2)}</b>
+                    </div>
+                    <p className="text-[10px] text-gray-400">Save the new duration first, then send this link to the customer to pay the difference.</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex items-center gap-1">
+                        <span className="text-sm text-gray-500">$</span>
+                        <input type="number" step="0.01" min="0" value={topUpAmount} onChange={(e) => setTopUpAmount(e.target.value)}
+                          className="w-20 px-2 py-1 text-sm bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-amber-500 outline-none text-gray-800 dark:text-gray-200" />
+                      </div>
+                      <label className="flex items-center gap-1.5 text-[11px] text-gray-600 dark:text-gray-400 cursor-pointer">
+                        <input type="checkbox" checked={topUpEmail} onChange={(e) => setTopUpEmail(e.target.checked)} className="rounded" /> Email link to customer
+                      </label>
+                      <button onClick={handleGenerateTopUpLink} disabled={generatingLink}
+                        className="ml-auto text-xs px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-semibold disabled:opacity-50 transition-colors">
+                        {generatingLink ? 'Generating…' : 'Generate link'}
+                      </button>
+                    </div>
+                    {linkError && <p className="text-[11px] text-red-500">{linkError}</p>}
+                    {paymentLinkUrl && (
+                      <div className="flex items-center gap-2 bg-white dark:bg-gray-900 rounded-lg px-2 py-1.5 border border-amber-200 dark:border-amber-800/40">
+                        <input readOnly value={paymentLinkUrl} onFocus={(e) => e.currentTarget.select()}
+                          className="flex-1 min-w-0 text-[11px] bg-transparent outline-none text-gray-700 dark:text-gray-300" />
+                        <button onClick={() => { navigator.clipboard?.writeText(paymentLinkUrl); setLinkCopied(true) }}
+                          className="shrink-0 text-[11px] px-2 py-1 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 font-semibold">
+                          {linkCopied ? '✓ Copied' : 'Copy'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

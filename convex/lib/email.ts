@@ -216,6 +216,25 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
         }),
       };
 
+    // Admin-sent payment request (e.g. a top-up for an extended session).
+    case "payment-link":
+      return {
+        subject: "Payment link for your session — Cricket Revolution",
+        html: layout({
+          title: "Payment for your session",
+          preheader: `A balance of ${esc(d.amount)} is due.`,
+          bodyHtml:
+            p(`Hi ${greetFirst(d, "customerName")}, there's a balance of ${esc(d.amount)} to pay for your session.`) +
+            p(`Tap the link below to pay securely:`) +
+            linkLine("Pay now:", d.paymentUrl) +
+            detailRows([
+              ["Amount due", d.amount],
+              ["For", d.description],
+            ]) +
+            muted(`If you've already paid this, you can ignore this email.`),
+        }),
+      };
+
     // ── Bookings ──────────────────────────────────────────────────────────────
     case "booking-confirmation":
       return {

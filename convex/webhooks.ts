@@ -294,6 +294,87 @@ export const confirmBookingPayment = internalMutation({
 });
 
 /**
+ * Reconcile a TOP-UP payment on an ALREADY-CONFIRMED booking (e.g. an admin
+ * extended a customer's session and sent them a payment link for the difference).
+ * Deliberately NOT confirmBookingPayment: that path no-ops on an already-paid
+ * booking, re-confirms, and re-syncs the calendar — none of which we want for a
+ * top-up. Here we just record the extra payment as a DISTINCT row and bump the
+ * stored price so future edit-diffs are correct. The booking/calendar/door code are
+ * already correct (the admin's modify did that). Idempotent on the Stripe session id
+ * (recordStripePaymentInternal dedupes by bookingId, so a top-up — which shares the
+ * booking with the original payment — needs session-level dedup instead).
+ */
+export const recordTopUpPayment = internalMutation({
+  args: {
+    bookingId: v.string(),
+    stripeSessionId: v.string(),
+    amountPaid: v.number(), // cents
+    currency: v.optional(v.string()),
+    receiptUrl: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId as any);
+    if (!booking) {
+      console.warn(`[webhook] Top-up for missing booking: ${args.bookingId}`);
+      return { success: false, reason: "booking_not_found" };
+    }
+    const b = booking as any;
+
+    // Idempotency: a webhook retry of the SAME top-up session must not double-record
+    // the payment or double-bump the price.
+    const existingForBooking = await ctx.db
+      .query("stripePayments")
+      .withIndex("by_bookingId", (q: any) => q.eq("bookingId", args.bookingId))
+      .collect();
+    if (existingForBooking.some((p: any) => p.stripeSessionId === args.stripeSessionId)) {
+      return { success: true, alreadyRecorded: true };
+    }
+
+    const currency = (args.currency ?? "AUD").toUpperCase();
+    const laneName = laneNameForBooking(b);
+    const amountDollars = args.amountPaid / 100;
+
+    // Record the extra payment as its own row (revenue/statements/receipts).
+    await ctx.db.insert("stripePayments", {
+      bookingId: args.bookingId,
+      stripeSessionId: args.stripeSessionId,
+      customerEmail: (b.customerEmail ?? "").toLowerCase().trim(),
+      customerName: b.customerName ?? "Customer",
+      amount: amountDollars,
+      currency,
+      status: "paid",
+      laneName,
+      date: b.date,
+      description: `Session extension top-up — ${laneName} ${b.date}`,
+      receiptUrl: args.receiptUrl,
+    } as any);
+
+    // Reflect the new total paid on the booking so a later edit-diff is correct.
+    await ctx.db.patch(booking._id, {
+      priceInCents: (b.priceInCents ?? 0) + args.amountPaid,
+    } as any);
+
+    // Receipt to the customer.
+    if (b.customerEmail) {
+      await ctx.scheduler.runAfter(0, internal.emails.sendPaymentConfirmation, {
+        to: b.customerEmail,
+        customerName: b.customerName ?? "there",
+        amount: `$${amountDollars.toFixed(2)} ${currency}`,
+        description: `Session extension — ${laneName} ${b.date}`,
+        reference: args.stripeSessionId,
+        paymentDate: new Date().toLocaleDateString("en-US", {
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        }),
+      });
+    }
+
+    return { success: true };
+  },
+});
+
+/**
  * Marks a booking as payment_failed. Idempotent.
  */
 export const markBookingPaymentFailed = internalMutation({

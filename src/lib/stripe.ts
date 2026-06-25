@@ -47,6 +47,10 @@ export interface CheckoutSessionRequest {
   additionalLanes?: string[]
   isCoachBooking?: boolean
   bookingId?: string
+  // Admin top-up link (extended booking): tags the link so the webhook records the
+  // extra payment vs re-confirming; emailToCustomer also emails the link.
+  topUp?: boolean
+  emailToCustomer?: boolean
 }
 
 export interface CheckoutSessionResponse {
@@ -138,6 +142,8 @@ export async function createPaymentLink(req: CheckoutSessionRequest): Promise<{ 
     customerEmail: req.customerEmail,
     priceInCents: Math.round(req.price * 100),
     bookingId: req.bookingId,
+    topUp: req.topUp,
+    emailToCustomer: req.emailToCustomer,
   })
 
   return result

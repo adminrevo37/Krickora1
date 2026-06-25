@@ -244,6 +244,28 @@ export const sendPaymentConfirmation = internalAction({
   },
 });
 
+// Admin-sent payment link (e.g. a top-up for an extended session). Transactional —
+// it's money the customer owes, so always sent (no notification opt-out check, like
+// the password-reset / verification emails).
+export const sendPaymentLink = internalAction({
+  args: {
+    to: v.string(),
+    customerName: v.string(),
+    amount: v.string(),
+    description: v.string(),
+    paymentUrl: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await sendEmail("payment-link", args.to, {
+      customerName: args.customerName,
+      firstName: await resolveFirstName(ctx, args.to),
+      amount: args.amount,
+      description: args.description,
+      paymentUrl: args.paymentUrl,
+    });
+  },
+});
+
 // ============================================================================
 // BOOKING CONFIRMATION EMAIL
 // ============================================================================
