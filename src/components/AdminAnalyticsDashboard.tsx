@@ -19,6 +19,7 @@ const UsageTab = lazy(() => import('./analytics/UsageTab'))
 const FunnelTab = lazy(() => import('./analytics/FunnelTab'))
 const PushTab = lazy(() => import('./analytics/PushTab'))
 const OccupancyTab = lazy(() => import('./analytics/OccupancyTab'))
+const MachineUsageTab = lazy(() => import('./analytics/MachineUsageTab'))
 const CustomersTab = lazy(() => import('./analytics/CustomersTab'))
 const MapTab = lazy(() => import('./analytics/MapTab'))
 
@@ -37,6 +38,7 @@ const TABS = [
   { id: 'funnel', label: 'Funnel', icon: '🛒', range: true, subDay: true },
   { id: 'push', label: 'Push & Waitlist', icon: '🔔', range: true, subDay: true },
   { id: 'occupancy', label: 'Occupancy', icon: '🏟️', range: true, subDay: false },
+  { id: 'machine', label: 'Machine Use', icon: '⚙️', range: true, subDay: false },
   { id: 'customers', label: 'Customers', icon: '💎', range: true, subDay: false },
   { id: 'map', label: 'Map', icon: '🗺️', range: true, subDay: false },
 ] as const
@@ -87,6 +89,7 @@ export default function AdminAnalyticsDashboard() {
         {tab === 'funnel' && <FunnelTab range={tabRange} />}
         {tab === 'push' && <PushTab range={tabRange} />}
         {tab === 'occupancy' && <OccupancyTab range={tabRange} />}
+        {tab === 'machine' && <MachineUsageTab range={tabRange} />}
         {tab === 'customers' && <CustomersTab range={tabRange} />}
         {tab === 'map' && <MapTab range={tabRange} />}
       </Suspense>

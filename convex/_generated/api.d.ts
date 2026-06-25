@@ -56,6 +56,7 @@ import type * as lib_unsubscribe from "../lib/unsubscribe.js";
 import type * as lib_waPostcodes from "../lib/waPostcodes.js";
 import type * as lockMutations from "../lockMutations.js";
 import type * as locks from "../locks.js";
+import type * as machineUsage from "../machineUsage.js";
 import type * as mates from "../mates.js";
 import type * as mutations from "../mutations.js";
 import type * as push from "../push.js";
@@ -133,6 +134,7 @@ declare const fullApi: ApiFromModules<{
   "lib/waPostcodes": typeof lib_waPostcodes;
   lockMutations: typeof lockMutations;
   locks: typeof locks;
+  machineUsage: typeof machineUsage;
   mates: typeof mates;
   mutations: typeof mutations;
   push: typeof push;

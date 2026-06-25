@@ -397,4 +397,53 @@ http.route({
   }),
 });
 
+// ── Bowling-machine usage webhook (HMAC-signed, no auth) ────────────
+// HA's "Machine Audit - Booking End" automation POSTs each booking's ACTUAL
+// machine-use minutes vs booked duration (SPEC_MACHINE_USAGE_AUDIT_KRICKORA_2026-06,
+// Phase 2). Body is compact JSON {ts, lane, customer, email?, bookedMin, usedMin,
+// utilPct, startISO}. Signed exactly like /ha/entry above: header  X-HA-Signature:
+// sha256=<hex HMAC_SHA256(USAGE_SIGN_KEY, rawBody)>  — the HMAC key is the
+// USAGE_SIGN_KEY *string* bytes (matching the HA script's `sign_key.encode()`).
+// Constant-time compare; 401 on mismatch or until USAGE_SIGN_KEY is set. Reuses the
+// entry webhook's signature helpers.
+http.route({
+  path: "/ha/usage",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const signKey = process.env.USAGE_SIGN_KEY || "";
+    const body = await request.text();
+    if (!signKey) {
+      return new Response("not configured", { status: 401, headers: corsHeaders(request) });
+    }
+    const header = request.headers.get("x-ha-signature") || "";
+    let expected: string;
+    try {
+      expected = "sha256=" + (await entrySignatureHex(signKey, body));
+    } catch {
+      return new Response("verify error", { status: 401, headers: corsHeaders(request) });
+    }
+    if (!header || !entryConstantTimeEqual(header, expected)) {
+      return new Response("invalid signature", { status: 401, headers: corsHeaders(request) });
+    }
+    try {
+      const d = JSON.parse(body || "{}");
+      const num = (x: any) => (typeof x === "number" && Number.isFinite(x) ? x : 0);
+      await ctx.runMutation(internal.machineUsage.logMachineUsageInternal, {
+        at: Date.now(),
+        ts: typeof d.ts === "number" ? d.ts : 0,
+        lane: num(d.lane),
+        customer: typeof d.customer === "string" ? d.customer : "",
+        email: typeof d.email === "string" && d.email ? d.email : undefined,
+        bookedMinutes: num(d.bookedMin),
+        usedMinutes: num(d.usedMin),
+        utilPct: num(d.utilPct),
+        startISO: typeof d.startISO === "string" ? d.startISO : "",
+      });
+    } catch {
+      /* signature already verified; never error on a parse hiccup */
+    }
+    return new Response(null, { status: 200, headers: corsHeaders(request) });
+  }),
+});
+
 export default http;

@@ -94,6 +94,34 @@ export default defineSchema({
     bookingId: v.optional(v.id("bookings")), // attribution phase
   }).index("by_at", ["at"]),
 
+  // BOWLING-MACHINE USAGE AUDIT (SPEC_MACHINE_USAGE_AUDIT_KRICKORA_2026-06, Phase 2)
+  // — each booking's ACTUAL machine-use minutes vs booked duration, pushed by HA at
+  // booking end via the signed /ha/usage webhook. HA computes usedMinutes from the
+  // lane plug power ("in use" = any non-zero draw). Matched to a bookings row by
+  // lane + date + customer/email at insert time (bookingId set only on a confident
+  // match; matchStatus flags ambiguous/unmatched for admin review). Additive — no
+  // migration. Usage only ever arrives for the 3 BM lanes (run-ups have no machine).
+  machineUsage: defineTable({
+    at: v.number(), // server receive time (ms)
+    ts: v.number(), // device unix seconds (0 if absent)
+    lane: v.number(), // physical BM lane 1..3
+    laneId: v.string(), // resolved stable id "bm1".."bm3" ("" if unmappable)
+    date: v.string(), // resolved AWST booking day YYYY-MM-DD (range queries)
+    startHour: v.optional(v.number()), // resolved booking start hour (display/debug)
+    customer: v.string(),
+    email: v.optional(v.string()),
+    bookedMinutes: v.number(),
+    usedMinutes: v.number(),
+    utilPct: v.number(), // usedMinutes / bookedMinutes * 100
+    startISO: v.string(), // booking start from the GCal event
+    bookingId: v.optional(v.id("bookings")), // set only on a confident match
+    matchStatus: v.string(), // 'matched' | 'ambiguous' | 'unmatched'
+  })
+    .index("by_at", ["at"])
+    .index("by_date", ["date"])
+    .index("by_email", ["email"])
+    .index("by_bookingId", ["bookingId"]),
+
   // Application tables
   customers: defineTable({
     name: v.string(), // DERIVED display string = "firstName lastName" (SPEC_NAME_SPLIT)
