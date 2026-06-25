@@ -201,7 +201,7 @@ export const adminUpdateUserProfile = mutation({
       if (coachTier !== undefined) updates.coachTier = coachTier || undefined;
       if (color !== undefined) updates.color = color || undefined;
       if (defaultSessionDuration !== undefined) updates.defaultSessionDuration = defaultSessionDuration || undefined;
-      if (athleteCapacity !== undefined) updates.athleteCapacity = Math.max(1, Math.min(athleteCapacity || 1, 4));
+      if (athleteCapacity !== undefined) updates.athleteCapacity = Math.max(1, Math.min(athleteCapacity || 1, 5));
       if (hideFromPublicCoachList !== undefined) updates.hideFromPublicCoachList = hideFromPublicCoachList;
       if (postcode !== undefined) updates.postcode = normalizePostcode(postcode);
       if (suburb !== undefined) updates.suburb = normalizeSuburb(suburb);

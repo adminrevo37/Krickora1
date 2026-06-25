@@ -270,7 +270,7 @@ export default function SettingsPanel() {
           <p className="text-sm text-gray-500 mt-0.5">Add-a-Mate and other miscellaneous limits</p>
         </div>
         <div className="p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          <NumberInput label="Max mates per booking" value={settings.maxMatesPerBooking ?? 3} onChange={(v) => updateSettings({ maxMatesPerBooking: v })} />
+          <NumberInput label="Max mates per booking" value={settings.maxMatesPerBooking ?? 2} onChange={(v) => updateSettings({ maxMatesPerBooking: v })} />
         </div>
       </div>
 

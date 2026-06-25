@@ -701,7 +701,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
               <span className="font-medium text-gray-700">Athletes per session</span>
               <p className="text-xs text-gray-400 mb-1">Max athletes at once — pre-fills that many back-to-back slots when allocating (1 = one-on-one)</p>
               <select value={athleteCapacity} onChange={e => setAthleteCapacity(Number(e.target.value))} className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white">
-                {[1, 2, 3, 4].map(n => (
+                {[1, 2, 3, 4, 5].map(n => (
                   <option key={n} value={n}>{n === 1 ? '1 (one-on-one)' : `${n} athletes`}</option>
                 ))}
               </select>

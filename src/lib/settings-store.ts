@@ -99,7 +99,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   modifyMoveEarlierMaxHours: 1,
   abandonedCheckoutMinutes: 10,
   waitlistOfferHoldMinutes: 15,
-  maxMatesPerBooking: 3,
+  maxMatesPerBooking: 2,
   pushEnabledGlobal: true,
   registrationLocked: false,
   adminGateEnabled: false,

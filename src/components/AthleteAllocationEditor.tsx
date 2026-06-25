@@ -13,7 +13,7 @@ interface AthleteAllocationEditorProps {
   onClose: () => void
   bottomSheet?: boolean // render as a mobile bottom sheet instead of a centred modal
   defaultSessionDuration?: number // coach's preferred default slot length in minutes
-  athleteCapacity?: number // coach's max athletes per session (1-4) — drives auto-populate
+  athleteCapacity?: number // coach's max athletes per session (1-5) — drives auto-populate
   // Coach allocation mode (2026-06): false (default) = SEQUENTIAL — auto-advance each
   // subsequent slot's start to the previous slot's end + smart-order the athlete picker
   // by recent history. true = coaches multiple athletes at once (independent slots).
@@ -68,7 +68,7 @@ export default function AthleteAllocationEditor({
   // the window). The coach just picks who goes in each pre-made slot, and can
   // delete/shift to insert rest-break gaps. Capacity 1 = a single 1:1 slot.
   const buildAutoSlots = (): AthleteSlot[] => {
-    const cap = Math.max(1, Math.min(athleteCapacity ?? 1, 4))
+    const cap = Math.max(1, Math.min(athleteCapacity ?? 1, 5))
     const out: AthleteSlot[] = []
     let cursor = bookingStartHour
     for (let i = 0; i < cap; i++) {

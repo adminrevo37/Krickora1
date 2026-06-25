@@ -155,7 +155,7 @@ export default defineSchema({
     color: v.optional(v.string()),
     coachTier: v.optional(v.string()), // 'L1' | 'L2'
     defaultSessionDuration: v.optional(v.number()), // coach default athlete slot duration in minutes
-    athleteCapacity: v.optional(v.number()), // coach max athletes per session (1-4); drives auto-populate
+    athleteCapacity: v.optional(v.number()), // coach max athletes per session (1-5); drives auto-populate
     // Coach allocation mode (2026-06): UNticked/absent (default) = coach runs athletes
     // SEQUENTIALLY → auto-advance the next slot's start + smart-order the athlete picker
     // by recent history. ticked (true) = coaches multiple at once → independent slots.
@@ -678,8 +678,9 @@ export default defineSchema({
     // before the offer rolls to the person behind them. Default 15.
     waitlistOfferHoldMinutes: v.optional(v.number()),    // default 15
     // SPEC_ADD_A_MATE "Misc Settings". Max mates a customer may add to one
-    // booking (the owner is NOT counted). Default 3 → 4 people total per net.
-    maxMatesPerBooking: v.optional(v.number()),          // default 3
+    // booking (the owner is NOT counted). Default 2 → 3 people total per net
+    // (matches the facility "max 3 people per lane" safety rule).
+    maxMatesPerBooking: v.optional(v.number()),          // default 2
     // SPEC_PWA_PUSH_NOTIFICATIONS §5.7 global kill-switch. When false, sendPush
     // short-circuits — all push disabled instantly without a deploy (email
     // unaffected). Default true.

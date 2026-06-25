@@ -312,7 +312,7 @@ export const addMateToBooking = mutation({
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
       .first();
-    const maxMates = settings?.maxMatesPerBooking ?? 3;
+    const maxMates = settings?.maxMatesPerBooking ?? 2;
 
     const mate = await ctx.db.get(args.mateCustomerId);
     if (!mate) throw new ConvexError("That account no longer exists.");
@@ -587,7 +587,7 @@ export const acceptBookingInvite = mutation({
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
       .first();
-    const maxMates = settings?.maxMatesPerBooking ?? 3;
+    const maxMates = settings?.maxMatesPerBooking ?? 2;
     if (current.length >= maxMates) return { status: "full" };
 
     await ctx.db.patch(invite.bookingId, {
