@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
@@ -24,12 +24,31 @@ function sameSet(a: string[], b: string[]): boolean {
 }
 
 export default function MyAthletesCard() {
-  const athletes = useQuery(api.athletes.listAthletesByAccount, {}) ?? []
+  const athletesRaw = useQuery(api.athletes.listAthletesByAccount, {})
+  const athletes = athletesRaw ?? []
   const coaches = useQuery(api.queries.listCustomersByRole, { role: 'coach' }) ?? []
   const createAthlete = useMutation(api.athletes.createAthlete)
   const updateAthlete = useMutation(api.athletes.updateAthlete)
   const removeAthlete = useMutation(api.athletes.removeAthlete)
   const setAthleteCoaches = useMutation(api.athletes.setAthleteCoaches)
+  const ensureSelfAthlete = useMutation(api.athletes.ensureSelfAthlete)
+
+  // "Coaches can also be athletes" — coaches (and any account that never got a
+  // self-athlete: the role=customer-only migration / older accounts) get one created
+  // on first open so they have a "You" row to link to a coach. Idempotent + self-scoped
+  // server-side; fired once per mount only when the account genuinely has no self row.
+  const ensuredRef = useRef(false)
+  useEffect(() => {
+    if (ensuredRef.current || athletesRaw === undefined) return
+    if (athletes.some((a: any) => a.isSelf)) return
+    ensuredRef.current = true
+    ensureSelfAthlete({}).catch(() => { ensuredRef.current = false })
+  }, [athletesRaw, athletes, ensureSelfAthlete])
+
+  // A coach can't be their own coach — drop the account's own coach row from the
+  // self-athlete's picker (no effect for a non-coach account: their id isn't a coach).
+  const coachesFor = (a: any) =>
+    a.isSelf ? coaches.filter((c: any) => c._id !== a.accountCustomerId) : coaches
 
   const [newFirst, setNewFirst] = useState('')
   const [newLast, setNewLast] = useState('')
@@ -217,7 +236,7 @@ export default function MyAthletesCard() {
                 )}
               </div>
               <CoachMultiSelect
-                coaches={coaches}
+                coaches={coachesFor(a)}
                 value={draftFor(a)}
                 onChange={(ids) => setDraft(a, ids)}
                 disabled={busyId === a._id}

@@ -265,7 +265,9 @@ function ProfilePage() {
           </form>
         )}
       </div>
-      {user.role === 'customer' && (
+      {/* "Coaches can also be athletes" — coaches manage their own athlete profile
+          (self + children) and link to OTHER coaches to be coached, same as a customer. */}
+      {(user.role === 'customer' || user.role === 'coach') && (
         <div className="mt-6">
           <MyAthletesCard />
         </div>

@@ -227,6 +227,38 @@ export const setAthleteCoaches = mutation({
   },
 });
 
+// "Coaches can also be athletes" (2026-06) — ensure the CALLER'S OWN account has a
+// self-athlete (the account holder as a trainee), creating it if missing. Idempotent
+// + self-scoped + role-agnostic, so a COACH (or any account that never went through the
+// self-registration self-athlete insert, nor the role=customer-only migrateToAthletes)
+// can manage themselves as an athlete and be coached by ANOTHER coach. The "My Athletes"
+// card calls this on load. Carries the account holder's name onto the new self row.
+export const ensureSelfAthlete = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) throw new ConvexError("Authentication required.");
+    const account = await getCallerCustomer(ctx);
+    if (!account) throw new ConvexError("No account found for the current user.");
+    const existing = await ctx.db
+      .query("athletes")
+      .withIndex("by_account", (q: any) => q.eq("accountCustomerId", account._id))
+      .collect();
+    const self = existing.find((a: any) => a.isSelf);
+    if (self) return { created: false, athleteId: self._id };
+    const selfId = await ctx.db.insert("athletes", {
+      accountCustomerId: account._id as any,
+      name: account.name ?? "",
+      firstName: account.firstName || undefined,
+      lastName: account.lastName || undefined,
+      assignedCoachIds: [],
+      isSelf: true,
+      createdAt: new Date().toISOString(),
+    });
+    return { created: true, athleteId: selfId };
+  },
+});
+
 // SPEC_SIGNUP_UPDATES_2026-06 G2 — one-shot setup called by the signup follow-up
 // (AuthModal) once the new account's auth token has attached. Writes the coaching
 // data the customer entered on the signup form:
