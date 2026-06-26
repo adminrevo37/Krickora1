@@ -45,6 +45,15 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   // When impersonating, behave as a regular customer (not admin/coach)
   const isAdmin = impersonatedEmail ? false : realIsAdmin
   const userIsCoach = impersonatedEmail ? false : realIsCoach
+  // When an admin is "viewing as" a COACH, still mark THAT coach's own coach
+  // bookings as their blue coverage block (not an anonymous "Booked"), and don't
+  // collapse full rows into the JOIN WAITLIST band (coaches never see it) — so the
+  // admin can actually see the coach's schedule. (useAuth overrides user.email/role
+  // to the viewed account during impersonation, so ownCoachBooking's own-match still
+  // scopes this to the viewed coach.) We deliberately do NOT flip the rest of the grid
+  // into coach-view mode (start-time grid / release window / tier resolution) during
+  // impersonation — only the own-booking marking. Outside impersonation = userIsCoach.
+  const renderAsCoachOwner = impersonatedEmail ? ((user?.role as string) === 'coach') : userIsCoach
   const { settings } = useSettings()
   // SPEC_RECONFIGURABLE_LANES: re-render when the lane layout changes (live).
   const laneConfig = useLaneConfigState()
@@ -578,7 +587,9 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
             // Never collapse a full row into the waitlist band if the user owns a
             // booking on this hour — render per-lane so their "Your booking" shows
             // (they don't need a waitlist for an hour they're already booked into).
-            const showWaitlistBand = rowFull && !isAdmin && !userIsCoach && !isHalfHour && !myBookedHoursToday.has(slot.hour)
+            // Also off when acting as a coach (real or admin-viewing-as-coach) —
+            // coaches always see the per-lane view, never the band.
+            const showWaitlistBand = rowFull && !isAdmin && !renderAsCoachOwner && !isHalfHour && !myBookedHoursToday.has(slot.hour)
             const hourWaitCount = waitlistByHour.count.get(slot.hour) ?? 0
             const myQueuePos = myWaitlistPositions[String(slot.hour)]
             const onThisHour = waitlistByHour.mine.has(slot.hour) || myQueuePos != null
@@ -627,7 +638,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   // band, so it always shows.
                   const bookingEndHour = booked ? booked.startHour + booked.duration / 60 : 0
                   const isWaitlistBandRow = (h: number) =>
-                    !isAdmin && !userIsCoach && h === Math.floor(h) &&
+                    !isAdmin && !renderAsCoachOwner && h === Math.floor(h) &&
                     !isPast(selectedDay, h) && !isSelectedDayClosed && (fullyBookedByHour.get(h) ?? false) &&
                     !myBookedHoursToday.has(h)
                   let renderBlockHere = false
@@ -666,7 +677,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   const visualSpan = getBookingVisualHeight()
 
                   // §1A/§1B: BLUE allocation coverage on the coach's OWN coach bookings.
-                  const ownCoachBooking = !!booked && !!booked.isCoachBooking && !!userIsCoach && !!user && (
+                  const ownCoachBooking = !!booked && !!booked.isCoachBooking && !!renderAsCoachOwner && !!user && (
                     (booked.customerEmail?.toLowerCase() === user.email?.toLowerCase()) || booked.userId === user.id
                   )
                   // §1F — compact ↻ Repeat sits on the coach's OWN COMPLETED sessions in
