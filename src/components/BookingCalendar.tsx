@@ -344,6 +344,26 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleTimeSlots, dateKey, displayBookings, laneActiveHalfHours])
 
+  // Whole-hour rows the CURRENT user's OWN (non-cancelled) booking occupies on this
+  // day. A fully-booked row is normally collapsed into a single JOIN WAITLIST band
+  // for customers — but if the customer OWNS a slot on that row, the band hides their
+  // own booking entirely. (The renderBlockHere rescue below only re-anchors a booking
+  // that SPILLS into a non-band row; a booking whose rows are ALL full had nowhere to
+  // anchor → invisible.) So a row the user owns is NEVER banded — it renders per-lane,
+  // showing their blue "Your booking" beside the other booked lanes. Matches the
+  // whole-hour semantics of isSlotBooked (hour h booked iff start ≤ h < end).
+  const myBookedHoursToday = useMemo(() => {
+    const s = new Set<number>()
+    if (!user || isAdmin) return s
+    for (const b of displayBookings) {
+      if (b.date !== dateKey || b.status === 'cancelled' || !ownerMatch(b)) continue
+      const end = b.startHour + b.duration / 60
+      for (let h = Math.floor(b.startHour); h < end; h++) if (h >= b.startHour) s.add(h)
+    }
+    return s
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayBookings, dateKey, user, isAdmin])
+
   const handleAuthSuccess = () => {
     setAuthModalOpen(false)
     if (pendingAction?.type === 'book') {
@@ -555,7 +575,10 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
             // don't normally sell is confusing. Half-hour rows always render per-lane (so
             // the coach booking shows as "Booked" and empty cells stay blank).
             const rowFull = !rowPast && !isSelectedDayClosed && (fullyBookedByHour.get(slot.hour) ?? false)
-            const showWaitlistBand = rowFull && !isAdmin && !userIsCoach && !isHalfHour
+            // Never collapse a full row into the waitlist band if the user owns a
+            // booking on this hour — render per-lane so their "Your booking" shows
+            // (they don't need a waitlist for an hour they're already booked into).
+            const showWaitlistBand = rowFull && !isAdmin && !userIsCoach && !isHalfHour && !myBookedHoursToday.has(slot.hour)
             const hourWaitCount = waitlistByHour.count.get(slot.hour) ?? 0
             const myQueuePos = myWaitlistPositions[String(slot.hour)]
             const onThisHour = waitlistByHour.mine.has(slot.hour) || myQueuePos != null
@@ -605,7 +628,8 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   const bookingEndHour = booked ? booked.startHour + booked.duration / 60 : 0
                   const isWaitlistBandRow = (h: number) =>
                     !isAdmin && !userIsCoach && h === Math.floor(h) &&
-                    !isPast(selectedDay, h) && !isSelectedDayClosed && (fullyBookedByHour.get(h) ?? false)
+                    !isPast(selectedDay, h) && !isSelectedDayClosed && (fullyBookedByHour.get(h) ?? false) &&
+                    !myBookedHoursToday.has(h)
                   let renderBlockHere = false
                   if (booked) {
                     for (const vs of visibleTimeSlots) {
