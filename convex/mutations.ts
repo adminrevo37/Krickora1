@@ -4662,6 +4662,48 @@ export const addCustomerCredit = mutation({
   },
 });
 
+// Admin-only: directly correct a booking's stored `priceInCents` (the "cash paid"
+// figure that cancellation refunds + future edit-diffs key off). For reconciling a
+// booking whose stored price drifted from what was actually paid after a manual
+// admin fix — e.g. a customer reduced a paid booking for credit, then an admin
+// re-extended it free, leaving priceInCents below the amount paid. Pure data fix:
+// touches NOTHING else (no Stripe, calendar, credit, or email). Logged to
+// modificationHistory for audit.
+export const adminSetBookingPrice = mutation({
+  args: { bookingId: v.id("bookings"), priceInCents: v.number() },
+  handler: async (ctx, args) => {
+    const adminUser = await requireAdmin(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new ConvexError("Booking not found.");
+    if (!Number.isFinite(args.priceInCents) || args.priceInCents < 0) {
+      throw new ConvexError("priceInCents must be a non-negative number.");
+    }
+    const newPrice = Math.round(args.priceInCents);
+    const oldPrice = (booking as any).priceInCents;
+    if (oldPrice === newPrice) return { success: true, unchanged: true, oldPrice, newPrice };
+    const prevHistory = (booking as any).modificationHistory ?? [];
+    await ctx.db.patch(args.bookingId, {
+      priceInCents: newPrice,
+      modificationHistory: [
+        ...prevHistory,
+        {
+          modifiedAt: new Date().toISOString(),
+          modifiedByUserId: (adminUser as any)?._id?.toString?.() ?? undefined,
+          modifiedByName: (adminUser as any)?.name ?? (adminUser as any)?.email ?? "Admin",
+          changes: [
+            {
+              field: "priceInCents",
+              oldValue: oldPrice === undefined || oldPrice === null ? undefined : String(oldPrice),
+              newValue: String(newPrice),
+            },
+          ],
+        },
+      ],
+    } as any);
+    return { success: true, oldPrice, newPrice };
+  },
+});
+
 export const useCustomerCredit = mutation({
   args: { email: v.string(), amount: v.number() },
   handler: async (ctx, args) => {
