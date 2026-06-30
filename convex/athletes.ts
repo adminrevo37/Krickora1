@@ -234,20 +234,22 @@ export const setAthleteCoaches = mutation({
 // can manage themselves as an athlete and be coached by ANOTHER coach. The "My Athletes"
 // card calls this on load. Carries the account holder's name onto the new self row.
 export const ensureSelfAthlete = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const caller = await getCallerContext(ctx);
-    if (!caller.identity) throw new ConvexError("Authentication required.");
-    const account = await getCallerCustomer(ctx);
-    if (!account) throw new ConvexError("No account found for the current user.");
+  // Defaults to the caller's own account; an ADMIN may pass accountCustomerId to
+  // ensure the self-athlete for a VIEWED user (admin "view as user"). authorizeAccount
+  // enforces self-or-admin, so a non-admin can never target another account.
+  args: { accountCustomerId: v.optional(v.id("customers")) },
+  handler: async (ctx, args) => {
+    const { accountId } = await authorizeAccount(ctx, args.accountCustomerId);
+    const account: any = await ctx.db.get(accountId as any);
+    if (!account) throw new ConvexError("No account found.");
     const existing = await ctx.db
       .query("athletes")
-      .withIndex("by_account", (q: any) => q.eq("accountCustomerId", account._id))
+      .withIndex("by_account", (q: any) => q.eq("accountCustomerId", accountId))
       .collect();
     const self = existing.find((a: any) => a.isSelf);
     if (self) return { created: false, athleteId: self._id };
     const selfId = await ctx.db.insert("athletes", {
-      accountCustomerId: account._id as any,
+      accountCustomerId: accountId as any,
       name: account.name ?? "",
       firstName: account.firstName || undefined,
       lastName: account.lastName || undefined,

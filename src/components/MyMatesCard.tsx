@@ -3,6 +3,7 @@ import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { getErrorMessage } from '../lib/errors'
+import { useImpersonation } from '../hooks/useImpersonation'
 
 /**
  * "My Mates" — collapsible profile section (SPEC_ADD_A_MATE) listing the saved
@@ -11,7 +12,11 @@ import { getErrorMessage } from '../lib/errors'
  * bookings). Collapsed by default.
  */
 export default function MyMatesCard() {
-  const savedMates = useQuery(api.mates.listSavedMates, {}) ?? []
+  // ADMIN "view as user" — target the VIEWED account's mates when impersonating.
+  const { impersonatedUser, isImpersonating } = useImpersonation()
+  const acctId =
+    isImpersonating && impersonatedUser ? (impersonatedUser.id as Id<'customers'>) : undefined
+  const savedMates = useQuery(api.mates.listSavedMates, { forAccountId: acctId }) ?? []
   const removeSaved = useMutation(api.mates.removeSavedMate)
   const [open, setOpen] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -20,7 +25,7 @@ export default function MyMatesCard() {
     if (!confirm(`Remove ${name} from your saved mates?`)) return
     setBusyId(mateCustomerId)
     try {
-      await removeSaved({ mateCustomerId: mateCustomerId as Id<'customers'> })
+      await removeSaved({ mateCustomerId: mateCustomerId as Id<'customers'>, forAccountId: acctId })
     } catch (err: any) {
       alert(getErrorMessage(err) ?? 'Failed to remove mate')
     } finally {

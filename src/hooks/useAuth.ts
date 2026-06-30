@@ -127,24 +127,39 @@ export function useAuth() {
   //   undefined → still loading / logged out (matches the old 'skip' behaviour)
   //   null      → authenticated but no customers row yet (triggers auto-create)
   //   <doc>     → ready. Stays reactive to customers edits (getCurrentUser reads them).
-  const customerRecord = betterAuthUser
+  // The REAL signed-in account's record (the admin, when impersonating). Drives
+  // genuine admin status + keeps the admin panel/exit working while impersonating.
+  const realCustomerRecord = betterAuthUser
     ? ((betterAuthUser as any).customer ?? null)
     : undefined
+  const realIsAdmin = (realCustomerRecord?.role ?? null) === 'admin'
+
+  // ADMIN "view as user" (impersonation) — to show EXACTLY what the impersonated
+  // user sees, resolve THEIR customers record (admin-gated; the real caller IS the
+  // admin) and expose it as `customerRecord`. Everything downstream — profile
+  // fields, role-derived views (isCoach/isCustomer), email prefs, the My-Athletes
+  // account — then reflects the viewed user. `isAdmin` stays bound to the REAL
+  // admin (below) so admin access + exit-impersonation remain available. When NOT
+  // impersonating, customerRecord === realCustomerRecord (behaviour unchanged).
+  // Trichotomy preserved (undefined loading / null no-row / doc ready).
+  const impersonatedRecord = useQuery(
+    api.queries.getCustomerByEmail,
+    isImpersonating && realIsAdmin && impersonatedUser ? { email: impersonatedUser.email } : 'skip',
+  )
+  const customerRecord =
+    isImpersonating && realIsAdmin ? impersonatedRecord : realCustomerRecord
 
   // INF-1 (audit 2026-06): only coaches + admins consume the coach roster
-  // (getAllCoaches). useAuth runs on every page for every user, so an ungated
-  // subscription re-streamed the whole coach roster to every customer on any
-  // coach-row write. Gate it on the viewer's own role (customerRecord is in scope
-  // here; the later `isCoach` is not, to avoid a TDZ). Returns [] for customers.
+  // (getAllCoaches). Gate on the (possibly impersonated) viewer's role so the
+  // roster follows what they'd see. Returns [] for customers.
   const allCoachRecords = useQuery(
     api.queries.listCustomersByRole,
     (customerRecord?.role === 'coach' || customerRecord?.role === 'admin') ? { role: 'coach' } : 'skip',
   ) ?? []
   // SEC-1: listCustomers / listCoachInvites are admin-only — they throw "Unauthenticated"
-  // for logged-out and non-admin callers. useAuth runs on every page, so calling them
-  // unconditionally crashes the whole app at the root. Gate them on the viewer actually
-  // being an admin (derived from their own record, which returns null safely when logged out).
-  const isAdminViewer = (customerRecord?.role ?? null) === 'admin'
+  // for non-admin callers. Gate on the REAL admin (not the impersonated record) so the
+  // admin panel keeps working even while impersonating a customer.
+  const isAdminViewer = realIsAdmin
   const allCustomersAll = useQuery(api.queries.listCustomers, isAdminViewer ? {} : 'skip') ?? []
   const coachInviteRecords = useQuery(api.queries.listCoachInvites, isAdminViewer ? {} : 'skip') ?? []
 
@@ -179,7 +194,10 @@ export function useAuth() {
   // Convex useMutation returns a new reference each render, which would cause
   // the effect to re-fire on every render while customerRecord is null.
   useEffect(() => {
-    if (betterAuthUser?.email && customerRecord === null) {
+    // Only ever auto-create the REAL signed-in user's own record — never while
+    // impersonating (customerRecord is then the viewed user's, and the create
+    // would run against the admin's own email).
+    if (!isImpersonating && betterAuthUser?.email && customerRecord === null) {
       const email = betterAuthUser.email.toLowerCase().trim()
       // Skip if another useAuth instance already initiated this
       if (_customerCreateAttempted.has(email)) return
@@ -206,7 +224,9 @@ export function useAuth() {
   const customerRole = customerRecord?.role ?? 'customer'
   const isCoach = customerRole === 'coach'
   const isCustomer = customerRole === 'customer'
-  const isAdmin = customerRole === 'admin'
+  // Bound to the REAL admin — stays true while impersonating so the admin panel +
+  // exit-impersonation remain accessible (isCoach/isCustomer reflect the viewed user).
+  const isAdmin = realIsAdmin
 
   // Build user object compatible with existing UI
   const user = useMemo(() => {
@@ -273,18 +293,19 @@ export function useAuth() {
   // still be loading (undefined) right after betterAuthUser lands — write what we
   // have and let the follow-up render (with the record) refine role/postcode.
   useEffect(() => {
+    // Cache the REAL signed-in user's snapshot only (never the impersonated one).
     if (betterAuthUser && !isImpersonating) {
       writeUserCache({
         id: betterAuthUser.id,
         name: betterAuthUser.name ?? betterAuthUser.email.split('@')[0],
         email: betterAuthUser.email,
-        role: (customerRecord?.role as string) ?? 'customer',
-        postcode: (customerRecord as any)?.postcode,
-        suburb: (customerRecord as any)?.suburb,
+        role: (realCustomerRecord?.role as string) ?? 'customer',
+        postcode: (realCustomerRecord as any)?.postcode,
+        suburb: (realCustomerRecord as any)?.suburb,
         emailVerified: (betterAuthUser as any).emailVerified === true,
       })
     }
-  }, [betterAuthUser, customerRecord, isImpersonating])
+  }, [betterAuthUser, realCustomerRecord, isImpersonating])
 
   // ── Coach list (from Convex, real-time) ──────────────────────────────
   const getAllCoaches = useCallback(() => {

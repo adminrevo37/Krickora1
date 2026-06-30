@@ -65,6 +65,19 @@ async function getCallerCustomer(ctx: any): Promise<any | null> {
     .first();
 }
 
+// Resolve the "owner" account whose mates we read/modify. Defaults to the caller's
+// own account; an ADMIN may pass forAccountId to act on a VIEWED user (admin "view
+// as user"). A non-admin passing someone else's id is ignored (falls back to self),
+// so it can never read/modify another account's mates.
+async function resolveMatesOwner(ctx: any, forAccountId?: string): Promise<any | null> {
+  const caller = await getCallerContext(ctx);
+  if (!caller.identity) return null;
+  if (forAccountId && caller.isAdmin) {
+    return await ctx.db.get(forAccountId as any);
+  }
+  return await getCallerCustomer(ctx);
+}
+
 // Does this booking belong to customer C? Bookings join to accounts by email
 // (the reliable key — booking.userId is the auth subject, not customers._id).
 function bookingOwnedBy(booking: any, customer: any): boolean {
@@ -119,9 +132,9 @@ export const searchCustomerByMobile = mutation({
 // entry: { customerId, displayName, sharedCount }. Used by the Add-a-Mate
 // search ("Ben W. (x4)") and the profile "My Mates" section.
 export const listSavedMates = query({
-  args: {},
-  handler: async (ctx) => {
-    const caller = await getCallerCustomer(ctx);
+  args: { forAccountId: v.optional(v.id("customers")) },
+  handler: async (ctx, args) => {
+    const caller = await resolveMatesOwner(ctx, args.forAccountId);
     if (!caller) return [];
     const friendships = await ctx.db
       .query("friendships")
@@ -456,9 +469,9 @@ export const leaveBooking = mutation({
 // Remove a saved mate from the caller's friendships list (does NOT touch any
 // existing bookings). Used by swipe-to-delete in "My Mates".
 export const removeSavedMate = mutation({
-  args: { mateCustomerId: v.id("customers") },
+  args: { mateCustomerId: v.id("customers"), forAccountId: v.optional(v.id("customers")) },
   handler: async (ctx, args) => {
-    const caller = await getCallerCustomer(ctx);
+    const caller = await resolveMatesOwner(ctx, args.forAccountId);
     if (!caller) throw new ConvexError("Authentication required.");
     const rows = await ctx.db
       .query("friendships")

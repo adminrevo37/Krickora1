@@ -3,6 +3,7 @@ import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { getErrorMessage } from '../lib/errors'
+import { useImpersonation } from '../hooks/useImpersonation'
 import CoachMultiSelect from './CoachMultiSelect'
 
 /**
@@ -24,7 +25,13 @@ function sameSet(a: string[], b: string[]): boolean {
 }
 
 export default function MyAthletesCard() {
-  const athletesRaw = useQuery(api.athletes.listAthletesByAccount, {})
+  // ADMIN "view as user" — when impersonating, target the VIEWED account's athletes
+  // (the queries/mutations default to the caller, i.e. the admin, otherwise). The
+  // impersonated id is the customers _id (admin is authorised for any account).
+  const { impersonatedUser, isImpersonating } = useImpersonation()
+  const acctId =
+    isImpersonating && impersonatedUser ? (impersonatedUser.id as Id<'customers'>) : undefined
+  const athletesRaw = useQuery(api.athletes.listAthletesByAccount, { accountCustomerId: acctId })
   const athletes = athletesRaw ?? []
   const coaches = useQuery(api.queries.listCustomersByRole, { role: 'coach' }) ?? []
   const createAthlete = useMutation(api.athletes.createAthlete)
@@ -42,8 +49,8 @@ export default function MyAthletesCard() {
     if (ensuredRef.current || athletesRaw === undefined) return
     if (athletes.some((a: any) => a.isSelf)) return
     ensuredRef.current = true
-    ensureSelfAthlete({}).catch(() => { ensuredRef.current = false })
-  }, [athletesRaw, athletes, ensureSelfAthlete])
+    ensureSelfAthlete({ accountCustomerId: acctId }).catch(() => { ensuredRef.current = false })
+  }, [athletesRaw, athletes, ensureSelfAthlete, acctId])
 
   // A coach can't be their own coach — drop the account's own coach row from the
   // self-athlete's picker (no effect for a non-coach account: their id isn't a coach).
@@ -82,7 +89,7 @@ export default function MyAthletesCard() {
     }
     setAdding(true)
     try {
-      await createAthlete({ firstName, lastName })
+      await createAthlete({ firstName, lastName, accountCustomerId: acctId })
       setNewFirst('')
       setNewLast('')
       flash('success', `Added ${firstName} ${lastName}`)
