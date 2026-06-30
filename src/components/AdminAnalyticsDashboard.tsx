@@ -14,6 +14,7 @@ const ServerActivityTab = lazy(() => import('./analytics/ServerActivityTab'))
 const NewCustomersTab = lazy(() => import('./analytics/NewCustomersTab'))
 const BookingsTab = lazy(() => import('./analytics/BookingsTab'))
 const RevenueTab = lazy(() => import('./analytics/RevenueTab'))
+const WeeklyReportTab = lazy(() => import('./analytics/WeeklyReportTab'))
 const CompareTab = lazy(() => import('./analytics/CompareTab'))
 const UsageTab = lazy(() => import('./analytics/UsageTab'))
 const FunnelTab = lazy(() => import('./analytics/FunnelTab'))
@@ -33,6 +34,7 @@ const TABS = [
   { id: 'newcustomers', label: 'New Customers', icon: '🆕', range: false, subDay: false },
   { id: 'bookings', label: 'Bookings', icon: '📋', range: true, subDay: false },
   { id: 'revenue', label: 'Revenue', icon: '💰', range: true, subDay: false },
+  { id: 'report', label: 'Weekly Report', icon: '📄', range: false, subDay: false },
   { id: 'compare', label: 'Compare', icon: '📈', range: false, subDay: false },
   { id: 'usage', label: 'Usage', icon: '👥', range: true, subDay: true },
   { id: 'funnel', label: 'Funnel', icon: '🛒', range: true, subDay: true },
@@ -84,6 +86,7 @@ export default function AdminAnalyticsDashboard() {
         {tab === 'newcustomers' && <NewCustomersTab />}
         {tab === 'bookings' && <BookingsTab range={tabRange} />}
         {tab === 'revenue' && <RevenueTab range={tabRange} />}
+        {tab === 'report' && <WeeklyReportTab />}
         {tab === 'compare' && <CompareTab />}
         {tab === 'usage' && <UsageTab range={tabRange} />}
         {tab === 'funnel' && <FunnelTab range={tabRange} />}

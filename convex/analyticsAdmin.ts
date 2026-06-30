@@ -9,6 +9,8 @@ import { query } from "./_generated/server";
 import { v } from "convex/values";
 import { getCallerContext } from "./lib/adminGuard";
 import { defaultLaneName } from "./lib/lanes";
+import { computeCustomerPriceCents } from "./lib/pricing";
+import { discountAmountCents } from "./lib/discounts";
 import {
   DOW_LABELS,
   HOUR_MS,
@@ -945,6 +947,190 @@ export const getLaneWearCumulative = query({
         laneName: defaultLaneName(l),
         resetDate: resetByLane[l] ?? null,
       })),
+    };
+  },
+});
+
+// ============================================================================
+// WEEKLY REPORT (printable) — admin operations summary for one Mon–Sun week.
+//   • Section A: each coach's session count, hours, and $ billed for the week
+//     (from coachPrice — the statement figure; excludes statement-removed lines).
+//   • Section B: customer cash revenue PER DAY (Mon–Sun), by session day. Cash =
+//     authoritative Stripe net (stripePayments, paid/complete), with offline-paid
+//     admin bookings falling back to priceInCents − credit.
+//   • Section C: itemised account-credit and discount usage + weekly totals.
+// All amounts in dollars. Confirmed bookings only (pending/cancelled excluded).
+// ============================================================================
+
+const REPORT_DAY_LABELS = [
+  "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+];
+
+// Add N days to a YYYY-MM-DD using UTC arithmetic (calendar-safe, no TZ drift).
+function addDaysStr(date: string, n: number): string {
+  const [y, m, d] = date.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + n);
+  const pad = (x: number) => String(x).padStart(2, "0");
+  return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
+}
+
+export const getWeeklyReport = query({
+  // weekStart = the Monday of the week (YYYY-MM-DD). The client defaults this to
+  // the last completed Mon–Sun and lets the admin step weeks.
+  args: { weekStart: v.string() },
+  handler: async (ctx, args) => {
+    if (!(await isAdmin(ctx))) return null;
+    const weekStart = args.weekStart;
+    const weekEnd = addDaysStr(weekStart, 6);
+    const days = Array.from({ length: 7 }, (_, i) => addDaysStr(weekStart, i));
+
+    const settings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+
+    // Bookings whose SESSION date falls in the week (indexed range read).
+    const bookings = (await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.gte("date", weekStart).lte("date", weekEnd))
+      .collect()) as any[];
+
+    // Authoritative customer cash: Stripe net charges for sessions in the week,
+    // summed per booking (a top-up adds a 2nd row → both count).
+    const payments = (await ctx.db
+      .query("stripePayments")
+      .withIndex("by_date", (q: any) => q.gte("date", weekStart).lte("date", weekEnd))
+      .collect()) as any[];
+    const cashByBooking = new Map<string, number>();
+    for (const p of payments) {
+      const st = (p.status || "").toLowerCase();
+      if (st !== "paid" && st !== "complete") continue;
+      cashByBooking.set(p.bookingId, (cashByBooking.get(p.bookingId) ?? 0) + (p.amount || 0));
+    }
+
+    // Discount-code definitions (small table) → recompute the $ given per session.
+    const codeMap = new Map<string, any>();
+    for (const c of (await ctx.db.query("discountCodes").collect()) as any[]) {
+      codeMap.set((c.code || "").toLowerCase().trim(), c);
+    }
+
+    const coachMap = new Map<
+      string,
+      { name: string; email: string; sessions: number; hours: number; amount: number }
+    >();
+    const dayMap = new Map<
+      string,
+      { date: string; dayName: string; sessions: number; cash: number; creditUsed: number; discountGiven: number }
+    >();
+    for (const d of days) {
+      const dow = new Date(d + "T00:00:00Z").getUTCDay();
+      dayMap.set(d, { date: d, dayName: REPORT_DAY_LABELS[dow], sessions: 0, cash: 0, creditUsed: 0, discountGiven: 0 });
+    }
+
+    const creditItems: Array<{ date: string; customerName: string; amount: number; lane: string; startHour: number }> = [];
+    const discountItems: Array<{ date: string; customerName: string; code: string; amount: number; lane: string; startHour: number }> = [];
+
+    for (const b of bookings) {
+      if (b.status !== "confirmed") continue; // exclude pending/cancelled
+
+      if (b.isCoachBooking) {
+        if (b.statementExcluded) continue; // removed from the coach statement
+        const key = (b.customerEmail || "").toLowerCase().trim() || (b.customerName || "unknown");
+        const e =
+          coachMap.get(key) ??
+          { name: b.customerName || "Unknown", email: b.customerEmail || "", sessions: 0, hours: 0, amount: 0 };
+        e.sessions += 1;
+        e.hours += (b.duration || 0) / 60;
+        e.amount += b.coachPrice || 0;
+        coachMap.set(key, e);
+        continue;
+      }
+
+      // Customer booking
+      const day = dayMap.get(b.date);
+      if (!day) continue;
+      day.sessions += 1;
+
+      const id = b._id.toString();
+      let cash = 0;
+      if (cashByBooking.has(id)) cash = cashByBooking.get(id)!;
+      else if (b.paymentStatus === "paid") cash = Math.max(0, (b.priceInCents || 0) / 100 - (b.creditApplied || 0));
+      day.cash += cash;
+
+      const credit = b.creditApplied || 0;
+      if (credit > 0) {
+        day.creditUsed += credit;
+        creditItems.push({
+          date: b.date,
+          customerName: b.customerName || "Customer",
+          amount: credit,
+          lane: b.laneNameSnapshot || b.laneId,
+          startHour: b.startHour,
+        });
+      }
+
+      if (b.discountCode) {
+        const def = codeMap.get((b.discountCode || "").toLowerCase().trim());
+        let disc = 0;
+        if (def) {
+          let grossCents = computeCustomerPriceCents(settings as any, b.variantId, b.duration);
+          for (const _l of (b.additionalLaneIds || []) as string[]) {
+            grossCents += computeCustomerPriceCents(settings as any, null, b.duration);
+          }
+          const type = def.discountType ?? "percent";
+          if (type === "free") disc = grossCents / 100;
+          else
+            disc =
+              discountAmountCents(grossCents, {
+                discount: def.discount,
+                type: type === "fixed" ? "fixed" : "percent",
+                amountOff: def.amountOff ?? 0,
+                label: "",
+                bypassStripe: false,
+              } as any) / 100;
+        }
+        day.discountGiven += disc;
+        discountItems.push({
+          date: b.date,
+          customerName: b.customerName || "Customer",
+          code: b.discountCode,
+          amount: disc,
+          lane: b.laneNameSnapshot || b.laneId,
+          startHour: b.startHour,
+        });
+      }
+    }
+
+    const coaches = Array.from(coachMap.values())
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((c) => ({ ...c, hours: round2(c.hours), amount: round2(c.amount) }));
+    const dayList = days.map((d) => {
+      const x = dayMap.get(d)!;
+      return { ...x, cash: round2(x.cash), creditUsed: round2(x.creditUsed), discountGiven: round2(x.discountGiven) };
+    });
+
+    const byDateThenTime = (a: { date: string; startHour: number }, b: { date: string; startHour: number }) =>
+      a.date.localeCompare(b.date) || a.startHour - b.startHour;
+
+    return {
+      weekStart,
+      weekEnd,
+      coaches,
+      coachTotal: {
+        sessions: coaches.reduce((s, c) => s + c.sessions, 0),
+        hours: round2(coaches.reduce((s, c) => s + c.hours, 0)),
+        amount: round2(coaches.reduce((s, c) => s + c.amount, 0)),
+      },
+      days: dayList,
+      customerTotal: {
+        sessions: dayList.reduce((s, d) => s + d.sessions, 0),
+        cash: round2(dayList.reduce((s, d) => s + d.cash, 0)),
+        creditUsed: round2(dayList.reduce((s, d) => s + d.creditUsed, 0)),
+        discountGiven: round2(dayList.reduce((s, d) => s + d.discountGiven, 0)),
+      },
+      creditItems: creditItems.sort(byDateThenTime),
+      discountItems: discountItems.sort(byDateThenTime),
     };
   },
 });
