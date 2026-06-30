@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
-import { useSession, readHadSession, writeHadSession } from '../lib/auth-client'
+import { useSession, readHadSession, writeHadSession, readUserCache, writeUserCache, clearUserCache } from '../lib/auth-client'
 import { useImpersonation } from './useImpersonation'
 
 /**
@@ -64,6 +64,14 @@ export function useAuth() {
     if (betterAuthUser) writeHadSession(true)
   }, [betterAuthUser])
 
+  // SPEC_AUTH_LOADING_SMOOTHING §3e — optimistic auth hydration. Read the cached
+  // user snapshot ONCE on mount so a cold launch can paint the logged-in app
+  // immediately (provisional `user` below), before the get-session + Convex WS
+  // round-trips resolve. Reconciled to authoritative the moment getCurrentUser
+  // lands. Cosmetic only — role booleans + gates stay on the authoritative
+  // record (see below); the server enforces every privileged read/write.
+  const cachedUserRef = useRef(readUserCache())
+
   // ── TRUE loading state ───────────────────────────────────────────────
   // We consider it "loading" if:
   // 1. The Better Auth client is still fetching the session (sessionPending), OR
@@ -96,9 +104,13 @@ export function useAuth() {
     if (!sessionPending && !session?.user) {
       // Clear the stabilization flag + persisted hint — user genuinely signed out
       // (or the token expired). Clearing the hint here stops the next refresh from
-      // spinning on a session that no longer exists.
+      // spinning on a session that no longer exists. Also drop the optimistic user
+      // cache (§3e) so the next launch doesn't paint a logged-in shell for a session
+      // that is gone — it will correctly show the landing page instead.
       wasAuthenticatedRef.current = false
       writeHadSession(false)
+      clearUserCache()
+      cachedUserRef.current = null
       return false
     }
     // Fallback: keep previous state
@@ -198,7 +210,32 @@ export function useAuth() {
 
   // Build user object compatible with existing UI
   const user = useMemo(() => {
-    if (!betterAuthUser) return null
+    // SPEC_AUTH_LOADING_SMOOTHING §3e — provisional user from the localStorage
+    // cache while the authoritative getCurrentUser is still resolving on a cold
+    // launch. Conditions: not yet resolved (betterAuthUser undefined), we believe
+    // we had a session (hint), NOT impersonating, and a cache exists. This paints
+    // the logged-in header + booking view instantly instead of a multi-second
+    // spinner. Role here is cosmetic (display only) — the role booleans + gates
+    // below derive from the authoritative customers record, so admin/coach UI and
+    // the postcode/verify gates still wait for the real resolve. Reconciles as soon
+    // as betterAuthUser lands (this memo recomputes on that dep change).
+    if (!betterAuthUser) {
+      const cu = cachedUserRef.current
+      if (wasAuthenticatedRef.current && !isImpersonating && cu) {
+        return {
+          id: cu.id,
+          name: cu.name,
+          email: cu.email,
+          phone: undefined as string | undefined,
+          role: (cu.role as 'customer' | 'coach' | 'admin'),
+          color: undefined as string | undefined,
+          postcode: cu.postcode,
+          suburb: cu.suburb,
+          emailVerified: cu.emailVerified,
+        }
+      }
+      return null
+    }
     const base = {
       id: betterAuthUser.id,
       name: betterAuthUser.name ?? betterAuthUser.email.split('@')[0],
@@ -228,6 +265,26 @@ export function useAuth() {
     }
     return base
   }, [betterAuthUser, customerRecord, customerRole, isImpersonating, impersonatedUser])
+
+  // SPEC_AUTH_LOADING_SMOOTHING §3e — keep the optimistic user cache fresh from the
+  // AUTHORITATIVE identity + profile so the next cold launch hydrates instantly with
+  // current name/role/postcode/verify state. Never cache the impersonated identity
+  // (only the real signed-in admin's own resolves get cached). customerRecord may
+  // still be loading (undefined) right after betterAuthUser lands — write what we
+  // have and let the follow-up render (with the record) refine role/postcode.
+  useEffect(() => {
+    if (betterAuthUser && !isImpersonating) {
+      writeUserCache({
+        id: betterAuthUser.id,
+        name: betterAuthUser.name ?? betterAuthUser.email.split('@')[0],
+        email: betterAuthUser.email,
+        role: (customerRecord?.role as string) ?? 'customer',
+        postcode: (customerRecord as any)?.postcode,
+        suburb: (customerRecord as any)?.suburb,
+        emailVerified: (betterAuthUser as any).emailVerified === true,
+      })
+    }
+  }, [betterAuthUser, customerRecord, isImpersonating])
 
   // ── Coach list (from Convex, real-time) ──────────────────────────────
   const getAllCoaches = useCallback(() => {

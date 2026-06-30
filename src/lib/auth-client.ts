@@ -70,6 +70,74 @@ export function writeHadSession(had: boolean) {
   } catch {}
 }
 
+// ============================================================================
+// USER CACHE (SPEC_AUTH_LOADING_SMOOTHING §3e — optimistic auth hydration)
+// ----------------------------------------------------------------------------
+// A small NON-SECRET snapshot of the signed-in user, persisted so a cold PWA
+// launch can paint the logged-in app INSTANTLY from cache instead of showing a
+// multi-second spinner while the Better Auth get-session HTTP + Convex WS auth
+// round-trips resolve. useAuth seeds a provisional `user` from this when the
+// `hadSession` hint is set and the authoritative getCurrentUser hasn't landed
+// yet, then reconciles the moment it does.
+//
+// SECURITY: this is cosmetic only. The bearer token (above) is the sole secret
+// and already lives in localStorage. The cached `role` cannot escalate anything
+// — every privileged query/mutation is server-enforced (requireAdmin /
+// getUserIdentity), and the postcode/email-verify GATES wait for the
+// authoritative customers record, never this cache. A tampered cache yields at
+// most a few seconds of empty cosmetic chrome that returns no data. Cleared on
+// sign-out + definitive no-session. Never written while impersonating.
+// ============================================================================
+
+const USER_CACHE_KEY = "krickora.userCache";
+
+export type CachedUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  postcode?: string;
+  suburb?: string;
+  emailVerified: boolean;
+};
+
+export function readUserCache(): CachedUser | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(USER_CACHE_KEY);
+    if (!raw) return null;
+    const u = JSON.parse(raw);
+    if (u && typeof u.id === "string" && typeof u.email === "string" && typeof u.name === "string") {
+      return {
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        role: typeof u.role === "string" ? u.role : "customer",
+        postcode: typeof u.postcode === "string" ? u.postcode : undefined,
+        suburb: typeof u.suburb === "string" ? u.suburb : undefined,
+        emailVerified: u.emailVerified === true,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeUserCache(u: CachedUser) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(USER_CACHE_KEY, JSON.stringify(u));
+  } catch {}
+}
+
+export function clearUserCache() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(USER_CACHE_KEY);
+  } catch {}
+}
+
 const credentialFetch: typeof globalThis.fetch = async (input, init) => {
   const existingHeaders = (init?.headers as Record<string, string>) || {};
   const token = getStoredToken();
@@ -269,11 +337,13 @@ export async function signOutUser() {
     });
     setStoredToken(null);
     writeHadSession(false);
+    clearUserCache();
     return { success: true };
   } catch (error: any) {
     // Even if signOut fails server-side, clear the local token so the user is effectively logged out
     setStoredToken(null);
     writeHadSession(false);
+    clearUserCache();
     return { success: false, error: { message: error.message || "Sign out failed" } };
   }
 }

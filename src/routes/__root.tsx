@@ -62,9 +62,12 @@ function RootComponent() {
             </Link>
 
             <div className="flex items-center gap-3">
-              {isLoading ? (
-                <div className="w-20 h-8 bg-gray-100 rounded-xl animate-pulse" />
-              ) : isAuthenticated && user ? (
+              {/* SPEC_AUTH_LOADING_SMOOTHING §3e — prefer the logged-in chrome the
+                  moment we have a `user` (provisional from cache on a cold launch,
+                  or authoritative), so a returning user never sees the skeleton.
+                  Only fall back to the skeleton while loading with no user yet, then
+                  to the signed-out buttons when definitively logged out. */}
+              {isAuthenticated && user ? (
                 <>
                 {/* Book a Net — primary CTA, only for logged-in users (G1) */}
                 <Link
@@ -143,6 +146,12 @@ function RootComponent() {
                   )}
                 </div>
                 </>
+              ) : isLoading ? (
+                /* §3e — still resolving with no cached user (e.g. first launch on
+                   this device / cleared storage): show the skeleton, never the
+                   signed-out buttons, so we don't flash "logged out" for someone
+                   who turns out to be signed in. */
+                <div className="w-20 h-8 bg-gray-100 rounded-xl animate-pulse" />
               ) : (
                 <>
                   {/* G1 — explicit, equal-weight logged-out entry points */}

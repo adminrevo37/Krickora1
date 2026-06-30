@@ -22,7 +22,7 @@ export const Route = createFileRoute('/')({
 })
 
 function HomePage() {
-  const { isAuthenticated, isAdmin, isLoading } = useAuth()
+  const { isAuthenticated, isAdmin, isLoading, user } = useAuth()
   const { isImpersonating, impersonatedUser } = useImpersonation()
   const { date: initialDate } = Route.useSearch()
   const [showAuth, setShowAuth] = useState(false)
@@ -31,16 +31,16 @@ function HomePage() {
   const openSignUp = () => { setAuthMode('signup'); setShowAuth(true) }
   const openSignIn  = () => { setAuthMode('signin');  setShowAuth(true) }
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-      </div>
-    )
-  }
-
   // ── Logged-in users go straight to the booking calendar ──
-  if (isAuthenticated) {
+  // SPEC_AUTH_LOADING_SMOOTHING §3e — render as soon as we have a `user`
+  // (provisional from cache on a cold launch, or authoritative), so a returning
+  // user opens straight into the booking view instead of a multi-second spinner.
+  // The admin/coach branches key off the AUTHORITATIVE isAdmin, so during the
+  // brief provisional window a staff account shows the customer calendar (its
+  // own data still loading) until the real role resolves — then it swaps. The
+  // spinner below now only covers the cache-miss case (first launch / cleared
+  // storage); the landing page only shows once definitively logged out.
+  if (isAuthenticated && user) {
     // Admin impersonating a user — show the customer view for that user
     if (isAdmin && isImpersonating && impersonatedUser) {
       return (
@@ -75,6 +75,17 @@ function HomePage() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Heading removed (Inspector request) — the calendar leads directly. */}
         <BookingCalendar initialDate={initialDate} />
+      </div>
+    )
+  }
+
+  // ── Still resolving with no cached user (first launch on this device /
+  //    cleared storage): neutral spinner, never the landing page, so we don't
+  //    flash the signed-out hero to someone who turns out to be logged in. ──
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
       </div>
     )
   }
