@@ -138,6 +138,9 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const [activeTab, setActiveTab] = useState<'schedule' | 'past' | 'waitlist' | 'coaches'>('schedule')
   const [cancellingId, setCancellingId] = useState<string | null>(null)
   const [cancelError, setCancelError] = useState<string | null>(null)
+  // Coach late-cancel (within coachLateCancellationHours of start) → an explicit
+  // "you'll still be charged" confirmation before the cancel goes through.
+  const [cancelConfirm, setCancelConfirm] = useState<Booking | null>(null)
   // SPEC_CHECKOUT_ABANDONMENT — Pay-now / cancel-unpaid in-flight state.
   const [pendingPayId, setPendingPayId] = useState<string | null>(null)
   const [pendingPayError, setPendingPayError] = useState<string | null>(null)
@@ -387,13 +390,31 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
 
   // ── actions ─────────────────────────────────────────────────────────────────
 
-  const handleCancel = async (booking: Booking) => {
+  // Perform the actual cancellation (after any confirmation).
+  const doCancel = async (booking: Booking) => {
+    setCancelError(null)
+    setCancellingId(booking.id)
+    try {
+      await cancelBooking(booking.id, user?.id)
+      setCancelConfirm(null)
+    } catch (err: any) {
+      setCancelError(getErrorMessage(err) ?? 'Could not cancel. Please try again.')
+    } finally {
+      setCancellingId(null)
+    }
+  }
+
+  const handleCancel = (booking: Booking) => {
     setCancelError(null)
     const check = evaluateCancellation(booking)
     if (!check.allowed) { setCancelError(check.reason ?? 'Cannot cancel this booking.'); return }
-    setCancellingId(booking.id)
-    await cancelBooking(booking.id, user?.id)
-    setCancellingId(null)
+    // Coach cancelling inside the late-cancel window → warn that the session is
+    // still chargeable + require an explicit confirmation before proceeding.
+    if (booking.isCoachBooking && check.willBeCharged) {
+      setCancelConfirm(booking)
+      return
+    }
+    void doCancel(booking)
   }
 
   // SPEC_CHECKOUT_ABANDONMENT — resume payment for an unpaid booking. The server
@@ -1400,6 +1421,49 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           </div>
         </div>
       )}
+
+      {/* Coach late-cancellation warning — cancelling within the late-cancel window
+          still charges the coach's statement, so require an explicit confirmation. */}
+      {cancelConfirm && (() => {
+        const hrs = settings?.coachLateCancellationHours ?? 24
+        const [yy, mm, dd] = cancelConfirm.date.split('-').map(Number)
+        const dateLabel = new Date(yy, mm - 1, dd).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })
+        const timeRange = `${formatTime(cancelConfirm.startHour)} – ${formatTime(cancelConfirm.startHour + cancelConfirm.duration / 60)}`
+        const charge = cancelConfirm.coachPrice ?? getCoachPrice(cancelConfirm.duration)
+        const busy = cancellingId === cancelConfirm.id
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => { if (!busy) { setCancelConfirm(null); setCancelError(null) } }} />
+            <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm p-5">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xl">⚠️</span>
+                <h3 className="text-base font-bold text-gray-900 dark:text-white">Cancel within {hrs} hours?</h3>
+              </div>
+              <p className="text-sm text-gray-600 dark:text-gray-300">
+                This session (<span className="font-medium">{dateLabel}, {timeRange}</span>) starts within {hrs} hours. If you cancel now,{' '}
+                <span className="font-semibold text-gray-900 dark:text-white">
+                  your account will still be charged{Number.isFinite(charge) && charge > 0 ? ` $${charge}` : ''} to your statement and payment will be required.
+                </span>
+              </p>
+              {cancelError && (
+                <p className="text-xs text-red-600 dark:text-red-400 mt-2">{cancelError}</p>
+              )}
+              <div className="flex gap-3 mt-4">
+                <button
+                  onClick={() => { setCancelConfirm(null); setCancelError(null) }}
+                  disabled={busy}
+                  className="flex-1 py-2.5 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all disabled:opacity-50"
+                >Keep booking</button>
+                <button
+                  onClick={() => { void doCancel(cancelConfirm) }}
+                  disabled={busy}
+                  className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-xl transition-all disabled:opacity-50"
+                >{busy ? 'Cancelling…' : 'Cancel anyway'}</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
