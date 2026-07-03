@@ -34,6 +34,13 @@ function lastCompletedMonday(): string {
 }
 
 const money = (n: number | undefined) => `$${(n ?? 0).toFixed(2)}`
+// Account balance: > 0 = coach owes (amber), < 0 = coach in credit (green).
+function balanceCell(n: number | undefined) {
+  const v = n ?? 0
+  if (v > 0) return <span className="text-amber-700 font-semibold">{money(v)}</span>
+  if (v < 0) return <span className="text-emerald-700">{money(v)} cr</span>
+  return <span className="text-gray-400">$0.00</span>
+}
 function prettyDate(dateStr: string): string {
   const [y, m, d] = dateStr.split('-').map(Number)
   return new Date(y, m - 1, d).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
@@ -127,16 +134,17 @@ export default function WeeklyReportTab() {
           </div>
 
           {/* A — Coaches */}
-          <Section title="A · Coach bookings this week">
+          <Section title="A · Coach bookings & account balances this week">
             <table className="w-full border-collapse">
               <thead>
                 <tr className="text-left border-b border-gray-300">
-                  <Th>Coach</Th><Th right>Sessions</Th><Th right>Hours</Th><Th right>Amount</Th>
+                  <Th>Coach</Th><Th right>Sessions</Th><Th right>Hours</Th><Th right>Billed</Th>
+                  <Th right>Opening bal</Th><Th right>Paid (wk)</Th><Th right>Balance</Th>
                 </tr>
               </thead>
               <tbody>
                 {report.coaches.length === 0 && (
-                  <tr><td colSpan={4} className="py-3 text-gray-400 text-center">No coach sessions this week.</td></tr>
+                  <tr><td colSpan={7} className="py-3 text-gray-400 text-center">No coach activity this week.</td></tr>
                 )}
                 {report.coaches.map((c) => (
                   <tr key={c.email || c.name} className="border-b border-gray-100">
@@ -144,6 +152,9 @@ export default function WeeklyReportTab() {
                     <Td right>{c.sessions}</Td>
                     <Td right>{c.hours}</Td>
                     <Td right>{money(c.amount)}</Td>
+                    <Td right>{money(c.openingBalance)}</Td>
+                    <Td right>{c.paymentsThisWeek > 0 ? money(c.paymentsThisWeek) : '—'}</Td>
+                    <Td right>{balanceCell(c.currentBalance)}</Td>
                   </tr>
                 ))}
               </tbody>
@@ -153,9 +164,15 @@ export default function WeeklyReportTab() {
                   <Td right>{report.coachTotal.sessions}</Td>
                   <Td right>{report.coachTotal.hours}</Td>
                   <Td right>{money(report.coachTotal.amount)}</Td>
+                  <Td right>{money(report.coachTotal.openingBalance)}</Td>
+                  <Td right>{money(report.coachTotal.paymentsThisWeek)}</Td>
+                  <Td right>{balanceCell(report.coachTotal.currentBalance)}</Td>
                 </tr>
               </tfoot>
             </table>
+            <div className="text-[11px] text-gray-500 mt-1">
+              Balance = current account balance from the coach's statement (charges + adjustments − all payments), owing shown in amber. Opening balance is as at the Monday of this week; Paid (wk) is payments received Mon–Sun. Coaches with a payment this week but no session are listed with 0 sessions.
+            </div>
           </Section>
 
           {/* B — Daily customer revenue */}
