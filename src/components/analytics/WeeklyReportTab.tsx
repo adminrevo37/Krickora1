@@ -139,7 +139,7 @@ export default function WeeklyReportTab() {
               <thead>
                 <tr className="text-left border-b border-gray-300">
                   <Th>Coach</Th><Th right>Sessions</Th><Th right>Hours</Th><Th right>Billed</Th>
-                  <Th right>Opening bal</Th><Th right>Paid (wk)</Th><Th right>Balance</Th>
+                  <Th right>Opening bal</Th><Th right>Paid (wk)</Th><Th right>Closing bal</Th>
                 </tr>
               </thead>
               <tbody>
@@ -154,7 +154,7 @@ export default function WeeklyReportTab() {
                     <Td right>{money(c.amount)}</Td>
                     <Td right>{money(c.openingBalance)}</Td>
                     <Td right>{c.paymentsThisWeek > 0 ? money(c.paymentsThisWeek) : '—'}</Td>
-                    <Td right>{balanceCell(c.currentBalance)}</Td>
+                    <Td right>{balanceCell(c.closingBalance)}</Td>
                   </tr>
                 ))}
               </tbody>
@@ -166,12 +166,12 @@ export default function WeeklyReportTab() {
                   <Td right>{money(report.coachTotal.amount)}</Td>
                   <Td right>{money(report.coachTotal.openingBalance)}</Td>
                   <Td right>{money(report.coachTotal.paymentsThisWeek)}</Td>
-                  <Td right>{balanceCell(report.coachTotal.currentBalance)}</Td>
+                  <Td right>{balanceCell(report.coachTotal.closingBalance)}</Td>
                 </tr>
               </tfoot>
             </table>
             <div className="text-[11px] text-gray-500 mt-1">
-              Balance = current account balance from the coach's statement (charges + adjustments − all payments), owing shown in amber. Opening balance is as at the Monday of this week; Paid (wk) is payments received Mon–Sun. Coaches with a payment this week but no session are listed with 0 sessions.
+              Closing bal = the coach's account balance as at the END of this week (charges + adjustments − payments dated up to Sunday), owing shown in amber — reconciles as Opening + Billed − Paid (later bookings are excluded). Opening bal is as at the Monday of this week; Paid (wk) is payments received Mon–Sun. Coaches with a payment this week but no session are listed with 0 sessions.
             </div>
           </Section>
 

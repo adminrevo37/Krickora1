@@ -1107,20 +1107,20 @@ export const getWeeklyReport = query({
     // the coach's statement page: balance = booked + adjustments − paid, with
     // statement-excluded charges counted as $0 and late-cancelled coach bookings
     // still charged.
-    const todayKey = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
     const coachDocs = (await ctx.db
       .query("customers")
       .withIndex("by_role", (q: any) => q.eq("role", "coach"))
       .collect()) as any[];
 
-    // Booked charges up to today (indexed), split before-week vs to-today, by email.
+    // Booked charges up to the END of the displayed week (indexed), split
+    // before-week vs to-week-end, by email.
     const bookedBeforeByEmail = new Map<string, number>();
-    const bookedToTodayByEmail = new Map<string, number>();
-    const bookingsToToday = (await ctx.db
+    const bookedToWeekEndByEmail = new Map<string, number>();
+    const bookingsToWeekEnd = (await ctx.db
       .query("bookings")
-      .withIndex("by_date", (q: any) => q.lte("date", todayKey))
+      .withIndex("by_date", (q: any) => q.lte("date", weekEnd))
       .collect()) as any[];
-    for (const b of bookingsToToday) {
+    for (const b of bookingsToWeekEnd) {
       const isCoachCharge =
         b.isCoachBooking === true || (typeof b.coachPrice === "number" && b.coachPrice > 0);
       if (!isCoachCharge) continue;
@@ -1130,7 +1130,7 @@ export const getWeeklyReport = query({
       if (cost === 0) continue;
       const email = (b.customerEmail ?? "").toLowerCase().trim();
       if (!email) continue;
-      bookedToTodayByEmail.set(email, (bookedToTodayByEmail.get(email) ?? 0) + cost);
+      bookedToWeekEndByEmail.set(email, (bookedToWeekEndByEmail.get(email) ?? 0) + cost);
       if (b.date < weekStart)
         bookedBeforeByEmail.set(email, (bookedBeforeByEmail.get(email) ?? 0) + cost);
     }
@@ -1138,21 +1138,19 @@ export const getWeeklyReport = query({
     // Payments, split before-week / this-week / total, by coachId.
     const paidBeforeByCoach = new Map<string, number>();
     const paidThisWeekByCoach = new Map<string, number>();
-    const paidTotalByCoach = new Map<string, number>();
     for (const p of (await ctx.db.query("payments").collect()) as any[]) {
       const cid = String(p.coachId ?? "");
       if (!cid) continue;
       const amt = Number(p.amount) || 0;
       const dr = p.dateReceived ?? "";
-      paidTotalByCoach.set(cid, (paidTotalByCoach.get(cid) ?? 0) + amt);
       if (dr && dr < weekStart) paidBeforeByCoach.set(cid, (paidBeforeByCoach.get(cid) ?? 0) + amt);
       if (dr >= weekStart && dr <= weekEnd)
         paidThisWeekByCoach.set(cid, (paidThisWeekByCoach.get(cid) ?? 0) + amt);
     }
 
-    // Coach statement adjustments, split before-week / to-today, by coachId.
+    // Coach statement adjustments, split before-week / to-week-end, by coachId.
     const adjBeforeByCoach = new Map<string, number>();
-    const adjToTodayByCoach = new Map<string, number>();
+    const adjToWeekEndByCoach = new Map<string, number>();
     for (const a of (await ctx.db
       .query("statementAdjustments")
       .withIndex("by_subject", (q: any) => q.eq("subjectType", "coach"))
@@ -1161,29 +1159,31 @@ export const getWeeklyReport = query({
       if (!cid) continue;
       const d = a.date ?? "";
       const delta = Number(a.delta) || 0;
-      if (d && d <= todayKey) adjToTodayByCoach.set(cid, (adjToTodayByCoach.get(cid) ?? 0) + delta);
+      if (d && d <= weekEnd) adjToWeekEndByCoach.set(cid, (adjToWeekEndByCoach.get(cid) ?? 0) + delta);
       if (d && d < weekStart) adjBeforeByCoach.set(cid, (adjBeforeByCoach.get(cid) ?? 0) + delta);
     }
 
     // Per-coach finance keyed by email (charges key by email; pay/adj by coachId).
     const financeByEmail = new Map<
       string,
-      { openingBalance: number; paymentsThisWeek: number; currentBalance: number }
+      { openingBalance: number; paymentsThisWeek: number; closingBalance: number }
     >();
     for (const c of coachDocs) {
       const email = (c.email ?? "").toLowerCase().trim();
       if (!email) continue;
       const cid = String(c._id);
       const bookedBefore = bookedBeforeByEmail.get(email) ?? 0;
-      const bookedToToday = bookedToTodayByEmail.get(email) ?? 0;
+      const bookedToWeekEnd = bookedToWeekEndByEmail.get(email) ?? 0;
       const paidBefore = paidBeforeByCoach.get(cid) ?? 0;
-      const paidTotal = paidTotalByCoach.get(cid) ?? 0;
+      const paidThisWeek = paidThisWeekByCoach.get(cid) ?? 0;
       const adjBefore = adjBeforeByCoach.get(cid) ?? 0;
-      const adjToToday = adjToTodayByCoach.get(cid) ?? 0;
+      const adjToWeekEnd = adjToWeekEndByCoach.get(cid) ?? 0;
       financeByEmail.set(email, {
         openingBalance: round2(bookedBefore + adjBefore - paidBefore),
-        paymentsThisWeek: round2(paidThisWeekByCoach.get(cid) ?? 0),
-        currentBalance: round2(bookedToToday + adjToToday - paidTotal),
+        paymentsThisWeek: round2(paidThisWeek),
+        // Balance as at the END of the displayed week (not live), so it reconciles:
+        // opening + booked(wk) + adjustments(wk) − paid(wk).
+        closingBalance: round2(bookedToWeekEnd + adjToWeekEnd - (paidBefore + paidThisWeek)),
       });
       // Include a coach who received a payment this week even with no session.
       if ((paidThisWeekByCoach.get(cid) ?? 0) !== 0 && !coachMap.has(email)) {
@@ -1201,7 +1201,7 @@ export const getWeeklyReport = query({
           amount: round2(c.amount),
           openingBalance: fin?.openingBalance ?? 0,
           paymentsThisWeek: fin?.paymentsThisWeek ?? 0,
-          currentBalance: fin?.currentBalance ?? 0,
+          closingBalance: fin?.closingBalance ?? 0,
         };
       });
     const dayList = days.map((d) => {
@@ -1222,7 +1222,7 @@ export const getWeeklyReport = query({
         amount: round2(coaches.reduce((s, c) => s + c.amount, 0)),
         openingBalance: round2(coaches.reduce((s, c) => s + c.openingBalance, 0)),
         paymentsThisWeek: round2(coaches.reduce((s, c) => s + c.paymentsThisWeek, 0)),
-        currentBalance: round2(coaches.reduce((s, c) => s + c.currentBalance, 0)),
+        closingBalance: round2(coaches.reduce((s, c) => s + c.closingBalance, 0)),
       },
       days: dayList,
       customerTotal: {
