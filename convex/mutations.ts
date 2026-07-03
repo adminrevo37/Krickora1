@@ -1186,6 +1186,138 @@ export const createBooking = mutation({
       skipVariantCheck: effectiveIsCoachBooking || isAdminManual,
     });
 
+    // ── Auto-merge back-to-back coach bookings ───────────────────────────────
+    // When a coach books a slot exactly adjacent to an existing coach booking of
+    // theirs on the SAME lane/date/variant, EXTEND that booking instead of making
+    // a second one: one door code, one continuous Google Calendar event (so HA
+    // powers the machine + holds the code for the whole session), one statement
+    // line. Single-lane confirmed coach bookings only; the survivor's door code is
+    // preserved and its event extended in place. Admin-managed bookings are left
+    // alone (respects the lock). Gap-fill between TWO coach bookings merges one
+    // side; the admin "merge consecutive" tool cleans up any remainder.
+    const canAutoMerge =
+      effectiveIsCoachBooking &&
+      effectiveStatus === "confirmed" &&
+      (args.additionalLaneIds ?? []).length === 0 &&
+      !(isAdminCaller && args.createdByAdmin); // never fold a managed booking into another
+    if (canAutoMerge) {
+      const emailKey = args.customerEmail.toLowerCase().trim();
+      const adj = dayBookings.find((b: any) => {
+        if (b.status === "cancelled" || b.isCoachBooking !== true) return false;
+        if (b.createdByAdmin === true) return false; // don't silently alter a managed booking
+        if ((b.customerEmail ?? "").toLowerCase().trim() !== emailKey) return false;
+        if (b.laneId !== args.laneId) return false;
+        if ((b.variantId ?? null) !== (args.variantId ?? null)) return false;
+        if (((b.additionalLaneIds as string[]) ?? []).length !== 0) return false;
+        const bEnd = b.startHour + b.duration / 60;
+        // Exactly adjacent on either side (float-safe, < ~1 min gap).
+        return Math.abs(bEnd - args.startHour) < 0.017 || Math.abs(endHour - b.startHour) < 0.017;
+      }) as any;
+      if (adj) {
+        const survivorCode = adj.accessCode ?? bookingAccessCode;
+        const mergedStart = Math.min(adj.startHour, args.startHour);
+        const mergedEnd = Math.max(adj.startHour + adj.duration / 60, endHour);
+        const mergedDuration = Math.round((mergedEnd - mergedStart) * 60);
+        // Sum the prices (like the manual merge tool) so an admin-adjusted price on
+        // the existing booking is preserved + the standard new-hour rate is added.
+        const mergedCoachPrice =
+          Math.round(((adj.coachPrice ?? 0) + (effectiveCoachPrice ?? 0)) * 100) / 100;
+        // The new slots keep their absolute times; stamp the survivor's shared code.
+        const newSlots = (normalizedAthleteSlots ?? []).map((s: any) => ({
+          ...s,
+          accessCode: survivorCode,
+          codeGeneratedAt: s.codeGeneratedAt ?? new Date().toISOString(),
+        }));
+        const mergedSlots = [...(((adj.athleteSlots as any[]) ?? [])), ...newSlots];
+        const mergedNotesArr = [adj.notes, args.notes].filter(
+          (n: any): n is string => typeof n === "string" && n.trim().length > 0
+        );
+        const mergedSnap = await resolveLaneSnapshot(ctx, adj.laneId, adj.variantId, adj.date, mergedStart);
+
+        await ctx.db.patch(adj._id, {
+          startHour: mergedStart,
+          duration: mergedDuration,
+          coachPrice: mergedCoachPrice,
+          athleteSlots: mergedSlots.length > 0 ? mergedSlots : undefined,
+          notes: mergedNotesArr.length > 0 ? mergedNotesArr.join(" | ") : adj.notes,
+          laneNameSnapshot: mergedSnap.laneNameSnapshot,
+          variantLabelSnapshot: mergedSnap.variantLabelSnapshot,
+          reminderSent: false,
+        });
+
+        // Live feed: record the extend as a modify on the survivor.
+        await recordBookingEvent(ctx, {
+          type: "modified",
+          bookingId: adj._id.toString(),
+          customerName: adj.customerName ?? args.customerName,
+          actorName: args.customerName,
+          isCoachBooking: true,
+          before: { date: adj.date, startHour: adj.startHour, duration: adj.duration, lane: adj.laneNameSnapshot ?? adj.laneId ?? "", variant: adj.variantLabelSnapshot ?? undefined },
+          after: { date: adj.date, startHour: mergedStart, duration: mergedDuration, lane: mergedSnap.laneNameSnapshot, variant: mergedSnap.variantLabelSnapshot ?? undefined },
+        });
+
+        // Google Calendar: extend the survivor's event IN PLACE so HA powers the
+        // machine + holds the door code for the WHOLE merged session. Create it if
+        // the survivor has no event yet (never leave the merged session eventless).
+        const calSlots = mergedSlots.map((s: any) => ({ athleteName: s.athleteName, startHour: s.startHour, durationMinutes: s.durationMinutes }));
+        const hadEvent = !!adj.googleCalendarEventId || (Array.isArray(adj.googleCalendarEventIds) && adj.googleCalendarEventIds.length > 0);
+        if (hadEvent) {
+          await ctx.scheduler.runAfter(0, internal.googleCalendar.updateCalendarEvent, {
+            googleCalendarEventId: adj.googleCalendarEventId ?? "",
+            laneId: adj.laneId,
+            variantId: adj.variantId,
+            date: adj.date,
+            startHour: mergedStart,
+            duration: mergedDuration,
+            customerName: adj.customerName,
+            customerEmail: adj.customerEmail,
+            customerPhone: adj.customerPhone,
+            status: "confirmed",
+            isCoachBooking: true,
+            accessCode: survivorCode,
+            additionalLaneIds: undefined,
+            athleteSlots: calSlots,
+            laneCalendarEventIds: adj.googleCalendarEventIds,
+            laneNameSnapshot: mergedSnap.laneNameSnapshot,
+            variantLabelSnapshot: mergedSnap.variantLabelSnapshot,
+          });
+        } else {
+          await ctx.scheduler.runAfter(0, internal.googleCalendar.createCalendarEvent, {
+            bookingId: adj._id.toString(),
+            laneId: adj.laneId,
+            variantId: adj.variantId,
+            date: adj.date,
+            startHour: mergedStart,
+            duration: mergedDuration,
+            customerName: adj.customerName,
+            customerEmail: adj.customerEmail,
+            customerPhone: adj.customerPhone,
+            status: "confirmed",
+            isCoachBooking: true,
+            accessCode: survivorCode,
+            additionalLaneIds: undefined,
+            athleteSlots: calSlots,
+            laneNameSnapshot: mergedSnap.laneNameSnapshot,
+            variantLabelSnapshot: mergedSnap.variantLabelSnapshot,
+          });
+        }
+
+        // Notify only the NEWLY-added athletes' parents (existing ones unchanged).
+        if (newSlots.length > 0) {
+          await scheduleAllocationEmails(ctx, {
+            slots: newSlots,
+            laneId: adj.laneId,
+            date: adj.date,
+            bookingAccessCode: survivorCode,
+            coachName: adj.customerName ?? args.customerName,
+          });
+        }
+
+        // Merged into the existing booking — return its id (no second row).
+        return adj._id;
+      }
+    }
+
     const id = await ctx.db.insert("bookings", {
       laneId: args.laneId,
       variantId: args.variantId,
@@ -5143,6 +5275,53 @@ export const mergeConsecutiveCoachBookings = mutation({
           if (allExtraLanes.length > 0) patch.additionalLaneIds = allExtraLanes;
 
           await ctx.db.patch(first._id, patch);
+
+          // M8 fix (audit 2026-07): extend the SURVIVOR's OWN calendar event to the
+          // merged duration. Previously the merge only deleted the later blocks'
+          // events and never grew the first block's event, so HA still saw a 1-hour
+          // session → the bowling-machine power cut off + the door code deactivated
+          // mid-session. Update in place (create if the survivor had no event yet).
+          // Note: if the merge unions additionalLaneIds the primary event carries the
+          // duration fix; per-extra-lane events are a rare admin-tool edge.
+          {
+            const survSlots = ((patch.athleteSlots ?? first.athleteSlots ?? []) as any[]).map((s: any) => ({
+              athleteName: s.athleteName,
+              startHour: s.startHour,
+              durationMinutes: s.durationMinutes,
+            }));
+            const survHadEvent =
+              !!first.googleCalendarEventId ||
+              (Array.isArray(first.googleCalendarEventIds) && first.googleCalendarEventIds.length > 0);
+            const survPayload = {
+              laneId: first.laneId,
+              variantId: first.variantId,
+              date: first.date,
+              startHour: first.startHour,
+              duration: totalDuration,
+              customerName: first.customerName,
+              customerEmail: first.customerEmail,
+              customerPhone: first.customerPhone,
+              status: "confirmed",
+              isCoachBooking: true,
+              accessCode: first.accessCode,
+              additionalLaneIds: patch.additionalLaneIds ?? first.additionalLaneIds,
+              athleteSlots: survSlots,
+              laneNameSnapshot: first.laneNameSnapshot,
+              variantLabelSnapshot: first.variantLabelSnapshot,
+            };
+            if (survHadEvent) {
+              await ctx.scheduler.runAfter(0, internal.googleCalendar.updateCalendarEvent, {
+                googleCalendarEventId: first.googleCalendarEventId ?? "",
+                laneCalendarEventIds: first.googleCalendarEventIds,
+                ...survPayload,
+              });
+            } else {
+              await ctx.scheduler.runAfter(0, internal.googleCalendar.createCalendarEvent, {
+                bookingId: first._id.toString(),
+                ...survPayload,
+              });
+            }
+          }
 
           // Hard-delete the subsequent bookings; clean up their GCal events
           for (let k = 1; k < chain.length; k++) {
