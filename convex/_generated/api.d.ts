@@ -21,6 +21,7 @@ import type * as analyticsUsage from "../analyticsUsage.js";
 import type * as announcements from "../announcements.js";
 import type * as athletes from "../athletes.js";
 import type * as auth from "../auth.js";
+import type * as billingCaps from "../billingCaps.js";
 import type * as bookingEvents from "../bookingEvents.js";
 import type * as broadcast from "../broadcast.js";
 import type * as closures from "../closures.js";
@@ -99,6 +100,7 @@ declare const fullApi: ApiFromModules<{
   announcements: typeof announcements;
   athletes: typeof athletes;
   auth: typeof auth;
+  billingCaps: typeof billingCaps;
   bookingEvents: typeof bookingEvents;
   broadcast: typeof broadcast;
   closures: typeof closures;

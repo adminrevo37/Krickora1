@@ -135,6 +135,8 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName, ed
         </div>
       </div>
 
+      {editable && <WeeklyCapEditor coachId={coachId} />}
+
       {editable && (
         <AddAdjustmentForm
           today={todayStr}
@@ -197,6 +199,70 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName, ed
             </table>
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ── Weekly billing cap editor (admin) ──────────────────────────────────────
+// Sets customers.weeklyBillingCap. On save the backend backfill-reconciles the
+// last 13 weeks, inserting/updating a "Weekly billing cap" credit line on every
+// over-cap week (visible in the ledger below + the weekly report closing balance).
+function WeeklyCapEditor({ coachId }: { coachId: string }) {
+  const capData = useQuery((api as any).billingCaps.getCoachWeeklyCap, coachId ? { coachId } : 'skip')
+  const setCap = useMutation((api as any).billingCaps.setCoachWeeklyCap)
+  const [value, setValue] = useState('')
+  const [touched, setTouched] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const current: number | null = capData?.cap ?? null
+  const display = touched ? value : current == null ? '' : String(current)
+
+  const save = async (raw: string | null) => {
+    setBusy(true)
+    try {
+      let cap: number | null = null
+      if (raw != null && raw.trim() !== '') {
+        cap = Math.round(parseFloat(raw) * 100) / 100
+        if (isNaN(cap) || cap < 0) { alert('Enter a valid cap amount (0 or more).'); return }
+      }
+      await setCap({ coachId, cap } as any)
+      setTouched(false)
+    } catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to save cap') }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="text-sm font-semibold text-gray-800">Weekly billing cap</div>
+        <div className="flex items-center gap-1">
+          <span className="text-gray-500">$</span>
+          <input
+            type="number" min="0" step="1" inputMode="decimal"
+            value={display}
+            onChange={(e) => { setTouched(true); setValue(e.target.value) }}
+            placeholder="no cap"
+            className="w-28 border border-gray-300 rounded-lg px-2 py-1 text-sm"
+          />
+          <span className="text-gray-500 text-sm">/ week</span>
+        </div>
+        <button
+          disabled={busy || capData === undefined}
+          onClick={() => save(display)}
+          className="px-3 py-1.5 rounded-lg bg-gray-900 text-white text-sm font-semibold disabled:opacity-50"
+        >Save</button>
+        {current != null && (
+          <button
+            disabled={busy}
+            onClick={() => save(null)}
+            className="px-3 py-1.5 rounded-lg bg-gray-100 text-gray-700 text-sm font-semibold disabled:opacity-50"
+          >Remove cap</button>
+        )}
+      </div>
+      <div className="text-xs text-gray-500 mt-2">
+        {current == null
+          ? 'No cap — the coach is charged for every session.'
+          : `Charged at most $${current.toFixed(2)} per Mon–Sun week; any excess is auto-credited as a "Weekly billing cap" line on the over-cap week.`}
       </div>
     </div>
   )

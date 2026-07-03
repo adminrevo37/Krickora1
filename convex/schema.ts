@@ -156,6 +156,12 @@ export default defineSchema({
     coachTier: v.optional(v.string()), // 'L1' | 'L2'
     defaultSessionDuration: v.optional(v.number()), // coach default athlete slot duration in minutes
     athleteCapacity: v.optional(v.number()), // coach max athletes per session (1-5); drives auto-populate
+    // Weekly billing cap (2026-07): the MOST this coach is charged per Mon–Sun week
+    // of coach sessions (dollars). When a week's booked charges exceed it, a system
+    // statement-adjustment line ("Weekly billing cap") credits the excess so the
+    // week nets to the cap. Reconciled on coach booking create/cancel + a nightly
+    // cron (convex/billingCaps.ts). Absent/undefined = no cap.
+    weeklyBillingCap: v.optional(v.number()),
     // Coach allocation mode (2026-06): UNticked/absent (default) = coach runs athletes
     // SEQUENTIALLY → auto-advance the next slot's start + smart-order the athlete picker
     // by recent history. ticked (true) = coaches multiple at once → independent slots.

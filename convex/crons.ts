@@ -69,6 +69,17 @@ crons.hourly(
 // 2026-06-23 silent-failure lockout class) and re-push any STALE door code so HA
 // always loads the booking's authoritative stored code. Forward ~14-day window,
 // by_date-bounded. 02:00 AWST = 18:00 UTC (after retention; quiet hours).
+// Weekly coach billing caps (2026-07) — nightly backstop that re-caps this + last
+// week for every capped coach, so the "Weekly billing cap" credit line stays in
+// sync with any charge change not individually triggered (modify / price edit /
+// statement-exclude). 02:30 AWST = 18:30 UTC. Booking create/cancel also reconcile
+// immediately (convex/billingCaps.ts).
+crons.daily(
+  "weekly-billing-caps",
+  { hourUTC: 18, minuteUTC: 30 },
+  internal.billingCaps.reconcileAllWeeklyCapsInternal
+);
+
 crons.daily(
   "calendar-reconcile",
   { hourUTC: 18, minuteUTC: 0 },

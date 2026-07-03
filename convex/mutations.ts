@@ -31,6 +31,7 @@ import { composeName, splitName } from "./lib/names";
 import { resolveCanonicalCustomerByEmail } from "./lib/identity";
 import { assertValidLocation, validateLocationIfProvided, normalizePostcode, normalizeSuburb } from "./lib/locations";
 import { notifyMatesOnCancel, notifyMatesOnModify } from "./mates";
+import { scheduleCapReconcileForBooking } from "./billingCaps";
 
 // ============================================================================
 // SHARED HELPERS
@@ -760,6 +761,16 @@ export async function applyBookingChange(
     }
   }
 
+  // Weekly billing cap (2026-07): a coach modify can change the week's charge
+  // (duration → coachPrice) or move the session to another week — re-cap both the
+  // old and new weeks (no-op for uncapped coaches / customer bookings).
+  if (booking.isCoachBooking) {
+    await scheduleCapReconcileForBooking(ctx, booking.customerEmail, booking.date);
+    if (change.newDate !== booking.date) {
+      await scheduleCapReconcileForBooking(ctx, booking.customerEmail, change.newDate);
+    }
+  }
+
   return { droppedAthletes: droppedSlots.map((s: any) => s.athleteName) };
 }
 
@@ -1313,6 +1324,8 @@ export const createBooking = mutation({
           });
         }
 
+        // Weekly billing cap: this coach's week just gained charge — re-cap it.
+        await scheduleCapReconcileForBooking(ctx, adj.customerEmail ?? args.customerEmail, adj.date);
         // Merged into the existing booking — return its id (no second row).
         return adj._id;
       }
@@ -1523,6 +1536,12 @@ export const createBooking = mutation({
         laneNameSnapshot: laneSnap.laneNameSnapshot,
         variantLabelSnapshot: laneSnap.variantLabelSnapshot,
       });
+    }
+
+    // Weekly billing cap (2026-07): a new coach session may push this coach's week
+    // over their cap — reconcile the credit line (no-op for uncapped coaches).
+    if (effectiveIsCoachBooking) {
+      await scheduleCapReconcileForBooking(ctx, args.customerEmail, args.date);
     }
 
     return id;
@@ -2074,6 +2093,13 @@ export const cancelBooking = mutation({
         before: booking.athleteSlots,
         after: booking.athleteSlots,
       });
+    }
+
+    // Weekly billing cap (2026-07): a cancelled coach session removes charge from
+    // the week (unless it's a late-cancel that's still billed) — re-cap it so the
+    // cap credit shrinks/clears (no-op for uncapped coaches).
+    if (booking.isCoachBooking) {
+      await scheduleCapReconcileForBooking(ctx, booking.customerEmail, booking.date);
     }
 
     return args.id;
