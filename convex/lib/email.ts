@@ -199,7 +199,37 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
       };
 
     // ── Payment ───────────────────────────────────────────────────────────────
-    case "payment-confirmation":
+    case "payment-confirmation": {
+      // Merged confirmation: when the paid-booking session details are present,
+      // this is the customer's ONE booking email — door code + session up top,
+      // payment receipt below. Falls back to the plain receipt (e.g. a top-up)
+      // when no session details were supplied.
+      const isBooking = Boolean(d.laneName);
+      if (isBooking) {
+        return {
+          subject: `Booking confirmed — ${esc(d.laneName)}, ${esc(d.date)}`,
+          html: layout({
+            title: "Booking confirmed",
+            preheader: `${esc(d.laneName)} on ${esc(d.date)}${d.accessCode ? ` — door code ${esc(d.accessCode)}` : ""}.`,
+            bodyHtml:
+              p(`Hi ${greetFirst(d, "customerName")}, your session is confirmed and your payment has been received.`) +
+              (d.accessCode ? codeBox(d.accessCode) : "") +
+              detailRows([
+                ["Lane", d.laneName],
+                ["Date", d.date],
+                ["Time", d.timeSlot],
+                ["Duration", d.duration],
+              ]) +
+              linkLine("How to find us — directions, parking & getting in:", `${SITE}/access`) +
+              heading("Payment") +
+              detailRows([
+                ["Amount", d.amount],
+                ["Reference", d.reference],
+                ["Date", d.paymentDate],
+              ]),
+          }),
+        };
+      }
       return {
         subject: "Payment received — Cricket Revolution",
         html: layout({
@@ -215,6 +245,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
             ]),
         }),
       };
+    }
 
     // Admin-sent payment request (e.g. a top-up for an extended session).
     case "payment-link":

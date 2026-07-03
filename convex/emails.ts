@@ -227,6 +227,15 @@ export const sendPaymentConfirmation = internalAction({
     description: v.string(),
     reference: v.string(),
     paymentDate: v.string(),
+    // Optional session/door-code fields. When present (the paid-booking confirm
+    // path), the template renders ONE merged email: door code + session details
+    // up top, payment receipt below. When absent (e.g. an admin top-up receipt),
+    // it renders the plain receipt as before.
+    laneName: v.optional(v.string()),
+    date: v.optional(v.string()),
+    timeSlot: v.optional(v.string()),
+    duration: v.optional(v.string()),
+    accessCode: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     if (!(await emailEnabledForUser(ctx, args.to, "payment-confirmation"))) {
@@ -240,6 +249,11 @@ export const sendPaymentConfirmation = internalAction({
       description: args.description,
       reference: args.reference,
       paymentDate: args.paymentDate,
+      ...(args.laneName ? { laneName: args.laneName } : {}),
+      ...(args.date ? { date: args.date } : {}),
+      ...(args.timeSlot ? { timeSlot: args.timeSlot } : {}),
+      ...(args.duration ? { duration: args.duration } : {}),
+      ...(args.accessCode ? { accessCode: args.accessCode } : {}),
     });
   },
 });

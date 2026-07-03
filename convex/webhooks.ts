@@ -5,7 +5,7 @@ import { redeemCredit } from "./lib/credit";
 import { recordDiscountRedemption } from "./lib/discounts";
 import { releaseHoldForBooking } from "./lib/slotHolds";
 import { scheduleWaitlistAdvance } from "./waitlist";
-import { applyBookingChange } from "./mutations";
+import { applyBookingChange, fmtHour12, durationLabel, fmtAwstDateLabel } from "./mutations";
 import { laneNameForBooking } from "./lib/lanes";
 
 /**
@@ -249,6 +249,10 @@ export const confirmBookingPayment = internalMutation({
         day: "numeric",
       });
 
+      // ONE merged email: door code + session details up top, payment receipt
+      // below. The paid-booking path (this branch) always has the session +
+      // door code, so the customer's single confirmation email carries the code.
+      const endHour = b.startHour + b.duration / 60;
       await ctx.scheduler.runAfter(0, internal.emails.sendPaymentConfirmation, {
         to: b.customerEmail,
         customerName: b.customerName ?? "there",
@@ -256,6 +260,11 @@ export const confirmBookingPayment = internalMutation({
         description,
         reference: args.stripeSessionId,
         paymentDate,
+        laneName,
+        date: fmtAwstDateLabel(b.date),
+        timeSlot: `${fmtHour12(b.startHour)} - ${fmtHour12(endHour)}`,
+        duration: durationLabel(b.duration),
+        ...(b.accessCode ? { accessCode: String(b.accessCode) } : {}),
       });
 
       // R4: record the authoritative payment row (Stripe-verified amount/status)

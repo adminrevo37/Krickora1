@@ -36,7 +36,9 @@ import { notifyMatesOnCancel, notifyMatesOnModify } from "./mates";
 // SHARED HELPERS
 // ============================================================================
 
-function fmtHour12(h: number): string {
+// Exported so the Stripe webhook (confirmBookingPayment) can format the merged
+// booking-confirmation + receipt email identically to createBooking's email.
+export function fmtHour12(h: number): string {
   const hr = Math.floor(h);
   const min = Math.round((h - hr) * 60);
   const period = hr >= 12 ? "PM" : "AM";
@@ -44,14 +46,14 @@ function fmtHour12(h: number): string {
   return `${display}:${min.toString().padStart(2, "0")} ${period}`;
 }
 
-function durationLabel(m: number): string {
+export function durationLabel(m: number): string {
   return m === 60 ? "1 hour" : m === 90 ? "1.5 hours" : m === 120 ? "2 hours" : `${m} minutes`;
 }
 
 // Format a YYYY-MM-DD booking date as a weekday-long label in AWST (Bug #4).
 // toLocaleDateString without an explicit timeZone uses the Convex server zone
 // (UTC), which can flip the weekday at the day boundary for AWST recipients.
-function fmtAwstDateLabel(dateStr: string): string {
+export function fmtAwstDateLabel(dateStr: string): string {
   return new Date(dateStr + "T00:00:00").toLocaleDateString("en-US", {
     timeZone: "Australia/Perth",
     weekday: "long",
