@@ -952,8 +952,13 @@ export const createBooking = mutation({
     // Server-owned coach price (coaches billed separately, no Stripe): derive from the
     // admin coachPerHour rate rather than trusting the client amount.
     const coachPerHourRate = (siteSettings as any)?.coachPerHour ?? PRICE_DEFAULTS.coachPerHour;
+    // M6 fix (2026-07): a coach booking spanning MULTIPLE lanes (additionalLaneIds)
+    // is charged PER LANE — matching the customer per-lane rule and the client
+    // booking preview. Previously coachPrice = duration×rate only, so a 4-lane block
+    // billed for 1 lane (e.g. $50 instead of $200).
+    const coachLaneCount = 1 + (args.additionalLaneIds?.length ?? 0);
     const effectiveCoachPrice = effectiveIsCoachBooking
-      ? Math.round((args.duration / 60) * coachPerHourRate * 100) / 100
+      ? Math.round((args.duration / 60) * coachPerHourRate * coachLaneCount * 100) / 100
       : undefined;
     const awstNow = getAWSTNow();
 
@@ -2401,8 +2406,10 @@ export const modifyBooking = mutation({
     let oldGrossCents = 0;
     if (isCoach) {
       // C2: coach price is per-hour (matches createBooking + the client preview).
+      // M6: per-lane (primary + additional lanes), like createBooking.
       const coachPerHour = settings?.coachPerHour ?? PRICE_DEFAULTS.coachPerHour;
-      newCoachPrice = Math.round((effDuration / 60) * coachPerHour * 100) / 100;
+      const coachLaneCount = 1 + (effAddl?.length ?? 0);
+      newCoachPrice = Math.round((effDuration / 60) * coachPerHour * coachLaneCount * 100) / 100;
     } else {
       const laneCents = (variantId: string | null) =>
         computeCustomerPriceCents(settings, variantId, effDuration);
@@ -3192,7 +3199,9 @@ async function writeCoachSessionCopy(
   // SPEC_ANALYTICS_ATHLETE_CATCHMENT: snapshot each athlete's home suburb.
   const copiedSlotsWithSuburbs = (await attachAthleteSuburbs(ctx, copiedSlots)) ?? [];
 
-  const newCoachPrice = Math.round((src.duration / 60) * coachPerHour * 100) / 100;
+  // M6: per-lane — the copy carries src.additionalLaneIds below, so price all lanes.
+  const copyLaneCount = 1 + ((src.additionalLaneIds as any[])?.length ?? 0);
+  const newCoachPrice = Math.round((src.duration / 60) * coachPerHour * copyLaneCount * 100) / 100;
   const newId = await ctx.db.insert("bookings", {
     laneId: src.laneId,
     variantId: src.variantId,
