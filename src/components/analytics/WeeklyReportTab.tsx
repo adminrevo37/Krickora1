@@ -138,8 +138,8 @@ export default function WeeklyReportTab() {
             <table className="w-full border-collapse">
               <thead>
                 <tr className="text-left border-b border-gray-300">
-                  <Th>Coach</Th><Th right>Sessions</Th><Th right>Hours</Th><Th right>Billed</Th>
-                  <Th right>Opening bal</Th><Th right>Paid (wk)</Th><Th right>Closing bal</Th>
+                  <Th>Coach</Th><Th right>Sessions</Th><Th right>Hours</Th>
+                  <Th right>Opening bal</Th><Th right>Charges (wk)</Th><Th right>Payments (wk)</Th><Th right>Closing bal</Th>
                 </tr>
               </thead>
               <tbody>
@@ -151,8 +151,8 @@ export default function WeeklyReportTab() {
                     <Td>{c.name}</Td>
                     <Td right>{c.sessions}</Td>
                     <Td right>{c.hours}</Td>
-                    <Td right>{money(c.amount)}</Td>
-                    <Td right>{money(c.openingBalance)}</Td>
+                    <Td right>{balanceCell(c.openingBalance)}</Td>
+                    <Td right>{c.amount > 0 ? money(c.amount) : '—'}</Td>
                     <Td right>{c.paymentsThisWeek > 0 ? money(c.paymentsThisWeek) : '—'}</Td>
                     <Td right>{balanceCell(c.closingBalance)}</Td>
                   </tr>
@@ -163,15 +163,15 @@ export default function WeeklyReportTab() {
                   <Td>Total</Td>
                   <Td right>{report.coachTotal.sessions}</Td>
                   <Td right>{report.coachTotal.hours}</Td>
+                  <Td right>{balanceCell(report.coachTotal.openingBalance)}</Td>
                   <Td right>{money(report.coachTotal.amount)}</Td>
-                  <Td right>{money(report.coachTotal.openingBalance)}</Td>
                   <Td right>{money(report.coachTotal.paymentsThisWeek)}</Td>
                   <Td right>{balanceCell(report.coachTotal.closingBalance)}</Td>
                 </tr>
               </tfoot>
             </table>
             <div className="text-[11px] text-gray-500 mt-1">
-              Closing bal = the coach's account balance as at the END of this week (charges + adjustments − payments dated up to Sunday), owing shown in amber — reconciles as Opening + Billed − Paid (later bookings are excluded). Opening bal is as at the Monday of this week; Paid (wk) is payments received Mon–Sun. Coaches with a payment this week but no session are listed with 0 sessions.
+              Each row reads as a mini-statement: <strong>Opening bal + Charges (wk) − Payments (wk) = Closing bal</strong>. Opening bal = carried-forward balance as at Monday (a credit shows green, e.g. “$12.50 cr”). Charges (wk) = only the coach's sessions dated in THIS Mon–Sun week — a session (incl. a multi-lane block) shows in the week it falls on, so earlier sessions sit in the opening balance and future ones aren't charged until they occur. Owing shown in amber.
             </div>
           </Section>
 
