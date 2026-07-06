@@ -120,7 +120,7 @@ export default function WeeklyReportTab() {
           {/* Summary band */}
           <div className="grid grid-cols-4 gap-3 mb-6 wr-avoid-break">
             {[
-              { label: 'Coach billings', value: money(report.coachTotal.amount), sub: `${report.coachTotal.sessions} sessions · ${report.coachTotal.hours} hrs` },
+              { label: 'Coach billings', value: money(report.coachTotal.chargesThisWeek), sub: `${report.coachTotal.sessions} sessions · ${report.coachTotal.hours} hrs` },
               { label: 'Customer cash', value: money(report.customerTotal.cash), sub: `${report.customerTotal.sessions} sessions` },
               { label: 'Account credit used', value: money(report.customerTotal.creditUsed), sub: `${report.creditItems.length} session(s)` },
               { label: 'Discounts given', value: money(report.customerTotal.discountGiven), sub: `${report.discountItems.length} session(s)` },
@@ -152,7 +152,7 @@ export default function WeeklyReportTab() {
                     <Td right>{c.sessions}</Td>
                     <Td right>{c.hours}</Td>
                     <Td right>{balanceCell(c.openingBalance)}</Td>
-                    <Td right>{c.amount > 0 ? money(c.amount) : '—'}</Td>
+                    <Td right>{c.chargesThisWeek !== 0 ? money(c.chargesThisWeek) : '—'}</Td>
                     <Td right>{c.paymentsThisWeek > 0 ? money(c.paymentsThisWeek) : '—'}</Td>
                     <Td right>{balanceCell(c.closingBalance)}</Td>
                   </tr>
@@ -164,14 +164,14 @@ export default function WeeklyReportTab() {
                   <Td right>{report.coachTotal.sessions}</Td>
                   <Td right>{report.coachTotal.hours}</Td>
                   <Td right>{balanceCell(report.coachTotal.openingBalance)}</Td>
-                  <Td right>{money(report.coachTotal.amount)}</Td>
+                  <Td right>{money(report.coachTotal.chargesThisWeek)}</Td>
                   <Td right>{money(report.coachTotal.paymentsThisWeek)}</Td>
                   <Td right>{balanceCell(report.coachTotal.closingBalance)}</Td>
                 </tr>
               </tfoot>
             </table>
             <div className="text-[11px] text-gray-500 mt-1">
-              Each row reads as a mini-statement: <strong>Opening bal + Charges (wk) − Payments (wk) = Closing bal</strong>. Opening bal = carried-forward balance as at Monday (a credit shows green, e.g. “$12.50 cr”). Charges (wk) = only the coach's sessions dated in THIS Mon–Sun week — a session (incl. a multi-lane block) shows in the week it falls on, so earlier sessions sit in the opening balance and future ones aren't charged until they occur. Owing shown in amber.
+              Each row reads as a mini-statement: <strong>Opening bal + Charges (wk) − Payments (wk) = Closing bal</strong>. Opening bal = carried-forward balance as at Monday (a credit shows green, e.g. “$12.50 cr”). Charges (wk) = the coach's sessions dated in THIS Mon–Sun week — including any late-cancellation charges (a late-cancelled coach session is still billed) and any statement adjustment dated this week. A session (incl. a multi-lane block) shows in the week it falls on, so earlier sessions sit in the opening balance and future ones aren't charged until they occur. Owing shown in amber.
             </div>
           </Section>
 

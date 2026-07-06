@@ -1164,9 +1164,14 @@ export const getWeeklyReport = query({
     }
 
     // Per-coach finance keyed by email (charges key by email; pay/adj by coachId).
+    // chargesThisWeek is the AUTHORITATIVE weekly charge for the balance: session
+    // charges dated this week by the statement charge rule (INCLUDING late-cancel
+    // charges, which the confirmed-only Section A "amount" omitted) PLUS any
+    // statement adjustments dated this week. Closing is DERIVED from it, so every
+    // row reconciles exactly: Opening + Charges − Payments = Closing.
     const financeByEmail = new Map<
       string,
-      { openingBalance: number; paymentsThisWeek: number; closingBalance: number }
+      { openingBalance: number; chargesThisWeek: number; paymentsThisWeek: number; closingBalance: number }
     >();
     for (const c of coachDocs) {
       const email = (c.email ?? "").toLowerCase().trim();
@@ -1178,15 +1183,18 @@ export const getWeeklyReport = query({
       const paidThisWeek = paidThisWeekByCoach.get(cid) ?? 0;
       const adjBefore = adjBeforeByCoach.get(cid) ?? 0;
       const adjToWeekEnd = adjToWeekEndByCoach.get(cid) ?? 0;
+      const openingBalance = round2(bookedBefore + adjBefore - paidBefore);
+      const chargesThisWeek = round2((bookedToWeekEnd - bookedBefore) + (adjToWeekEnd - adjBefore));
       financeByEmail.set(email, {
-        openingBalance: round2(bookedBefore + adjBefore - paidBefore),
+        openingBalance,
+        chargesThisWeek,
         paymentsThisWeek: round2(paidThisWeek),
-        // Balance as at the END of the displayed week (not live), so it reconciles:
-        // opening + booked(wk) + adjustments(wk) − paid(wk).
-        closingBalance: round2(bookedToWeekEnd + adjToWeekEnd - (paidBefore + paidThisWeek)),
+        closingBalance: round2(openingBalance + chargesThisWeek - paidThisWeek),
       });
-      // Include a coach who received a payment this week even with no session.
-      if ((paidThisWeekByCoach.get(cid) ?? 0) !== 0 && !coachMap.has(email)) {
+      // Include a coach with weekly financial activity (charge or payment) even if
+      // Section A's confirmed-session filter didn't already list them (e.g. a coach
+      // whose only week activity is a late-cancel charge or an adjustment).
+      if ((chargesThisWeek !== 0 || paidThisWeek !== 0) && !coachMap.has(email)) {
         coachMap.set(email, { name: c.name || email, email: c.email || "", sessions: 0, hours: 0, amount: 0 });
       }
     }
@@ -1200,6 +1208,7 @@ export const getWeeklyReport = query({
           hours: round2(c.hours),
           amount: round2(c.amount),
           openingBalance: fin?.openingBalance ?? 0,
+          chargesThisWeek: fin?.chargesThisWeek ?? round2(c.amount),
           paymentsThisWeek: fin?.paymentsThisWeek ?? 0,
           closingBalance: fin?.closingBalance ?? 0,
         };
@@ -1220,6 +1229,7 @@ export const getWeeklyReport = query({
         sessions: coaches.reduce((s, c) => s + c.sessions, 0),
         hours: round2(coaches.reduce((s, c) => s + c.hours, 0)),
         amount: round2(coaches.reduce((s, c) => s + c.amount, 0)),
+        chargesThisWeek: round2(coaches.reduce((s, c) => s + c.chargesThisWeek, 0)),
         openingBalance: round2(coaches.reduce((s, c) => s + c.openingBalance, 0)),
         paymentsThisWeek: round2(coaches.reduce((s, c) => s + c.paymentsThisWeek, 0)),
         closingBalance: round2(coaches.reduce((s, c) => s + c.closingBalance, 0)),
