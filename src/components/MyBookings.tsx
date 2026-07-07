@@ -1040,6 +1040,78 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     )
   }
 
+  // ── customer/general List view: a flat date-grouped list of ALL upcoming
+  // bookings (own + shared mate bookings), so a customer can see every upcoming
+  // booking at once instead of one day at a time. Mirrors the coach List (§2.12)
+  // without the coach-only athlete-allocation banner.
+  const renderCustomerList = () => {
+    const byDate: Record<string, DayItem[]> = {}
+    for (const b of scheduleBookings) (byDate[b.date] ??= []).push({ kind: 'own', b })
+    for (const b of sharedBookings) (byDate[b.date] ??= []).push({ kind: 'shared', b })
+    const sortedDates = Object.keys(byDate).sort()
+    for (const d of sortedDates) byDate[d].sort((a, b) => a.b.startHour - b.b.startHour)
+
+    if (sortedDates.length === 0) {
+      return (
+        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-8 text-center">
+          <div className="text-3xl mb-2">📭</div>
+          <h3 className="font-semibold text-gray-700 dark:text-gray-300 text-sm">No upcoming bookings</h3>
+          <p className="text-xs text-gray-400 mt-1">Book a net from the calendar — they'll all appear here</p>
+          <Link to="/" className="inline-block mt-3 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-semibold rounded-xl transition-colors">
+            Book Now
+          </Link>
+        </div>
+      )
+    }
+
+    return (
+      <div className="space-y-4">
+        {sortedDates.map(date => {
+          const isToday = date === todayKey
+          const isTomorrow = date === toDateKey(addDays(now, 1))
+          const items = byDate[date]
+          const dateObj = new Date(date + 'T00:00:00')
+          let dateLabel: string
+          let dateSub: string
+          if (isToday) {
+            dateLabel = 'Today'
+            dateSub = dateObj.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+          } else if (isTomorrow) {
+            dateLabel = 'Tomorrow'
+            dateSub = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          } else {
+            dateLabel = dateObj.toLocaleDateString('en-US', { weekday: 'long' })
+            dateSub = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+          }
+          return (
+            <div key={date} className="space-y-2">
+              <div className="flex items-center gap-2">
+                <div className={`px-2.5 py-1 rounded-lg text-xs font-bold ${
+                  isToday
+                    ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
+                    : isTomorrow
+                      ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
+                }`}>
+                  {dateLabel}
+                </div>
+                <span className="text-xs text-gray-400 dark:text-gray-500">{dateSub}</span>
+                <span className="ml-auto text-[10px] bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 px-1.5 py-0.5 rounded-full">
+                  {items.length}
+                </span>
+              </div>
+              {items.map(item => (
+                <div key={(item.kind === 'own' ? 'o-' : 's-') + item.b.id}>
+                  {item.kind === 'own' ? renderBookingCard(item.b) : renderSharedBookingCard(item.b)}
+                </div>
+              ))}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
   // ── unified day view (§2): date strip + status dots + the selected day's cards ─
   const renderDayView = () => {
     const selectedLabel = new Date(selectedDateKey + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
@@ -1208,21 +1280,23 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       {/* ── SCHEDULE TAB — unified day view; coaches toggle Week | List (§2.12) ── */}
       {activeTab === 'schedule' && (
         <div className="space-y-3">
-          {isCoach && (
-            <div className="flex justify-end">
-              <div className="inline-flex bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5">
-                <button
-                  onClick={() => setCoachView('week')}
-                  className={`text-xs font-semibold px-3 py-1 rounded-md transition-all ${coachView === 'week' ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-800 dark:text-gray-200' : 'text-gray-500 dark:text-gray-400'}`}
-                >Week</button>
-                <button
-                  onClick={() => setCoachView('list')}
-                  className={`text-xs font-semibold px-3 py-1 rounded-md transition-all ${coachView === 'list' ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-800 dark:text-gray-200' : 'text-gray-500 dark:text-gray-400'}`}
-                >List</button>
-              </div>
+          {/* Week | List toggle — shown for everyone now (customers get a List of all
+              their upcoming bookings, coaches keep their allocation-aware List). */}
+          <div className="flex justify-end">
+            <div className="inline-flex bg-gray-100 dark:bg-gray-800 rounded-lg p-0.5">
+              <button
+                onClick={() => setCoachView('week')}
+                className={`text-xs font-semibold px-3 py-1 rounded-md transition-all ${coachView === 'week' ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-800 dark:text-gray-200' : 'text-gray-500 dark:text-gray-400'}`}
+              >Week</button>
+              <button
+                onClick={() => setCoachView('list')}
+                className={`text-xs font-semibold px-3 py-1 rounded-md transition-all ${coachView === 'list' ? 'bg-white dark:bg-gray-700 shadow-sm text-gray-800 dark:text-gray-200' : 'text-gray-500 dark:text-gray-400'}`}
+              >List</button>
             </div>
-          )}
-          {isCoach && coachView === 'list' ? renderCoachSchedule() : renderDayView()}
+          </div>
+          {coachView === 'list'
+            ? (isCoach ? renderCoachSchedule() : renderCustomerList())
+            : renderDayView()}
         </div>
       )}
 
