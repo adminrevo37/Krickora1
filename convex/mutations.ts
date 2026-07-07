@@ -926,7 +926,18 @@ export const createBooking = mutation({
     if (args.startHour < OPENING_HOUR && !allowPreOpen) {
       throw new ConvexError("Booking starts before opening time.");
     }
-    if (endHour > CLOSING_HOUR) {
+    // SPEC_ADMIN_AFTER_HOURS_BOOKING_2026-07 — admins may book the after-hours slot
+    // (start ≥ close, end ≤ 22:00 / 10pm), for customers OR coaches. Hidden from the
+    // public calendar (it renders only up to `close`, unchanged). Derived from the
+    // RESOLVED admin caller server-side, so a crafted customer/coach request can never
+    // set it; only starts at/after the close get the extension (no 8–10pm).
+    const AFTER_HOURS_CEILING = 22;
+    const allowAfterHours =
+      isAdminCaller &&
+      args.startHour >= CLOSING_HOUR &&
+      endHour > CLOSING_HOUR &&
+      endHour <= AFTER_HOURS_CEILING + 1e-9;
+    if (endHour > CLOSING_HOUR && !allowAfterHours) {
       throw new ConvexError("Booking extends past closing time.");
     }
 
@@ -1200,6 +1211,10 @@ export const createBooking = mutation({
       startHour: args.startHour,
       durationMinutes: args.duration,
       skipVariantCheck: effectiveIsCoachBooking || isAdminManual,
+      // Admin after-hours (9–10pm) booking: don't reject the segment-boundary cross
+      // at the day's close. There is no lane segment past 21:00 to legitimately cross,
+      // and allowAfterHours is admin-derived above, so the server stays authoritative.
+      allowAfterHours,
     });
 
     // ── Auto-merge back-to-back coach bookings ───────────────────────────────

@@ -68,8 +68,25 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   // Cap durations so an admin booking can't cross a segment boundary (§2.14) —
   // createBooking rejects a crossing booking server-side, so mirror the cap here.
   const segEndHour = resolveLaneAt(lane.id, dateKey, startHour).segment.endHour
+  // SPEC_ADMIN_AFTER_HOURS_BOOKING_2026-07: admin-only 9–10pm slot. When the clicked
+  // start is at/after the day's close, extend the effective ceiling to 22:00 (10pm)
+  // so durations/multi-lane checks aren't clipped to `close` (which would return []).
+  // Public calendars never surface a start ≥ close, so this branch is admin-only.
+  const AFTER_HOURS_CEILING = 22
+  const dayClose = getHoursForDate(getSettingsStore().get(), dateKey).close
+  const afterHours = startHour >= dayClose
 
   const availableDurations = useMemo(() => {
+    // After-hours (9–10pm) slot: the close-clipping helpers return [] for a start at/
+    // after close, so special-case it — offer whole/half-hour options that fit within
+    // the 22:00 ceiling and don't conflict, for EITHER a customer or a coach target.
+    if (afterHours) {
+      return [30, 60].filter(
+        (d) =>
+          startHour + d / 60 <= AFTER_HOURS_CEILING + 1e-9 &&
+          !hasConflict(existingBookings, lane.id, dateKey, startHour, d)
+      )
+    }
     // Admin gap-fill override: when only a 30-min slot physically fits (e.g. between
     // two back-to-back coach bookings, or against closing), offer it for EITHER a
     // customer or a coach session. The customer helper already returns [30] there,
@@ -85,7 +102,7 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
       ? getCoachDurations(existingBookings, lane.id, dateKey, startHour)
       : getCustomerDurations(existingBookings, lane.id, dateKey, startHour)
     return base.filter((d) => startHour + d / 60 <= segEndHour + 1e-9)
-  }, [existingBookings, lane.id, dateKey, startHour, isCoach, segEndHour])
+  }, [existingBookings, lane.id, dateKey, startHour, isCoach, segEndHour, afterHours])
 
   const [duration, setDuration] = useState<number>(() => availableDurations[0] ?? 60)
   const [recurrence, setRecurrence] = useState<Recurrence>('none')
@@ -130,13 +147,15 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
 
   // Determine which other lanes are available for the same start + duration (no conflicts on first occurrence)
   const otherLanes = useMemo(() => {
-    const dayClose = getHoursForDate(getSettingsStore().get(), dateKey).close
+    // SPEC_ADMIN_AFTER_HOURS_BOOKING_2026-07: for the admin 9–10pm slot the effective
+    // close is 22:00, so a multi-lane 9–10pm booking isn't wrongly flagged past-close.
+    const closeCeil = afterHours ? AFTER_HOURS_CEILING : getHoursForDate(getSettingsStore().get(), dateKey).close
     return LANES.filter(l => l.id !== lane.id).map(l => ({
       lane: l,
       conflict: hasConflict(existingBookings, l.id, dateKey, startHour, duration) ||
-                (startHour + duration / 60) > dayClose,
+                (startHour + duration / 60) > closeCeil + 1e-9,
     }))
-  }, [lane.id, existingBookings, dateKey, startHour, duration])
+  }, [lane.id, existingBookings, dateKey, startHour, duration, afterHours])
 
   // Auto-prune additional lanes that became conflicting after duration change
   useEffect(() => {

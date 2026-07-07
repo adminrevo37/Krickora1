@@ -137,6 +137,9 @@ export async function validateAndSnapshotLane(
     startHour: number;
     durationMinutes: number;
     skipVariantCheck?: boolean;
+    // SPEC_ADMIN_AFTER_HOURS_BOOKING_2026-07: admin 9–10pm booking may end past the
+    // day's close segment boundary (no real segment exists past 21:00 to cross).
+    allowAfterHours?: boolean;
   }
 ): Promise<{ laneNameSnapshot: string; variantLabelSnapshot: string; segment: Segment }> {
   const rows = await loadLaneRows(ctx);
@@ -148,7 +151,7 @@ export async function validateAndSnapshotLane(
     : defaultLaneRows().find((r) => r.laneId === args.laneId)?.segments ?? [];
 
   const { segment, crosses } = segmentForBooking(segments, args.startHour, args.durationMinutes);
-  if (crosses) {
+  if (crosses && !args.allowAfterHours) {
     throw new ConvexError(
       "This booking would span a lane setup change. Please pick a shorter duration or a different start time."
     );
