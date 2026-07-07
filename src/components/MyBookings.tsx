@@ -535,12 +535,26 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     if (!booking.variantId) return null
     return getLane(booking.laneId)?.variants?.find(v => v.id === booking.variantId)?.name ?? null
   }
+  // Multi-lane aware. A booking spanning multiple lanes (additionalLaneIds) is
+  // charged PER LANE, so the card must reflect the full charge, not one lane's.
   const getBookingPrice = (booking: Booking) => {
-    if (booking.isCoachBooking) return booking.coachPrice ?? getCoachPrice(booking.duration)
+    const laneCount = 1 + (booking.additionalLaneIds?.length ?? 0)
+    if (booking.isCoachBooking) {
+      // coachPrice is the server-computed total (incl. all lanes, M6 2026-07).
+      return booking.coachPrice ?? getCoachPrice(booking.duration) * laneCount
+    }
+    // Prefer the actual charged total — it reflects multi-lane pricing, discounts,
+    // comp ($0) and admin overrides. Fall back to a per-lane recompute × lane count.
+    if (booking.priceInCents != null) return Math.round(booking.priceInCents) / 100
     const lane = getLane(booking.laneId)
-    if (!lane) return 40
-    return getLanePrice(lane, booking.variantId ?? null, booking.duration)
+    const perLane = lane ? getLanePrice(lane, booking.variantId ?? null, booking.duration) : 40
+    return perLane * laneCount
   }
+  // "$157.50" / "$60" — 2dp only when needed.
+  const fmtMoney = (n: number) => (Number.isInteger(n) ? `${n}` : n.toFixed(2))
+  // All lane names for a booking (primary + additional), e.g. ["BM 3","RU 1","RU 2"].
+  const bookingLaneNames = (b: Booking) =>
+    [b.laneId, ...(b.additionalLaneIds ?? [])].map((id) => getLane(id)?.name ?? id)
 
   // Waitlist tab is driven by the REAL Convex waitlist table (reactive — anyone
   // joining/leaving updates this live), not the old in-memory store. Remove calls
@@ -590,6 +604,8 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const renderCoachBookingCard = (booking: Booking) => {
     const lane = getLane(booking.laneId)
     const variantName = getVariantName(booking)
+    const laneNames = bookingLaneNames(booking)
+    const laneCount = laneNames.length
     const cancelCheck = evaluateCancellation(booking)
     // §6: allocation-coverage. §1D — card shell tints by coverage state.
     const cov = coverageSummary(booking)
@@ -625,7 +641,10 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
               ) : null}
             </div>
             <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              {lane?.icon} {lane?.name ?? booking.laneId}
+              {lane?.icon} {laneNames.join(', ')}
+              {laneCount > 1 && (
+                <span className="ml-1 text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded-full align-middle">{laneCount} lanes</span>
+              )}
               {variantName && <span className="ml-1 text-gray-400">· {variantName}</span>}
               <span className="ml-1 text-gray-400">· {formatDuration(booking.duration)}</span>
             </div>
@@ -758,6 +777,8 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     const lane = getLane(booking.laneId)
     const variantName = getVariantName(booking)
     const price = getBookingPrice(booking)
+    const laneNames = bookingLaneNames(booking)
+    const laneCount = laneNames.length
 
     // SPEC_CHECKOUT_ABANDONMENT (layer 1) — an unpaid booking is NOT a confirmed
     // booking. Show it as "Awaiting payment" (amber) with Pay now / Cancel, never
@@ -776,7 +797,10 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                 <span className="text-[10px] font-semibold bg-amber-200 dark:bg-amber-800/50 text-amber-800 dark:text-amber-200 px-1.5 py-0.5 rounded-full uppercase tracking-wide">Awaiting payment</span>
               </div>
               <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                {lane?.icon} {lane?.name ?? booking.laneId}
+                {lane?.icon} {laneNames.join(', ')}
+                {laneCount > 1 && (
+                  <span className="ml-1 text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded-full align-middle">{laneCount} lanes</span>
+                )}
                 {variantName && <span className="ml-1">· {variantName}</span>}
                 <span className="ml-1">· {formatDuration(booking.duration)}</span>
               </div>
@@ -817,10 +841,13 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
               {formatTime(booking.startHour)} – {formatTime(booking.startHour + booking.duration / 60)}
             </div>
             <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              {lane?.icon} {lane?.name ?? booking.laneId}
+              {lane?.icon} {laneNames.join(', ')}
+              {laneCount > 1 && (
+                <span className="ml-1 text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded-full align-middle">{laneCount} lanes</span>
+              )}
               {variantName && <span className="ml-1">· {variantName}</span>}
               <span className="ml-1">· {formatDuration(booking.duration)}</span>
-              <span className="ml-1 font-semibold text-emerald-600 dark:text-emerald-400">· ${price}</span>
+              <span className="ml-1 font-semibold text-emerald-600 dark:text-emerald-400">· ${fmtMoney(price)}</span>
             </div>
             {/* §2.16 / §4: mate names on the customer card. */}
             {booking.mates && booking.mates.length > 0 && (
@@ -1331,7 +1358,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                     <span className="text-lg shrink-0">{lane?.icon ?? '🏏'}</span>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium text-gray-600 dark:text-gray-400 truncate">{lane?.name ?? booking.laneId}</div>
-                      <div className="text-xs text-gray-400">{formatDate(booking.date)} · {formatTime(booking.startHour)} – {formatTime(booking.startHour + booking.duration / 60)} · ${price}</div>
+                      <div className="text-xs text-gray-400">{formatDate(booking.date)} · {formatTime(booking.startHour)} – {formatTime(booking.startHour + booking.duration / 60)} · ${fmtMoney(price)}</div>
                     </div>
                   </div>
                 )

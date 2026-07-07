@@ -24,6 +24,7 @@ function toBooking(doc: any): Booking {
     stripeSessionId: doc.stripeSessionId,
     isCoachBooking: doc.isCoachBooking,
     coachPrice: doc.coachPrice,
+    priceInCents: doc.priceInCents,
     additionalLaneIds: doc.additionalLaneIds,
     athleteSlots: doc.athleteSlots,
     creditApplied: doc.creditApplied,
