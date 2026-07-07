@@ -926,17 +926,16 @@ export const createBooking = mutation({
     if (args.startHour < OPENING_HOUR && !allowPreOpen) {
       throw new ConvexError("Booking starts before opening time.");
     }
-    // SPEC_ADMIN_AFTER_HOURS_BOOKING_2026-07 — admins may book the after-hours slot
-    // (start ≥ close, end ≤ 22:00 / 10pm), for customers OR coaches. Hidden from the
+    // SPEC_ADMIN_AFTER_HOURS_BOOKING_2026-07 — admins may extend a booking PAST the
+    // day's close, up to a 22:00 (10pm) ceiling, for customers OR coaches (e.g. an 8pm
+    // booking for 1.5h/2h → 8–9:30 / 8–10, or the 9–10pm slot itself). Hidden from the
     // public calendar (it renders only up to `close`, unchanged). Derived from the
     // RESOLVED admin caller server-side, so a crafted customer/coach request can never
-    // set it; only starts at/after the close get the extension (no 8–10pm).
+    // set it. The booking end is the only thing gated (≤ 22:00); the start may be any
+    // in-hours slot.
     const AFTER_HOURS_CEILING = 22;
     const allowAfterHours =
-      isAdminCaller &&
-      args.startHour >= CLOSING_HOUR &&
-      endHour > CLOSING_HOUR &&
-      endHour <= AFTER_HOURS_CEILING + 1e-9;
+      isAdminCaller && endHour > CLOSING_HOUR && endHour <= AFTER_HOURS_CEILING + 1e-9;
     if (endHour > CLOSING_HOUR && !allowAfterHours) {
       throw new ConvexError("Booking extends past closing time.");
     }

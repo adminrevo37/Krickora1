@@ -118,11 +118,11 @@ export default function AdminBookingCalendar() {
     // Admin may book the 6:30am pre-open slot (outside opening hours), so start the
     // grid from 6:30am when the day opens later. Half-hour granularity throughout.
     const gridStart = Math.min(open, 6.5)
-    // SPEC_ADMIN_AFTER_HOURS_BOOKING_2026-07: admins can also book the after-hours
-    // 9–10pm slot (start ≥ close, end ≤ 22:00). Extend the grid one hour past close so
-    // the 21:00 + 21:30 rows appear here — the PUBLIC BookingCalendar still stops at
-    // `close`, so the slot stays hidden from customers/coaches.
-    const gridEnd = close + 1
+    // SPEC_ADMIN_AFTER_HOURS_BOOKING_2026-07: admins can extend a booking past close up
+    // to a 22:00 (10pm) ceiling (e.g. an 8pm booking to 10pm, or the 9–10pm slot). Show
+    // rows through the ceiling so those cells + block spans render. The PUBLIC
+    // BookingCalendar still stops at `close`, so the after-hours rows stay admin-only.
+    const gridEnd = Math.max(close, 22)
     for (let h = gridStart; h < gridEnd; h += 0.5) slots.push({ hour: h, label: formatTime(h) })
     return slots
   }, [selectedDay, settings])
