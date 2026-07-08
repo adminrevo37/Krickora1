@@ -190,6 +190,9 @@ export interface Booking {
   // SPEC_SCHEDULE_DAY_VIEW §2.13: admin-managed coach booking (view+allocate only
   // for the coach; Modify/Cancel/Repeat hidden + server-rejected for non-admins).
   createdByAdmin?: boolean
+  // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: admin-set "auto-open roller door" flag (team
+  // booking). Writes the 🚪 AUTO-DOOR token to the calendar event HA reads.
+  autoDoor?: boolean
   // Audit trail of admin modifications
   modificationHistory?: Array<{
     modifiedAt: string

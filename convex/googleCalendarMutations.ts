@@ -196,6 +196,34 @@ export const getReconcileCandidates = internalQuery({
   },
 });
 
+// SPEC_TEAM_BOOKING_AUTODOOR_2026-07: resolve the EFFECTIVE auto-door flag for a
+// booking = booking.autoDoor OR the owning customer's autoDoorDefault. Called by
+// createCalendarEvent (always) + updateCalendarEvent (when a bookingId is passed) so
+// every event-write path stamps the `🚪 AUTO-DOOR` token consistently — a per-booking
+// tick (e.g. Paolo Sat) AND a team-account default (e.g. Balcatta CC) both resolve
+// here, so the token is never dropped on a re-sync. Best-effort: returns false if the
+// booking/customer can't be found (a missing token just means normal door-code access).
+export const getBookingAutoDoor = internalQuery({
+  args: { bookingId: v.string() },
+  handler: async (ctx, args): Promise<boolean> => {
+    let booking: any = null;
+    try {
+      booking = await ctx.db.get(args.bookingId as Id<"bookings">);
+    } catch {
+      return false; // malformed id
+    }
+    if (!booking) return false;
+    if (booking.autoDoor === true) return true;
+    const email = (booking.customerEmail as string | undefined)?.toLowerCase().trim();
+    if (!email) return false;
+    const customer = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", email))
+      .first();
+    return customer?.autoDoorDefault === true;
+  },
+});
+
 // ============================================================================
 // LANE CALENDAR MAPPING MUTATIONS — ADMIN ONLY
 // ============================================================================

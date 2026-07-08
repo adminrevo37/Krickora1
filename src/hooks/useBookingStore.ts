@@ -38,6 +38,7 @@ function toBooking(doc: any): Booking {
     notes: doc.notes,
     mates: doc.mates,
     createdByAdmin: doc.createdByAdmin,
+    autoDoor: doc.autoDoor, // SPEC_TEAM_BOOKING_AUTODOOR
   }
 }
 
@@ -123,6 +124,7 @@ export function useBookingActions() {
         paymentStatus: booking.paymentStatus,
         priceInCents: booking.priceInCents,
         createdByAdmin: booking.createdByAdmin,
+        autoDoor: booking.autoDoor, // SPEC_TEAM_BOOKING_AUTODOOR
       })
       return id
     },
@@ -161,6 +163,7 @@ export function useBookingActions() {
       if (updates.accessCode !== undefined) convexUpdates.accessCode = updates.accessCode
       if (updates.refilledMinutes !== undefined) convexUpdates.refilledMinutes = updates.refilledMinutes
       if (updates.notes !== undefined) convexUpdates.notes = updates.notes
+      if (updates.autoDoor !== undefined) convexUpdates.autoDoor = updates.autoDoor // SPEC_TEAM_BOOKING_AUTODOOR
 
       await updateBookingMut({
         id: bookingId as Id<"bookings">,

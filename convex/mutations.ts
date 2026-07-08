@@ -656,6 +656,7 @@ export async function applyBookingChange(
   if (!laneSetChanged && hadEvents) {
     // In-place update — keeps the same event ids on the same calendars.
     await ctx.scheduler.runAfter(0, internal.googleCalendar.updateCalendarEvent, {
+      bookingId: booking._id.toString(), // preserve AUTO-DOOR token on re-sync
       googleCalendarEventId: oldCalEventId ?? "",
       laneId: change.newLaneId,
       variantId: change.newVariantId ?? booking.variantId,
@@ -819,6 +820,10 @@ export const createBooking = mutation({
     // SPEC_SCHEDULE_DAY_VIEW §2.13: admin manual-booking "Managed by admin" flag.
     // Only honoured for admin-created coach bookings (gated server-side below).
     createdByAdmin: v.optional(v.boolean()),
+    // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: admin-only "auto-open roller door" tick.
+    // Honoured only for admin callers (gated below). Team accounts (e.g. Balcatta CC)
+    // don't need this — their customers.autoDoorDefault auto-tags every booking.
+    autoDoor: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     // SEC-1: Auth guard — logged-in users may only book for themselves unless admin.
@@ -1293,6 +1298,7 @@ export const createBooking = mutation({
         const hadEvent = !!adj.googleCalendarEventId || (Array.isArray(adj.googleCalendarEventIds) && adj.googleCalendarEventIds.length > 0);
         if (hadEvent) {
           await ctx.scheduler.runAfter(0, internal.googleCalendar.updateCalendarEvent, {
+            bookingId: adj._id.toString(), // preserve AUTO-DOOR token on re-sync
             googleCalendarEventId: adj.googleCalendarEventId ?? "",
             laneId: adj.laneId,
             variantId: adj.variantId,
@@ -1379,6 +1385,9 @@ export const createBooking = mutation({
       // §2.13: only an admin can mark a COACH booking as admin-managed. Ignore the
       // flag on customer bookings or from non-admin callers.
       createdByAdmin: isAdminCaller && effectiveIsCoachBooking && args.createdByAdmin ? true : undefined,
+      // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: only an admin may force per-booking auto-door.
+      // (Team-account default resolves at calendar-write time regardless of who books.)
+      autoDoor: isAdminCaller && args.autoDoor ? true : undefined,
       createdAt: Date.now(), // §6.2 admin digest windowing
     });
 
@@ -1607,6 +1616,9 @@ export const updateBooking = mutation({
     accessCode: v.optional(v.string()),
     discountCode: v.optional(v.string()),
     notes: v.optional(v.string()),
+    // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: admin toggles auto-door on an existing
+    // booking; requireAdmin below already gates this whole mutation to admins.
+    autoDoor: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const adminUser = await requireAdmin(ctx);
@@ -1699,6 +1711,10 @@ export const updateBooking = mutation({
       _fieldChanged("customerName") ||
       _fieldChanged("customerPhone") ||
       _fieldChanged("status") ||
+      // SPEC_TEAM_BOOKING_AUTODOOR: re-sync only when the flag actually flips
+      // (normalise undefined↔false so a routine save doesn't force a needless write).
+      ((cleanUpdates as any).autoDoor !== undefined &&
+        !!(cleanUpdates as any).autoDoor !== !!(existing as any)?.autoDoor) ||
       (cleanUpdates as any).athleteSlots !== undefined;
 
     // DI-1: Conflict check when scheduling fields change
@@ -1834,6 +1850,7 @@ export const updateBooking = mutation({
 
       if (hadEvents && !laneSetChanged) {
         await ctx.scheduler.runAfter(0, internal.googleCalendar.updateCalendarEvent, {
+          bookingId: id.toString(), // preserve AUTO-DOOR token on re-sync
           googleCalendarEventId: (existing as any).googleCalendarEventId ?? "",
           laneCalendarEventIds: (existing as any).googleCalendarEventIds,
           ...calArgs,
@@ -2710,6 +2727,7 @@ async function applyDoorCodeChange(
 
   if (hadEvents) {
     await ctx.scheduler.runAfter(delayMs, internal.googleCalendar.updateCalendarEvent, {
+      bookingId: booking._id.toString(), // preserve AUTO-DOOR token on re-sync
       googleCalendarEventId: booking.googleCalendarEventId ?? "",
       laneId: booking.laneId,
       variantId: booking.variantId,
@@ -2749,6 +2767,149 @@ async function applyDoorCodeChange(
     });
   }
 }
+
+// SPEC_TEAM_BOOKING_AUTODOOR_2026-07: re-write a booking's calendar event(s) so the
+// `🚪 AUTO-DOOR` token appears (or clears) IMMEDIATELY after a flag change — instead
+// of waiting for the daily reconcile (which only fixes missing events / stale codes,
+// not a token-only change). Passes bookingId so updateCalendarEvent/createCalendarEvent
+// re-resolve the effective flag. Update-in-place when events exist; create otherwise.
+async function scheduleAutoDoorCalendarResync(ctx: any, booking: any): Promise<void> {
+  const hadEvents =
+    !!booking.googleCalendarEventId ||
+    (Array.isArray(booking.googleCalendarEventIds) && booking.googleCalendarEventIds.length > 0);
+  const calAthleteSlots = (booking.athleteSlots ?? []).map((s: any) => ({
+    athleteName: s.athleteName,
+    startHour: s.startHour,
+    durationMinutes: s.durationMinutes,
+  }));
+  const common = {
+    laneId: booking.laneId,
+    variantId: booking.variantId,
+    date: booking.date,
+    startHour: booking.startHour,
+    duration: booking.duration,
+    customerName: booking.customerName,
+    customerEmail: booking.customerEmail,
+    customerPhone: booking.customerPhone,
+    status: "confirmed",
+    isCoachBooking: booking.isCoachBooking,
+    accessCode: booking.accessCode,
+    additionalLaneIds: booking.additionalLaneIds,
+    athleteSlots: calAthleteSlots,
+    laneNameSnapshot: booking.laneNameSnapshot,
+    variantLabelSnapshot: booking.variantLabelSnapshot,
+  };
+  if (hadEvents) {
+    await ctx.scheduler.runAfter(0, internal.googleCalendar.updateCalendarEvent, {
+      bookingId: booking._id.toString(),
+      googleCalendarEventId: booking.googleCalendarEventId ?? "",
+      laneCalendarEventIds: booking.googleCalendarEventIds,
+      ...common,
+    });
+  } else {
+    await ctx.scheduler.runAfter(0, internal.googleCalendar.createCalendarEvent, {
+      bookingId: booking._id.toString(),
+      ...common,
+    });
+  }
+}
+
+// SPEC_TEAM_BOOKING_AUTODOOR_2026-07 §3 — one-shot admin backfill for the requested
+// team bookings. dryRun defaults TRUE (report only). Balcatta CC → set the customer
+// default (auto-tags all their bookings) + re-sync their FUTURE confirmed events.
+// Paolo Franzoni → per-booking flag on his Saturday 16:00 block ONLY (never his
+// weekday/coach bookings), each lane row, + re-sync. Idempotent (safe to re-run).
+export const adminBackfillAutoDoorTeamBookings = mutation({
+  args: {
+    dryRun: v.optional(v.boolean()),
+    balcattaEmail: v.optional(v.string()),
+    paoloEmail: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const dryRun = args.dryRun !== false; // default true
+    const balcattaEmail = (args.balcattaEmail ?? "julian@revolutionsports.com.au").toLowerCase().trim();
+    // AWST "today" — only touch future/ongoing bookings (past events are moot).
+    const awstToday = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+
+    const report = {
+      dryRun,
+      balcattaEmail,
+      balcattaDefaultSet: false,
+      balcattaBookingsResynced: 0,
+      paoloEmailUsed: null as string | null,
+      paoloSaturdayBookingsTagged: 0,
+      details: [] as string[],
+    };
+
+    // ── Balcatta CC: customer default + re-sync future bookings ────────────────
+    const balcatta = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", balcattaEmail))
+      .first();
+    if (!balcatta) {
+      report.details.push(`⚠️ No customer found for ${balcattaEmail} — Balcatta default NOT set.`);
+    } else {
+      if (balcatta.autoDoorDefault !== true) {
+        if (!dryRun) await ctx.db.patch(balcatta._id, { autoDoorDefault: true });
+        report.balcattaDefaultSet = true;
+      }
+      const balcattaBookings = await ctx.db
+        .query("bookings")
+        .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", balcatta.email))
+        .collect();
+      for (const b of balcattaBookings) {
+        if (b.status !== "confirmed" || b.date < awstToday) continue;
+        if (!dryRun) await scheduleAutoDoorCalendarResync(ctx, b);
+        report.balcattaBookingsResynced++;
+      }
+      report.details.push(
+        `Balcatta CC (${balcatta.email}): default→true, ${report.balcattaBookingsResynced} future booking(s) re-synced.`
+      );
+    }
+
+    // ── Paolo Franzoni: Saturday 16:00 block only ──────────────────────────────
+    let paolo: any = null;
+    if (args.paoloEmail) {
+      paolo = await ctx.db
+        .query("customers")
+        .withIndex("by_email", (q: any) => q.eq("email", args.paoloEmail!.toLowerCase().trim()))
+        .first();
+    } else {
+      // Resolve by name among coaches (no email supplied).
+      const coaches = await ctx.db
+        .query("customers")
+        .withIndex("by_role", (q: any) => q.eq("role", "coach"))
+        .collect();
+      paolo = coaches.find((c: any) => (c.name ?? "").toLowerCase().includes("paolo franzoni")) ?? null;
+    }
+    if (!paolo) {
+      report.details.push("⚠️ Paolo Franzoni not resolved (pass paoloEmail) — Saturday block NOT tagged.");
+    } else {
+      report.paoloEmailUsed = paolo.email;
+      const paoloBookings = await ctx.db
+        .query("bookings")
+        .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", paolo.email))
+        .collect();
+      for (const b of paoloBookings) {
+        if (b.status !== "confirmed" || b.date < awstToday) continue;
+        // Saturday (UTC day 6 for a bare YYYY-MM-DD) 16:00 start only.
+        const isSaturday = new Date(`${b.date}T00:00:00Z`).getUTCDay() === 6;
+        if (!isSaturday || b.startHour !== 16) continue;
+        if (b.autoDoor !== true) {
+          if (!dryRun) {
+            await ctx.db.patch(b._id, { autoDoor: true });
+            await scheduleAutoDoorCalendarResync(ctx, { ...b, autoDoor: true });
+          }
+          report.paoloSaturdayBookingsTagged++;
+          report.details.push(`Paolo Sat ${b.date} ${b.laneId} ${b.startHour}:00 → autoDoor.`);
+        }
+      }
+    }
+
+    return report;
+  },
+});
 
 export const adminSetBookingDoorCode = mutation({
   args: { bookingId: v.id("bookings"), code: v.string() },
@@ -3000,6 +3161,7 @@ export const updateBookingAthleteSlots = mutation({
       (Array.isArray(booking.googleCalendarEventIds) && booking.googleCalendarEventIds.length > 0);
     if (hadEvents) {
       await ctx.scheduler.runAfter(0, internal.googleCalendar.updateCalendarEvent, {
+        bookingId: booking._id.toString(), // preserve AUTO-DOOR token on re-sync
         googleCalendarEventId: booking.googleCalendarEventId ?? "",
         laneId: booking.laneId,
         variantId: booking.variantId,
@@ -3234,6 +3396,9 @@ async function writeCoachSessionCopy(
     accessCode: newCode,
     laneNameSnapshot: analysis.laneNameSnapshot,
     variantLabelSnapshot: analysis.variantLabelSnapshot,
+    // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: a repeated/repeat-to-dates/multi-date copy
+    // of a tagged team booking stays tagged (e.g. Paolo Sat repeats keep auto-door).
+    autoDoor: src.autoDoor === true ? true : undefined,
     createdAt: Date.now(), // §6.2 admin digest windowing
   } as any);
 
@@ -5360,6 +5525,7 @@ export const mergeConsecutiveCoachBookings = mutation({
             };
             if (survHadEvent) {
               await ctx.scheduler.runAfter(0, internal.googleCalendar.updateCalendarEvent, {
+                bookingId: first._id.toString(), // preserve AUTO-DOOR token on re-sync
                 googleCalendarEventId: first.googleCalendarEventId ?? "",
                 laneCalendarEventIds: first.googleCalendarEventIds,
                 ...survPayload,

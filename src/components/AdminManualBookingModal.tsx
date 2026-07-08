@@ -152,6 +152,10 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   // one-off booking to the coach to modify/cancel/repeat themselves.
   const [managedByAdmin, setManagedByAdmin] = useState(true)
 
+  // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: tag this booking so HA auto-opens/holds/closes
+  // the roller door for a team booking (no code entry needed). Default off.
+  const [autoDoor, setAutoDoor] = useState(false)
+
   // Additional lanes (multi-lane booking)
   const [additionalLaneIds, setAdditionalLaneIds] = useState<string[]>([])
   const toggleLane = (id: string) => {
@@ -266,6 +270,7 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
           isCoachBooking: isCoach,
           coachPrice: isCoach ? effectivePricePerLane : undefined,
           createdByAdmin: isCoach && managedByAdmin ? true : undefined,
+          autoDoor: autoDoor ? true : undefined, // SPEC_TEAM_BOOKING_AUTODOOR
           additionalLaneIds: additionalLaneIds.length > 0 ? additionalLaneIds : undefined,
           discountCode: discountCode.trim() || undefined,
           notes: notes.trim() || (isComp ? 'Comp (complimentary)' : undefined),
@@ -610,6 +615,21 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
               </span>
             </label>
           )}
+
+          {/* SPEC_TEAM_BOOKING_AUTODOOR_2026-07: team-booking auto-door (admin only). */}
+          <label className="flex items-start gap-2.5 bg-gray-50 dark:bg-gray-800 rounded-xl p-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={autoDoor}
+              onChange={(e) => setAutoDoor(e.target.checked)}
+              className="mt-0.5 w-4 h-4 accent-purple-500 shrink-0"
+            />
+            <span className="text-xs text-gray-600 dark:text-gray-300">
+              <span className="font-semibold text-gray-800 dark:text-gray-200">🚪 Auto-open roller door (team booking)</span>
+              {' '}— the roller door opens ~15 min before start, stays open, and closes ~5 min after start.
+              Use for team bookings; individuals still enter with their door code.
+            </span>
+          </label>
 
           {error && (
             <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-200 dark:border-red-800/50 text-xs text-red-700 dark:text-red-400 whitespace-pre-line">

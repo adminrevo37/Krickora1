@@ -161,6 +161,9 @@ function buildEventBody(booking: {
   accessCode?: string;
   additionalLanes?: string[];
   athleteSlots?: Array<{ athleteName: string; startHour: number; durationMinutes: number }>;
+  // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: when set, emit the `🚪 AUTO-DOOR` token line
+  // HA matches to auto-open/hold/close the roller door for a team booking.
+  autoDoor?: boolean;
 }) {
   const endHour = booking.startHour + booking.duration / 60;
   const startTime = formatTime(booking.startHour);
@@ -179,7 +182,11 @@ function buildEventBody(booking: {
   const statusEmoji = booking.status === "confirmed" ? "✅" : booking.status === "cancelled" ? "❌" : "📋";
   const summary = `${statusEmoji} ${booking.customerName} - ${booking.laneName}${variantLabel}${additionalLabel}`;
 
-  let description = `${typeLabel}\n\n`;
+  let description = `${typeLabel}\n`;
+  // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: HA matches the exact case-sensitive substring
+  // `AUTO-DOOR` anywhere in the description. Keep the token verbatim.
+  if (booking.autoDoor) description += `🚪 AUTO-DOOR\n`;
+  description += `\n`;
   description += `📍 Lane: ${booking.laneName}${variantLabel}${additionalLabel}\n`;
   description += `👤 Customer: ${booking.customerName}\n`;
   description += `📧 Email: ${booking.customerEmail}\n`;
@@ -256,13 +263,21 @@ export const createCalendarEvent = internalAction({
     const variantName = args.variantLabelSnapshot || (args.variantId ? variantLabel(args.variantId) : undefined);
     const additionalLanes = args.additionalLaneIds?.map(id => defaultLaneName(id));
 
+    // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: resolve the effective flag from the booking
+    // row (+ its customer's default) so EVERY create path stamps the token without
+    // each caller threading it. Single-row multi-lane → all lane events share this.
+    const autoDoor: boolean = await ctx.runQuery(
+      internal.googleCalendarMutations.getBookingAutoDoor,
+      { bookingId: args.bookingId }
+    );
+
     const eventBody = buildEventBody({
       laneId: args.laneId, laneName, variantName, date: args.date,
       startHour: args.startHour, duration: args.duration,
       customerName: args.customerName, customerEmail: args.customerEmail,
       customerPhone: args.customerPhone, status: args.status,
       isCoachBooking: args.isCoachBooking, accessCode: args.accessCode,
-      additionalLanes, athleteSlots: args.athleteSlots,
+      additionalLanes, athleteSlots: args.athleteSlots, autoDoor,
     });
 
     const eventEntries: Array<{ laneId: string; calendarId: string; eventId: string }> = [];
@@ -365,6 +380,10 @@ export const updateCalendarEvent = internalAction({
     ),
     laneNameSnapshot: v.optional(v.string()),
     variantLabelSnapshot: v.optional(v.string()),
+    // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: pass the booking id so a re-sync (modify /
+    // door-code edit / lane-set-unchanged update / reconcile stale-code) re-resolves
+    // + PRESERVES the `🚪 AUTO-DOOR` token instead of silently dropping it.
+    bookingId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const tokenInfo = await getValidToken(ctx);
@@ -377,13 +396,18 @@ export const updateCalendarEvent = internalAction({
     const variantName = args.variantLabelSnapshot || (args.variantId ? variantLabel(args.variantId) : undefined);
     const additionalLanes = args.additionalLaneIds?.map(id => defaultLaneName(id));
 
+    // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: preserve the token across re-syncs.
+    const autoDoor: boolean = args.bookingId
+      ? await ctx.runQuery(internal.googleCalendarMutations.getBookingAutoDoor, { bookingId: args.bookingId })
+      : false;
+
     const eventBody = buildEventBody({
       laneId: args.laneId, laneName, variantName, date: args.date,
       startHour: args.startHour, duration: args.duration,
       customerName: args.customerName, customerEmail: args.customerEmail,
       customerPhone: args.customerPhone, status: args.status,
       isCoachBooking: args.isCoachBooking, accessCode: args.accessCode,
-      additionalLanes, athleteSlots: args.athleteSlots,
+      additionalLanes, athleteSlots: args.athleteSlots, autoDoor,
     });
 
     // Update per-lane events if available — customise the summary per lane so a
@@ -590,6 +614,10 @@ export const bulkSyncBookings = action({
         customerPhone: booking.customerPhone, status: booking.status,
         isCoachBooking: booking.isCoachBooking, accessCode: booking.accessCode,
         additionalLanes, athleteSlots: booking.athleteSlots,
+        // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: this admin-only bulk path is dormant
+        // ("never run" per the migration notes) — carry the per-booking flag; team
+        // defaults resolve on the normal create/update paths.
+        autoDoor: booking.autoDoor === true,
       });
 
       const eventEntries: Array<{ laneId: string; calendarId: string; eventId: string }> = [];
@@ -780,6 +808,7 @@ async function runCalendarReconcile(
           laneCalendarEventIds: entries,
           laneNameSnapshot: b.laneNameSnapshot,
           variantLabelSnapshot: b.variantLabelSnapshot,
+          bookingId: b.bookingId, // preserve AUTO-DOOR token on stale-code re-push
         });
         repaired++;
       }

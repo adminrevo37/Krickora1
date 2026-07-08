@@ -198,6 +198,11 @@ export default defineSchema({
     // has been sent ~1 h before this customer's FIRST-ever session — guards against
     // re-sending on later bookings. Additive/optional → no migration.
     facilityAccessPushSent: v.optional(v.boolean()),
+    // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: team-account default — when true, EVERY
+    // booking for this customer auto-tags for the HA roller-door auto-open (without
+    // ticking each booking). Effective per-booking flag = booking.autoDoor OR this.
+    // Set true for team accounts (e.g. Balcatta CC). Additive/optional → no migration.
+    autoDoorDefault: v.optional(v.boolean()),
     createdAt: v.string(),
   })
     .index("by_email", ["email"])
@@ -476,6 +481,12 @@ export default defineSchema({
     // admin digest's "new bookings last hour" count. Additive/optional → legacy
     // bookings have none and are simply not counted by the digest.
     createdAt: v.optional(v.number()),
+    // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: per-booking "auto-open the roller door"
+    // flag. When the EFFECTIVE flag (this OR the customer's autoDoorDefault) is set,
+    // the calendar event description carries the `🚪 AUTO-DOOR` token that HA matches
+    // to auto-open/hold/close the roller door for a team booking. Admin-set only.
+    // Additive/optional → no migration; absent = normal (door-code-only) access.
+    autoDoor: v.optional(v.boolean()),
   })
     .index("by_date", ["date"])
     .index("by_laneId_date", ["laneId", "date"])

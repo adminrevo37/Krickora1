@@ -67,6 +67,8 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
   const [status, setStatus] = useState<string>(booking.status)
   const [coachPrice, setCoachPrice] = useState(booking.coachPrice ?? 0)
   const [notes, setNotes] = useState(booking.notes ?? '')
+  // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: toggle the roller-door auto-open tag.
+  const [autoDoor, setAutoDoor] = useState(booking.autoDoor ?? false)
   // SPEC_ADMIN_TOPUP — top-up payment link (customer bookings only).
   const [topUpAmount, setTopUpAmount] = useState('')
   const [topUpEmail, setTopUpEmail] = useState(false)
@@ -200,6 +202,7 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
         customerPhone: customerPhone || undefined,
         status: status as Booking['status'],
         notes: notes.trim() || undefined,
+        autoDoor, // SPEC_TEAM_BOOKING_AUTODOOR
         ...(booking.isCoachBooking ? { coachPrice } : {}),
       } as any)
       // Auto-close and navigate calendar to the (possibly new) date
@@ -669,6 +672,20 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                   rows={2}
                   className="mt-1 w-full px-2.5 py-1.5 text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none text-gray-800 dark:text-gray-200 resize-none"
                 />
+              </label>
+              {/* SPEC_TEAM_BOOKING_AUTODOOR_2026-07: roller-door auto-open (team booking). */}
+              <label className="flex items-start gap-2.5 bg-gray-50 dark:bg-gray-800 rounded-xl p-3 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={autoDoor}
+                  onChange={(e) => setAutoDoor(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 accent-purple-500 shrink-0"
+                />
+                <span className="text-xs text-gray-600 dark:text-gray-300">
+                  <span className="font-semibold text-gray-800 dark:text-gray-200">🚪 Auto-open roller door (team booking)</span>
+                  {' '}— door opens ~15 min before start, holds open, closes ~5 min after start.
+                  Save at least 15 min before the session for HA to pick it up.
+                </span>
               </label>
               <div className="flex gap-2 pt-2">
                 <button onClick={() => { setEditing(false); setError(null) }} disabled={saving} className="flex-1 px-4 py-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 text-sm font-semibold hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors disabled:opacity-50">Cancel</button>
