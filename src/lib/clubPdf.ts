@@ -93,7 +93,7 @@ export async function exportClubSchedulePdf(opts: {
     page.drawText('Date', { x: cols.date, y, size: 8.5, font: bold, color: GREY })
     page.drawText('Time', { x: cols.time, y, size: 8.5, font: bold, color: GREY })
     page.drawText('Lane(s)', { x: cols.lane, y, size: 8.5, font: bold, color: GREY })
-    page.drawText('Door', { x: cols.door, y, size: 8.5, font: bold, color: GREY })
+    page.drawText('Door Code', { x: cols.door, y, size: 8.5, font: bold, color: GREY })
     if (includePrices) {
       page.drawText('Price', { x: cols.price, y, size: 8.5, font: bold, color: GREY })
       page.drawText('Status', { x: cols.status, y, size: 8.5, font: bold, color: GREY })
