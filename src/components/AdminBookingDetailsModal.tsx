@@ -46,6 +46,10 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
   const cancelMut = useMutation(api.mutations.cancelBooking)
   const resendMut = useMutation((api.mutations as any).resendBookingConfirmation)
   const voidMut = useMutation((api.mutations as any).voidBookingCharge)
+  // SPEC_CLUB_TEAM_BOOKINGS: mark an offline/club booking paid/unpaid.
+  const setPaymentStatusMut = useMutation((api.mutations as any).adminSetBookingPaymentStatus)
+  const [paymentStatusLocal, setPaymentStatusLocal] = useState<string | undefined>((booking as any).paymentStatus)
+  const [savingPayment, setSavingPayment] = useState(false)
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -327,6 +331,37 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
               {/* Admin: set/override the front-door code (per-booking + bulk). Writes
                   Krickora + pushes to Google Calendar (creates the event if missing). */}
               {status !== 'cancelled' && <DoorCodeEditor booking={booking} />}
+
+              {/* SPEC_CLUB_TEAM_BOOKINGS: offline/club payment status + mark paid/unpaid.
+                  Shown for confirmed offline bookings (club or admin paid-offline; never
+                  Stripe or coach-statement bookings). */}
+              {status !== 'cancelled' && !booking.isCoachBooking && !booking.stripeSessionId &&
+               (booking.isClubBooking || paymentStatusLocal === 'paid' || paymentStatusLocal === 'unpaid') && (
+                <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-800/60 rounded-lg px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] uppercase font-semibold text-gray-500 dark:text-gray-400 tracking-wide">Payment</span>
+                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${paymentStatusLocal === 'unpaid' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'}`}>
+                      {paymentStatusLocal === 'unpaid' ? 'Unpaid' : 'Paid'}
+                    </span>
+                  </div>
+                  <button
+                    disabled={savingPayment}
+                    onClick={async () => {
+                      setSavingPayment(true); setError(null)
+                      try {
+                        const nextPaid = paymentStatusLocal === 'unpaid'
+                        const r: any = await setPaymentStatusMut({ bookingId: booking.id as any, paid: nextPaid })
+                        setPaymentStatusLocal(r?.paymentStatus ?? (nextPaid ? 'paid' : 'unpaid'))
+                      } catch (e: any) {
+                        setError(getErrorMessage(e) ?? 'Failed to update payment status.')
+                      } finally { setSavingPayment(false) }
+                    }}
+                    className={`text-xs px-3 py-1.5 rounded-lg font-semibold transition-colors disabled:opacity-50 ${paymentStatusLocal === 'unpaid' ? 'bg-emerald-500 hover:bg-emerald-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'}`}
+                  >
+                    {savingPayment ? 'Saving…' : paymentStatusLocal === 'unpaid' ? '✓ Mark as paid' : 'Mark as unpaid'}
+                  </button>
+                </div>
+              )}
 
               {/* Last-modified strip — shows most recent history entry at a glance */}
               {lastHistoryEntry && (

@@ -1173,7 +1173,7 @@ export const createBooking = mutation({
     // deliberately / billed separately). The applied credit is server-clamped to
     // the booker's real balance so an inflated `creditApplied` can't fake $0 due.
     let effectiveStatus = args.status;
-    if (!effectiveIsCoachBooking && !isAdminManual && args.status === "confirmed") {
+    if (!effectiveIsCoachBooking && !isAdminManual && !subjectIsClub && args.status === "confirmed") {
       const realBalCents = Math.max(0, Math.round(((callerCustomer as any)?.creditBalance ?? 0) * 100));
       const wantCreditCents = Math.max(0, Math.round((args.creditApplied ?? 0) * 100));
       const clampedCreditCents = Math.min(wantCreditCents, realBalCents);
@@ -1399,7 +1399,9 @@ export const createBooking = mutation({
       accessCode: bookingAccessCode,
       discountCode: args.discountCode,
       notes: args.notes,
-      paymentStatus: args.paymentStatus,
+      // SPEC_CLUB_TEAM_BOOKINGS: a club booking is always offline — default to paid
+      // unless the admin explicitly recorded it unpaid (invoice).
+      paymentStatus: subjectIsClub ? (args.paymentStatus ?? "paid") : args.paymentStatus,
       priceInCents: serverPriceCents,
       bookingPostcode,
       bookingSuburb,
@@ -3019,6 +3021,37 @@ export const adminMigrateBookingsToClub = mutation({
       }
     }
     return { dryRun, clubName: club.name, clubEmail: club.email, movedCount: future.length, clearedSourceDefault, details };
+  },
+});
+
+// SPEC_CLUB_TEAM_BOOKINGS_2026-07 — mark an offline/club booking Paid or Unpaid.
+// For invoiced bookings (recorded as confirmed but awaiting offline payment): the
+// admin flips it to "paid" when the money lands. Pure data + audit; no Stripe, no
+// calendar/email side effects. Only "paid" counts as revenue (analytics gate on
+// paymentStatus==="paid"), so an "unpaid" booking is excluded until settled.
+export const adminSetBookingPaymentStatus = mutation({
+  args: { bookingId: v.id("bookings"), paid: v.boolean() },
+  handler: async (ctx, args) => {
+    const adminUser = await requireAdmin(ctx);
+    const b: any = await ctx.db.get(args.bookingId);
+    if (!b) throw new ConvexError("Booking not found.");
+    const next = args.paid ? "paid" : "unpaid";
+    const prev = b.paymentStatus ?? "";
+    if (prev === next) return { paymentStatus: next };
+    const hist = b.modificationHistory ?? [];
+    await ctx.db.patch(args.bookingId, {
+      paymentStatus: next,
+      modificationHistory: [
+        ...hist,
+        {
+          modifiedAt: new Date().toISOString(),
+          modifiedByUserId: (adminUser as any)?._id?.toString?.() ?? undefined,
+          modifiedByName: (adminUser as any)?.name ?? (adminUser as any)?.email ?? "Admin",
+          changes: [{ field: "paymentStatus", oldValue: String(prev || "—"), newValue: next }],
+        },
+      ],
+    });
+    return { paymentStatus: next };
   },
 });
 

@@ -166,7 +166,7 @@ export interface Booking {
   customerPhone?: string
   userId?: string
   status: 'confirmed' | 'pending' | 'pending_payment' | 'cancelled'
-  paymentStatus?: 'paid' | 'pending' | 'failed'
+  paymentStatus?: 'paid' | 'pending' | 'failed' | 'unpaid' // 'unpaid' = confirmed offline/club booking awaiting offline payment (SPEC_CLUB_TEAM_BOOKINGS)
   priceInCents?: number
   stripeSessionId?: string
   isCoachBooking?: boolean

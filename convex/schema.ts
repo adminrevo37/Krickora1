@@ -409,7 +409,7 @@ export default defineSchema({
     // booking is cancelled (SPEC_PAYMENTS_AND_CREDIT #4).
     coachLateCancelCharged: v.optional(v.boolean()),
     // Payment tracking
-    paymentStatus: v.optional(v.string()), // 'paid' | 'pending' | 'failed'
+    paymentStatus: v.optional(v.string()), // 'paid' | 'pending' | 'failed' | 'unpaid' | 'waived' | 'refunded'. 'unpaid' = confirmed offline/club booking awaiting offline payment (admin marks paid on receipt) — SPEC_CLUB_TEAM_BOOKINGS.
     paymentEmailSent: v.optional(v.boolean()), // Dedup guard — prevents duplicate payment confirmation emails
     stripePaymentIntentId: v.optional(v.string()), // Needed to issue partial refunds
     // Admin in-app void/refund (SPEC_ADMIN_MANUAL_POWERS #4). In-app only — no

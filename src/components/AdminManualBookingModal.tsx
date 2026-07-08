@@ -159,6 +159,10 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   // the roller door for a team booking (no code entry needed). Default off.
   const [autoDoor, setAutoDoor] = useState(false)
 
+  // SPEC_CLUB_TEAM_BOOKINGS_2026-07: has the club paid yet? Default paid; flip to
+  // Unpaid to record an invoiced booking and mark it paid later on receipt.
+  const [clubPaid, setClubPaid] = useState(true)
+
   // Additional lanes (multi-lane booking)
   const [additionalLaneIds, setAdditionalLaneIds] = useState<string[]>([])
   const toggleLane = (id: string) => {
@@ -253,7 +257,11 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
       const isComp = !isCoach && !isClub && paymentMode === 'comp'
       const perBookingCents = Math.round((isComp ? 0 : price) * 100)
       const bookingStatus = isRequest ? 'pending_payment' : 'confirmed'
-      const bookingPaymentStatus = isCoach ? undefined : isRequest ? 'pending' : 'paid'
+      const bookingPaymentStatus = isCoach
+        ? undefined
+        : isClub
+          ? (clubPaid ? 'paid' : 'unpaid')
+          : isRequest ? 'pending' : 'paid'
 
       const bookings: Booking[] = []
       for (const occ of validOccurrences) {
@@ -562,6 +570,34 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
                   >
                     <div className="text-xs font-semibold">{m.label}</div>
                     <div className={`text-[10px] ${paymentMode === m.id ? 'text-emerald-50' : 'text-gray-400'}`}>{m.hint}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* SPEC_CLUB_TEAM_BOOKINGS: clubs are invoiced offline — record now as paid
+              or unpaid (mark paid later from the booking details when payment lands). */}
+          {isClub && (
+            <div>
+              <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">💳 Payment</label>
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  { paid: true, label: 'Paid', hint: 'Payment received' },
+                  { paid: false, label: 'Unpaid', hint: 'Invoice — mark paid later' },
+                ] as const).map(o => (
+                  <button
+                    key={String(o.paid)}
+                    type="button"
+                    onClick={() => setClubPaid(o.paid)}
+                    className={`px-2 py-2 rounded-xl border text-center transition-all ${
+                      clubPaid === o.paid
+                        ? 'bg-emerald-500 border-emerald-500 text-white'
+                        : 'bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-100'
+                    }`}
+                  >
+                    <div className="text-xs font-semibold">{o.label}</div>
+                    <div className={`text-[10px] ${clubPaid === o.paid ? 'text-emerald-50' : 'text-gray-400'}`}>{o.hint}</div>
                   </button>
                 ))}
               </div>
