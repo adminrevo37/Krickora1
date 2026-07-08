@@ -88,7 +88,19 @@ export default function AdminBookingCalendar() {
   // Customer selection
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('')
   const [customerSearch, setCustomerSearch] = useState('')
-  const [roleFilter, setRoleFilter] = useState<'all' | 'customer' | 'coach'>('all')
+  const [roleFilter, setRoleFilter] = useState<'all' | 'customer' | 'coach' | 'club'>('all')
+  // SPEC_CLUB_TEAM_BOOKINGS_2026-07: quick-create a login-less club/team subject.
+  const createClubMut = useMutation((api.mutations as any).adminCreateClub)
+  const handleNewClub = async () => {
+    const name = window.prompt('New club / team name:')?.trim()
+    if (!name) return
+    try {
+      const res: any = await createClubMut({ name })
+      if (res?.id) { setSelectedCustomerId(String(res.id)); setCustomerDropdownOpen(false) }
+    } catch (e: any) {
+      alert(getErrorMessage(e) ?? 'Failed to create club')
+    }
+  }
 
   const filteredCustomers = useMemo(() => {
     const list = allCustomers as any[]
@@ -406,7 +418,7 @@ export default function AdminBookingCalendar() {
             <div className="relative">
               {selectedCustomer ? (
                 <div className="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-900/20">
-                  <span className={`w-5 h-5 rounded-full ${selectedCustomer.role === 'coach' ? 'bg-orange-500' : 'bg-emerald-500'} flex items-center justify-center text-white text-[9px] font-bold shrink-0`}>
+                  <span className={`w-5 h-5 rounded-full ${selectedCustomer.role === 'coach' ? 'bg-orange-500' : selectedCustomer.role === 'club' ? 'bg-purple-500' : 'bg-emerald-500'} flex items-center justify-center text-white text-[9px] font-bold shrink-0`}>
                     {selectedCustomer.name.charAt(0).toUpperCase()}
                   </span>
                   <span className="font-semibold text-gray-800 dark:text-gray-200 max-w-[120px] truncate">{selectedCustomer.name}</span>
@@ -437,27 +449,31 @@ export default function AdminBookingCalendar() {
                         />
                       </div>
                       <div className="flex gap-1">
-                        {(['all', 'customer', 'coach'] as const).map(r => (
+                        {(['all', 'customer', 'coach', 'club'] as const).map(r => (
                           <button key={r} onClick={() => setRoleFilter(r)} className={`flex-1 text-[10px] py-1 rounded-md font-semibold transition-colors ${roleFilter === r ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400' : 'text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
                             {r.charAt(0).toUpperCase() + r.slice(1)}
                           </button>
                         ))}
                       </div>
+                      {/* SPEC_CLUB_TEAM_BOOKINGS: quick-create a club/team (no account). */}
+                      <button onClick={handleNewClub} className="w-full text-[10px] py-1 rounded-md font-semibold text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-900/20 hover:bg-purple-100 dark:hover:bg-purple-900/40 transition-colors">
+                        + New club / team
+                      </button>
                     </div>
                     <div className="max-h-56 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
                       {filteredCustomers.length === 0 ? (
                         <div className="p-3 text-center text-xs text-gray-400">{customerSearch ? 'No matches' : 'No customers'}</div>
                       ) : filteredCustomers.map((c) => (
                         <button key={c._id} onClick={() => { setSelectedCustomerId(c._id); setCustomerDropdownOpen(false) }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-emerald-50 dark:hover:bg-emerald-900/10 transition-colors text-left">
-                          <div className={`w-6 h-6 ${c.role === 'coach' ? 'bg-orange-500' : 'bg-emerald-500'} rounded-full flex items-center justify-center text-white text-[9px] font-bold shrink-0`}>
+                          <div className={`w-6 h-6 ${c.role === 'coach' ? 'bg-orange-500' : c.role === 'club' ? 'bg-purple-500' : 'bg-emerald-500'} rounded-full flex items-center justify-center text-white text-[9px] font-bold shrink-0`}>
                             {(c.name ?? '?').charAt(0).toUpperCase()}
                           </div>
                           <div className="min-w-0 flex-1">
                             <div className="text-xs font-medium text-gray-800 dark:text-gray-200 truncate">{c.name}</div>
-                            <div className="text-[9px] text-gray-400 truncate">{c.email}</div>
+                            <div className="text-[9px] text-gray-400 truncate">{c.role === 'club' ? 'Club / team · no account' : c.email}</div>
                           </div>
-                          <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold shrink-0 ${c.role === 'coach' ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400' : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400'}`}>
-                            {c.role === 'coach' ? 'Coach' : 'Cust.'}
+                          <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold shrink-0 ${c.role === 'coach' ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400' : c.role === 'club' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400' : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400'}`}>
+                            {c.role === 'coach' ? 'Coach' : c.role === 'club' ? 'Club' : 'Cust.'}
                           </span>
                         </button>
                       ))}

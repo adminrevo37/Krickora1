@@ -109,10 +109,16 @@ export const getLaneDisplay = query({
             (b.additionalLaneIds ?? []).includes(row.laneId)
         )
         .map((b: any) => ({
-          name: shortName(b.customerName),
+          // SPEC_CLUB_TEAM_BOOKINGS: show the FULL club name on the board (a team name
+          // like "Balcatta CC" must not be truncated to "Balcatta C."). Customers +
+          // coaches stay "First L." for privacy.
+          name: b.isClubBooking === true
+            ? (String(b.customerName ?? "").trim() || "Club booking")
+            : shortName(b.customerName),
           startHour: b.startHour as number,
           endHour: (b.startHour as number) + (b.duration as number) / 60,
           isCoach: b.isCoachBooking === true,
+          isClub: b.isClubBooking === true,
         }))
         .sort((a, b) => a.startHour - b.startHour);
       return {

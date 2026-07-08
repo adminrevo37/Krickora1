@@ -149,7 +149,7 @@ export default defineSchema({
     // Optional in schema → no forced migration (legacy accounts have neither).
     referralSource: v.optional(v.string()),
     referralSourceOther: v.optional(v.string()),
-    role: v.string(), // 'customer' | 'coach' | 'admin' | 'user' (default: 'user' for new signups)
+    role: v.string(), // 'customer' | 'coach' | 'admin' | 'user' | 'club' (default: 'user' for new signups). 'club' = a no-login team/club booking subject (SPEC_CLUB_TEAM_BOOKINGS_2026-07).
     assignedCoachIds: v.optional(v.array(v.string())),
     creditBalance: v.optional(v.number()),
     color: v.optional(v.string()),
@@ -487,6 +487,11 @@ export default defineSchema({
     // to auto-open/hold/close the roller door for a team booking. Admin-set only.
     // Additive/optional → no migration; absent = normal (door-code-only) access.
     autoDoor: v.optional(v.boolean()),
+    // SPEC_CLUB_TEAM_BOOKINGS_2026-07: true when the booking subject is a club/team
+    // (a no-login customers row, role "club"). Club bookings always use door code 2026
+    // + auto-door, send no emails, and show the FULL club name on the TV board (no
+    // "First L." truncation). Additive/optional → no migration.
+    isClubBooking: v.optional(v.boolean()),
   })
     .index("by_date", ["date"])
     .index("by_laneId_date", ["laneId", "date"])

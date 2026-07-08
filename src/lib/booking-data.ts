@@ -193,6 +193,9 @@ export interface Booking {
   // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: admin-set "auto-open roller door" flag (team
   // booking). Writes the 🚪 AUTO-DOOR token to the calendar event HA reads.
   autoDoor?: boolean
+  // SPEC_CLUB_TEAM_BOOKINGS_2026-07: the subject is a club/team (no-login record).
+  // Full club name shown on the TV board; fixed door code 2026; no emails.
+  isClubBooking?: boolean
   // Audit trail of admin modifications
   modificationHistory?: Array<{
     modifiedAt: string

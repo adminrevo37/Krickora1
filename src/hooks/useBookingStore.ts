@@ -39,6 +39,7 @@ function toBooking(doc: any): Booking {
     mates: doc.mates,
     createdByAdmin: doc.createdByAdmin,
     autoDoor: doc.autoDoor, // SPEC_TEAM_BOOKING_AUTODOOR
+    isClubBooking: doc.isClubBooking, // SPEC_CLUB_TEAM_BOOKINGS
   }
 }
 

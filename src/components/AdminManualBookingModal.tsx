@@ -61,6 +61,9 @@ function hasConflict(bookings: Booking[], laneId: string, dateKey: string, start
 
 export default function AdminManualBookingModal({ lane, date, startHour, customer, existingBookings, onClose, onConfirm }: Props) {
   const isCoach = customer.role === 'coach'
+  // SPEC_CLUB_TEAM_BOOKINGS_2026-07: a club/team subject (no account). Forces door
+  // code 2026 + auto-door + offline pricing + no emails (all server-authoritative).
+  const isClub = customer.role === 'club'
   const hasVariants = !!(lane.variants && lane.variants.length > 0)
   const [selectedVariant, setSelectedVariant] = useState<LaneVariant | null>(hasVariants ? lane.variants![0] : null)
   const dateKey = formatDateKey(date)
@@ -244,9 +247,10 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
       const validOccurrences = occurrenceInfo.filter(o => !o.conflict)
       if (validOccurrences.length === 0) throw new Error('No valid dates available — all selected dates have conflicts.')
 
-      // Payment mode (customers only). Coaches always bill via statement.
-      const isRequest = !isCoach && paymentMode === 'request'
-      const isComp = !isCoach && paymentMode === 'comp'
+      // Payment mode (customers only). Coaches bill via statement; clubs are always
+      // recorded as paid offline / invoiced (SPEC_CLUB_TEAM_BOOKINGS).
+      const isRequest = !isCoach && !isClub && paymentMode === 'request'
+      const isComp = !isCoach && !isClub && paymentMode === 'comp'
       const perBookingCents = Math.round((isComp ? 0 : price) * 100)
       const bookingStatus = isRequest ? 'pending_payment' : 'confirmed'
       const bookingPaymentStatus = isCoach ? undefined : isRequest ? 'pending' : 'paid'
@@ -270,7 +274,8 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
           isCoachBooking: isCoach,
           coachPrice: isCoach ? effectivePricePerLane : undefined,
           createdByAdmin: isCoach && managedByAdmin ? true : undefined,
-          autoDoor: autoDoor ? true : undefined, // SPEC_TEAM_BOOKING_AUTODOOR
+          // SPEC_TEAM_BOOKING_AUTODOOR / CLUB: clubs always auto-door (server also forces it).
+          autoDoor: (autoDoor || isClub) ? true : undefined,
           additionalLaneIds: additionalLaneIds.length > 0 ? additionalLaneIds : undefined,
           discountCode: discountCode.trim() || undefined,
           notes: notes.trim() || (isComp ? 'Comp (complimentary)' : undefined),
@@ -535,8 +540,8 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
             )}
           </div>
 
-          {/* Payment mode (customers only — coaches bill via statement) */}
-          {!isCoach && (
+          {/* Payment mode (customers only — coaches bill via statement, clubs invoiced offline) */}
+          {!isCoach && !isClub && (
             <div>
               <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">💳 Payment</label>
               <div className="grid grid-cols-3 gap-2">
@@ -590,11 +595,13 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
             <p className="text-xs text-blue-700 dark:text-blue-400">
               🛡️ {isCoach
                 ? 'Coach booking — charged to the coach statement.'
-                : paymentMode === 'comp'
-                  ? 'Complimentary — recorded as paid at $0, no charge.'
-                  : paymentMode === 'request'
-                    ? 'A Stripe pay link will be generated for you to send the customer; the slot is held until they pay.'
-                    : 'Recorded as paid offline — no Stripe charge.'}
+                : isClub
+                  ? 'Club / team booking — door code 2026, roller door auto-opens, no emails. Recorded as paid offline (invoice the club separately).'
+                  : paymentMode === 'comp'
+                    ? 'Complimentary — recorded as paid at $0, no charge.'
+                    : paymentMode === 'request'
+                      ? 'A Stripe pay link will be generated for you to send the customer; the slot is held until they pay.'
+                      : 'Recorded as paid offline — no Stripe charge.'}
               {selectedLaneCount > 1 ? ` ${selectedLaneCount} lanes per session.` : ''}
             </p>
           </div>
@@ -616,18 +623,20 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
             </label>
           )}
 
-          {/* SPEC_TEAM_BOOKING_AUTODOOR_2026-07: team-booking auto-door (admin only). */}
-          <label className="flex items-start gap-2.5 bg-gray-50 dark:bg-gray-800 rounded-xl p-3 cursor-pointer select-none">
+          {/* SPEC_TEAM_BOOKING_AUTODOOR_2026-07: team-booking auto-door. For clubs it's
+              always on (locked); for customer/coach it's an optional admin toggle. */}
+          <label className={`flex items-start gap-2.5 bg-gray-50 dark:bg-gray-800 rounded-xl p-3 select-none ${isClub ? 'opacity-90' : 'cursor-pointer'}`}>
             <input
               type="checkbox"
-              checked={autoDoor}
+              checked={isClub ? true : autoDoor}
+              disabled={isClub}
               onChange={(e) => setAutoDoor(e.target.checked)}
               className="mt-0.5 w-4 h-4 accent-purple-500 shrink-0"
             />
             <span className="text-xs text-gray-600 dark:text-gray-300">
-              <span className="font-semibold text-gray-800 dark:text-gray-200">🚪 Auto-open roller door (team booking)</span>
+              <span className="font-semibold text-gray-800 dark:text-gray-200">🚪 Auto-open roller door {isClub ? '(on for club bookings)' : '(team booking)'}</span>
               {' '}— the roller door opens ~15 min before start, stays open, and closes ~5 min after start.
-              Use for team bookings; individuals still enter with their door code.
+              {isClub ? ' Always on for clubs; door code 2026 is the fallback.' : ' Use for team bookings; individuals still enter with their door code.'}
             </span>
           </label>
 

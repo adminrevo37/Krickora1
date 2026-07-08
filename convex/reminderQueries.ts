@@ -60,6 +60,8 @@ export const getBookingsNeedingReminder = internalQuery({
       if (b.reminderSent) return false;
       // Must have a customer email
       if (!b.customerEmail) return false;
+      // SPEC_CLUB_TEAM_BOOKINGS: clubs never get emails (synthetic address).
+      if (b.isClubBooking) return false;
 
       // Calculate hours until booking
       const [bYear, bMonth, bDay] = b.date.split("-").map(Number);
@@ -145,6 +147,7 @@ export const getFirstVisitBookingsForFacilityPush = internalQuery({
       if (b.status !== "confirmed") return false;
       if (!b.customerEmail) return false;
       if (b.isCoachBooking) return false; // customer first-visits only
+      if (b.isClubBooking) return false; // SPEC_CLUB_TEAM_BOOKINGS: clubs get no push/email
 
       const [bYear, bMonth, bDay] = b.date.split("-").map(Number);
       const bookingDate = new Date(bYear, bMonth - 1, bDay);

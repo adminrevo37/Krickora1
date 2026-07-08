@@ -197,6 +197,12 @@ async function groupSlotsByAccount(
 const fmtTimeRange = (startHour: number, durationMinutes: number): string =>
   `${fmtHour12(startHour)} - ${fmtHour12(startHour + durationMinutes / 60)}`;
 
+// SPEC_CLUB_TEAM_BOOKINGS_2026-07: the fixed, memorable door code used by EVERY
+// club/team booking (decision: one code for all clubs). Set server-side so it can't
+// be regenerated or overridden by the client. Change here to rotate. ⚠️ Must not be a
+// live reserved staff PIN.
+const CLUB_FIXED_DOOR_CODE = "2026";
+
 // Schedule ONE consolidated allocation email per account. Recipient = parent
 // account email, addressed with the child's name. Mandatory (NOT prefs-gated).
 async function scheduleAllocationEmails(
@@ -891,6 +897,23 @@ export const createBooking = mutation({
       }
     }
 
+    // SPEC_CLUB_TEAM_BOOKINGS_2026-07: resolve the booking SUBJECT (by email) and
+    // detect a club/team subject (a no-login customers row, role "club"). Club
+    // bookings are implicitly admin-only (a club has no login → never "self"), and
+    // get the club invariants forced server-side below (code 2026, auto-door, offline,
+    // no emails). Resolved once; reused for the catchment-snapshot lookup too.
+    const subjectEmailKey = args.customerEmail?.toLowerCase().trim() ?? "";
+    const subjectCustomer: any =
+      callerCustomer && (callerCustomer as any).email === subjectEmailKey
+        ? callerCustomer
+        : subjectEmailKey
+          ? await ctx.db
+              .query("customers")
+              .withIndex("by_email", (q: any) => q.eq("email", subjectEmailKey))
+              .first()
+          : null;
+    const subjectIsClub = (subjectCustomer as any)?.role === "club";
+
     const siteSettings = await ctx.db
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
@@ -963,7 +986,9 @@ export const createBooking = mutation({
     // paid customer booking); an admin may explicitly create one; a CUSTOMER can
     // never forge one (this also closes a payment-skip hole — the client flag was
     // previously trusted at insert time). Everything below keys off this.
-    const effectiveIsCoachBooking = callerRole === "coach" || (isAdminCaller && !!args.isCoachBooking);
+    // SPEC_CLUB_TEAM_BOOKINGS: a club subject is never a coach booking (no coachPrice,
+    // no statement, no allocation editor).
+    const effectiveIsCoachBooking = !subjectIsClub && (callerRole === "coach" || (isAdminCaller && !!args.isCoachBooking));
     // Server-owned coach price (coaches billed separately, no Stripe): derive from the
     // admin coachPerHour rate rather than trusting the client amount.
     const coachPerHourRate = (siteSettings as any)?.coachPerHour ?? PRICE_DEFAULTS.coachPerHour;
@@ -1164,7 +1189,11 @@ export const createBooking = mutation({
     // otherwise set a known staff code or collide with another active booking).
     // Admin-manual bookings may pass a code (admin is trusted).
     let bookingAccessCode: string;
-    if (isAdminManual && args.accessCode) {
+    if (subjectIsClub) {
+      // SPEC_CLUB_TEAM_BOOKINGS: every club booking uses the fixed code 2026
+      // (server-authoritative; never regenerated, safe to share across bookings).
+      bookingAccessCode = CLUB_FIXED_DOOR_CODE;
+    } else if (isAdminManual && args.accessCode) {
       bookingAccessCode = args.accessCode;
     } else {
       const reservedSet = new Set<string>((siteSettings as any)?.reservedAccessCodes ?? DEFAULT_RESERVED_CODES);
@@ -1189,15 +1218,9 @@ export const createBooking = mutation({
     // by customerEmail. Stored as a snapshot so a later move doesn't rewrite history.
     let bookingPostcode: string | undefined;
     let bookingSuburb: string | undefined;
-    if (!effectiveIsCoachBooking) {
-      const targetEmail = args.customerEmail.toLowerCase().trim();
-      const targetCustomer =
-        callerCustomer && (callerCustomer as any).email === targetEmail
-          ? callerCustomer
-          : await ctx.db
-              .query("customers")
-              .withIndex("by_email", (q: any) => q.eq("email", targetEmail))
-              .first();
+    if (!effectiveIsCoachBooking && !subjectIsClub) {
+      // Reuse the already-resolved subject (clubs have no postcode → skipped).
+      const targetCustomer = subjectCustomer;
       if ((targetCustomer as any)?.postcode && (targetCustomer as any)?.suburb) {
         bookingPostcode = (targetCustomer as any).postcode;
         bookingSuburb = (targetCustomer as any).suburb;
@@ -1387,7 +1410,11 @@ export const createBooking = mutation({
       createdByAdmin: isAdminCaller && effectiveIsCoachBooking && args.createdByAdmin ? true : undefined,
       // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: only an admin may force per-booking auto-door.
       // (Team-account default resolves at calendar-write time regardless of who books.)
-      autoDoor: isAdminCaller && args.autoDoor ? true : undefined,
+      // SPEC_CLUB_TEAM_BOOKINGS: a club booking ALWAYS auto-opens the door.
+      autoDoor: (isAdminCaller && args.autoDoor) || subjectIsClub ? true : undefined,
+      // SPEC_CLUB_TEAM_BOOKINGS: mark club-subject bookings (drives the TV full-name
+      // display + email/reminder suppression).
+      isClubBooking: subjectIsClub ? true : undefined,
       createdAt: Date.now(), // §6.2 admin digest windowing
     });
 
@@ -1479,8 +1506,10 @@ export const createBooking = mutation({
       });
     }
 
-    // Send booking confirmation email for confirmed bookings
-    if (effectiveStatus === "confirmed" && args.customerEmail) {
+    // Send booking confirmation email for confirmed bookings.
+    // SPEC_CLUB_TEAM_BOOKINGS: clubs send NO emails/push (no account; synthetic,
+    // non-deliverable address). The admin handles all club comms.
+    if (effectiveStatus === "confirmed" && args.customerEmail && !subjectIsClub) {
       await ctx.scheduler.runAfter(
         0,
         internal.emails.sendBookingConfirmation,
@@ -2908,6 +2937,88 @@ export const adminBackfillAutoDoorTeamBookings = mutation({
     }
 
     return report;
+  },
+});
+
+// SPEC_CLUB_TEAM_BOOKINGS_2026-07 — create a login-less club/team booking subject
+// (a customers row, role "club", auto-door default on, synthetic non-deliverable
+// email). Admin-only. Returns the new id so the caller can select it immediately.
+export const adminCreateClub = mutation({
+  args: { name: v.string(), phone: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const name = args.name.trim();
+    if (!name) throw new ConvexError("Club name is required.");
+    const slug =
+      name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "club";
+    // Synthetic, non-deliverable, unique. Clubs never receive mail; this just gives the
+    // booking rows + by_email/by_customerEmail indexes a stable key.
+    const email = `club-${slug}-${Date.now().toString(36)}@clubs.krickora.local`;
+    const id = await ctx.db.insert("customers", {
+      name,
+      email,
+      phone: args.phone?.trim() || undefined,
+      role: "club",
+      autoDoorDefault: true, // every club booking auto-opens the door
+      creditBalance: 0,
+      createdAt: new Date().toISOString(),
+    } as any);
+    return { id, email, name };
+  },
+});
+
+// SPEC_CLUB_TEAM_BOOKINGS_2026-07 §5 — move a source account's FUTURE confirmed
+// bookings onto a club record (customerEmail/name → club, userId cleared, door code
+// 2026, auto-door + club flag), re-sync each calendar event, and clear the source
+// account's autoDoorDefault. dryRun defaults TRUE (reports the set, changes nothing).
+// Idempotent. Used to lift Balcatta CC off the personal-email account.
+export const adminMigrateBookingsToClub = mutation({
+  args: { fromEmail: v.string(), clubId: v.id("customers"), dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const dryRun = args.dryRun !== false;
+    const club: any = await ctx.db.get(args.clubId);
+    if (!club || club.role !== "club") throw new ConvexError("Target is not a club.");
+    const fromEmail = args.fromEmail.toLowerCase().trim();
+    const awstToday = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const src = await ctx.db
+      .query("bookings")
+      .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", fromEmail))
+      .collect();
+    const future = src.filter((b: any) => b.status === "confirmed" && b.date >= awstToday);
+    const details: string[] = [];
+    for (const b of future) {
+      details.push(`${b.date} ${b.laneId} ${b.startHour}:00`);
+      if (!dryRun) {
+        await ctx.db.patch(b._id, {
+          customerEmail: club.email,
+          customerName: club.name,
+          userId: undefined,
+          accessCode: CLUB_FIXED_DOOR_CODE,
+          autoDoor: true,
+          isClubBooking: true,
+        });
+        await scheduleAutoDoorCalendarResync(ctx, {
+          ...b,
+          customerEmail: club.email,
+          customerName: club.name,
+          accessCode: CLUB_FIXED_DOOR_CODE,
+          autoDoor: true,
+        });
+      }
+    }
+    let clearedSourceDefault = false;
+    if (!dryRun) {
+      const srcCust: any = await ctx.db
+        .query("customers")
+        .withIndex("by_email", (q: any) => q.eq("email", fromEmail))
+        .first();
+      if (srcCust && srcCust.autoDoorDefault === true) {
+        await ctx.db.patch(srcCust._id, { autoDoorDefault: false });
+        clearedSourceDefault = true;
+      }
+    }
+    return { dryRun, clubName: club.name, clubEmail: club.email, movedCount: future.length, clearedSourceDefault, details };
   },
 });
 
