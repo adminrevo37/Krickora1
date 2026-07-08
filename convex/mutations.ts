@@ -830,6 +830,9 @@ export const createBooking = mutation({
     // Honoured only for admin callers (gated below). Team accounts (e.g. Balcatta CC)
     // don't need this — their customers.autoDoorDefault auto-tags every booking.
     autoDoor: v.optional(v.boolean()),
+    // SPEC_CLUB_TEAM_BOOKINGS_2026-07: shared id for every row created together in one
+    // multi-date/recurring batch, so a block can be actioned as a unit (e.g. mark paid).
+    bookingGroupId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // SEC-1: Auth guard — logged-in users may only book for themselves unless admin.
@@ -1417,6 +1420,8 @@ export const createBooking = mutation({
       // SPEC_CLUB_TEAM_BOOKINGS: mark club-subject bookings (drives the TV full-name
       // display + email/reminder suppression).
       isClubBooking: subjectIsClub ? true : undefined,
+      // SPEC_CLUB_TEAM_BOOKINGS: batch/block id (multi-date bookings share it).
+      bookingGroupId: args.bookingGroupId,
       createdAt: Date.now(), // §6.2 admin digest windowing
     });
 
@@ -3029,6 +3034,47 @@ export const adminMigrateBookingsToClub = mutation({
 // admin flips it to "paid" when the money lands. Pure data + audit; no Stripe, no
 // calendar/email side effects. Only "paid" counts as revenue (analytics gate on
 // paymentStatus==="paid"), so an "unpaid" booking is excluded until settled.
+// SPEC_CLUB_TEAM_BOOKINGS_2026-07 — backfill bookingGroupId for a club's EXISTING
+// upcoming bookings created before grouping existed. Groups ungrouped rows by their
+// (startHour | duration | lane-set) signature — the recurring block's pattern — so a
+// legacy block (e.g. the migrated Balcatta CC weekly slot) becomes one group and the
+// group-scoped mark-paid works on it. dryRun defaults TRUE. Idempotent (skips rows that
+// already have a groupId).
+export const adminBackfillClubBookingGroups = mutation({
+  args: { clubId: v.id("customers"), dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const dryRun = args.dryRun !== false;
+    const club: any = await ctx.db.get(args.clubId);
+    if (!club || club.role !== "club") throw new ConvexError("Target is not a club.");
+    const email = (club.email ?? "").toLowerCase();
+    const todayKey = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const rows = await ctx.db
+      .query("bookings")
+      .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", email))
+      .collect();
+    const eligible = rows.filter(
+      (b: any) => b.status !== "cancelled" && b.date >= todayKey && !b.bookingGroupId
+    );
+    const sig = (b: any) =>
+      `${b.startHour}|${b.duration}|${[b.laneId, ...((b.additionalLaneIds ?? []) as string[])].slice().sort().join(",")}`;
+    const bySig = new Map<string, any[]>();
+    for (const b of eligible) {
+      const s = sig(b);
+      const arr = bySig.get(s);
+      if (arr) arr.push(b); else bySig.set(s, [b]);
+    }
+    const groups: Array<{ count: number }> = [];
+    let i = 0;
+    for (const [, list] of bySig) {
+      const groupId = `grp-${club._id}-${Date.now().toString(36)}-${i++}`;
+      groups.push({ count: list.length });
+      if (!dryRun) for (const b of list) await ctx.db.patch(b._id, { bookingGroupId: groupId });
+    }
+    return { dryRun, clubName: club.name, groupedBookings: eligible.length, groups };
+  },
+});
+
 export const adminSetBookingPaymentStatus = mutation({
   args: { bookingId: v.id("bookings"), paid: v.boolean() },
   handler: async (ctx, args) => {
@@ -3036,22 +3082,43 @@ export const adminSetBookingPaymentStatus = mutation({
     const b: any = await ctx.db.get(args.bookingId);
     if (!b) throw new ConvexError("Booking not found.");
     const next = args.paid ? "paid" : "unpaid";
-    const prev = b.paymentStatus ?? "";
-    if (prev === next) return { paymentStatus: next };
-    const hist = b.modificationHistory ?? [];
-    await ctx.db.patch(args.bookingId, {
-      paymentStatus: next,
-      modificationHistory: [
-        ...hist,
-        {
-          modifiedAt: new Date().toISOString(),
-          modifiedByUserId: (adminUser as any)?._id?.toString?.() ?? undefined,
-          modifiedByName: (adminUser as any)?.name ?? (adminUser as any)?.email ?? "Admin",
-          changes: [{ field: "paymentStatus", oldValue: String(prev || "—"), newValue: next }],
-        },
-      ],
-    });
-    return { paymentStatus: next };
+
+    // SPEC_CLUB_TEAM_BOOKINGS: apply to the WHOLE block booked together, not just this
+    // row. Targets = every booking sharing this one's bookingGroupId (a club/team block
+    // is created as many rows in one batch). Ungrouped bookings update alone. Only
+    // offline rows are touched — never a Stripe-paid or coach-statement booking.
+    let targets: any[] = [b];
+    if (b.bookingGroupId) {
+      const group = await ctx.db
+        .query("bookings")
+        .withIndex("by_bookingGroupId", (q: any) => q.eq("bookingGroupId", b.bookingGroupId))
+        .collect();
+      targets = group.filter(
+        (g: any) => g.status !== "cancelled" && !g.stripeSessionId && !g.isCoachBooking
+      );
+      if (targets.length === 0) targets = [b];
+    }
+
+    const stamp = {
+      modifiedAt: new Date().toISOString(),
+      modifiedByUserId: (adminUser as any)?._id?.toString?.() ?? undefined,
+      modifiedByName: (adminUser as any)?.name ?? (adminUser as any)?.email ?? "Admin",
+    };
+    let updated = 0;
+    for (const t of targets) {
+      const prev = t.paymentStatus ?? "";
+      if (prev === next) continue;
+      const hist = t.modificationHistory ?? [];
+      await ctx.db.patch(t._id, {
+        paymentStatus: next,
+        modificationHistory: [
+          ...hist,
+          { ...stamp, changes: [{ field: "paymentStatus", oldValue: String(prev || "—"), newValue: next }] },
+        ],
+      });
+      updated++;
+    }
+    return { paymentStatus: next, updatedCount: updated, groupSize: targets.length };
   },
 });
 

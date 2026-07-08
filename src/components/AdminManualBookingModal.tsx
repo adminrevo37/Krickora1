@@ -263,10 +263,15 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
           ? (clubPaid ? 'paid' : 'unpaid')
           : isRequest ? 'pending' : 'paid'
 
+      // SPEC_CLUB_TEAM_BOOKINGS: one id for the whole batch so the dates booked together
+      // (recurrence / pick-dates / single) form a "block" that can be actioned as a unit
+      // (e.g. mark the whole block paid).
+      const bookingGroupId = crypto.randomUUID()
       const bookings: Booking[] = []
       for (const occ of validOccurrences) {
         bookings.push({
           id: crypto.randomUUID(),
+          bookingGroupId,
           laneId: lane.id,
           variantId: selectedVariant?.id ?? null,
           date: occ.dateKey,

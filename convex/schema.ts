@@ -492,13 +492,19 @@ export default defineSchema({
     // + auto-door, send no emails, and show the FULL club name on the TV board (no
     // "First L." truncation). Additive/optional → no migration.
     isClubBooking: v.optional(v.boolean()),
+    // SPEC_CLUB_TEAM_BOOKINGS_2026-07: shared id for all rows created together in one
+    // multi-date/recurring batch (a "block"). Lets an admin action (e.g. mark
+    // paid/unpaid) apply to the whole block at once. Additive/optional → no migration;
+    // legacy/single bookings may have none (treated as a group of one).
+    bookingGroupId: v.optional(v.string()),
   })
     .index("by_date", ["date"])
     .index("by_laneId_date", ["laneId", "date"])
     .index("by_userId", ["userId"])
     .index("by_customerEmail", ["customerEmail"])
     .index("by_status", ["status"])
-    .index("by_createdAt", ["createdAt"]),
+    .index("by_createdAt", ["createdAt"])
+    .index("by_bookingGroupId", ["bookingGroupId"]),
 
   // SPEC_ADD_A_MATE: persistent saved-mates list (the "friendships" book). One
   // row per (owner → mate) pair the owner has added to a booking at least once,

@@ -343,22 +343,27 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                     <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${paymentStatusLocal === 'unpaid' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'}`}>
                       {paymentStatusLocal === 'unpaid' ? 'Unpaid' : 'Paid'}
                     </span>
+                    {booking.bookingGroupId && (
+                      <span className="text-[10px] text-gray-400">· applies to the whole block</span>
+                    )}
                   </div>
                   <button
                     disabled={savingPayment}
                     onClick={async () => {
-                      setSavingPayment(true); setError(null)
+                      setSavingPayment(true); setError(null); setActionNote(null)
                       try {
                         const nextPaid = paymentStatusLocal === 'unpaid'
                         const r: any = await setPaymentStatusMut({ bookingId: booking.id as any, paid: nextPaid })
                         setPaymentStatusLocal(r?.paymentStatus ?? (nextPaid ? 'paid' : 'unpaid'))
+                        const n = r?.updatedCount ?? 1
+                        setActionNote(`${n} session${n === 1 ? '' : 's'} marked ${nextPaid ? 'paid' : 'unpaid'}.`)
                       } catch (e: any) {
                         setError(getErrorMessage(e) ?? 'Failed to update payment status.')
                       } finally { setSavingPayment(false) }
                     }}
                     className={`text-xs px-3 py-1.5 rounded-lg font-semibold transition-colors disabled:opacity-50 ${paymentStatusLocal === 'unpaid' ? 'bg-emerald-500 hover:bg-emerald-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-600'}`}
                   >
-                    {savingPayment ? 'Saving…' : paymentStatusLocal === 'unpaid' ? '✓ Mark as paid' : 'Mark as unpaid'}
+                    {savingPayment ? 'Saving…' : paymentStatusLocal === 'unpaid' ? (booking.bookingGroupId ? '✓ Mark block paid' : '✓ Mark as paid') : (booking.bookingGroupId ? 'Mark block unpaid' : 'Mark as unpaid')}
                   </button>
                 </div>
               )}

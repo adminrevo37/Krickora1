@@ -40,6 +40,7 @@ function toBooking(doc: any): Booking {
     createdByAdmin: doc.createdByAdmin,
     autoDoor: doc.autoDoor, // SPEC_TEAM_BOOKING_AUTODOOR
     isClubBooking: doc.isClubBooking, // SPEC_CLUB_TEAM_BOOKINGS
+    bookingGroupId: doc.bookingGroupId, // SPEC_CLUB_TEAM_BOOKINGS block id
   }
 }
 
@@ -126,6 +127,7 @@ export function useBookingActions() {
         priceInCents: booking.priceInCents,
         createdByAdmin: booking.createdByAdmin,
         autoDoor: booking.autoDoor, // SPEC_TEAM_BOOKING_AUTODOOR
+        bookingGroupId: booking.bookingGroupId, // SPEC_CLUB_TEAM_BOOKINGS block id
       })
       return id
     },

@@ -196,6 +196,8 @@ export interface Booking {
   // SPEC_CLUB_TEAM_BOOKINGS_2026-07: the subject is a club/team (no-login record).
   // Full club name shown on the TV board; fixed door code 2026; no emails.
   isClubBooking?: boolean
+  // SPEC_CLUB_TEAM_BOOKINGS_2026-07: shared id for a block booked together (multi-date).
+  bookingGroupId?: string
   // Audit trail of admin modifications
   modificationHistory?: Array<{
     modifiedAt: string
