@@ -124,6 +124,26 @@ export default function AdminBookingCalendar() {
     return { _id: c._id, name: c.name ?? '', email: c.email ?? '', phone: c.phone, role: c.role ?? 'customer' }
   }, [allCustomers, selectedCustomerId])
 
+  // SPEC_CLUB_TEAM_BOOKINGS_2026-07: club PDF export (schedule + appended facility guide).
+  const clubExport = useQuery(
+    (api.queries as any).getClubSessionsForExport,
+    selectedCustomer?.role === 'club' ? { clubId: selectedCustomer._id as any } : 'skip'
+  ) as { clubName: string; sessions: any[] } | null | undefined
+  const [includePrices, setIncludePrices] = useState(false)
+  const [exportingPdf, setExportingPdf] = useState(false)
+  const handleExportClubPdf = async () => {
+    if (!clubExport) return
+    setExportingPdf(true)
+    try {
+      const { exportClubSchedulePdf } = await import('../lib/clubPdf')
+      await exportClubSchedulePdf({ clubName: clubExport.clubName, sessions: clubExport.sessions, includePrices })
+    } catch (e: any) {
+      alert(getErrorMessage(e) ?? 'Failed to export PDF')
+    } finally {
+      setExportingPdf(false)
+    }
+  }
+
   const allTimeSlots = useMemo(() => {
     const { open, close } = getHoursForDate(settings, selectedDay)
     const slots: TimeSlot[] = []
@@ -482,6 +502,23 @@ export default function AdminBookingCalendar() {
                 </>
               )}
             </div>
+            {/* SPEC_CLUB_TEAM_BOOKINGS: export this club's schedule + facility guide as a PDF */}
+            {selectedCustomer?.role === 'club' && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={handleExportClubPdf}
+                  disabled={exportingPdf || !clubExport}
+                  title="Export this club's upcoming sessions + facility guide as a PDF"
+                  className="text-[11px] px-2.5 py-1.5 rounded-lg bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 font-semibold hover:bg-purple-200 dark:hover:bg-purple-900/50 transition-colors disabled:opacity-50"
+                >
+                  {exportingPdf ? 'Building…' : `📄 Export PDF${clubExport ? ` (${clubExport.sessions.length})` : ''}`}
+                </button>
+                <label className="flex items-center gap-1 text-[10px] text-gray-500 dark:text-gray-400 cursor-pointer select-none">
+                  <input type="checkbox" checked={includePrices} onChange={(e) => setIncludePrices(e.target.checked)} className="w-3 h-3 accent-purple-500" />
+                  incl. prices
+                </label>
+              </div>
+            )}
             <span className="text-xs text-gray-500 dark:text-gray-400">{dayBookings.length} bookings</span>
             <button
               onClick={() => { setBlockPrefill(null); setBlockModalOpen(true) }}

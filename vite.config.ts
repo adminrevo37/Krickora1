@@ -64,7 +64,7 @@ export default defineConfig({
         // recharts+d3 "charts" chunk is the big, predictable admin-only payload; the
         // lazy admin-analytics route/tab chunks (incl. leaflet via MapTab) are fetched
         // on demand anyway.
-        globIgnores: ["**/charts-*.js", "**/facility-instructions/**", "**/access/**", "**/58f7d9/**", "**/d058cb/**", "**/3fff00/**"],
+        globIgnores: ["**/charts-*.js", "**/pdflib-*.js", "**/facility-instructions/**", "**/access/**", "**/58f7d9/**", "**/d058cb/**", "**/3fff00/**"],
         // App-shell navigations → NetworkFirst (a new deploy is picked up; falls
         // back to the cached shell offline). NEVER fall back for /api/*.
         navigateFallback: "/index.html",
@@ -127,6 +127,11 @@ export default defineConfig({
             )
           )
             return "charts";
+          // SPEC_CLUB_TEAM_BOOKINGS: pdf-lib powers the admin-only club PDF export
+          // (dynamically imported). Keep it a separate, precache-excluded chunk so
+          // customers never download it in the PWA install.
+          if (/[\\/]node_modules[\\/](pdf-lib|@pdf-lib[\\/]|pako)[\\/]/.test(id))
+            return "pdflib";
           return undefined;
         },
       },

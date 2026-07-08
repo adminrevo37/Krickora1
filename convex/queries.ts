@@ -2,6 +2,7 @@ import { query, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { requireAdmin, getCallerContext, stripBookingPII } from "./lib/adminGuard";
+import { defaultLaneName } from "./lib/lanes";
 import { validateDiscount } from "./lib/discounts";
 import { resolveCanonicalCustomerByEmail, customerIdsForEmail } from "./lib/identity";
 
@@ -350,6 +351,43 @@ export const listCustomers = query({
     // a soft-deleted loser row should not appear in any admin customer list.
     const rows = await ctx.db.query("customers").collect();
     return rows.filter((c: any) => !c.deactivatedAt);
+  },
+});
+
+// SPEC_CLUB_TEAM_BOOKINGS_2026-07 — a club's UPCOMING confirmed sessions for the PDF
+// export (dates/times/lane/door code + price + paid status). Admin-only; keyed by the
+// club's customers row. Returns null if the id isn't a club.
+export const getClubSessionsForExport = query({
+  args: { clubId: v.id("customers") },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const club: any = await ctx.db.get(args.clubId);
+    if (!club || club.role !== "club") return null;
+    const email = (club.email ?? "").toLowerCase();
+    const todayKey = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const rows = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.gte("date", todayKey))
+      .collect();
+    const sessions = rows
+      .filter((b: any) => b.status !== "cancelled" && (b.customerEmail ?? "").toLowerCase() === email)
+      .map((b: any) => {
+        const lanes = [
+          b.laneNameSnapshot ?? defaultLaneName(b.laneId),
+          ...((b.additionalLaneIds ?? []) as string[]).map((id) => defaultLaneName(id)),
+        ];
+        return {
+          date: b.date as string,
+          startHour: b.startHour as number,
+          duration: b.duration as number,
+          laneLabel: lanes.join(", "),
+          accessCode: (b.accessCode ?? "2026") as string,
+          priceInCents: (b.priceInCents ?? 0) as number,
+          paymentStatus: (b.paymentStatus ?? "paid") as string,
+        };
+      })
+      .sort((a: any, b: any) => a.date.localeCompare(b.date) || a.startHour - b.startHour);
+    return { clubName: club.name as string, sessions };
   },
 });
 
