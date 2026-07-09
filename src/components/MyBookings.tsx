@@ -9,6 +9,7 @@ import {
   LANES,
   formatDateKey,
   formatTime,
+  getAWSTNow,
   generateGoogleCalendarUrl,
   generateOutlookCalendarUrl,
   getLanePrice,
@@ -616,6 +617,15 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     const cancelCheck = evaluateCancellation(booking, cancelOpts)
     // §6: allocation-coverage. §1D — card shell tints by coverage state.
     const cov = coverageSummary(booking)
+    // A coach may edit athlete allocations right up until the session ENDS (during the
+    // session too) — independent of the modify/cancel lock. Compute whether it's ended.
+    const cbEnd = (() => {
+      const [ey, em, ed] = booking.date.split('-').map(Number)
+      const ew = Math.floor(booking.startHour); const emin = Math.round((booking.startHour - ew) * 60)
+      return new Date(ey, em - 1, ed, ew, emin, 0).getTime() + booking.duration * 60000
+    })()
+    const bookingHasEnded = getAWSTNow().getTime() > cbEnd
+    const canEditAthletes = booking.isCoachBooking && booking.status !== 'cancelled' && !bookingHasEnded
     // §2.13: an admin-managed coach booking is view+allocate only — hide
     // Modify/Repeat/Cancel for non-admins (allocation stays available).
     const adminLocked = !!booking.createdByAdmin && !isAdmin
@@ -669,11 +679,30 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
 
         {/* Booking actions — hidden when admin-managed (allocation only). */}
         {adminLocked ? (
-          <div className="mt-2.5 flex items-center gap-1.5 text-[11px] text-gray-500 dark:text-gray-400" onClick={e => e.stopPropagation()}>
-            🔒 Managed by admin — contact admin to change
+          <div className="mt-2.5 flex items-center gap-1.5 flex-wrap text-[11px] text-gray-500 dark:text-gray-400" onClick={e => e.stopPropagation()}>
+            <span>🔒 Managed by admin — contact admin to change</span>
+            {/* Allocation stays available even on admin-managed bookings (§2.13). */}
+            {canEditAthletes && (
+              <button
+                onClick={(e) => { e.stopPropagation(); openAthleteEditor(booking) }}
+                className="text-[11px] px-2.5 py-1 rounded-lg border border-orange-200 dark:border-orange-800 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"
+              >
+                🏏 Edit athletes
+              </button>
+            )}
           </div>
         ) : (
           <div className="mt-2.5 flex gap-1.5 flex-wrap" onClick={e => e.stopPropagation()}>
+            {/* Athlete allocations are editable up until the session ENDS — kept
+                separate from the Modify/Cancel lock (which closes at the start time). */}
+            {canEditAthletes && (
+              <button
+                onClick={(e) => { e.stopPropagation(); openAthleteEditor(booking) }}
+                className="text-[11px] px-2.5 py-1 rounded-lg border border-orange-200 dark:border-orange-800 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"
+              >
+                🏏 Edit athletes
+              </button>
+            )}
             {cancelCheck.allowed && (
               <button
                 onClick={(e) => { e.stopPropagation(); setModifyBookingData(booking) }}
