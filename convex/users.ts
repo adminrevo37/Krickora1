@@ -146,8 +146,8 @@ export const adminChangeEmail = mutation({
 });
 
 export const adminUpdateUserProfile = mutation({
-  args: { email: v.string(), name: v.optional(v.string()), firstName: v.optional(v.string()), lastName: v.optional(v.string()), phone: v.optional(v.string()), role: v.optional(v.string()), coachTier: v.optional(v.string()), color: v.optional(v.string()), defaultSessionDuration: v.optional(v.number()), athleteCapacity: v.optional(v.number()), postcode: v.optional(v.string()), suburb: v.optional(v.string()), hideFromPublicCoachList: v.optional(v.boolean()) },
-  handler: async (ctx, { email, name, firstName, lastName, phone, role, coachTier, color, defaultSessionDuration, athleteCapacity, postcode, suburb, hideFromPublicCoachList }) => {
+  args: { email: v.string(), name: v.optional(v.string()), firstName: v.optional(v.string()), lastName: v.optional(v.string()), phone: v.optional(v.string()), role: v.optional(v.string()), coachTier: v.optional(v.string()), color: v.optional(v.string()), defaultSessionDuration: v.optional(v.number()), athleteCapacity: v.optional(v.number()), postcode: v.optional(v.string()), suburb: v.optional(v.string()), hideFromPublicCoachList: v.optional(v.boolean()), flexibleBookingWindow: v.optional(v.boolean()) },
+  handler: async (ctx, { email, name, firstName, lastName, phone, role, coachTier, color, defaultSessionDuration, athleteCapacity, postcode, suburb, hideFromPublicCoachList, flexibleBookingWindow }) => {
     // SEC-2 (audit 2026-06): this writes `role` — privilege escalation. Gate it
     // behind the admin second-factor (requireAdminUnlocked), not bare requireAdmin,
     // so a hijacked admin session can't self-escalate without the password.
@@ -203,6 +203,7 @@ export const adminUpdateUserProfile = mutation({
       if (defaultSessionDuration !== undefined) updates.defaultSessionDuration = defaultSessionDuration || undefined;
       if (athleteCapacity !== undefined) updates.athleteCapacity = Math.max(1, Math.min(athleteCapacity || 1, 5));
       if (hideFromPublicCoachList !== undefined) updates.hideFromPublicCoachList = hideFromPublicCoachList;
+      if (flexibleBookingWindow !== undefined) updates.flexibleBookingWindow = flexibleBookingWindow; // SPEC_COACH_FLEXIBLE_WINDOW
       if (postcode !== undefined) updates.postcode = normalizePostcode(postcode);
       if (suburb !== undefined) updates.suburb = normalizeSuburb(suburb);
       if (Object.keys(updates).length > 0) await ctx.db.patch(customer._id, updates);

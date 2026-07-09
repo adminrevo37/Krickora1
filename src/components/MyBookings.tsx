@@ -131,6 +131,13 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     ((customerRecord as any)?.coachTier === 'L2' || (customerRecord as any)?.coachTier === 'BowlingL2') ? 'L2' : 'L1'
   const isL1Coach = isCoach && coachTierNorm === 'L1'
   const coachWindowDays = settings.coachBookingWindowDays ?? 8
+  // SPEC_COACH_FLEXIBLE_WINDOW_2026-07: if the viewing coach is flagged flexible, their
+  // late-cancel/charge + modify window is the shorter coachFlexibleWindowHours (3h). Used
+  // to keep the client charge-warning consistent with the server (which enforces it).
+  const coachFlexHours = (isCoach && (customerRecord as any)?.flexibleBookingWindow === true)
+    ? (settings.coachFlexibleWindowHours ?? 3)
+    : undefined
+  const cancelOpts = coachFlexHours !== undefined ? { coachLateHoursOverride: coachFlexHours } : undefined
 
   // ── local state ─────────────────────────────────────────────────────────────
   const [weekOffset, setWeekOffset] = useState(0)
@@ -406,7 +413,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
 
   const handleCancel = (booking: Booking) => {
     setCancelError(null)
-    const check = evaluateCancellation(booking)
+    const check = evaluateCancellation(booking, cancelOpts)
     if (!check.allowed) { setCancelError(check.reason ?? 'Cannot cancel this booking.'); return }
     // Coach cancelling inside the late-cancel window → warn that the session is
     // still chargeable + require an explicit confirmation before proceeding.
@@ -606,7 +613,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     const variantName = getVariantName(booking)
     const laneNames = bookingLaneNames(booking)
     const laneCount = laneNames.length
-    const cancelCheck = evaluateCancellation(booking)
+    const cancelCheck = evaluateCancellation(booking, cancelOpts)
     // §6: allocation-coverage. §1D — card shell tints by coverage state.
     const cov = coverageSummary(booking)
     // §2.13: an admin-managed coach booking is view+allocate only — hide
@@ -1526,7 +1533,8 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       {/* Coach late-cancellation warning — cancelling within the late-cancel window
           still charges the coach's statement, so require an explicit confirmation. */}
       {cancelConfirm && (() => {
-        const hrs = settings?.coachLateCancellationHours ?? 24
+        // SPEC_COACH_FLEXIBLE_WINDOW: a flexible coach's charge window is the shorter 3h.
+        const hrs = coachFlexHours ?? settings?.coachLateCancellationHours ?? 24
         const [yy, mm, dd] = cancelConfirm.date.split('-').map(Number)
         const dateLabel = new Date(yy, mm - 1, dd).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })
         const timeRange = `${formatTime(cancelConfirm.startHour)} – ${formatTime(cancelConfirm.startHour + cancelConfirm.duration / 60)}`

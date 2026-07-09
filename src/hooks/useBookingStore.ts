@@ -51,6 +51,9 @@ function toBooking(doc: any): Booking {
 // narrow grid array. Mirrors the server-enforced windows (SSOT settings).
 export function evaluateCancellation(
   booking: Booking | undefined,
+  // SPEC_COACH_FLEXIBLE_WINDOW: when the viewing coach is flagged flexible, pass their
+  // shorter late-cancel window (hours) so the charge threshold + warning match the server.
+  opts?: { coachLateHoursOverride?: number },
 ): { allowed: boolean; reason?: string; willBeCharged?: boolean } {
   if (!booking) return { allowed: false, reason: 'Booking not found.' }
   if (booking.status === 'cancelled')
@@ -69,7 +72,7 @@ export function evaluateCancellation(
   // Coach bookings can always be cancelled, but will be charged within the
   // admin-configured late-cancel window (SSOT: coachLateCancellationHours).
   if (booking.isCoachBooking) {
-    const coachLateHours = getSettingsStore().get().coachLateCancellationHours ?? 24
+    const coachLateHours = opts?.coachLateHoursOverride ?? getSettingsStore().get().coachLateCancellationHours ?? 24
     if (hoursUntil < coachLateHours) {
       return { allowed: true, willBeCharged: true, reason: `Cancellation within ${coachLateHours} hour${coachLateHours !== 1 ? 's' : ''} of booking — you will still be charged to your statement.` }
     }

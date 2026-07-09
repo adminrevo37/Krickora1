@@ -171,6 +171,12 @@ export default defineSchema({
     // bookings/allocation. Used for the owner account (Noddy) and any coach that
     // shouldn't be publicly selectable. Admin-toggled on the coach edit form.
     hideFromPublicCoachList: v.optional(v.boolean()),
+    // SPEC_COACH_FLEXIBLE_WINDOW_2026-07: admin grants THIS coach a shorter
+    // modify/cancel restriction — they can modify or cancel (no late-cancel charge)
+    // right up to `coachFlexibleWindowHours` (default 3h) before the session, instead
+    // of the standard coach window (coachRescheduleFreezeHours / coachLateCancellationHours,
+    // default 24h). Per-coach opt-in; absent/false = the standard window. Additive.
+    flexibleBookingWindow: v.optional(v.boolean()),
     bookingEmailsEnabled: v.optional(v.boolean()),
     // Bug 7: master email switch. Strict === false silences ALL preference-gated
     // emails (regular notifications + the weekly summary); legacy/absent = ON. Does
@@ -692,6 +698,10 @@ export default defineSchema({
     // Cancellation rules (separated by user type)
     customerCancellationHours: v.optional(v.number()),   // default 2 — customers cannot cancel within N hours
     coachLateCancellationHours: v.optional(v.number()),  // default 24 — coach charged if they cancel within N hours
+    // SPEC_COACH_FLEXIBLE_WINDOW_2026-07: the shorter window (hours) used for coaches
+    // flagged flexibleBookingWindow — they may modify/cancel (no charge) up to this many
+    // hours before the session, instead of the 24h defaults. default 3.
+    coachFlexibleWindowHours: v.optional(v.number()),
     // Admin second-factor gate (SPEC_SECURITY_HARDENING #2 — re-enter own password)
     adminGateEnabled: v.optional(v.boolean()),           // default false — do NOT enable until /admin prompt is deployed
     adminUnlockMinutes: v.optional(v.number()),          // default 45 — how long an admin unlock lasts

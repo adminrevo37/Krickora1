@@ -555,6 +555,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
   const [defaultSessionDuration, setDefaultSessionDuration] = useState<number>(Math.min(user.defaultSessionDuration || 60, 90))
   const [athleteCapacity, setAthleteCapacity] = useState<number>(user.athleteCapacity || 1)
   const [hideFromPublicCoachList, setHideFromPublicCoachList] = useState<boolean>(!!user.hideFromPublicCoachList)
+  const [flexibleBookingWindow, setFlexibleBookingWindow] = useState<boolean>(!!user.flexibleBookingWindow)
   const [busy, setBusy] = useState(false)
   // SPEC_ADMIN_MANUAL_POWERS — manual support actions
   const [creditAmount, setCreditAmount] = useState('')
@@ -603,7 +604,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
     try {
       const args: any = { email: user.email, phone, role }
       if (isCoach) { args.name = name } else { args.firstName = firstName.trim(); args.lastName = lastName.trim() }
-      if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color; args.defaultSessionDuration = defaultSessionDuration; args.athleteCapacity = athleteCapacity; args.hideFromPublicCoachList = hideFromPublicCoachList }
+      if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color; args.defaultSessionDuration = defaultSessionDuration; args.athleteCapacity = athleteCapacity; args.hideFromPublicCoachList = hideFromPublicCoachList; args.flexibleBookingWindow = flexibleBookingWindow }
       // SPEC_PROFILE_POSTCODE_SUBURB: only send when both present (avoids clobbering to blank).
       if (location.postcode.trim() && location.suburb.trim()) { args.postcode = location.postcode.trim(); args.suburb = location.suburb.trim() }
       await updateProfile(args)
@@ -711,6 +712,14 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
               <span className="text-gray-600">
                 <span className="font-medium text-gray-800">Hide from public coach list</span>
                 {' '}— this coach won't appear on the signup form or the "add coaches" picker. Bookings &amp; allocation still work.
+              </span>
+            </label>
+            {/* SPEC_COACH_FLEXIBLE_WINDOW_2026-07: per-coach shorter modify/cancel window. */}
+            <label className="flex items-start gap-2 text-sm bg-gray-50 rounded-lg p-3 cursor-pointer select-none">
+              <input type="checkbox" checked={flexibleBookingWindow} onChange={e => setFlexibleBookingWindow(e.target.checked)} className="mt-0.5 w-4 h-4 accent-violet-500 shrink-0" />
+              <span className="text-gray-600">
+                <span className="font-medium text-gray-800">Flexible modify/cancel window</span>
+                {' '}— this coach can modify or cancel (no late-cancel charge) right up to 3 hours before the session, instead of the standard 24-hour cutoff.
               </span>
             </label>
           </>

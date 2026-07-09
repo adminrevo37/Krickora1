@@ -203,6 +203,29 @@ const fmtTimeRange = (startHour: number, durationMinutes: number): string =>
 // live reserved staff PIN.
 const CLUB_FIXED_DOOR_CODE = "2026";
 
+// SPEC_COACH_FLEXIBLE_WINDOW_2026-07: the effective coach modify/cancel window (hours)
+// for a booking. If the booking's coach is flagged `flexibleBookingWindow`, use the
+// short flexible window (siteSettings.coachFlexibleWindowHours, default 3); otherwise
+// the passed standard default (24). Resolved from the booking's OWNER coach, so it
+// applies however the action is initiated.
+async function resolveCoachWindowHours(
+  ctx: any,
+  booking: any,
+  settings: any,
+  standardHours: number
+): Promise<number> {
+  const email = (booking?.customerEmail ?? "").toLowerCase().trim();
+  if (!email) return standardHours;
+  const coach = await ctx.db
+    .query("customers")
+    .withIndex("by_email", (q: any) => q.eq("email", email))
+    .first();
+  if ((coach as any)?.flexibleBookingWindow === true) {
+    return (settings as any)?.coachFlexibleWindowHours ?? 3;
+  }
+  return standardHours;
+}
+
 // Schedule ONE consolidated allocation email per account. Recipient = parent
 // account email, addressed with the child's name. Mandatory (NOT prefs-gated).
 async function scheduleAllocationEmails(
@@ -2031,7 +2054,11 @@ export const cancelBooking = mutation({
     // late-cancel window the slot stays on the coach statement as a charge.
     let coachLateCancelCharged = false;
     if (booking.isCoachBooking) {
-      const coachLateHours = (cancelSettings as any)?.coachLateCancellationHours ?? 24;
+      // SPEC_COACH_FLEXIBLE_WINDOW: a flagged coach's late-cancel-charge window shrinks
+      // to coachFlexibleWindowHours (3h) — they can cancel charge-free up to then.
+      const coachLateHours = await resolveCoachWindowHours(
+        ctx, booking, cancelSettings, (cancelSettings as any)?.coachLateCancellationHours ?? 24
+      );
       if (hoursUntil < coachLateHours) {
         coachLateCancelCharged = true;
       }
@@ -2496,7 +2523,11 @@ export const modifyBooking = mutation({
 
     // ── Coach freeze (any modify) ─────────────────────────────────────────────
     if (isCoach && !isAdmin) {
-      const freezeHours = settings?.coachRescheduleFreezeHours ?? 24;
+      // SPEC_COACH_FLEXIBLE_WINDOW: a flagged coach may modify right up to
+      // coachFlexibleWindowHours (3h) before start, instead of the 24h freeze.
+      const freezeHours = await resolveCoachWindowHours(
+        ctx, booking, settings, settings?.coachRescheduleFreezeHours ?? 24
+      );
       if (hoursUntilOriginal < freezeHours) {
         throw new ConvexError(`Coach bookings cannot be modified within ${freezeHours} hours of the session start.`);
       }
@@ -4837,6 +4868,7 @@ export const updateSiteSettings = mutation({
     minAthleteDurationMinutes: v.optional(v.number()),
     customerCancellationHours: v.optional(v.number()),
     coachLateCancellationHours: v.optional(v.number()),
+    coachFlexibleWindowHours: v.optional(v.number()), // SPEC_COACH_FLEXIBLE_WINDOW (default 3)
     modifyMoveEarlierMaxHours: v.optional(v.number()),
     adminGateEnabled: v.optional(v.boolean()),
     adminUnlockMinutes: v.optional(v.number()),

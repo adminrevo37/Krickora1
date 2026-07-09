@@ -46,6 +46,7 @@ export interface SiteSettings {
   coachMaxDurationMinutes?: number
   minAthleteDurationMinutes?: number
   coachRescheduleFreezeHours?: number
+  coachFlexibleWindowHours?: number // SPEC_COACH_FLEXIBLE_WINDOW (default 3)
   extensionNoticeMinutes?: number
   coachLateCancellationHours?: number
   customerCancellationHours?: number
@@ -93,6 +94,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   coachMaxDurationMinutes: 600,
   minAthleteDurationMinutes: 15,
   coachRescheduleFreezeHours: 24,
+  coachFlexibleWindowHours: 3,
   extensionNoticeMinutes: 20,
   customerCancellationHours: 2,
   coachLateCancellationHours: 24,
