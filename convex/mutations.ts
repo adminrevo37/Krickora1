@@ -3221,6 +3221,87 @@ export const adminListCustomerUpcomingBookings = query({
   },
 });
 
+// One-off admin bulk allocation, NO NOTIFICATIONS. Allocates a single athlete to
+// EVERY non-cancelled coach booking of the given coach as one slot of `durationMinutes`
+// (capped to the booking length), starting at the booking start. Patches the row +
+// writes the allocation audit + re-syncs the calendar event (so HA/staff see the
+// athlete) — but sends NO allocation email/push (unlike updateBookingAthleteSlots).
+// Skips bookings that already have OTHER athletes (never clobbers) or already have this
+// athlete (idempotent). dryRun defaults TRUE. includePast defaults TRUE ("all bookings
+// that exist"); set false for upcoming-only.
+export const adminBulkAllocateAthleteNoNotify = mutation({
+  args: {
+    coachEmail: v.string(),
+    athleteId: v.id("athletes"),
+    athleteName: v.string(),
+    durationMinutes: v.number(),
+    dryRun: v.optional(v.boolean()),
+    includePast: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const dryRun = args.dryRun !== false;
+    const includePast = args.includePast !== false; // default true
+    const email = args.coachEmail.toLowerCase().trim();
+    const todayKey = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const rows = await ctx.db
+      .query("bookings")
+      .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", email))
+      .collect();
+    const details: string[] = [];
+    let allocated = 0, skippedHasOther = 0, skippedAlready = 0, skippedShort = 0;
+    for (const b of rows) {
+      if (b.status === "cancelled" || !b.isCoachBooking) continue;
+      if (!includePast && b.date < todayKey) continue;
+      const existing = (b.athleteSlots ?? []) as any[];
+      const isTarget = (s: any) => s.athleteId === args.athleteId || s.athleteName === args.athleteName;
+      if (existing.some((s) => !isTarget(s))) { skippedHasOther++; details.push(`${b.date} ${b.startHour}:00 — has other athlete(s), skipped`); continue; }
+      if (existing.some(isTarget)) { skippedAlready++; continue; }
+      const dur = Math.min(args.durationMinutes, b.duration);
+      if (dur < 30) { skippedShort++; continue; }
+      const slot = {
+        athleteId: args.athleteId,
+        athleteName: args.athleteName,
+        startHour: b.startHour,
+        durationMinutes: dur,
+        accessCode: b.accessCode ?? undefined,
+        codeGeneratedAt: new Date().toISOString(),
+      };
+      details.push(`${b.date} ${b.startHour}:00 · ${b.laneNameSnapshot ?? b.laneId} → ${args.athleteName} ${dur}min`);
+      allocated++;
+      if (!dryRun) {
+        await ctx.db.patch(b._id, { athleteSlots: [slot] });
+        await writeAllocationAudit(ctx, {
+          bookingId: b._id.toString(),
+          actorName: "Admin (bulk, no-notify)",
+          action: "allocate",
+          before: existing,
+          after: [slot],
+        });
+        // Calendar re-sync only (no emails). Mirrors the door-code editor pattern.
+        const hadEvents = !!b.googleCalendarEventId || (Array.isArray(b.googleCalendarEventIds) && b.googleCalendarEventIds.length > 0);
+        const calSlots = [{ athleteName: args.athleteName, startHour: b.startHour, durationMinutes: dur }];
+        const common = {
+          laneId: b.laneId, variantId: b.variantId, date: b.date, startHour: b.startHour, duration: b.duration,
+          customerName: b.customerName, customerEmail: b.customerEmail, customerPhone: b.customerPhone,
+          status: "confirmed", isCoachBooking: true, accessCode: b.accessCode,
+          additionalLaneIds: b.additionalLaneIds, athleteSlots: calSlots,
+          laneNameSnapshot: b.laneNameSnapshot, variantLabelSnapshot: b.variantLabelSnapshot,
+        };
+        if (hadEvents) {
+          await ctx.scheduler.runAfter(0, internal.googleCalendar.updateCalendarEvent, {
+            bookingId: b._id.toString(), googleCalendarEventId: b.googleCalendarEventId ?? "",
+            laneCalendarEventIds: b.googleCalendarEventIds, ...common,
+          });
+        } else {
+          await ctx.scheduler.runAfter(0, internal.googleCalendar.createCalendarEvent, { bookingId: b._id.toString(), ...common });
+        }
+      }
+    }
+    return { dryRun, coachEmail: email, allocated, skippedHasOther, skippedAlready, skippedShort, details };
+  },
+});
+
 // Update athlete slots on an existing booking (coach only)
 export const updateBookingAthleteSlots = mutation({
   args: {
