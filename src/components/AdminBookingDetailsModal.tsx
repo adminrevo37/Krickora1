@@ -3,10 +3,12 @@ import { useMutation, useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { getErrorMessage } from '../lib/errors'
-import { LANES, formatTime, getCoachPrice, getCustomerPrice, canBookSlot, getAWSTNow, type Booking } from '../lib/booking-data'
+import { LANES, formatTime, getCoachPrice, getCustomerPrice, canBookSlot, getAWSTNow, type Booking, type AthleteSlot } from '../lib/booking-data'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 import { useBookingActions } from '../hooks/useBookingStore'
 import { useAuth } from '../hooks/useAuth'
+// SPEC_COACH_ALLOCATION — admin can allocate athletes to a coach's booking.
+import AthleteAllocationEditor from './AthleteAllocationEditor'
 // SPEC_ADMIN_TOPUP — admin sends a customer a Stripe payment link for the price
 // difference after extending their booking.
 import { createPaymentLink } from '../lib/stripe'
@@ -41,8 +43,23 @@ function generateHoursForDate(dateKey: string): number[] {
 }
 
 export default function AdminBookingDetailsModal({ booking, onClose, onSave }: Props) {
-  const { updateBooking } = useBookingActions()
+  const { updateBooking, updateAthleteSlots } = useBookingActions()
   const { user } = useAuth()
+  // SPEC_COACH_ALLOCATION — admin allocates athletes to a coach booking. The editor is
+  // scoped to the BOOKING's coach (by email); fetch that coach's settings for the picker.
+  const [showAthleteEditor, setShowAthleteEditor] = useState(false)
+  const coachRecord = useQuery(
+    api.queries.getCustomerByEmail,
+    booking.isCoachBooking && booking.customerEmail ? { email: booking.customerEmail } : 'skip'
+  ) as any
+  const handleSaveAthleteSlots = async (
+    slots: AthleteSlot[],
+    opts?: { confirmedOverride?: boolean },
+  ) => {
+    const res = await updateAthleteSlots(booking.id, slots as any, user?.id ?? '', opts?.confirmedOverride)
+    if (res.success) { setActionNote('Athlete allocations updated.'); setShowAthleteEditor(false) }
+    return res
+  }
   const cancelMut = useMutation(api.mutations.cancelBooking)
   const resendMut = useMutation((api.mutations as any).resendBookingConfirmation)
   const voidMut = useMutation((api.mutations as any).voidBookingCharge)
@@ -388,27 +405,42 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                 </div>
               )}
 
-              {/* Athlete Allocations — coach bookings only */}
-              {booking.isCoachBooking && (booking.athleteSlots ?? []).length > 0 && (
+              {/* Athlete Allocations — coach bookings only. Admin can add/edit the
+                  coach's athletes here (SPEC_COACH_ALLOCATION). */}
+              {booking.isCoachBooking && (
                 <div>
-                  <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide mb-2">
-                    🏏 Athlete Allocations ({booking.athleteSlots!.length})
-                  </h4>
-                  <div className="space-y-1.5">
-                    {booking.athleteSlots!.map((slot, i) => (
-                      <div key={i} className="flex items-center justify-between bg-orange-50 dark:bg-orange-900/10 rounded-lg px-3 py-2 border border-orange-100 dark:border-orange-900/30">
-                        <div className="flex items-center gap-2">
-                          <div className="w-5 h-5 bg-orange-400 rounded-full flex items-center justify-center text-white text-[9px] font-bold shrink-0">
-                            {slot.athleteName.charAt(0).toUpperCase()}
-                          </div>
-                          <span className="text-sm font-medium text-gray-800 dark:text-gray-200">{slot.athleteName}</span>
-                        </div>
-                        <span className="text-xs text-gray-500 dark:text-gray-400 tabular-nums">
-                          {formatTime(slot.startHour)} – {formatTime(slot.startHour + slot.durationMinutes / 60)} · {slot.durationMinutes}min
-                        </span>
-                      </div>
-                    ))}
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">
+                      🏏 Athlete Allocations ({(booking.athleteSlots ?? []).length})
+                    </h4>
+                    {status !== 'cancelled' && (
+                      <button
+                        onClick={() => setShowAthleteEditor(true)}
+                        className="text-[11px] px-2.5 py-1 rounded-lg border border-orange-200 dark:border-orange-800 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors font-semibold"
+                      >
+                        ✏️ Edit athletes
+                      </button>
+                    )}
                   </div>
+                  {(booking.athleteSlots ?? []).length > 0 ? (
+                    <div className="space-y-1.5">
+                      {booking.athleteSlots!.map((slot, i) => (
+                        <div key={i} className="flex items-center justify-between bg-orange-50 dark:bg-orange-900/10 rounded-lg px-3 py-2 border border-orange-100 dark:border-orange-900/30">
+                          <div className="flex items-center gap-2">
+                            <div className="w-5 h-5 bg-orange-400 rounded-full flex items-center justify-center text-white text-[9px] font-bold shrink-0">
+                              {slot.athleteName.charAt(0).toUpperCase()}
+                            </div>
+                            <span className="text-sm font-medium text-gray-800 dark:text-gray-200">{slot.athleteName}</span>
+                          </div>
+                          <span className="text-xs text-gray-500 dark:text-gray-400 tabular-nums">
+                            {formatTime(slot.startHour)} – {formatTime(slot.startHour + slot.durationMinutes / 60)} · {slot.durationMinutes}min
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-400 dark:text-gray-500">No athletes allocated yet — tap "Edit athletes" to add them to {booking.customerName}.</p>
+                  )}
                 </div>
               )}
 
@@ -737,6 +769,20 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
           )}
         </div>
       </div>
+      {/* SPEC_COACH_ALLOCATION — admin allocates athletes to the booking's coach. */}
+      {showAthleteEditor && booking.isCoachBooking && (
+        <AthleteAllocationEditor
+          bookingStartHour={booking.startHour}
+          bookingDuration={booking.duration}
+          currentSlots={booking.athleteSlots ?? []}
+          coachId={booking.customerEmail}
+          onSave={handleSaveAthleteSlots}
+          onClose={() => setShowAthleteEditor(false)}
+          defaultSessionDuration={coachRecord?.defaultSessionDuration ?? undefined}
+          athleteCapacity={coachRecord?.athleteCapacity ?? undefined}
+          coachesSimultaneously={coachRecord?.coachesSimultaneously ?? false}
+        />
+      )}
     </div>
   )
 }
