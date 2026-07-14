@@ -105,6 +105,10 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
 
   const displayLane = LANES.find(l => l.id === laneId)
   const hours = useMemo(() => generateHoursForDate(date), [date])
+  // SPEC_CLUB_TEAM_BOOKINGS: club/team bookings are invoiced offline — never Stripe.
+  // Used to hide the customer session-price + Stripe top-up blocks in the edit form
+  // (offline paid/unpaid is handled by its own section in the view above).
+  const isClub = (booking as any).isClubBooking === true
 
   // Auto-recalculate coach price when duration changes
   useEffect(() => {
@@ -113,10 +117,18 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
     }
   }, [duration, booking.isCoachBooking])
 
-  // Duration options capped at day's closing hour for the selected date + start time
+  // Duration options capped at the day's closing hour — but this admin-only modal
+  // may extend an evening / team (club) booking past the public close up to the
+  // after-hours 10pm ceiling (SPEC_ADMIN_AFTER_HOURS_BOOKING). updateBooking has no
+  // close-check and the server accepts endHour ≤ 22:00 for admins, so an 8pm team
+  // booking could previously only offer 1hr — the reason club durations weren't editable.
+  // Math.max(close, 22) only ever WIDENS late-start options; daytime is already bounded
+  // by ALL_DURATION_OPTIONS (max 6hr), so it's unaffected.
+  const ADMIN_AFTER_HOURS_CLOSE = 22
   const durationOptions = useMemo(() => {
     const { close } = getHoursForDate(getSettingsStore().get(), date)
-    const maxMinutes = Math.round((close - startHour) * 60)
+    const ceiling = Math.max(close, ADMIN_AFTER_HOURS_CLOSE)
+    const maxMinutes = Math.round((ceiling - startHour) * 60)
     return ALL_DURATION_OPTIONS.filter(d => d >= 60 && d <= maxMinutes)
   }, [date, startHour])
 
@@ -205,7 +217,12 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
       const otherBookings = ((targetDayRaw ?? []) as any[])
         .map(b => ({ ...b, id: String(b._id) }))
         .filter(b => b.id !== booking.id)
-      if (!canBookSlot(otherBookings, laneId, date, startHour, duration)) {
+      // Check EVERY lane the booking occupies (multi-lane team/club bookings span
+      // additionalLaneIds too) — the old single-lane check missed a clash on an
+      // additional lane. Server (updateBooking) remains authoritative.
+      const occupiedLanes = [laneId, ...(((booking as any).additionalLaneIds ?? []) as string[])]
+      const clashLane = occupiedLanes.find(l => !canBookSlot(otherBookings, l, date, startHour, duration))
+      if (clashLane) {
         setError('This time slot is already taken. Please choose a different time or lane.')
         setSaving(false)
         return
@@ -680,7 +697,7 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                     </div>
                   </div>
                 )}
-                {!booking.isCoachBooking && calculatedCustomerPrice !== null && (
+                {!booking.isCoachBooking && !isClub && calculatedCustomerPrice !== null && (
                   <div className="col-span-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg px-3 py-2 border border-blue-200 dark:border-blue-800/40">
                     <div className="text-[10px] uppercase font-semibold text-blue-600 dark:text-blue-400 tracking-wide">Session Price</div>
                     <div className="text-sm font-bold text-blue-800 dark:text-blue-200 mt-0.5">
@@ -698,8 +715,9 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                     </div>
                   </div>
                 )}
-                {/* SPEC_ADMIN_TOPUP — collect the difference after extending a customer booking. */}
-                {!booking.isCoachBooking && calculatedCustomerPrice !== null && (
+                {/* SPEC_ADMIN_TOPUP — collect the difference after extending a customer booking.
+                    Hidden for club/team bookings (offline invoice, no Stripe). */}
+                {!booking.isCoachBooking && !isClub && calculatedCustomerPrice !== null && (
                   <div className="col-span-2 bg-amber-50 dark:bg-amber-900/15 rounded-lg px-3 py-2.5 border border-amber-200 dark:border-amber-800/40 space-y-2">
                     <div className="text-[10px] uppercase font-semibold text-amber-700 dark:text-amber-400 tracking-wide">💳 Top-up payment link</div>
                     <div className="text-[11px] text-gray-600 dark:text-gray-400">

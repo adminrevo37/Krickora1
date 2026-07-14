@@ -1678,10 +1678,14 @@ export const updateBooking = mutation({
     // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: admin toggles auto-door on an existing
     // booking; requireAdmin below already gates this whole mutation to admins.
     autoDoor: v.optional(v.boolean()),
+    // Admin no-notify lane/reschedule move: when explicitly false, suppress the
+    // customer reschedule email + push (GCal resync + activity feed still run, so
+    // door code / machine power still follow the booking). Default = notify.
+    notify: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const adminUser = await requireAdmin(ctx);
-    const { id, ...updates } = args;
+    const { id, notify, ...updates } = args;
     const cleanUpdates = Object.fromEntries(
       Object.entries(updates).filter(([_, v]) => v !== undefined)
     );
@@ -1935,8 +1939,11 @@ export const updateBooking = mutation({
       }
     }
 
-    // Customer notification — only on a genuine reschedule (date/time/lane/duration).
-    if (schedulingChanged && existing && effNewDate && effNewStartHour != null && effNewDuration != null && effNewLaneId) {
+    // Customer notification — only on a genuine reschedule (date/time/lane/duration),
+    // only when the admin hasn't opted out (notify !== false), and never for club/team
+    // bookings (SPEC_CLUB_TEAM_BOOKINGS: clubs are login-less with a placeholder .local
+    // email and never receive email).
+    if (notify !== false && !(existing as any)?.isClubBooking && schedulingChanged && existing && effNewDate && effNewStartHour != null && effNewDuration != null && effNewLaneId) {
       const fmtTUpd = (h: number) => {
         const w = Math.floor(h); const m = Math.round((h - w) * 60);
         const p = w >= 12 ? "PM" : "AM"; const dh = w > 12 ? w - 12 : w === 0 ? 12 : w;
