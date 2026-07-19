@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { createFileRoute, useNavigate, Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { useAuth } from '../hooks/useAuth'
 import { getErrorMessage } from '../lib/errors'
@@ -40,6 +40,10 @@ export const Route = createFileRoute('/rev-ops-7k2p')({
     section: (VALID_SECTIONS.includes(search.section as Section)
       ? search.section
       : 'bookings') as Section,
+    // Deep-link a single coach's statement, e.g. from the Weekly Report's coach
+    // rows: ?section=statements&coach=<email>. StatementsTab opens that coach
+    // directly instead of the all-coaches list.
+    coach: typeof search.coach === 'string' && search.coach ? search.coach : undefined,
   }),
 })
 
@@ -405,6 +409,26 @@ function StatementsTab() {
   const coaches = (customers as any[]).filter(c => c.role === 'coach')
     .sort((a, b) => (a.name || a.email || '').localeCompare(b.name || b.email || '')) // alphabetical by first name
   const [viewCoach, setViewCoach] = useState<any | null>(null)
+  // Deep link from the Weekly Report: ?section=statements&coach=<email> opens that
+  // coach's statement directly. Applied once per param value (tracked by ref) so
+  // "Back to all statements" isn't immediately undone by this effect re-firing.
+  const { coach: coachParam } = Route.useSearch()
+  const appliedCoachRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!coachParam || appliedCoachRef.current === coachParam) return
+    const match = (coaches as any[]).find(
+      c => (c.email || '').toLowerCase() === coachParam.toLowerCase(),
+    )
+    if (match) {
+      appliedCoachRef.current = coachParam
+      setViewCoach(match)
+    }
+  }, [coachParam, coaches])
+  const backToAllStatements = () => {
+    setViewCoach(null)
+    // Drop the deep-link param so the effect above can't reopen the coach.
+    if (coachParam) navigate({ to: '/rev-ops-7k2p', search: { section: 'statements' }, replace: true })
+  }
   const createPayment = useMutation((api.mutations as any).createPayment)
   const today = new Date().toISOString().slice(0, 10)
   const [form, setForm] = useState({ amount: '', dateReceived: today, method: 'bank_transfer', description: '' })
@@ -434,7 +458,7 @@ function StatementsTab() {
   if (viewCoach) {
     return (
       <div className="space-y-4">
-        <button onClick={() => setViewCoach(null)} className="text-sm text-emerald-600 hover:underline">
+        <button onClick={backToAllStatements} className="text-sm text-emerald-600 hover:underline">
           ← Back to all statements
         </button>
 

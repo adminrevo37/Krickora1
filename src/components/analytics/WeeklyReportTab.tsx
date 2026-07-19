@@ -6,6 +6,7 @@
 // only the report (#weekly-report-print) on the page.
 import { useMemo, useState } from 'react'
 import { useQuery } from 'convex/react'
+import { Link } from '@tanstack/react-router'
 import { api } from '../../../convex/_generated/api'
 
 // ── Local date helpers (Perth admin → browser-local date is AWST) ──────────
@@ -148,7 +149,23 @@ export default function WeeklyReportTab() {
                 )}
                 {report.coaches.map((c) => (
                   <tr key={c.email || c.name} className="border-b border-gray-100">
-                    <Td>{c.name}</Td>
+                    <Td>
+                      {/* Coach name → that coach's individual statement. Falls back to
+                          plain text when the row has no email to key the statement on.
+                          `print:no-underline` keeps the printed PDF clean. */}
+                      {c.email ? (
+                        <Link
+                          to="/rev-ops-7k2p"
+                          search={{ section: 'statements', coach: c.email }}
+                          className="text-emerald-700 hover:underline print:text-inherit print:no-underline"
+                          title={`Open ${c.name}'s statement`}
+                        >
+                          {c.name}
+                        </Link>
+                      ) : (
+                        c.name
+                      )}
+                    </Td>
                     <Td right>{c.sessions}</Td>
                     <Td right>{c.hours}</Td>
                     <Td right>{balanceCell(c.openingBalance)}</Td>
