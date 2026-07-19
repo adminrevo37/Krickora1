@@ -4,7 +4,7 @@ import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
 import {
   formatDateKey, formatTime, getCustomerPrice, getCoachPrice,
-  getCustomerDurations, getCoachDurations, getMaxDuration, bookingOccupiesLane, LANES, type Lane, type LaneVariant, type Booking,
+  bookingOccupiesLane, LANES, type Lane, type LaneVariant, type Booking,
 } from '../lib/booking-data'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
@@ -79,48 +79,43 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   const dayClose = getHoursForDate(getSettingsStore().get(), dateKey).close
 
   const availableDurations = useMemo(() => {
-    // The normal duration helpers clip to `close`, so we (1) keep their close-bounded
-    // result for the within-hours part, then (2) add whole/half-hour options that cross
-    // close up to 22:00. Crossing is only offered when the START segment runs to the
-    // day's close, so a mid-day lane-setup boundary is still never crossed. Conflicts +
-    // the 22:00 ceiling are always enforced.
+    // ADMIN DURATION LADDER — every 30-min length that physically fits this slot.
+    //
+    // The customer/coach helpers only ever offer whole hours (60/120/180…) and apply
+    // gap-prevention heuristics meant for self-service booking, so an admin was shown a
+    // coarse list that both HID lengths that fit (1.5hr, 2.5hr, a 30-min tail) and could
+    // offer a length the next booking leaves no room for. An admin is deciding
+    // deliberately, so offer every 30-min step and stop at the first real obstruction.
+    //
+    // Obstructions, in order:
+    //   • an existing booking on this lane (conflict-checked at EVERY step)
+    //   • the lane's segment boundary (§2.14 — createBooking rejects a crossing booking)
+    //   • the day's close, extended to the 22:00 after-hours ceiling when the start
+    //     segment runs to close (SPEC_ADMIN_AFTER_HOURS_BOOKING_2026-07)
     const startSegReachesClose = segEndHour >= dayClose - 1e-9
+    const ceiling = startSegReachesClose ? Math.max(segEndHour, AFTER_HOURS_CEILING) : segEndHour
 
-    // (1) within-hours base (unchanged behaviour) —
-    let base: number[]
-    if (startHour >= dayClose - 1e-9) {
-      // Start at/after close → the close-clipping helpers return []; the extension below
-      // provides the options.
-      base = []
-    } else {
-      // Admin gap-fill override: when only a 30-min slot physically fits (e.g. between
-      // two back-to-back coach bookings, or against closing), offer it for EITHER a
-      // customer or a coach session (admins are server-exempt from the customer-only
-      // 30-min rule). Otherwise use the normal helper, capped to the segment boundary.
-      const maxMins = getMaxDuration(existingBookings, lane.id, dateKey, startHour, isCoach)
-      if (maxMins === 30) {
-        base = startHour + 0.5 <= segEndHour + 1e-9 ? [30] : []
-      } else {
-        const b = isCoach
-          ? getCoachDurations(existingBookings, lane.id, dateKey, startHour)
-          : getCustomerDurations(existingBookings, lane.id, dateKey, startHour)
-        base = b.filter((d) => startHour + d / 60 <= segEndHour + 1e-9)
-      }
+    // Longest single booking. A club/team is a facility-hire subject like a coach, not a
+    // retail customer, so it uses the coach ceiling rather than the 3hr customer cap.
+    const s = getSettingsStore().get()
+    const maxMins = (isCoach || isClub)
+      ? (s.coachMaxDurationMinutes ?? 600)
+      : (s.customerMaxDurationMinutes ?? 180)
+
+    const out: number[] = []
+    for (let d = 30; d <= maxMins; d += 30) {
+      if (startHour + d / 60 > ceiling + 1e-9) break
+      if (hasConflict(existingBookings, lane.id, dateKey, startHour, d)) break
+      out.push(d)
     }
+    return out
+  }, [existingBookings, lane.id, dateKey, startHour, isCoach, isClub, segEndHour, dayClose])
 
-    // (2) admin after-hours extension up to 22:00 (whole/half-hour options that end
-    // strictly past the day's close) —
-    if (!startSegReachesClose) return base
-    const extras = [30, 60, 90, 120, 150, 180, 210, 240].filter(
-      (d) =>
-        startHour + d / 60 > dayClose + 1e-9 &&
-        startHour + d / 60 <= AFTER_HOURS_CEILING + 1e-9 &&
-        !hasConflict(existingBookings, lane.id, dateKey, startHour, d)
-    )
-    return [...new Set([...base, ...extras])].sort((a, b) => a - b)
-  }, [existingBookings, lane.id, dateKey, startHour, isCoach, segEndHour, dayClose])
-
-  const [duration, setDuration] = useState<number>(() => availableDurations[0] ?? 60)
+  // Default to 1 hour when it fits (the common case); otherwise the longest length that
+  // does — the ladder now starts at 30 min, which shouldn't silently become the default.
+  const [duration, setDuration] = useState<number>(
+    () => availableDurations.includes(60) ? 60 : (availableDurations[availableDurations.length - 1] ?? 60),
+  )
   const [recurrence, setRecurrence] = useState<Recurrence>('none')
   const [occurrences, setOccurrences] = useState<number>(4)
   // 'custom' (pick-specific-dates) mode: the set of date keys to book on. Always
