@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
-import { useSession, readHadSession, writeHadSession, readUserCache, writeUserCache, clearUserCache } from '../lib/auth-client'
+import { useSession, readHadSession, writeHadSession, readUserCache, writeUserCache, clearUserCache, clearStoredToken } from '../lib/auth-client'
+import { trackEvent } from '../lib/tracker'
 import { useImpersonation } from './useImpersonation'
 
 /**
@@ -17,6 +18,17 @@ import { useImpersonation } from './useImpersonation'
  * all others skip immediately. The email is removed on error to allow retry.
  */
 const _customerCreateAttempted = new Set<string>()
+
+/**
+ * SPEC_AUTH_SESSION_PERSISTENCE_2026-08 F1 — module-level retry state for the
+ * get-session transport-error recovery. useAuth mounts in many components at
+ * once; only ONE retry chain may run. Backoff resets on any clean resolve.
+ */
+const _sessionRetry = {
+  timer: null as ReturnType<typeof setTimeout> | null,
+  attempt: 0,
+}
+const SESSION_RETRY_DELAYS_MS = [2000, 5000, 15000, 30000]
 
 /**
  * useAuth — Fully Convex-native hook using Better Auth session.
@@ -39,7 +51,42 @@ export function useAuth() {
   const { impersonatedUser, isImpersonating } = useImpersonation()
 
   // ── Better Auth session (client-side, has proper isPending) ──────────
-  const { data: session, isPending: sessionPending } = useSession()
+  // SPEC_AUTH_SESSION_PERSISTENCE_2026-08 F1 — also read `error` + `refetch`.
+  // better-auth 1.5.3 sets the session atom to data:null/isPending:false on ANY
+  // failed get-session fetch (mount fetch AND the visibilitychange/online
+  // refetch). A transport error (network not ready on PWA resume, timeout, 5xx)
+  // is NOT a sign-out — a genuine "no session" arrives as a CLEAN 200 null with
+  // error:null. Everything below distinguishes the two.
+  const { data: session, isPending: sessionPending, error: sessionError, refetch: refetchSession } = useSession()
+
+  // F1 retry — while the session fetch is in a transport-error state, retry with
+  // backoff (2s → 5s → 15s → 30s cap, indefinitely). Deduped across the many
+  // useAuth instances via module state. Better Auth's own focus/online refetch
+  // remains a bonus recovery path. No give-up threshold: a wrongly-signed-out
+  // user is worse than a stale shell; if the token is truly dead the next
+  // successful round-trip returns a clean null and logs out properly.
+  useEffect(() => {
+    if (sessionError && !sessionPending) {
+      if (_sessionRetry.timer) return
+      const delay = SESSION_RETRY_DELAYS_MS[Math.min(_sessionRetry.attempt, SESSION_RETRY_DELAYS_MS.length - 1)]
+      // F5 telemetry — a suppressed false logout (fires once per scheduled retry,
+      // capped at one per 30s during a sustained outage; sends are best-effort).
+      trackEvent('auth_transport_error', { attempt: _sessionRetry.attempt, retryInMs: delay, status: (sessionError as any)?.status ?? null })
+      _sessionRetry.timer = setTimeout(() => {
+        _sessionRetry.timer = null
+        _sessionRetry.attempt++
+        void refetchSession()
+      }, delay)
+    } else if (!sessionError) {
+      _sessionRetry.attempt = 0
+      if (_sessionRetry.timer) {
+        clearTimeout(_sessionRetry.timer)
+        _sessionRetry.timer = null
+      }
+    }
+    // refetchSession is stable per atom; not depended on to avoid re-arming on identity churn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionError, sessionPending])
 
   // ── Better Auth user from Convex (server-side, real-time) ────────────
   const betterAuthUser = useQuery(api.auth.getCurrentUser)
@@ -100,20 +147,33 @@ export function useAuth() {
     if (isLoading) return wasAuthenticatedRef.current
     // Definitive: we have a user
     if (betterAuthUser) return true
-    // Definitive: Better Auth says no session (not pending, no data)
-    if (!sessionPending && !session?.user) {
+    // Definitive: Better Auth says no session — a CLEAN server null only
+    // (SPEC_AUTH_SESSION_PERSISTENCE_2026-08 F1: `!sessionError` is the fix —
+    // a transport-error null falls through to the fallback below and keeps the
+    // authenticated stance while the retry effect re-fetches).
+    if (!sessionPending && !session?.user && !sessionError) {
       // Clear the stabilization flag + persisted hint — user genuinely signed out
       // (or the token expired). Clearing the hint here stops the next refresh from
       // spinning on a session that no longer exists. Also drop the optimistic user
       // cache (§3e) so the next launch doesn't paint a logged-in shell for a session
       // that is gone — it will correctly show the landing page instead.
+      if (wasAuthenticatedRef.current) {
+        // Authenticated → logged-out TRANSITION only: drop the dead bearer token
+        // (F3 — the server just cleanly rejected/expired it) + telemetry (F5).
+        // Guarded so a fresh sign-in's just-captured token is never destroyed in
+        // the pre-refetch window, and so the event can't fire on every render
+        // while logged out.
+        clearStoredToken()
+        trackEvent('auth_definitive_logout', {})
+      }
       wasAuthenticatedRef.current = false
       writeHadSession(false)
       clearUserCache()
       cachedUserRef.current = null
       return false
     }
-    // Fallback: keep previous state
+    // Fallback: keep previous state (covers the transport-error window — cached
+    // shell stays up, retry effect recovers the session)
     return wasAuthenticatedRef.current
   })()
 

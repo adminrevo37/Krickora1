@@ -41,6 +41,16 @@ function setStoredToken(token: string | null) {
   } catch {}
 }
 
+// SPEC_AUTH_SESSION_PERSISTENCE_2026-08 F3 — stale-token hygiene. Called by
+// useAuth when the server CLEANLY reports no session (token expired/revoked)
+// so a dead bearer token doesn't linger in localStorage forever. Must ONLY be
+// called on the authenticated→logged-out TRANSITION — never while a sign-in
+// is in flight (the just-captured token would be destroyed before the session
+// atom refetches, breaking login on cookie-less iOS).
+export function clearStoredToken() {
+  setStoredToken(null);
+}
+
 // ============================================================================
 // SESSION HINT (SPEC_AUTH_LOADING_SMOOTHING §3b)
 // ----------------------------------------------------------------------------

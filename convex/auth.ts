@@ -75,6 +75,12 @@ function getTrustedOrigins(_request?: Request): string[] {
 function buildConvexPlugin() {
   return convex({
     authConfig,
+    // SPEC_AUTH_SESSION_PERSISTENCE_2026-08 F4 — Convex identity JWT 15min→1h.
+    // Cuts the JWT-refetch round-trip that every PWA resume >15min forced into
+    // the fragile radio-waking window. Trade-off (accepted): a revoked/banned
+    // session's Convex WS identity can outlive revocation by up to 1h (was
+    // 15min); privileged reads/writes all re-check server-side regardless.
+    jwt: { expirationSeconds: 60 * 60 },
   });
 }
 
@@ -192,6 +198,16 @@ export function createAuthOptions(ctx?: GenericCtx<DataModel>): BetterAuthOption
       },
     },
     session: {
+      // SPEC_AUTH_SESSION_PERSISTENCE_2026-08 F2 — rolling 7-day INACTIVITY
+      // window, pinned explicitly (previously library defaults: 7d/24h — a
+      // better-auth upgrade could silently change them). GET /get-session
+      // extends expiresAt to now+expiresIn whenever the session is older than
+      // updateAge, so a user is only logged out after 7 days without opening
+      // the app. updateAge=1h makes "7 days since last access" accurate to ±1h
+      // (the default 24h could log out up to ~1 day early) at the cost of at
+      // most one session-row write per active hour.
+      expiresIn: 60 * 60 * 24 * 7, // 7 days
+      updateAge: 60 * 60, // extend on any access >1h since last extension
       cookieCache: {
         enabled: true,
         maxAge: 60 * 5, // 5 minutes
