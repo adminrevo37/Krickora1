@@ -1055,7 +1055,11 @@ export const getWeeklyReport = query({
       const id = b._id.toString();
       let cash = 0;
       if (cashByBooking.has(id)) cash = cashByBooking.get(id)!;
-      else if (b.paymentStatus === "paid") cash = Math.max(0, (b.priceInCents || 0) / 100 - (b.creditApplied || 0));
+      // G1 (SPEC_ADMIN_BOOKING_PARITY_2026-08): when paymentStatus==='paid',
+      // priceInCents already holds the CASH settled (the Stripe webhook rewrites
+      // it to amountPaid; admin offline-with-credit stores price − credit) —
+      // subtracting creditApplied again would double-count the credit portion.
+      else if (b.paymentStatus === "paid") cash = Math.max(0, (b.priceInCents || 0) / 100);
       day.cash += cash;
 
       const credit = b.creditApplied || 0;

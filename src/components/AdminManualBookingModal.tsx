@@ -19,6 +19,10 @@ export interface AdminCustomerOption {
   email: string
   phone?: string
   role: string
+  // G1 (SPEC_ADMIN_BOOKING_PARITY_2026-08): the customer's account-credit balance
+  // (dollars), from the admin-only listCustomers row, so the modal can offer
+  // "apply account credit" on the customer's behalf.
+  creditBalance?: number
 }
 
 type Recurrence = 'none' | 'weekly' | 'fortnightly' | 'monthly' | 'custom'
@@ -163,6 +167,11 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   // coach bookings always bill via their statement). Default = paid offline.
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('offline')
   const createPaymentLink = useAction(api.stripe.createPaymentLink)
+  // G1 — apply the customer's account credit on their behalf. Mirrors the public
+  // checkout semantics (credit = min(balance, post-discount price); redeemed at
+  // create for offline, on webhook confirm for request). v1 scope: single-date
+  // bookings only (splitting one balance across a recurrence block is deferred).
+  const [applyCredit, setApplyCredit] = useState(false)
   // SPEC_ADMIN_BOOKING_PARITY_2026-08 G2 — request mode previously surfaced the
   // pay link ONLY as clipboard + alert (lose the alert → link lost; the
   // 2026-08-04 Turnbull incident). Default ON: the system emails each link to
@@ -218,6 +227,16 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   const effectivePricePerLane = priceOverride !== null ? priceOverride : pricePerLane
   const price = effectivePricePerLane * selectedLaneCount
   const endHour = startHour + duration / 60
+
+  // G1 — account-credit derivation (customer subjects only; comp is already $0;
+  // single-date only in v1). creditToApply = min(balance, price), like the public
+  // checkout. The server re-validates against the subject's live balance.
+  const creditBalance = !isCoach && !isClub ? (customer.creditBalance ?? 0) : 0
+  const creditEligible = !isCoach && !isClub && paymentMode !== 'comp' && recurrence === 'none' && creditBalance > 0.005
+  const creditToApply = creditEligible && applyCredit
+    ? Math.min(Math.round(creditBalance * 100), Math.round(price * 100)) / 100
+    : 0
+  const netAfterCredit = Math.max(0, Math.round(price * 100) - Math.round(creditToApply * 100)) / 100
 
   // FEA-6 (audit 2026-06): the parent now passes only the SELECTED day's bookings, so
   // for a multi-date booking (recurrence / "Pick dates") fetch bookings across the
@@ -277,7 +296,22 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
       // recorded as paid offline / invoiced (SPEC_CLUB_TEAM_BOOKINGS).
       const isRequest = !isCoach && !isClub && paymentMode === 'request'
       const isComp = !isCoach && !isClub && paymentMode === 'comp'
-      const perBookingCents = Math.round((isComp ? 0 : price) * 100)
+      // G1 — money convention (matches the live cancel/refund math + the Stripe
+      // webhook): when paymentStatus==='paid', priceInCents holds the CASH settled.
+      //  - offline + credit: priceInCents = price − credit (cash), creditApplied =
+      //    credit (redeemed server-side at create; cancel returns cash + credit).
+      //  - request + credit: priceInCents = GROSS (customer-checkout convention for
+      //    pending bookings); the pay link is minted for the net; on webhook confirm
+      //    priceInCents is rewritten to the cash paid and the credit is redeemed.
+      const creditCents = Math.round(creditToApply * 100)
+      const grossCents = Math.round((isComp ? 0 : price) * 100)
+      if (isRequest && creditCents > 0 && grossCents - creditCents < 50) {
+        throw new Error(
+          'Account credit covers (nearly) the full amount — Stripe cannot charge under $0.50. Use "Paid offline" mode instead: the booking confirms immediately and the credit is redeemed.'
+        )
+      }
+      const perBookingCents = isRequest ? grossCents : Math.max(0, grossCents - creditCents)
+      const linkAmountCents = Math.max(0, grossCents - creditCents)
       const bookingStatus = isRequest ? 'pending_payment' : 'confirmed'
       const bookingPaymentStatus = isCoach
         ? undefined
@@ -306,6 +340,9 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
           status: bookingStatus,
           paymentStatus: bookingPaymentStatus,
           priceInCents: isCoach ? undefined : perBookingCents,
+          // G1 — dollars; server clamps to the subject's live balance and redeems
+          // (create-time for confirmed, webhook-time for payment requests).
+          creditApplied: creditCents > 0 ? creditCents / 100 : undefined,
           isCoachBooking: isCoach,
           coachPrice: isCoach ? effectivePricePerLane : undefined,
           createdByAdmin: isCoach && managedByAdmin ? true : undefined,
@@ -336,7 +373,9 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
               duration,
               customerName: customer.name,
               customerEmail: customer.email,
-              priceInCents: perBookingCents,
+              // G1 — the link charges the NET (gross − applied credit); the webhook
+              // redeems the credit and records the cash on confirm.
+              priceInCents: linkAmountCents,
               bookingId: result.createdIds[i],
               // G2 — system-emails the link (one email per date/link). Every link
               // is tracked in the Payment Links tab regardless, so nothing is
@@ -627,6 +666,34 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
                   />
                   Email the pay link{totalSessions - conflictCount > 1 ? 's' : ''} straight to <b>{customer.email}</b>
                 </label>
+              )}
+              {/* G1 — apply the customer's account credit on their behalf. */}
+              {paymentMode !== 'comp' && creditBalance > 0.005 && (
+                recurrence === 'none' ? (
+                  <div className="mt-2">
+                    <label className="flex items-center gap-2 text-[11px] text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={applyCredit}
+                        onChange={e => setApplyCredit(e.target.checked)}
+                        className="rounded accent-emerald-500"
+                      />
+                      Apply account credit — <b>${creditBalance.toFixed(2)}</b> available
+                    </label>
+                    {applyCredit && creditToApply > 0 && (
+                      <div className="mt-1 text-[11px] text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-2 border border-emerald-200 dark:border-emerald-800/50">
+                        −${creditToApply.toFixed(2)} credit →{' '}
+                        {paymentMode === 'request'
+                          ? `pay link for $${netAfterCredit.toFixed(2)} (credit redeemed when paid)`
+                          : `$${netAfterCredit.toFixed(2)} cash recorded as paid offline`}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-2 text-[11px] text-gray-400 dark:text-gray-500">
+                    Account credit (${creditBalance.toFixed(2)}) can only be applied to a single-date booking — set Recurrence to "One-time".
+                  </div>
+                )
               )}
             </div>
           )}

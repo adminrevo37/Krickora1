@@ -170,6 +170,12 @@ export function useBookingActions() {
       if (updates.refilledMinutes !== undefined) convexUpdates.refilledMinutes = updates.refilledMinutes
       if (updates.notes !== undefined) convexUpdates.notes = updates.notes
       if (updates.autoDoor !== undefined) convexUpdates.autoDoor = updates.autoDoor // SPEC_TEAM_BOOKING_AUTODOOR
+      // G3 (SPEC_ADMIN_BOOKING_PARITY_2026-08): forward a variant switch — the
+      // mutation already recomputes the lane/variant snapshots and resyncs the
+      // Google Calendar event in place on variant change (2026-06-20 fix); this
+      // hook was silently dropping the field. The validator takes a string, so
+      // null (no-variant) is never sent — variants are always non-null ids.
+      if (updates.variantId !== undefined && updates.variantId !== null) convexUpdates.variantId = updates.variantId
 
       await updateBookingMut({
         id: bookingId as Id<"bookings">,

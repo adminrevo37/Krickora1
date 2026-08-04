@@ -84,6 +84,12 @@ export default function AdminBookingCalendar() {
   const [modalOpen, setModalOpen] = useState(false)
   const [selectedSlot, setSelectedSlot] = useState<{ lane: Lane; date: Date; startHour: number } | null>(null)
   const [detailsBooking, setDetailsBooking] = useState<Booking | null>(null)
+  // G5 (SPEC_ADMIN_BOOKING_PARITY_2026-08): after a coach-booking create the admin
+  // can jump straight into athlete allocation. The created id is parked here until
+  // the reactive per-day query delivers the new row, then the details modal opens
+  // directly into the AthleteAllocationEditor.
+  const [pendingAllocateId, setPendingAllocateId] = useState<string | null>(null)
+  const [detailsOpenAthleteEditor, setDetailsOpenAthleteEditor] = useState(false)
 
   // Customer selection
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('')
@@ -121,7 +127,13 @@ export default function AdminBookingCalendar() {
   const selectedCustomer: AdminCustomerOption | null = useMemo(() => {
     const c = (allCustomers as any[]).find((c) => c._id === selectedCustomerId)
     if (!c) return null
-    return { _id: c._id, name: c.name ?? '', email: c.email ?? '', phone: c.phone, role: c.role ?? 'customer' }
+    // G1 (SPEC_ADMIN_BOOKING_PARITY_2026-08): carry the credit balance so the
+    // manual-booking modal can offer "apply account credit" (listCustomers is
+    // admin-only and already returns the full row — no extra query).
+    return {
+      _id: c._id, name: c.name ?? '', email: c.email ?? '', phone: c.phone, role: c.role ?? 'customer',
+      creditBalance: typeof c.creditBalance === 'number' ? c.creditBalance : 0,
+    }
   }, [allCustomers, selectedCustomerId])
 
   // SPEC_CLUB_TEAM_BOOKINGS_2026-07: club PDF export (schedule + appended facility guide).
@@ -283,9 +295,35 @@ export default function AdminBookingCalendar() {
     if (failed === 0 && !isRequest) {
       setModalOpen(false)
       setSelectedSlot(null)
+      // G5: coach booking created → offer to allocate athletes immediately. Opens
+      // the first created booking's details modal straight into the editor once
+      // the reactive query delivers the row. Only offered when that booking is on
+      // the VIEWED day (custom pick-dates sorts its dates, so the first created
+      // date can differ from the clicked one — parking an id for another day
+      // would never resolve here and could pop the modal on a later navigation).
+      if (createdIds.length > 0 && newBookings[0]?.isCoachBooking && newBookings[0]?.date === dateKey) {
+        const multi = createdIds.length > 1 ? ` (${createdIds.length} dates created — this opens the first)` : ''
+        if (window.confirm(`Booking created. Allocate athletes now?${multi}`)) {
+          setPendingAllocateId(createdIds[0])
+        }
+      }
     }
     return { succeeded, failed, failedDates, createdIds }
   }
+
+  // G5: resolve the parked id once the per-day query has the new booking.
+  useEffect(() => {
+    if (!pendingAllocateId) return
+    const match = selectedDayBookings.find(b => b.id === pendingAllocateId)
+    if (match) {
+      setPendingAllocateId(null)
+      setDetailsOpenAthleteEditor(true)
+      setDetailsBooking(match)
+    }
+  }, [pendingAllocateId, selectedDayBookings])
+  // G5: a parked id is only valid for the day it was created on — drop it if the
+  // admin navigates away before the query resolves (no surprise modals later).
+  useEffect(() => { setPendingAllocateId(null) }, [dateKey])
 
   const dayBookings = selectedDayBookings.filter(b => b.date === dateKey && b.status !== 'cancelled')
 
@@ -761,9 +799,11 @@ export default function AdminBookingCalendar() {
       {detailsBooking && (
         <AdminBookingDetailsModal
           booking={detailsBooking}
-          onClose={() => setDetailsBooking(null)}
+          openAthleteEditor={detailsOpenAthleteEditor}
+          onClose={() => { setDetailsBooking(null); setDetailsOpenAthleteEditor(false) }}
           onSave={(newDate) => {
             setDetailsBooking(null)
+            setDetailsOpenAthleteEditor(false)
             // Navigate calendar to the saved date (which may be different from the original)
             const newDay = allDays.find(d => formatDateKey(d) === newDate)
             if (newDay) {

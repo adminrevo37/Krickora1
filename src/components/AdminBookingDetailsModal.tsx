@@ -12,11 +12,17 @@ import AthleteAllocationEditor from './AthleteAllocationEditor'
 // SPEC_ADMIN_TOPUP — admin sends a customer a Stripe payment link for the price
 // difference after extending their booking.
 import { createPaymentLink } from '../lib/stripe'
+// G3 (SPEC_ADMIN_BOOKING_PARITY_2026-08): machine-type (variant) switch on an
+// existing booking — options resolved per date/segment like the booking modals.
+import { resolveLaneAt, variantLabel } from '../lib/lanes'
+import { useLaneConfigState } from '../hooks/useLaneConfig'
 
 interface Props {
   booking: Booking
   onClose: () => void
   onSave?: (newDate: string) => void
+  // G5: open straight into the athlete-allocation editor (post-create bridge).
+  openAthleteEditor?: boolean
 }
 
 const ALL_DURATION_OPTIONS = [30, 60, 90, 120, 150, 180, 240, 300, 360]
@@ -42,12 +48,13 @@ function generateHoursForDate(dateKey: string): number[] {
   return hours
 }
 
-export default function AdminBookingDetailsModal({ booking, onClose, onSave }: Props) {
+export default function AdminBookingDetailsModal({ booking, onClose, onSave, openAthleteEditor }: Props) {
   const { updateBooking, updateAthleteSlots } = useBookingActions()
   const { user } = useAuth()
   // SPEC_COACH_ALLOCATION — admin allocates athletes to a coach booking. The editor is
   // scoped to the BOOKING's coach (by email); fetch that coach's settings for the picker.
-  const [showAthleteEditor, setShowAthleteEditor] = useState(false)
+  // G5: openAthleteEditor pre-opens it (the create → allocate bridge).
+  const [showAthleteEditor, setShowAthleteEditor] = useState(openAthleteEditor === true && booking.isCoachBooking)
   const coachRecord = useQuery(
     api.queries.getCustomerByEmail,
     booking.isCoachBooking && booking.customerEmail ? { email: booking.customerEmail } : 'skip'
@@ -90,6 +97,26 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
   const [notes, setNotes] = useState(booking.notes ?? '')
   // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: toggle the roller-door auto-open tag.
   const [autoDoor, setAutoDoor] = useState(booking.autoDoor ?? false)
+  // G3 — machine-type (variant) switch. Options come from the date/segment-resolved
+  // lane config (the G6 pattern), NOT the static default layout. Matters physically:
+  // the "(Truman)" token on the resynced calendar event drives HA's machine power.
+  useLaneConfigState()
+  const [variantId, setVariantId] = useState<string | null>(booking.variantId ?? null)
+  const segVariants = useMemo(() => {
+    try { return resolveLaneAt(laneId, date, startHour).segment.variants } catch { return [] as string[] }
+  }, [laneId, date, startHour])
+  // NO auto-snap: variantId changes ONLY on explicit admin interaction with the
+  // select. (Review 2026-08-05: a mount-time snap silently rewrote any booking
+  // whose stored variant isn't in the live segment — e.g. every legacy Truman
+  // booking while the live layout offers no truman variant — so ANY unrelated
+  // save would flip its machine type + resync the calendar/HA power token.)
+  // If the stored variant isn't offered by the resolved segment, it's shown as
+  // an extra option so the select never lies about the current value.
+  const variantOptions = useMemo(
+    () => (variantId != null && !segVariants.includes(variantId) ? [variantId, ...segVariants] : segVariants),
+    [segVariants, variantId]
+  )
+  const variantChanged = !booking.isCoachBooking && (variantId ?? null) !== (booking.variantId ?? null)
   // SPEC_ADMIN_TOPUP — top-up payment link (customer bookings only).
   const [topUpAmount, setTopUpAmount] = useState('')
   const [topUpEmail, setTopUpEmail] = useState(false)
@@ -132,20 +159,27 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
     return ALL_DURATION_OPTIONS.filter(d => d >= 60 && d <= maxMinutes)
   }, [date, startHour])
 
-  // Computed customer price — for display reference (payment already processed)
+  // Computed customer price — for display reference (payment already processed).
+  // G3: priced at the EDITED variant so a machine-type switch shows its new price
+  // (and the top-up default below becomes the delta to collect).
   const calculatedCustomerPrice = useMemo(() => {
     if (booking.isCoachBooking) return null
     const lane = LANES.find(l => l.id === laneId)
     if (!lane) return null
-    return getCustomerPrice(lane, booking.variantId ?? null, duration)
-  }, [booking.isCoachBooking, booking.variantId, laneId, duration])
+    return getCustomerPrice(lane, variantId ?? booking.variantId ?? null, duration)
+  }, [booking.isCoachBooking, booking.variantId, variantId, laneId, duration])
 
   // SPEC_ADMIN_TOPUP — what the customer has paid (the stored price) vs the new
   // price at the edited duration; the balance is the top-up to collect.
+  // G1: on a PAID booking priceInCents is the CASH settled; any redeemed account
+  // credit (creditApplied) also covered value, so count it before flagging a
+  // balance as "still owing" (else a credit-part-paid booking looks underbilled).
   const alreadyPaidDollars = ((booking as any).priceInCents ?? 0) / 100
+  const creditCoveredDollars =
+    (booking as any).paymentStatus === 'paid' ? (((booking as any).creditApplied ?? 0) as number) : 0
   const balanceDueDollars = useMemo(
-    () => Math.max(0, (calculatedCustomerPrice ?? 0) - alreadyPaidDollars),
-    [calculatedCustomerPrice, alreadyPaidDollars]
+    () => Math.max(0, (calculatedCustomerPrice ?? 0) - alreadyPaidDollars - creditCoveredDollars),
+    [calculatedCustomerPrice, alreadyPaidDollars, creditCoveredDollars]
   )
   // Default the amount field to the live balance (re-fills when the duration changes).
   useEffect(() => {
@@ -254,6 +288,10 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
         status: status as Booking['status'],
         notes: notes.trim() || undefined,
         autoDoor, // SPEC_TEAM_BOOKING_AUTODOOR
+        // G3 — send the variant only when actually changed (avoids needless
+        // calendar resyncs; the mutation recomputes snapshots + updates the
+        // event in place, carrying the "(Truman)" token HA's power gating reads).
+        ...(variantChanged && variantId != null ? { variantId } : {}),
         ...(booking.isCoachBooking ? { coachPrice } : {}),
       } as any)
       // Auto-close and navigate calendar to the (possibly new) date
@@ -281,12 +319,18 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
     }
   }
 
-  // SPEC_ADMIN_MANUAL_POWERS — suggested refund for the void panel = money the
-  // customer actually paid (stored gross price minus any credit applied).
+  // SPEC_ADMIN_MANUAL_POWERS — suggested CASH refund for the void panel.
+  // G1 invariant: when paymentStatus==='paid', priceInCents already IS the cash
+  // settled (Stripe webhook rewrites it; admin offline-with-credit stores net) —
+  // subtracting credit again would understate. For unpaid/credit-only bookings
+  // priceInCents is gross, so cash = gross − credit (usually $0).
   const suggestedRefund = useMemo(() => {
     const cents = (booking as any).priceInCents
     const credit = (booking as any).creditApplied ?? 0
-    if (typeof cents === 'number') return Math.max(0, Math.round((cents / 100 - credit) * 100) / 100)
+    if (typeof cents === 'number') {
+      if ((booking as any).paymentStatus === 'paid') return Math.max(0, Math.round(cents) / 100)
+      return Math.max(0, Math.round(cents - credit * 100) / 100)
+    }
     return calculatedCustomerPrice ?? 0
   }, [booking, calculatedCustomerPrice])
 
@@ -367,6 +411,11 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                 <Field label="Time" value={`${formatTime(startHour)} – ${formatTime(startHour + duration / 60)}`} />
                 <Field label="Duration" value={`${duration} min`} />
                 <Field label="Type" value={booking.isCoachBooking ? '🏅 Coach' : '👤 Customer'} />
+                {/* G3 — surface the machine type (was displayed nowhere). Prefers the
+                    stored snapshot; falls back to the variant id's label. */}
+                {!booking.isCoachBooking && ((booking as any).variantLabelSnapshot || variantId) && (
+                  <Field label="Machine Type" value={(booking as any).variantLabelSnapshot ?? variantLabel(variantId)} />
+                )}
                 {booking.isCoachBooking && <Field label="Coach Price" value={`$${coachPrice.toFixed(2)}`} />}
                 {!booking.isCoachBooking && calculatedCustomerPrice !== null && (
                   <Field label="Session Price" value={`$${(calculatedCustomerPrice as number).toFixed(2)}`} />
@@ -699,6 +748,26 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                 <Select label="Lane" value={laneId} onChange={setLaneId} options={LANES.map(l => l.id)} optionLabels={LANES.map(l => l.name)} />
                 <Select label="Start Time" value={String(startHour)} onChange={(v) => setStartHour(Number(v))} options={hours.map(String)} optionLabels={hours.map(h => formatTime(h))} />
                 <Select label="Duration" value={String(duration)} onChange={(v) => setDuration(Number(v))} options={durationOptions.map(String)} optionLabels={durationOptions.map(d => d >= 60 ? `${Math.floor(d/60)}hr${d%60>0?` ${d%60}min`:''}` : `${d}min`)} />
+                {/* G3 — machine-type switch (customer/club bookings on a multi-variant
+                    segment). Price is NOT auto-adjusted — the delta shows in Session
+                    Price below; collect/return it via the top-up link or void tools. */}
+                {!booking.isCoachBooking && variantOptions.length > 1 && (
+                  <div className="col-span-2">
+                    <Select
+                      label="Machine Type"
+                      value={variantId ?? variantOptions[0]}
+                      onChange={(v) => setVariantId(v)}
+                      options={variantOptions}
+                      optionLabels={variantOptions.map(v => variantLabel(v) + (!segVariants.includes(v) ? ' (not offered on this lane/date)' : ''))}
+                    />
+                    {variantChanged && (
+                      <div className="mt-1 text-[10px] text-amber-600 dark:text-amber-400">
+                        Machine type will change on save (calendar + HA machine power follow automatically).
+                        Price is not auto-adjusted — use the top-up link / void tools for any difference.
+                      </div>
+                    )}
+                  </div>
+                )}
                 {booking.isCoachBooking && (
                   <div className="col-span-2">
                     <div className="text-[10px] uppercase font-semibold text-gray-500 dark:text-gray-400 tracking-wide mb-1">Coach Price</div>
@@ -720,9 +789,7 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                           was ACTUALLY paid (priceInCents) vs the current price. */}
                       <span className={`text-[10px] font-normal ${balanceDueDollars > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-blue-500'}`}>
                         {(booking as any).paymentStatus === 'paid'
-                          ? balanceDueDollars > 0
-                            ? `· $${alreadyPaidDollars.toFixed(2)} paid · $${balanceDueDollars.toFixed(2)} still owing`
-                            : `· $${alreadyPaidDollars.toFixed(2)} paid`
+                          ? `· $${alreadyPaidDollars.toFixed(2)} paid${creditCoveredDollars > 0 ? ` + $${creditCoveredDollars.toFixed(2)} credit` : ''}${balanceDueDollars > 0 ? ` · $${balanceDueDollars.toFixed(2)} still owing` : ''}`
                           : '· not yet charged'}
                       </span>
                       {pendingLinkCents > 0 && (

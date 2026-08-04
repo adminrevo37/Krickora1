@@ -1210,6 +1210,43 @@ export const createBooking = mutation({
       }
     }
 
+    // SPEC_ADMIN_BOOKING_PARITY_2026-08 G1 — admin applies the SUBJECT's account
+    // credit at create. The customer clamp above reads the CALLER's balance and is
+    // skipped for admin-manual bookings entirely, so validate here against the
+    // on-behalf customer's live balance. THROW rather than silently clamp: for
+    // offline/paid mode the client stores priceInCents = price − credit (the cash
+    // split), so a silent clamp would mis-record money; the admin must reopen the
+    // modal and re-apply against the fresh balance.
+    if (isAdminManual && !effectiveIsCoachBooking && !subjectIsClub && (args.creditApplied ?? 0) > 0) {
+      const subjBalDollars = Math.max(0, Math.round((((subjectCustomer as any)?.creditBalance ?? 0) as number) * 100)) / 100;
+      const wantDollars = Math.round((args.creditApplied as number) * 100) / 100;
+      if (wantDollars > subjBalDollars + 0.005) {
+        throw new ConvexError(
+          `Credit to apply ($${wantDollars.toFixed(2)}) exceeds this customer's current balance ($${subjBalDollars.toFixed(2)}). Their balance changed — reopen the booking form and re-apply.`
+        );
+      }
+    }
+
+    // G1 review fix (2026-08-05) — the STORED creditApplied must be server-clamped,
+    // not just the charge. Previously the raw client value was persisted; a customer
+    // could send an inflated creditApplied (the charge clamp + redeemCredit's own
+    // clamp hid it), then cancel — and cancelBooking/adminRefundBooking return
+    // cashPaid + creditApplied, MINTING the inflated amount as spendable credit.
+    // Rule: coach/club subjects never carry credit; customer self-bookings clamp to
+    // min(balance, server price); admin-manual customer bookings were validated by
+    // the throw above (admin sets price deliberately, so no price clamp).
+    let creditAppliedEff: number | undefined =
+      (args.creditApplied ?? 0) > 0 ? (args.creditApplied as number) : undefined;
+    if (effectiveIsCoachBooking || subjectIsClub) {
+      creditAppliedEff = undefined;
+    } else if (!isAdminManual && creditAppliedEff !== undefined) {
+      const realBalCents = Math.max(0, Math.round(((callerCustomer as any)?.creditBalance ?? 0) * 100));
+      const wantCreditCents = Math.max(0, Math.round(creditAppliedEff * 100));
+      const priceCapCents = serverPriceCents != null ? Math.max(0, serverPriceCents) : wantCreditCents;
+      const clampedCents = Math.min(wantCreditCents, realBalCents, priceCapCents);
+      creditAppliedEff = clampedCents > 0 ? clampedCents / 100 : undefined;
+    }
+
     // C3 (SECURITY): the door code is generated SERVER-SIDE; any client-supplied
     // `accessCode` is IGNORED for customer + coach bookings (a customer could
     // otherwise set a known staff code or collide with another active booking).
@@ -1421,7 +1458,7 @@ export const createBooking = mutation({
       coachPrice: effectiveCoachPrice,
       additionalLaneIds: args.additionalLaneIds,
       athleteSlots: normalizedAthleteSlots,
-      creditApplied: args.creditApplied,
+      creditApplied: creditAppliedEff,
       accessCode: bookingAccessCode,
       discountCode: args.discountCode,
       notes: args.notes,
@@ -1510,10 +1547,10 @@ export const createBooking = mutation({
     // coach's credit balance (coaches bill via statement, not credit) — added the
     // !effectiveIsCoachBooking guard (redeemCredit already clamps to balance, but a
     // coach booking should not touch credit at all).
-    if (effectiveStatus === "confirmed" && !effectiveIsCoachBooking && (args.creditApplied ?? 0) > 0 && args.customerEmail) {
+    if (effectiveStatus === "confirmed" && !effectiveIsCoachBooking && (creditAppliedEff ?? 0) > 0 && args.customerEmail) {
       await redeemCredit(ctx, {
         email: args.customerEmail,
-        amount: args.creditApplied as number,
+        amount: creditAppliedEff as number,
         bookingId: id.toString(),
       });
     }
@@ -1553,7 +1590,7 @@ export const createBooking = mutation({
           duration: args.duration,
           accessCode: bookingAccessCode,
           coachPrice: effectiveCoachPrice,
-          creditApplied: args.creditApplied,
+          creditApplied: creditAppliedEff,
         }),
       );
       // SPEC_PWA_PUSH §5.1 — booking confirmation push (customer bookings only;
