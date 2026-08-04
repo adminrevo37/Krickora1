@@ -8,7 +8,7 @@ import {
 } from '../lib/booking-data'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
-import { resolveLaneAt } from '../lib/lanes'
+import { resolveLaneAt, getLaneWarning, variantLabel, variantRatePerHour } from '../lib/lanes'
 import MultiDatePicker from './MultiDatePicker'
 
 type PaymentMode = 'comp' | 'offline' | 'request'
@@ -64,13 +64,35 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   // SPEC_CLUB_TEAM_BOOKINGS_2026-07: a club/team subject (no account). Forces door
   // code 2026 + auto-door + offline pricing + no emails (all server-authoritative).
   const isClub = customer.role === 'club'
-  const hasVariants = !!(lane.variants && lane.variants.length > 0)
-  const [selectedVariant, setSelectedVariant] = useState<LaneVariant | null>(hasVariants ? lane.variants![0] : null)
   const dateKey = formatDateKey(date)
   useLaneConfigState() // SPEC_RECONFIGURABLE_LANES: react to layout changes
+  // SPEC_ADMIN_BOOKING_PARITY_2026-08 G6 — resolve variants/name for THIS
+  // (date, startHour) exactly like BookingModal (segment + per-date override
+  // aware). The calendar grid passes the STATIC default-layout lane object, so
+  // `lane.variants` could offer a machine type that doesn't exist on an
+  // override date (wrong variantId stored → wrong Truman gating in HA) or hide
+  // one that does. The clicked date/hour never change within this modal, so a
+  // single resolve is sufficient; recurrence occurrences are re-validated
+  // per-date by the server (validateAndSnapshotLane) as before.
+  const resolvedLane = resolveLaneAt(lane.id, dateKey, startHour)
+  const seg = resolvedLane.segment
+  const laneWarning = getLaneWarning(lane.id, dateKey, startHour)
+  const settingsForPrice = getSettingsStore().get()
+  const variantOptions = useMemo<LaneVariant[]>(
+    () => seg.variants.map((vid) => ({
+      id: vid,
+      name: variantLabel(vid, seg.variants.length === 1 && seg.mode === 'BM'),
+      pricePerHour: variantRatePerHour(vid, settingsForPrice),
+      description: '',
+    })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [seg.variants.join(','), seg.mode, settingsForPrice.customerPricePerHour, settingsForPrice.trumanPricePerHour]
+  )
+  const hasVariantChoice = !isCoach && variantOptions.length > 1
+  const [selectedVariant, setSelectedVariant] = useState<LaneVariant | null>(variantOptions[0] ?? null)
   // Cap durations so an admin booking can't cross a segment boundary (§2.14) —
   // createBooking rejects a crossing booking server-side, so mirror the cap here.
-  const segEndHour = resolveLaneAt(lane.id, dateKey, startHour).segment.endHour
+  const segEndHour = seg.endHour
   // SPEC_ADMIN_AFTER_HOURS_BOOKING_2026-07: this modal is admin-only, so an admin may
   // extend a booking PAST the day's close (9pm) up to a 22:00 (10pm) ceiling — e.g. an
   // 8pm start can be 1h / 1.5h / 2h (8–9 / 8–9:30 / 8–10), or the 9–10pm slot itself.
@@ -141,6 +163,11 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   // coach bookings always bill via their statement). Default = paid offline.
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('offline')
   const createPaymentLink = useAction(api.stripe.createPaymentLink)
+  // SPEC_ADMIN_BOOKING_PARITY_2026-08 G2 — request mode previously surfaced the
+  // pay link ONLY as clipboard + alert (lose the alert → link lost; the
+  // 2026-08-04 Turnbull incident). Default ON: the system emails each link to
+  // the customer (branded template; the Payment Links tab records sentToEmail).
+  const [emailLinks, setEmailLinks] = useState(true)
 
   // Admin notes
   const [notes, setNotes] = useState('')
@@ -296,7 +323,7 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
       // Send-payment-request mode: generate a Stripe payment link per created
       // pending booking and present them for the admin to send to the customer.
       if (isRequest && result && result.createdIds && result.createdIds.length > 0) {
-        const laneName = lane.name + (selectedVariant ? ` (${selectedVariant.name})` : '')
+        const laneName = resolvedLane.name + (selectedVariant ? ` (${selectedVariant.name})` : '')
         const links: string[] = []
         for (let i = 0; i < result.createdIds.length; i++) {
           const occ = validOccurrences[i]
@@ -311,6 +338,10 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
               customerEmail: customer.email,
               priceInCents: perBookingCents,
               bookingId: result.createdIds[i],
+              // G2 — system-emails the link (one email per date/link). Every link
+              // is tracked in the Payment Links tab regardless, so nothing is
+              // lost even if this tab is closed before the alert is read.
+              emailToCustomer: emailLinks,
             })
             links.push(`${occ?.dateKey ?? ''}: ${res.url}`)
           } catch { /* skip a failed link; booking still pending */ }
@@ -318,8 +349,12 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
         if (links.length > 0) {
           try { await navigator.clipboard.writeText(links.map(l => l.split(': ').slice(1).join(': ')).join('\n')) } catch {}
           alert(
-            `Payment request created. Send this pay link to ${customer.name || customer.email}` +
-            ` (copied to clipboard):\n\n${links.join('\n')}`
+            (emailLinks
+              ? `Payment request created and EMAILED to ${customer.email}.` +
+                ` Link${links.length > 1 ? 's' : ''} also copied to clipboard:`
+              : `Payment request created. Send this pay link to ${customer.name || customer.email}` +
+                ` (copied to clipboard):`) +
+            `\n\n${links.join('\n')}\n\nAll links are tracked under Analytics → 💳 Payment Links.`
           )
         }
       }
@@ -373,22 +408,29 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
           </div>
 
           <div className="flex items-center gap-3 bg-gray-50 dark:bg-gray-800 rounded-xl p-3">
-            <div className="w-10 h-10 bg-white dark:bg-gray-700 rounded-lg flex items-center justify-center text-lg shadow-sm">{lane.icon}</div>
+            <div className="w-10 h-10 bg-white dark:bg-gray-700 rounded-lg flex items-center justify-center text-lg shadow-sm">{resolvedLane.icon}</div>
             <div>
-              <div className="font-semibold text-gray-800 dark:text-gray-200">{lane.name} <span className="text-[10px] text-emerald-600 dark:text-emerald-400">(primary)</span></div>
+              <div className="font-semibold text-gray-800 dark:text-gray-200">{resolvedLane.name} <span className="text-[10px] text-emerald-600 dark:text-emerald-400">(primary)</span></div>
               <div className="text-xs text-gray-500">{formatTime(startHour)} start</div>
             </div>
           </div>
 
-          {hasVariants && lane.variants && !isCoach && (
+          {/* G6: same fixed auto-warning the public modal shows on layout-override dates. */}
+          {laneWarning && (
+            <div className="text-[11px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-lg p-2 border border-amber-200 dark:border-amber-800/50">
+              ⚠️ {laneWarning}
+            </div>
+          )}
+
+          {hasVariantChoice && (
             <div>
               <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Machine Type (primary lane)</label>
               <div className="grid grid-cols-2 gap-3">
-                {lane.variants.map(v => (
+                {variantOptions.map(v => (
                   <button key={v.id} onClick={() => setSelectedVariant(v)}
                     className={`p-3 rounded-xl border-2 transition-all text-left ${selectedVariant?.id === v.id ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 shadow-md' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'}`}>
                     <div className="text-base font-bold text-gray-800 dark:text-gray-200">{v.name}</div>
-                    <div className="text-xs text-gray-500 mt-0.5">${getCustomerPrice(lane, v.id, 60)}/hr</div>
+                    <div className="text-xs text-gray-500 mt-0.5">${v.pricePerHour.toFixed(2)}/hr</div>
                   </button>
                 ))}
               </div>
@@ -573,6 +615,19 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
                   </button>
                 ))}
               </div>
+              {/* G2 — auto-email the pay link(s); default ON so a lost clipboard/alert
+                  can never strand a request again. */}
+              {paymentMode === 'request' && (
+                <label className="mt-2 flex items-center gap-2 text-[11px] text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={emailLinks}
+                    onChange={e => setEmailLinks(e.target.checked)}
+                    className="rounded accent-emerald-500"
+                  />
+                  Email the pay link{totalSessions - conflictCount > 1 ? 's' : ''} straight to <b>{customer.email}</b>
+                </label>
+              )}
             </div>
           )}
 
@@ -636,7 +691,9 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
                   : paymentMode === 'comp'
                     ? 'Complimentary — recorded as paid at $0, no charge.'
                     : paymentMode === 'request'
-                      ? 'A Stripe pay link will be generated for you to send the customer; the slot is held until they pay.'
+                      ? emailLinks
+                        ? 'A Stripe pay link will be generated and emailed to the customer automatically; the slot is held until they pay. All links are tracked in Analytics → Payment Links.'
+                        : 'A Stripe pay link will be generated for you to send the customer; the slot is held until they pay. All links are tracked in Analytics → Payment Links.'
                       : 'Recorded as paid offline — no Stripe charge.'}
               {selectedLaneCount > 1 ? ` ${selectedLaneCount} lanes per session.` : ''}
             </p>
