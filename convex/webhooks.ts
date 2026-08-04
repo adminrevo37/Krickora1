@@ -30,60 +30,15 @@ export const confirmBookingPayment = internalMutation({
 
     const b = booking as any;
 
-    // Idempotency: already paid → no-op
-    if (b.paymentStatus === "paid") {
-      return { success: true, alreadyPaid: true };
-    }
-
-    // SAFETY backstop (audit 2026-06-10 money-hole #1): a payment confirmed for a
-    // booking that is no longer live. The abandoned-checkout sweep (or a cancel)
-    // already terminated it and its slot may have been re-booked. The timing fix
-    // (hold window ≥ Stripe session lifetime, lib/slotHolds.ts) makes this rare,
-    // but clock skew / a late Stripe retry could still land here. Do NOT run the
-    // normal confirm side-effects — that would send a false "Booking confirmed"
-    // and redeem account credit against a dead booking. Instead: record the money
-    // so it's traceable, flag the booking for an admin refund, and alert. Setting
-    // paymentStatus:"paid" also makes any Stripe retry hit the idempotency no-op
-    // above. (Coaches don't pay, so this is customer-only by construction.)
-    if (b.status === "cancelled") {
-      await ctx.db.patch(booking._id, {
-        paymentStatus: "paid",
-        stripeSessionId: args.stripeSessionId,
-        needsRefund: true,
-      } as any);
-      if (b.customerEmail) {
-        const currency = (args.currency ?? "AUD").toUpperCase();
-        const laneName = b.laneNameSnapshot ?? String(b.laneId).toUpperCase();
-        await ctx.runMutation(internal.mutations.recordStripePaymentInternal, {
-          bookingId: booking._id.toString(),
-          stripeSessionId: args.stripeSessionId,
-          customerEmail: b.customerEmail,
-          customerName: b.customerName ?? "Customer",
-          amount: args.amountPaid / 100,
-          currency,
-          // MON-5 (audit 2026-06): this charge is awaiting refund, NOT revenue. A
-          // distinct status keeps it out of getRevenueDashboard's paid/complete sum
-          // (the description already says REFUND DUE; the booking.needsRefund flag +
-          // admin alert still drive the refund workflow).
-          status: "refund_due",
-          laneName,
-          date: b.date,
-          description: `REFUND DUE — payment received after booking cancelled (${b.date})`,
-          receiptUrl: args.receiptUrl,
-        });
-      }
-      await ctx.scheduler.runAfter(0, internal.push.sendAdminPush, {
-        title: "⚠️ Refund needed — paid after cancel",
-        body: `${b.customerName ?? b.customerEmail ?? "A customer"} paid for a CANCELLED booking (${b.laneNameSnapshot ?? b.laneId} ${b.date}). Refund required.`,
-        url: "/rev-ops-7k2p",
-        tag: `refund-${booking._id.toString()}`,
-      });
-      console.error(
-        `[webhook] PAYMENT FOR CANCELLED BOOKING ${booking._id.toString()} — flagged needsRefund, admin alerted`
-      );
-      return { success: true, orphanedPayment: true };
-    }
-
+    // H2 FIX (AUDIT_FULL_2026-07-02 / SPEC_PAYMENT_LINK_TRACKING §5): the
+    // pending-edit branch MUST run BEFORE the paid-idempotency guard. A customer
+    // extending an already-PAID booking keeps paymentStatus:"paid" while
+    // modifyBooking stashes the change in pendingEdit — the guard below used to
+    // return first, so the top-up was charged but the extension (duration,
+    // calendar resync, door code, slot) was silently thrown away. Retry-safe:
+    // once applied, status flips to "confirmed" + pendingEdit clears, so a
+    // webhook retry falls through to the paid-guard no-op.
+    //
     // Booking edit / unified modify top-up — apply the pending change once paid.
     if (b.status === "pending_edit_payment" && b.pendingEdit) {
       const pe = b.pendingEdit;
@@ -152,6 +107,63 @@ export const confirmBookingPayment = internalMutation({
       } as any);
       return { success: true, isBookingEdit: true };
     }
+
+    // Idempotency: already paid → no-op
+    if (b.paymentStatus === "paid") {
+      return { success: true, alreadyPaid: true };
+    }
+
+    // SAFETY backstop (audit 2026-06-10 money-hole #1): a payment confirmed for a
+    // booking that is no longer live. The abandoned-checkout sweep (or a cancel)
+    // already terminated it and its slot may have been re-booked. The timing fix
+    // (hold window ≥ Stripe session lifetime, lib/slotHolds.ts) makes this rare,
+    // but clock skew / a late Stripe retry could still land here. Do NOT run the
+    // normal confirm side-effects — that would send a false "Booking confirmed"
+    // and redeem account credit against a dead booking. Instead: record the money
+    // so it's traceable, flag the booking for an admin refund, and alert. Setting
+    // paymentStatus:"paid" also makes any Stripe retry hit the idempotency no-op
+    // above. (Coaches don't pay, so this is customer-only by construction.)
+    if (b.status === "cancelled") {
+      await ctx.db.patch(booking._id, {
+        paymentStatus: "paid",
+        stripeSessionId: args.stripeSessionId,
+        needsRefund: true,
+      } as any);
+      if (b.customerEmail) {
+        const currency = (args.currency ?? "AUD").toUpperCase();
+        const laneName = b.laneNameSnapshot ?? String(b.laneId).toUpperCase();
+        await ctx.runMutation(internal.mutations.recordStripePaymentInternal, {
+          bookingId: booking._id.toString(),
+          stripeSessionId: args.stripeSessionId,
+          customerEmail: b.customerEmail,
+          customerName: b.customerName ?? "Customer",
+          amount: args.amountPaid / 100,
+          currency,
+          // MON-5 (audit 2026-06): this charge is awaiting refund, NOT revenue. A
+          // distinct status keeps it out of getRevenueDashboard's paid/complete sum
+          // (the description already says REFUND DUE; the booking.needsRefund flag +
+          // admin alert still drive the refund workflow).
+          status: "refund_due",
+          laneName,
+          date: b.date,
+          description: `REFUND DUE — payment received after booking cancelled (${b.date})`,
+          receiptUrl: args.receiptUrl,
+        });
+      }
+      await ctx.scheduler.runAfter(0, internal.push.sendAdminPush, {
+        title: "⚠️ Refund needed — paid after cancel",
+        body: `${b.customerName ?? b.customerEmail ?? "A customer"} paid for a CANCELLED booking (${b.laneNameSnapshot ?? b.laneId} ${b.date}). Refund required.`,
+        url: "/rev-ops-7k2p",
+        tag: `refund-${booking._id.toString()}`,
+      });
+      console.error(
+        `[webhook] PAYMENT FOR CANCELLED BOOKING ${booking._id.toString()} — flagged needsRefund, admin alerted`
+      );
+      return { success: true, orphanedPayment: true };
+    }
+
+    // (The pending_edit_payment branch used to live HERE — moved above the
+    // paid-idempotency guard, see H2 FIX comment at the top of this handler.)
 
     const patch: Record<string, any> = {
       paymentStatus: "paid",

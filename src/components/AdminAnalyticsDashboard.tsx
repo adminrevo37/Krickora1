@@ -23,6 +23,7 @@ const OccupancyTab = lazy(() => import('./analytics/OccupancyTab'))
 const MachineUsageTab = lazy(() => import('./analytics/MachineUsageTab'))
 const CustomersTab = lazy(() => import('./analytics/CustomersTab'))
 const MapTab = lazy(() => import('./analytics/MapTab'))
+const PaymentLinksTab = lazy(() => import('./analytics/PaymentLinksTab'))
 
 // `subDay`: whether 1h/4h presets are offered (event-time panels only). Date-based
 // panels (bookings/revenue/occupancy/customers/map) bucket by session date, so
@@ -41,6 +42,7 @@ const TABS = [
   { id: 'push', label: 'Push & Waitlist', icon: '🔔', range: true, subDay: true },
   { id: 'occupancy', label: 'Occupancy', icon: '🏟️', range: true, subDay: false },
   { id: 'machine', label: 'Machine Use', icon: '⚙️', range: true, subDay: false },
+  { id: 'paylinks', label: 'Payment Links', icon: '💳', range: false, subDay: false },
   { id: 'customers', label: 'Customers', icon: '💎', range: true, subDay: false },
   { id: 'map', label: 'Map', icon: '🗺️', range: true, subDay: false },
 ] as const
@@ -93,6 +95,7 @@ export default function AdminAnalyticsDashboard() {
         {tab === 'push' && <PushTab range={tabRange} />}
         {tab === 'occupancy' && <OccupancyTab range={tabRange} />}
         {tab === 'machine' && <MachineUsageTab range={tabRange} />}
+        {tab === 'paylinks' && <PaymentLinksTab />}
         {tab === 'customers' && <CustomersTab range={tabRange} />}
         {tab === 'map' && <MapTab range={tabRange} />}
       </Suspense>

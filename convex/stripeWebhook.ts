@@ -91,6 +91,47 @@ export const stripeWebhook = httpAction(async (ctx, request) => {
         } else {
           console.warn("[stripe-webhook] checkout.session.completed without bookingId metadata");
         }
+
+        // SPEC_PAYMENT_LINK_TRACKING_2026-07 — if this session was spawned by a
+        // Stripe Payment Link (admin-sent top-up / manual payment request), flip
+        // the tracked link to 'paid' and DEACTIVATE it on Stripe. Payment Links
+        // are reusable URLs that never expire — without deactivation a second
+        // open would spawn a NEW session and charge the customer again (the
+        // session-level dedupe in recordTopUpPayment can't catch a different
+        // session id). Best-effort: never fail the webhook over tracking.
+        const paymentLinkId =
+          typeof (session as any).payment_link === "string"
+            ? ((session as any).payment_link as string)
+            : ((session as any).payment_link?.id as string | undefined);
+        if (paymentLinkId) {
+          let receiptUrlForLink: string | undefined;
+          try {
+            if (session.payment_intent) {
+              const pi = await stripe.paymentIntents.retrieve(
+                session.payment_intent as string,
+                { expand: ["latest_charge"] }
+              );
+              receiptUrlForLink =
+                (pi.latest_charge as Stripe.Charge | null)?.receipt_url ?? undefined;
+            }
+          } catch {
+            /* best-effort */
+          }
+          try {
+            await ctx.runMutation(internal.paymentLinks.markPaidInternal, {
+              stripePaymentLinkId: paymentLinkId,
+              stripeSessionId: session.id,
+              receiptUrl: receiptUrlForLink,
+            });
+          } catch (e: any) {
+            console.warn("[stripe-webhook] paymentLinks.markPaid failed:", e?.message);
+          }
+          try {
+            await stripe.paymentLinks.update(paymentLinkId, { active: false });
+          } catch (e: any) {
+            console.warn("[stripe-webhook] payment link deactivate failed:", e?.message);
+          }
+        }
         break;
       }
 

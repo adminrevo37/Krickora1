@@ -639,6 +639,38 @@ export default defineSchema({
     .index("by_bookingId", ["bookingId"])
     .index("by_date", ["date"]),
 
+  // SPEC_PAYMENT_LINK_TRACKING_2026-07 — admin-sent Stripe payment links (top-up +
+  // manual payment requests). Previously a link only became visible when PAID (the
+  // webhook wrote a stripePayments row) — sent-but-unpaid links were invisible, so
+  // a part-paid booking looked underbilled. NB createPaymentLink uses Stripe's
+  // NATIVE Payment Links product (plink_…), which spawns a NEW Checkout Session
+  // per open — so the stable join key is the payment-link id, and the paying
+  // session id is only known (and stored) once checkout.session.completed arrives.
+  paymentLinks: defineTable({
+    bookingId: v.optional(v.string()),
+    stripePaymentLinkId: v.string(), // plink_… (join key to the webhook via session.payment_link)
+    stripeSessionId: v.optional(v.string()), // cs_… of the PAYING session, set on completed
+    purpose: v.string(), // 'topup' | 'manual'
+    amountCents: v.number(),
+    currency: v.string(), // 'AUD'
+    status: v.string(), // 'pending' | 'paid' | 'cancelled'
+    customerName: v.optional(v.string()),
+    customerEmail: v.optional(v.string()),
+    sentToEmail: v.optional(v.string()), // set when emailToCustomer was ticked
+    url: v.string(),
+    description: v.string(),
+    createdBy: v.string(), // admin email (server-derived)
+    createdAt: v.number(), // ms
+    paidAt: v.optional(v.number()), // ms
+    cancelledAt: v.optional(v.number()), // ms
+    manualPaid: v.optional(v.boolean()), // paid offline via admin "mark paid"
+    receiptUrl: v.optional(v.string()),
+  })
+    .index("by_link", ["stripePaymentLinkId"])
+    .index("by_booking", ["bookingId"])
+    .index("by_status", ["status"])
+    .index("by_createdAt", ["createdAt"]),
+
   // Site-wide settings (singleton - only one document)
   siteSettings: defineTable({
     key: v.string(), // always "global"

@@ -196,6 +196,19 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
     booking.isCoachBooking ? 'skip' : { bookingId: booking.id as Id<'bookings'> },
   ) ?? []
 
+  // SPEC_PAYMENT_LINK_TRACKING_2026-07 — this booking's sent payment links
+  // (reactive: a link flips to Paid the moment the Stripe webhook lands). Drives
+  // the "⏳ top-up pending" badge so a part-paid booking is never mistaken for
+  // underbilling. Full management (cancel / mark-paid-offline) lives on the
+  // analytics "💳 Payment Links" tab.
+  const bookingLinks = (useQuery(
+    (api as any).paymentLinks.getLinksForBooking,
+    booking.isCoachBooking ? 'skip' : { bookingId: booking.id },
+  ) ?? []) as any[]
+  const pendingLinkCents = bookingLinks
+    .filter((l) => l.status === 'pending')
+    .reduce((s, l) => s + (l.amountCents ?? 0), 0)
+
   // Detect whether a cancellation is already recorded in the history array
   const hasCancelledInHistory = history.some(h =>
     h.changes.some(c => c.field === 'status' && c.newValue === 'cancelled')
@@ -712,6 +725,11 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                             : `· $${alreadyPaidDollars.toFixed(2)} paid`
                           : '· not yet charged'}
                       </span>
+                      {pendingLinkCents > 0 && (
+                        <span className="text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                          ⏳ ${(pendingLinkCents / 100).toFixed(2)} payment link pending
+                        </span>
+                      )}
                     </div>
                   </div>
                 )}
@@ -747,6 +765,36 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave }: P
                           className="shrink-0 text-[11px] px-2 py-1 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 font-semibold">
                           {linkCopied ? '✓ Copied' : 'Copy'}
                         </button>
+                      </div>
+                    )}
+                    {/* SPEC_PAYMENT_LINK_TRACKING_2026-07 — this booking's sent links w/ live status. */}
+                    {bookingLinks.length > 0 && (
+                      <div className="space-y-1 pt-1.5 border-t border-amber-200/60 dark:border-amber-800/30">
+                        <div className="text-[10px] uppercase font-semibold text-amber-700 dark:text-amber-400 tracking-wide">Sent links</div>
+                        {bookingLinks.map((l: any) => (
+                          <div key={l.id} className="flex items-center justify-between gap-2 text-[11px]">
+                            <span className="text-gray-600 dark:text-gray-400 truncate">
+                              ${(l.amountCents / 100).toFixed(2)} · sent {new Date(l.createdAt).toLocaleDateString('en-AU')}
+                              {l.sentToEmail ? ' · emailed' : ''}
+                            </span>
+                            {l.status === 'paid' ? (
+                              <span className="shrink-0 font-semibold text-green-600 dark:text-green-400">
+                                ✓ Paid{l.manualPaid ? ' (offline)' : ''}{l.paidAt ? ` ${new Date(l.paidAt).toLocaleDateString('en-AU')}` : ''}
+                              </span>
+                            ) : l.status === 'cancelled' ? (
+                              <span className="shrink-0 text-gray-400">Cancelled</span>
+                            ) : (
+                              <span className="shrink-0 flex items-center gap-1.5">
+                                <span className="font-semibold text-amber-600 dark:text-amber-400">⏳ Pending</span>
+                                <button onClick={() => navigator.clipboard?.writeText(l.url)}
+                                  className="px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 font-semibold">
+                                  Copy
+                                </button>
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                        <p className="text-[10px] text-gray-400">Cancel / mark-paid-offline: Analytics → 💳 Payment Links.</p>
                       </div>
                     )}
                   </div>

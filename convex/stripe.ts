@@ -377,6 +377,23 @@ export const createPaymentLink = action({
       },
     });
 
+    // SPEC_PAYMENT_LINK_TRACKING_2026-07 — persist the link so sent-but-unpaid
+    // links are visible (admin Payment Links tab + booking modal badge). The
+    // webhook flips it to 'paid' by session.payment_link when someone pays.
+    await ctx.runMutation(internal.paymentLinks.recordCreatedInternal, {
+      bookingId: args.bookingId || undefined,
+      stripePaymentLinkId: paymentLink.id,
+      purpose: args.topUp ? "topup" : "manual",
+      amountCents: args.priceInCents,
+      currency: "AUD",
+      customerName: args.customerName,
+      customerEmail: args.customerEmail.toLowerCase().trim(),
+      sentToEmail: args.emailToCustomer ? args.customerEmail.toLowerCase().trim() : undefined,
+      url: paymentLink.url,
+      description,
+      createdBy: plEmail,
+    });
+
     // Optionally email the link straight to the customer (admin convenience).
     if (args.emailToCustomer && args.customerEmail) {
       await ctx.scheduler.runAfter(0, internal.emails.sendPaymentLink, {
@@ -392,6 +409,62 @@ export const createPaymentLink = action({
       url: paymentLink.url,
       description,
     };
+  },
+});
+
+// ── SPEC_PAYMENT_LINK_TRACKING_2026-07 — link controls (admin only) ─────────
+
+/** Shared admin gate for the link-control actions. Returns the admin's email. */
+async function requireAdminActionCaller(ctx: any): Promise<string> {
+  const identity = await ctx.auth.getUserIdentity();
+  const email = identity?.email?.toLowerCase?.().trim?.() ?? "";
+  const isAdmin = email
+    ? await ctx.runQuery(internal.queries.isAdminEmail, { email })
+    : false;
+  if (!isAdmin) throw new ConvexError("Not authorized — admin only.");
+  return email;
+}
+
+/**
+ * Cancel a pending payment link: deactivates it on Stripe (the URL stops
+ * accepting payments) then marks the row cancelled.
+ */
+export const cancelPaymentLink = action({
+  args: { linkId: v.string(), stripePaymentLinkId: v.string() },
+  handler: async (ctx, args): Promise<{ success: boolean }> => {
+    await requireAdminActionCaller(ctx);
+    try {
+      await getStripe().paymentLinks.update(args.stripePaymentLinkId, { active: false });
+    } catch (e: any) {
+      // Unknown/already-inactive link — still mark cancelled locally.
+      console.warn("[cancelPaymentLink] Stripe deactivate failed:", e?.message);
+    }
+    await ctx.runMutation(internal.paymentLinks.markCancelledInternal, { linkId: args.linkId });
+    return { success: true };
+  },
+});
+
+/**
+ * Mark a pending link as paid OFFLINE (cash/EFT). Deactivates the Stripe link
+ * FIRST — that is the double-count guard: once inactive, the same link can never
+ * also be card-paid — then applies the money semantics (see
+ * paymentLinks.applyManualLinkPayment: top-ups mirror recordTopUpPayment;
+ * manual payment requests only flip the link).
+ */
+export const markPaymentLinkPaidManually = action({
+  args: { linkId: v.string(), stripePaymentLinkId: v.string() },
+  handler: async (ctx, args): Promise<{ success: boolean; reason?: string }> => {
+    const adminEmail = await requireAdminActionCaller(ctx);
+    try {
+      await getStripe().paymentLinks.update(args.stripePaymentLinkId, { active: false });
+    } catch (e: any) {
+      console.warn("[markPaymentLinkPaidManually] Stripe deactivate failed:", e?.message);
+    }
+    const res: any = await ctx.runMutation(internal.paymentLinks.applyManualLinkPayment, {
+      linkId: args.linkId,
+      adminEmail,
+    });
+    return { success: res?.success === true, reason: res?.reason };
   },
 });
 
