@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { useMutation, useQuery } from 'convex/react'
+import { useMutation, useQuery, useConvex } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { getErrorMessage } from '../lib/errors'
@@ -229,6 +229,70 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave, ope
     api.mates.listBookingMates,
     booking.isCoachBooking ? 'skip' : { bookingId: booking.id as Id<'bookings'> },
   ) ?? []
+
+  // G4 (SPEC_ADMIN_BOOKING_PARITY_2026-08) — admin manages mates on the OWNER's
+  // behalf. addMateToBooking/removeMateFromBooking already authorise an admin
+  // caller and attribute the friendship + M1/M2 emails to the booking owner, so
+  // this is a thin mirror of the customer /add-mate flow. Clubs excluded (no
+  // login, fixed door code — mates make no sense there).
+  const convex = useConvex()
+  const addMateMut = useMutation(api.mates.addMateToBooking)
+  const removeMateMut = useMutation(api.mates.removeMateFromBooking)
+  const [matePhone, setMatePhone] = useState('')
+  const [mateSearching, setMateSearching] = useState(false)
+  const [mateMatch, setMateMatch] = useState<{ _id: string; displayName: string; isSelf?: boolean } | null | 'none'>(null)
+  const [mateBusy, setMateBusy] = useState(false)
+  const [mateMsg, setMateMsg] = useState<{ text: string; ok: boolean } | null>(null)
+  const maxMates = ((getSettingsStore().get() as any).maxMatesPerBooking ?? 2) as number
+  // Owner's saved mates for one-tap adds (listSavedMates already supports the
+  // admin forAccountId override; we resolve the owner's customers row by email).
+  const mateOwnerRecord = useQuery(
+    api.queries.getCustomerByEmail,
+    !booking.isCoachBooking && !isClub && booking.customerEmail ? { email: booking.customerEmail } : 'skip'
+  ) as any
+  const ownerSavedMates = (useQuery(
+    api.mates.listSavedMates,
+    mateOwnerRecord?._id ? { forAccountId: mateOwnerRecord._id } : 'skip'
+  ) ?? []) as Array<{ customerId: string; displayName: string; sharedCount: number }>
+  // Adds are blocked server-side once the session has started (removals stay
+  // allowed) — hide the add controls at that point.
+  const mateSessionStarted = useMemo(() => {
+    const start = new Date(booking.date + 'T00:00:00')
+    start.setMinutes(start.getMinutes() + Math.round(booking.startHour * 60))
+    return getAWSTNow() >= start
+  }, [booking.date, booking.startHour])
+  const handleMateSearch = async (e: { preventDefault(): void }) => {
+    e.preventDefault()
+    setMateMsg(null); setMateMatch(null); setMateSearching(true)
+    try {
+      const res = await convex.mutation(api.mates.searchCustomerByMobile, {
+        phone: matePhone,
+        forBookingId: booking.id as Id<'bookings'>,
+      })
+      setMateMatch(res ?? 'none')
+    } catch (err: any) {
+      setMateMsg({ text: getErrorMessage(err) ?? 'Search failed.', ok: false })
+    } finally { setMateSearching(false) }
+  }
+  const handleAddMate = async (mateCustomerId: string) => {
+    setMateBusy(true); setMateMsg(null)
+    try {
+      await addMateMut({ bookingId: booking.id as Id<'bookings'>, mateCustomerId: mateCustomerId as any })
+      setMateMatch(null); setMatePhone('')
+      setMateMsg({ text: "Mate added — they've been emailed the session details + door code.", ok: true })
+    } catch (err: any) {
+      setMateMsg({ text: getErrorMessage(err) ?? 'Failed to add mate.', ok: false })
+    } finally { setMateBusy(false) }
+  }
+  const handleRemoveMate = async (mateCustomerId: string, name: string) => {
+    if (!window.confirm(`Remove ${name} from this booking?`)) return
+    setMateBusy(true); setMateMsg(null)
+    try {
+      await removeMateMut({ bookingId: booking.id as Id<'bookings'>, mateCustomerId: mateCustomerId as any })
+    } catch (err: any) {
+      setMateMsg({ text: getErrorMessage(err) ?? 'Failed to remove mate.', ok: false })
+    } finally { setMateBusy(false) }
+  }
 
   // SPEC_PAYMENT_LINK_TRACKING_2026-07 — this booking's sent payment links
   // (reactive: a link flips to Paid the moment the Stripe webhook lands). Drives
@@ -523,23 +587,95 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave, ope
                 </div>
               )}
 
-              {/* Mates (SPEC_ADD_A_MATE) — customer bookings only. Display name
-                  only (first name + last initial) to match the privacy model. */}
-              {!booking.isCoachBooking && mates.length > 0 && (
+              {/* Mates (SPEC_ADD_A_MATE + G4 admin management) — customer bookings.
+                  Display names only (first name + last initial), same privacy model
+                  as the customer flow. Admin add/remove acts ON THE OWNER'S BEHALF
+                  (friendship + M1/M2 mate emails attribute to the owner). */}
+              {!booking.isCoachBooking && (mates.length > 0 || (!isClub && status !== 'cancelled' && !mateSessionStarted)) && (
                 <div>
                   <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide mb-2">
-                    👥 Mates ({mates.length})
+                    👥 Mates ({mates.length}/{maxMates})
                   </h4>
-                  <div className="flex flex-wrap gap-1.5">
-                    {mates.map((m: any) => (
-                      <span
-                        key={m.customerId}
-                        className="text-xs px-2.5 py-1 rounded-full bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/50 text-blue-700 dark:text-blue-300"
-                      >
-                        {m.displayName}
-                      </span>
-                    ))}
-                  </div>
+                  {mates.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {mates.map((m: any) => (
+                        <span
+                          key={m.customerId}
+                          className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/50 text-blue-700 dark:text-blue-300"
+                        >
+                          {m.displayName}
+                          {!isClub && status !== 'cancelled' && (
+                            <button
+                              type="button"
+                              disabled={mateBusy}
+                              onClick={() => handleRemoveMate(m.customerId, m.displayName)}
+                              title={`Remove ${m.displayName} from this booking`}
+                              className="text-blue-400 hover:text-rose-600 dark:hover:text-rose-400 font-bold leading-none"
+                            >×</button>
+                          )}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {!isClub && status !== 'cancelled' && !mateSessionStarted && mates.length < maxMates && (
+                    <div className="space-y-2">
+                      <form onSubmit={handleMateSearch} className="flex gap-2">
+                        <input
+                          type="tel"
+                          value={matePhone}
+                          onChange={e => { setMatePhone(e.target.value); setMateMatch(null) }}
+                          placeholder="Mate's mobile number…"
+                          className="flex-1 px-2.5 py-1.5 text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg"
+                        />
+                        <button
+                          type="submit"
+                          disabled={mateSearching || matePhone.replace(/\D/g, '').length < 8}
+                          className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-500 text-white disabled:opacity-40"
+                        >{mateSearching ? '…' : 'Search'}</button>
+                      </form>
+                      {mateMatch === 'none' && (
+                        <div className="text-[11px] text-gray-400">No account matches that mobile — they need a Cricket Revolution account first.</div>
+                      )}
+                      {mateMatch && mateMatch !== 'none' && (
+                        mateMatch.isSelf ? (
+                          <div className="text-[11px] text-amber-600 dark:text-amber-400">That's the booking holder — they're already on this booking.</div>
+                        ) : (
+                          <div className="flex items-center gap-2 text-xs bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/50 rounded-lg px-2.5 py-1.5">
+                            <span className="flex-1 text-blue-800 dark:text-blue-200">Add <b>{mateMatch.displayName}</b> to this booking?</span>
+                            <button
+                              type="button"
+                              disabled={mateBusy}
+                              onClick={() => handleAddMate(mateMatch._id)}
+                              className="px-2.5 py-1 font-semibold rounded-lg bg-emerald-500 text-white disabled:opacity-40"
+                            >Add</button>
+                          </div>
+                        )
+                      )}
+                      {ownerSavedMates.filter(s => !mates.some((m: any) => m.customerId === s.customerId)).length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-[10px] uppercase font-semibold text-gray-400 tracking-wide">{customerName ? `${customerName.split(' ')[0]}'s` : "Owner's"} saved mates:</span>
+                          {ownerSavedMates
+                            .filter(s => !mates.some((m: any) => m.customerId === s.customerId))
+                            .map(s => (
+                              <button
+                                key={s.customerId}
+                                type="button"
+                                disabled={mateBusy}
+                                onClick={() => handleAddMate(s.customerId)}
+                                title={`Add ${s.displayName} (${s.sharedCount} shared session${s.sharedCount === 1 ? '' : 's'})`}
+                                className="text-xs px-2.5 py-1 rounded-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-emerald-400 hover:text-emerald-600 disabled:opacity-40"
+                              >+ {s.displayName}</button>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {!isClub && status !== 'cancelled' && !mateSessionStarted && mates.length >= maxMates && (
+                    <div className="text-[11px] text-gray-400">Mate limit reached — owner + {maxMates} mate{maxMates === 1 ? '' : 's'} = {maxMates + 1} people max on a lane.</div>
+                  )}
+                  {mateMsg && (
+                    <div className={`mt-1.5 text-[11px] ${mateMsg.ok ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{mateMsg.text}</div>
+                  )}
                 </div>
               )}
 

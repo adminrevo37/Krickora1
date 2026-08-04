@@ -104,7 +104,11 @@ function isMateOnBooking(booking: any, customerId: string): boolean {
 // script-probe arbitrary mobile numbers to learn which have accounts (the result
 // leaks a short name + the customer _id usable as mateCustomerId).
 export const searchCustomerByMobile = mutation({
-  args: { phone: v.string() },
+  // G4 (SPEC_ADMIN_BOOKING_PARITY_2026-08): forBookingId lets an ADMIN search on a
+  // booking owner's behalf — isSelf ("that's already the booking holder") is then
+  // computed against the BOOKING's owner, not the admin doing the typing. Ignored
+  // for non-admins (their own identity stays the reference), so nothing leaks.
+  args: { phone: v.string(), forBookingId: v.optional(v.id("bookings")) },
   handler: async (ctx, args) => {
     const caller = await getCallerCustomer(ctx);
     if (!caller) return null;
@@ -123,7 +127,20 @@ export const searchCustomerByMobile = mutation({
       (c: any) => c.phone && normalizePhone(c.phone) === target
     );
     if (!match) return null;
-    if (match._id === caller._id) return { _id: match._id, displayName: shortName(match.name), isSelf: true };
+    let selfReferenceEmail: string | null = (caller as any).email ?? null;
+    let selfReferenceId: string = caller._id as any;
+    if (args.forBookingId && (caller as any).role === "admin") {
+      const b: any = await ctx.db.get(args.forBookingId);
+      if (b?.customerEmail) {
+        selfReferenceEmail = String(b.customerEmail).toLowerCase();
+        selfReferenceId = ""; // owner may have no customers row; email is the reference
+      }
+    }
+    const isSelf =
+      match._id === selfReferenceId ||
+      (!!selfReferenceEmail && !!(match as any).email &&
+        String((match as any).email).toLowerCase() === selfReferenceEmail);
+    if (isSelf) return { _id: match._id, displayName: shortName(match.name), isSelf: true };
     return { _id: match._id, displayName: shortName(match.name) };
   },
 });
