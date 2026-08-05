@@ -277,9 +277,10 @@ async function verifySvix(
     const sig = await crypto.subtle.sign("HMAC", cryptoKey, data);
     const expected = btoa(String.fromCharCode(...new Uint8Array(sig)));
     // svix-signature header = space-separated "v1,<base64sig>" tokens.
+    // A3 (SECURITY 2026-08): constant-time compare (matches the HA webhooks).
     return sigHeader.split(" ").some((tok) => {
       const comma = tok.indexOf(",");
-      return comma > 0 && tok.slice(comma + 1) === expected;
+      return comma > 0 && entryConstantTimeEqual(tok.slice(comma + 1), expected);
     });
   } catch {
     return false;

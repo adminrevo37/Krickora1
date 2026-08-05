@@ -180,6 +180,12 @@ export function stripBookingPII<T extends Record<string, any>>(booking: T): T {
     mates: undefined,
     modificationHistory: undefined,
     cancelledByUserId: undefined,
+    // A2 (SECURITY 2026-08): pendingEdit carries the REGENERATED door code
+    // (newAccessCode) + the modify's financials (newPriceInCents, priceDifference,
+    // creditApplied) during a pending_edit_payment window. It must never reach a
+    // non-owner — an unauth listBookingsByDate would otherwise leak the victim's
+    // upcoming door code.
+    pendingEdit: undefined,
   };
 }
 

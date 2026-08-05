@@ -1804,6 +1804,14 @@ export const updateBooking = mutation({
     const _fieldChanged = (f: string) =>
       existing != null && (cleanUpdates as any)[f] !== undefined && (cleanUpdates as any)[f] !== (existing as any)[f];
     const variantChanged = _fieldChanged("variantId");
+    // A1 (SECURITY 2026-08): a Status→cancelled/no_show edit must delete the
+    // calendar event (not update it in place) — else HA keeps the live door code
+    // for a "cancelled" booking → building access. Handled in the GCal block below.
+    const statusChangingToCancelled =
+      existing != null &&
+      (cleanUpdates as any).status !== undefined &&
+      ((cleanUpdates as any).status === "cancelled" || (cleanUpdates as any).status === "no_show") &&
+      (existing as any).status !== (cleanUpdates as any).status;
     const eventAffected =
       schedulingChanged ||
       variantChanged ||
@@ -1918,7 +1926,31 @@ export const updateBooking = mutation({
     // recomputed snapshot so the event name is correct. (Old code: always delete+create
     // on a scheduling change, never re-synced a variant/name edit, never passed the
     // snapshot — which left a stale name and, on a lane swap, an orphaned delete.)
-    if (existing && eventAffected && effNewDate && effNewStartHour != null && effNewDuration != null && effNewLaneId) {
+    if (existing && statusChangingToCancelled) {
+      // A1 (SECURITY 2026-08): tear the booking down like cancelBooking — delete the
+      // calendar event + clear the stored ids (so HA drops the door code), free the
+      // checkout hold, and advance the waitlist. This replaces the old update-in-place
+      // resync, which left a live confirmed event carrying the door code for a
+      // "cancelled" booking. (The dedicated Cancel button → cancelBooking already
+      // does credit/emails/mate notifications; this Status-dropdown path is the gap.)
+      if (
+        (existing as any).googleCalendarEventId ||
+        (((existing as any).googleCalendarEventIds?.length ?? 0) > 0)
+      ) {
+        await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
+          googleCalendarEventId: (existing as any).googleCalendarEventId ?? "",
+          laneCalendarEventIds: (existing as any).googleCalendarEventIds,
+        });
+        await ctx.db.patch(id, { googleCalendarEventId: undefined, googleCalendarEventIds: undefined });
+      }
+      await releaseHoldForBooking(ctx, id.toString());
+      await scheduleWaitlistAdvance(ctx, {
+        laneId: (existing as any).laneId,
+        date: (existing as any).date,
+        startHour: (existing as any).startHour,
+        duration: (existing as any).duration,
+      });
+    } else if (existing && eventAffected && effNewDate && effNewStartHour != null && effNewDuration != null && effNewLaneId) {
       const hadEvents =
         !!(existing as any).googleCalendarEventId ||
         (Array.isArray((existing as any).googleCalendarEventIds) && (existing as any).googleCalendarEventIds.length > 0);

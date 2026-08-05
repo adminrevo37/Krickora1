@@ -194,7 +194,11 @@ function buildEventBody(booking: {
   description += `⏰ Time: ${startTime} - ${endTime}\n`;
   description += `⏱️ Duration: ${booking.duration >= 60 ? `${Math.floor(booking.duration / 60)}hr${booking.duration % 60 > 0 ? ` ${booking.duration % 60}min` : ""}` : `${booking.duration}min`}\n`;
   description += `📊 Status: ${booking.status.charAt(0).toUpperCase() + booking.status.slice(1)}\n`;
-  if (booking.accessCode) description += `\n🔑 DOOR CODE: ${booking.accessCode}\n`;
+  // A1 (SECURITY 2026-08): never write the door code onto a cancelled/no_show
+  // event (defence-in-depth — the cancel path deletes the event, but any other
+  // caller that builds a body for a non-confirmed booking must not leak the PIN).
+  if (booking.accessCode && booking.status !== "cancelled" && booking.status !== "no_show")
+    description += `\n🔑 DOOR CODE: ${booking.accessCode}\n`;
   if (booking.athleteSlots && booking.athleteSlots.length > 0) {
     description += `\n👥 Athletes:\n`;
     for (const slot of booking.athleteSlots) {
@@ -214,7 +218,7 @@ function buildEventBody(booking: {
     start: { dateTime: startDateTime, timeZone: "Australia/Perth" },
     end: { dateTime: endDateTime, timeZone: "Australia/Perth" },
     colorId,
-    status: "confirmed",
+    status: (booking.status === "cancelled" || booking.status === "no_show") ? "cancelled" : "confirmed",
   };
 }
 
