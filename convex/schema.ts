@@ -962,6 +962,10 @@ export default defineSchema({
         endHour: v.number(),
         mode: v.string(), // "BM" | "RU"
         variants: v.array(v.string()), // BM → subset of ["standard","truman"]; RU → ["run-up"]
+        // SPEC_LANE_SEGMENT_BOOKING_TIMES (2026-08) — additive.
+        bookable: v.optional(v.boolean()),
+        startCadenceMinutes: v.optional(v.number()),
+        explicitStartHours: v.optional(v.array(v.number())),
       })
     ),
   }).index("by_laneId", ["laneId"]),
@@ -980,6 +984,10 @@ export default defineSchema({
         endHour: v.number(),
         mode: v.string(),
         variants: v.array(v.string()),
+        // SPEC_LANE_SEGMENT_BOOKING_TIMES (2026-08) — additive.
+        bookable: v.optional(v.boolean()),
+        startCadenceMinutes: v.optional(v.number()),
+        explicitStartHours: v.optional(v.array(v.number())),
       })
     ),
     createdBy: v.optional(v.string()),

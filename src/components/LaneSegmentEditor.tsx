@@ -103,20 +103,44 @@ export default function LaneSegmentEditor({
   }
 
   // Editable boundary between seg i and seg i+1 (must stay strictly between neighbours).
+  // Half-hour granular so windows like 12:30 / 3:30 can be framed (SPEC_LANE_SEGMENT_BOOKING_TIMES).
   const setBoundary = (i: number, hour: number) => {
-    const lo = segs[i].startHour + 1
-    const hi = segs[i + 1].endHour - 1
+    const lo = segs[i].startHour + 0.5
+    const hi = segs[i + 1].endHour - 0.5
     const h = Math.max(lo, Math.min(hi, hour))
+    // Moving a boundary can push explicit starts out of range — drop any that no longer fit.
+    const clampStarts = (s: Segment): Segment =>
+      s.explicitStartHours?.length
+        ? { ...s, explicitStartHours: s.explicitStartHours.filter((x) => x >= s.startHour - 1e-9 && x < s.endHour - 1e-9) }
+        : s
     const next = segs.map((s, idx) => {
-      if (idx === i) return { ...s, endHour: h }
-      if (idx === i + 1) return { ...s, startHour: h }
+      if (idx === i) return clampStarts({ ...s, endHour: h })
+      if (idx === i + 1) return clampStarts({ ...s, startHour: h })
       return s
     })
     setSegs(next)
   }
 
+  // SPEC_LANE_SEGMENT_BOOKING_TIMES — per-segment bookable/closed + start-times.
+  const setBookable = (i: number, bookable: boolean) => updateSeg(i, { bookable })
+  const setCadence = (i: number, cadence: number) =>
+    updateSeg(i, { startCadenceMinutes: cadence, explicitStartHours: undefined })
+  const toggleExplicitStart = (i: number, hour: number) => {
+    const s = segs[i]
+    const cur = s.explicitStartHours ?? []
+    const has = cur.some((x) => Math.abs(x - hour) < 1e-6)
+    const nextList = (has ? cur.filter((x) => Math.abs(x - hour) >= 1e-6) : [...cur, hour]).sort((a, b) => a - b)
+    updateSeg(i, { explicitStartHours: nextList.length ? nextList : undefined })
+  }
+  // Candidate starts inside a segment (every 30 min) for the "custom starts" chips.
+  const candidateStarts = (s: Segment): number[] => {
+    const out: number[] = []
+    for (let h = s.startHour; h < s.endHour - 1e-9; h += 0.5) out.push(Math.round(h * 60) / 60)
+    return out
+  }
+
   const hourOptions: number[] = []
-  for (let h = openHour; h <= closeHour; h++) hourOptions.push(h)
+  for (let h = openHour; h <= closeHour; h += 0.5) hourOptions.push(h)
 
   return (
     <div className="space-y-2">
@@ -124,9 +148,18 @@ export default function LaneSegmentEditor({
         <div key={i} className="rounded-lg border border-gray-200 p-3 bg-gray-50/50">
           <div className="flex items-center justify-between gap-2 mb-2">
             <div className="flex items-center gap-2 text-sm font-medium text-gray-800">
-              <span className="text-lg">{laneIcon(s.mode)}</span>
-              <span>{laneName(s.mode, bayNumber)}</span>
-              <VariantChips mode={s.mode} variants={s.variants} />
+              {s.bookable === false ? (
+                <>
+                  <span className="text-lg">🔒</span>
+                  <span className="text-gray-500">Closed</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-lg">{laneIcon(s.mode)}</span>
+                  <span>{laneName(s.mode, bayNumber)}</span>
+                  <VariantChips mode={s.mode} variants={s.variants} />
+                </>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -154,40 +187,108 @@ export default function LaneSegmentEditor({
             <span className="text-gray-600">
               {formatTime(s.startHour)} – {formatTime(s.endHour)}
             </span>
+            {/* Bookable / Closed toggle (closed = no bookings this period). */}
             <label className="flex items-center gap-1">
-              <span className="text-xs text-gray-500">Mode</span>
+              <span className="text-xs text-gray-500">Status</span>
               <select
-                value={s.mode}
-                onChange={(e) => setMode(i, e.target.value as LaneMode)}
+                value={s.bookable === false ? 'closed' : 'open'}
+                onChange={(e) => setBookable(i, e.target.value === 'open')}
                 className="px-2 py-1 border border-gray-200 rounded text-sm"
               >
-                <option value="BM">Bowling Machine</option>
-                <option value="RU">Run Up</option>
+                <option value="open">Bookable</option>
+                <option value="closed">Closed (setup/service)</option>
               </select>
             </label>
-            {s.mode === 'BM' ? (
-              <span className="flex items-center gap-3">
-                <label className="flex items-center gap-1">
-                  <input
-                    type="checkbox"
-                    checked={s.variants.includes(VARIANT_STANDARD)}
-                    onChange={() => toggleVariant(i, VARIANT_STANDARD)}
-                  />
-                  <span className="text-xs text-gray-700">Standard</span>
-                </label>
-                <label className="flex items-center gap-1">
-                  <input
-                    type="checkbox"
-                    checked={s.variants.includes(VARIANT_TRUMAN)}
-                    onChange={() => toggleVariant(i, VARIANT_TRUMAN)}
-                  />
-                  <span className="text-xs text-gray-700">Truman</span>
-                </label>
-              </span>
+            {s.bookable === false ? (
+              <span className="text-xs text-gray-500 italic">🔒 No bookings during this period</span>
             ) : (
-              <span className="text-xs text-gray-500">9m Run Up</span>
+              <>
+                <label className="flex items-center gap-1">
+                  <span className="text-xs text-gray-500">Mode</span>
+                  <select
+                    value={s.mode}
+                    onChange={(e) => setMode(i, e.target.value as LaneMode)}
+                    className="px-2 py-1 border border-gray-200 rounded text-sm"
+                  >
+                    <option value="BM">Bowling Machine</option>
+                    <option value="RU">Run Up</option>
+                  </select>
+                </label>
+                {s.mode === 'BM' ? (
+                  <span className="flex items-center gap-3">
+                    <label className="flex items-center gap-1">
+                      <input
+                        type="checkbox"
+                        checked={s.variants.includes(VARIANT_STANDARD)}
+                        onChange={() => toggleVariant(i, VARIANT_STANDARD)}
+                      />
+                      <span className="text-xs text-gray-700">Standard</span>
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <input
+                        type="checkbox"
+                        checked={s.variants.includes(VARIANT_TRUMAN)}
+                        onChange={() => toggleVariant(i, VARIANT_TRUMAN)}
+                      />
+                      <span className="text-xs text-gray-700">Truman</span>
+                    </label>
+                  </span>
+                ) : (
+                  <span className="text-xs text-gray-500">9m Run Up</span>
+                )}
+              </>
             )}
           </div>
+
+          {/* Bookable start times (customers): cadence, or an explicit custom list. */}
+          {s.bookable !== false && (
+            <div className="mt-2 pt-2 border-t border-dashed border-gray-200 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
+              <label className="flex items-center gap-1">
+                <span className="text-gray-500">Customer starts</span>
+                <select
+                  value={s.explicitStartHours?.length ? 'custom' : String(s.startCadenceMinutes ?? 60)}
+                  onChange={(e) => {
+                    if (e.target.value === 'custom') {
+                      // seed the custom list with the current cadence starts
+                      const stepH = (s.startCadenceMinutes ?? 60) / 60
+                      const seed: number[] = []
+                      for (let h = s.startHour; h < s.endHour - 1e-9; h += stepH) seed.push(Math.round(h * 60) / 60)
+                      updateSeg(i, { explicitStartHours: seed })
+                    } else {
+                      setCadence(i, Number(e.target.value))
+                    }
+                  }}
+                  className="px-2 py-0.5 border border-gray-200 rounded"
+                >
+                  <option value="60">Every hour</option>
+                  <option value="30">Every 30 min</option>
+                  <option value="custom">Custom…</option>
+                </select>
+              </label>
+              {s.explicitStartHours?.length ? (
+                <span className="flex flex-wrap items-center gap-1">
+                  <span className="text-gray-400">tick the allowed starts:</span>
+                  {candidateStarts(s).map((h) => {
+                    const on = (s.explicitStartHours ?? []).some((x) => Math.abs(x - h) < 1e-6)
+                    return (
+                      <button
+                        key={h}
+                        type="button"
+                        onClick={() => toggleExplicitStart(i, h)}
+                        className={`px-1.5 py-0.5 rounded border ${on ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-white text-gray-500 border-gray-200'}`}
+                      >
+                        {formatTime(h)}
+                      </button>
+                    )
+                  })}
+                </span>
+              ) : (
+                <span className="text-gray-400">
+                  from {formatTime(s.startHour)}, e.g. {candidateStarts(s).slice(0, 3).map((h) => formatTime(h)).join(', ')}…
+                </span>
+              )}
+            </div>
+          )}
 
           {/* Boundary control between this segment and the next */}
           {i < segs.length - 1 && (

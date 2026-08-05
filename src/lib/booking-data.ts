@@ -37,7 +37,16 @@ export const LANES: Lane[] = [
 // Rate is sourced from admin panel settings (siteSettings.coachPerHour)
 import { getSettingsStore, getHoursForDate, DAY_KEYS } from './settings-store'
 import { PRICE_DEFAULTS } from './priceDefaults'
-import { variantRatePerHour, normalizeVariant, VARIANT_TRUMAN } from './lanes'
+import {
+  variantRatePerHour,
+  normalizeVariant,
+  VARIANT_TRUMAN,
+  getDaySegments,
+  resolveSegment,
+  segmentIsClosed,
+  segmentHasCustomStarts,
+  segmentStartHours,
+} from './lanes'
 
 export const COACH_PRICING = {
   get perHour(): number {
@@ -406,6 +415,8 @@ export function getAvailableStartTimes(bookings: Booking[], laneId: string, date
   const laneBookings = bookings.filter(b => bookingOccupiesLane(b, laneId) && b.date === dateKey && b.status !== 'cancelled')
   const activeHalfHours = getActiveHalfHoursForLane(bookings, laneId, dateKey)
   const { open, close } = getHoursForDate(getSettingsStore().get(), dateKey)
+  // SPEC_LANE_SEGMENT_BOOKING_TIMES — the day's segments govern which starts exist.
+  const { segments } = getDaySegments(laneId, dateKey)
 
   for (let h = open; h < close; h += 0.5) {
     const isOccupied = laneBookings.some(b => {
@@ -413,12 +424,24 @@ export function getAvailableStartTimes(bookings: Booking[], laneId: string, date
       return h >= b.startHour && h < bEnd
     })
     if (isOccupied) continue
+    const seg = resolveSegment(segments, h)
+    // Closed period → not bookable at all.
+    if (segmentIsClosed(seg)) continue
     const isHalfHour = h !== Math.floor(h)
-    if (isHalfHour && !activeHalfHours.has(h)) continue
+    if (segmentHasCustomStarts(seg)) {
+      // Admin defined the exact bookable starts for this segment (whole or half hour).
+      if (!segmentStartHours(seg).some(s => Math.abs(s - h) < 1e-6)) continue
+    } else {
+      // Legacy: whole hours always; half-hours only when activated by an adjacent booking.
+      if (isHalfHour && !activeHalfHours.has(h)) continue
+    }
     const nextStart = getNextBookingStart(bookings, laneId, dateKey, h)
     const availableMinutes = Math.round((nextStart - h) * 60)
     const toClose = Math.round((close - h) * 60)
-    const effectiveAvail = Math.min(availableMinutes, toClose)
+    // Don't offer a start whose own segment can't hold a session (a booking may not
+    // cross a segment boundary). Default single-segment days: segEnd === close → no change.
+    const toSegEnd = Math.round((seg.endHour - h) * 60)
+    const effectiveAvail = Math.min(availableMinutes, toClose, toSegEnd)
 
     // Standard rule: need at least 60 min of space
     if (effectiveAvail >= 60) {
@@ -474,7 +497,11 @@ export function getMaxDuration(bookings: Booking[], laneId: string, dateKey: str
   const s = getSettingsStore().get()
   const dayClose = getHoursForDate(s, dateKey).close
   const laneBookings = bookings.filter(b => bookingOccupiesLane(b, laneId) && b.date === dateKey && b.status !== 'cancelled')
-  let maxEnd = dayClose
+  // SPEC_LANE_SEGMENT_BOOKING_TIMES — a booking may not cross a segment boundary, so a
+  // duration can't run past the start-hour's segment end. Default day: segEnd === close.
+  const { segments } = getDaySegments(laneId, dateKey)
+  const segEnd = resolveSegment(segments, startHour).endHour
+  let maxEnd = Math.min(dayClose, segEnd)
   for (const b of laneBookings) {
     if (b.startHour > startHour && b.startHour < maxEnd) maxEnd = b.startHour
   }

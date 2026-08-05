@@ -17,6 +17,11 @@ export interface Segment {
   endHour: number
   mode: LaneMode
   variants: string[]
+  // SPEC_LANE_SEGMENT_BOOKING_TIMES (2026-08) — all optional & additive; absent =
+  // legacy behaviour (bookable, whole-hour + active-half-hour customer starts).
+  bookable?: boolean // false = closed period (no bookings), replaces service blocks in-layout
+  startCadenceMinutes?: number // 30 | 60 — customer starts at startHour, +cadence, …
+  explicitStartHours?: number[] // if set, THE allowed customer starts (overrides cadence)
 }
 
 export interface LaneRow {
@@ -101,6 +106,31 @@ export function segmentForBooking(
   const segment = resolveSegment(segments, startHour)
   const crosses = endHour > segment.endHour + 1e-9
   return { segment, crosses }
+}
+
+// SPEC_LANE_SEGMENT_BOOKING_TIMES — segment bookable-times helpers.
+export function segmentIsClosed(seg: Segment): boolean {
+  return seg.bookable === false
+}
+/** True when an admin has deliberately restricted this segment's customer starts
+ *  (cadence or explicit list). Default/legacy segments return false → unchanged
+ *  whole-hour + active-half-hour behaviour. */
+export function segmentHasCustomStarts(seg: Segment): boolean {
+  return !segmentIsClosed(seg) && !!(seg.explicitStartHours?.length || seg.startCadenceMinutes)
+}
+/** The allowed customer start hours for a segment that has custom starts.
+ *  Closed → none. Explicit list wins; else cadence (default 60) from startHour. */
+export function segmentStartHours(seg: Segment): number[] {
+  if (segmentIsClosed(seg)) return []
+  if (seg.explicitStartHours?.length) {
+    return [...seg.explicitStartHours]
+      .filter((h) => h >= seg.startHour - 1e-9 && h < seg.endHour - 1e-9)
+      .sort((a, b) => a - b)
+  }
+  const stepH = (seg.startCadenceMinutes ?? 60) / 60
+  const out: number[] = []
+  for (let h = seg.startHour; h < seg.endHour - 1e-9; h += stepH) out.push(Math.round(h * 60) / 60)
+  return out
 }
 
 export function laneIcon(mode: LaneMode): string {

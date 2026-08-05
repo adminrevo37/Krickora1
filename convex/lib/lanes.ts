@@ -21,6 +21,11 @@ export interface Segment {
   endHour: number; // exclusive (e.g. 12); segments tile the open day, no gaps/overlaps
   mode: LaneMode;
   variants: string[]; // BM → subset of ["standard","truman"] (≥1); RU → ["run-up"]
+  // SPEC_LANE_SEGMENT_BOOKING_TIMES (2026-08) — all optional & additive; absent =
+  // legacy behaviour (bookable, whole-hour + active-half-hour customer starts).
+  bookable?: boolean; // false = closed period (no bookings), replaces service blocks in-layout
+  startCadenceMinutes?: number; // 30 | 60 — customer starts at startHour, +cadence, …
+  explicitStartHours?: number[]; // if set, THE allowed customer starts (overrides cadence)
 }
 
 export interface LaneRow {
@@ -118,6 +123,28 @@ export function segmentForBooking(
   // (use a tiny epsilon so a booking ending exactly at endHour does NOT count).
   const crosses = endHour > segment.endHour + 1e-9;
   return { segment, crosses };
+}
+
+// SPEC_LANE_SEGMENT_BOOKING_TIMES — segment bookable-times helpers (mirror of src/lib/lanes.ts).
+export function segmentIsClosed(seg: Segment): boolean {
+  return seg.bookable === false;
+}
+/** True when an admin has deliberately restricted this segment's customer starts. */
+export function segmentHasCustomStarts(seg: Segment): boolean {
+  return !segmentIsClosed(seg) && !!(seg.explicitStartHours?.length || seg.startCadenceMinutes);
+}
+/** Allowed customer start hours for a segment with custom starts. */
+export function segmentStartHours(seg: Segment): number[] {
+  if (segmentIsClosed(seg)) return [];
+  if (seg.explicitStartHours?.length) {
+    return [...seg.explicitStartHours]
+      .filter((h) => h >= seg.startHour - 1e-9 && h < seg.endHour - 1e-9)
+      .sort((a, b) => a - b);
+  }
+  const stepH = (seg.startCadenceMinutes ?? 60) / 60;
+  const out: number[] = [];
+  for (let h = seg.startHour; h < seg.endHour - 1e-9; h += stepH) out.push(Math.round(h * 60) / 60);
+  return out;
 }
 
 export function laneIcon(mode: LaneMode): string {

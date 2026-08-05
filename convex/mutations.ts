@@ -1307,6 +1307,10 @@ export const createBooking = mutation({
       // at the day's close. There is no lane segment past 21:00 to legitimately cross,
       // and allowAfterHours is admin-derived above, so the server stays authoritative.
       allowAfterHours,
+      // SPEC_LANE_SEGMENT_BOOKING_TIMES: closed segments reject everyone; custom start
+      // cadence is enforced for customers only (coaches/admin keep their own starts).
+      isAdmin: isAdminCaller,
+      isCoach: effectiveIsCoachBooking,
     });
 
     // ── Auto-merge back-to-back coach bookings ───────────────────────────────

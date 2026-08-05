@@ -13,6 +13,9 @@ import {
   resolveDaySegments,
   resolveSegment,
   segmentForBooking,
+  segmentIsClosed,
+  segmentHasCustomStarts,
+  segmentStartHours,
   laneName,
   variantLabel,
   buildLaneWarning,
@@ -26,6 +29,10 @@ const segmentValidator = v.object({
   endHour: v.number(),
   mode: v.string(),
   variants: v.array(v.string()),
+  // SPEC_LANE_SEGMENT_BOOKING_TIMES (2026-08) — additive.
+  bookable: v.optional(v.boolean()),
+  startCadenceMinutes: v.optional(v.number()),
+  explicitStartHours: v.optional(v.array(v.number())),
 });
 
 // ----------------------------------------------------------------------------
@@ -140,6 +147,11 @@ export async function validateAndSnapshotLane(
     // SPEC_ADMIN_AFTER_HOURS_BOOKING_2026-07: admin 9–10pm booking may end past the
     // day's close segment boundary (no real segment exists past 21:00 to cross).
     allowAfterHours?: boolean;
+    // SPEC_LANE_SEGMENT_BOOKING_TIMES: the resolved booker type drives start-cadence
+    // enforcement (customers only) and the closed-segment message. Closed segments
+    // reject EVERY booker (like a service block).
+    isAdmin?: boolean;
+    isCoach?: boolean;
   }
 ): Promise<{ laneNameSnapshot: string; variantLabelSnapshot: string; segment: Segment }> {
   const rows = await loadLaneRows(ctx);
@@ -155,6 +167,22 @@ export async function validateAndSnapshotLane(
     throw new ConvexError(
       "This booking would span a lane setup change. Please pick a shorter duration or a different start time."
     );
+  }
+  // SPEC_LANE_SEGMENT_BOOKING_TIMES — a CLOSED segment takes no bookings from anyone
+  // (replaces service blocks in-layout; the after-hours admin path resolves to a real
+  // open segment so it's unaffected).
+  if (segmentIsClosed(segment) && !args.allowAfterHours) {
+    throw new ConvexError("This lane is closed for setup/service during this time.");
+  }
+  // Off-cadence guard: when an admin has set explicit customer start times on a
+  // segment, a CUSTOMER booking must start on one of them (coaches keep their own
+  // start rules; admin-manual can place any start). Default segments have no custom
+  // starts → no enforcement → whole-hour + active-half-hour behaviour is unchanged.
+  if (!args.isAdmin && !args.isCoach && segmentHasCustomStarts(segment)) {
+    const allowed = segmentStartHours(segment);
+    if (!allowed.some((h) => Math.abs(h - args.startHour) < 1e-6)) {
+      throw new ConvexError("That start time isn't available for this lane. Please refresh and try again.");
+    }
   }
   // Variant must be offered by the segment (normalise to canonical key for the check).
   if (!args.skipVariantCheck && args.variantId) {
@@ -335,7 +363,15 @@ export const countBookingsOnDate = query({
   },
 });
 
-type RawSegment = { startHour: number; endHour: number; mode: string; variants: string[] };
+type RawSegment = {
+  startHour: number;
+  endHour: number;
+  mode: string;
+  variants: string[];
+  bookable?: boolean;
+  startCadenceMinutes?: number;
+  explicitStartHours?: number[];
+};
 
 /** Deep-equal two segment lists (order-sensitive on segments, set-insensitive on variants). */
 function segmentsEqual(a: RawSegment[], b: RawSegment[]): boolean {
@@ -346,13 +382,18 @@ function segmentsEqual(a: RawSegment[], b: RawSegment[]): boolean {
     const av = [...a[i].variants].sort();
     const bv = [...b[i].variants].sort();
     if (av.length !== bv.length || av.some((x, j) => x !== bv[j])) return false;
+    // SPEC_LANE_SEGMENT_BOOKING_TIMES — treat a cadence/closed/explicit-only change as
+    // a real difference (else upsertLaneOverride would drop the override as "== default").
+    if ((a[i].bookable !== false) !== (b[i].bookable !== false)) return false;
+    if ((a[i].startCadenceMinutes ?? 0) !== (b[i].startCadenceMinutes ?? 0)) return false;
+    const ae = [...(a[i].explicitStartHours ?? [])].sort((x, y) => x - y);
+    const be = [...(b[i].explicitStartHours ?? [])].sort((x, y) => x - y);
+    if (ae.length !== be.length || ae.some((x, j) => x !== be[j])) return false;
   }
   return true;
 }
 
-function validateSegments(
-  segments: Array<{ startHour: number; endHour: number; mode: string; variants: string[] }>
-): void {
+function validateSegments(segments: RawSegment[]): void {
   if (!segments.length) throw new ConvexError("A lane needs at least one segment.");
   const sorted = [...segments].sort((a, b) => a.startHour - b.startHour);
   for (let i = 0; i < sorted.length; i++) {
@@ -368,6 +409,15 @@ function validateSegments(
     }
     if (i > 0 && sorted[i].startHour < sorted[i - 1].endHour)
       throw new ConvexError("Segments must not overlap.");
+    // SPEC_LANE_SEGMENT_BOOKING_TIMES — validate the optional start-time fields.
+    if (s.startCadenceMinutes != null && s.startCadenceMinutes !== 30 && s.startCadenceMinutes !== 60)
+      throw new ConvexError("Start cadence must be 30 or 60 minutes.");
+    if (s.explicitStartHours?.length) {
+      for (const h of s.explicitStartHours) {
+        if (h < s.startHour - 1e-9 || h >= s.endHour - 1e-9)
+          throw new ConvexError("A custom start time must fall inside its segment.");
+      }
+    }
   }
 }
 

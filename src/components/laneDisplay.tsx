@@ -111,6 +111,7 @@ export function LaneLegend() {
       <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-blue-200" />Standard / Machine</span>
       <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-purple-200" />Truman</span>
       <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-200" />9m Run Up</span>
+      <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-gray-200 border border-gray-400" />🔒 Closed</span>
       <span className="text-gray-400">🕐 = changes during the day</span>
     </div>
   )

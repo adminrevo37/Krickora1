@@ -26,6 +26,7 @@ import {
 import { getHoursForDate } from '../lib/settings-store'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
 import { LaneHeaderInner, LaneLegend, bandClassForSlot, bandStart, bandTagText } from './laneDisplay'
+import { getDaySegments, resolveSegment, segmentIsClosed, segmentHasCustomStarts, segmentStartHours } from '../lib/lanes'
 import { CoachCalendarBlock } from './CoverageTimeline'
 import { dayDotState } from '../lib/coverage'
 import RepeatBookingButton from './RepeatBookingButton'
@@ -239,9 +240,29 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     [userIsCoach, selectedDay, coachTierNorm]
   )
 
+  // SPEC_LANE_SEGMENT_BOOKING_TIMES — half-hour rows introduced by the lane layout
+  // (a segment boundary on the half-hour, or a custom bookable start on the half-hour)
+  // must appear as grid rows even with no booking there, so closed periods render and
+  // offset bookable starts (e.g. 12:30) are reachable.
+  const segmentHalfHours = useMemo(() => {
+    const set = new Set<number>()
+    for (const lane of LANES) {
+      const { segments } = getDaySegments(lane.id, dateKey)
+      for (const seg of segments) {
+        if (seg.startHour !== Math.floor(seg.startHour)) set.add(seg.startHour)
+        if (segmentHasCustomStarts(seg)) {
+          for (const h of segmentStartHours(seg)) if (h !== Math.floor(h)) set.add(h)
+        }
+      }
+    }
+    return set
+  }, [dateKey, laneConfig])
+
   const visibleTimeSlots = useMemo(() => {
     const base = allTimeSlots.filter(slot => {
       if (slot.hour === Math.floor(slot.hour)) return true
+      // Layout-introduced half-hour rows (segment boundaries / offset custom starts).
+      if (segmentHalfHours.has(slot.hour)) return true
       // SPEC_MOBILE_BOOKING_UPDATES §7.1 — 3:30pm is a COACH-ONLY start row (all tiers,
       // weekdays). Never shown to customers as an empty bookable start. BUT
       // (SPEC_30MIN_GAP_FILL) if a coach booking actually OCCUPIES 3:30, show the row to
@@ -274,13 +295,14 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       return base.filter(s => (s.hour + 1) > nowHour)
     }
     return base
-  }, [allTimeSlots, laneActiveHalfHours, userIsCoach, isL1Coach, selectedDay, validCoachStartsForDay])
+  }, [allTimeSlots, laneActiveHalfHours, userIsCoach, isL1Coach, selectedDay, validCoachStartsForDay, segmentHalfHours])
 
   const laneStartTimes = useMemo(() => {
     const map = new Map<string, number[]>()
     for (const lane of LANES) map.set(lane.id, getAvailableStartTimes(displayBookings, lane.id, dateKey))
     return map
-  }, [displayBookings, dateKey])
+    // laneConfig: getAvailableStartTimes reads the day's segments (closed / custom starts).
+  }, [displayBookings, dateKey, laneConfig])
 
   const handleSlotClick = (lane: Lane, slot: TimeSlot) => {
     if (isPast(selectedDay, slot.hour)) return
@@ -342,7 +364,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     }
     return m
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [displayBookings, dateKey, visibleTimeSlots, settings])
+  }, [displayBookings, dateKey, visibleTimeSlots, settings, laneConfig])
 
   // FEB-4: isTimeSlotFullyBooked (a 5-lane scan) was recomputed per cell for the
   // full-row check + the waitlist-band probe. Memoize once per row.
@@ -619,12 +641,17 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   const laneActiveSet = laneActiveHalfHours.get(lane.id) ?? new Set()
                   const booked = isSlotBooked(displayBookings, lane.id, dateKey, slot.hour)
                   const blocked = !booked ? isLaneBlocked(lane.id, dateKey, slot.hour) : null
+                  // SPEC_LANE_SEGMENT_BOOKING_TIMES — the segment covering this cell is
+                  // CLOSED (setup/service in-layout). Rendered like a block, never bookable.
+                  const closedSeg = !booked && !blocked
+                    ? (() => { const seg = resolveSegment(getDaySegments(lane.id, dateKey).segments, slot.hour); return segmentIsClosed(seg) ? seg : null })()
+                    : null
                   const past = isPast(selectedDay, slot.hour)
                   // A half-hour cell is "inactive" (renders "–") unless a booking is
                   // active there — EXCEPT a coach valid half-hour start (e.g. weekday
                   // 7:30am–3:30pm), which must render as a bookable "+" for coaches.
                   const isCoachHalfStart = userIsCoach && validCoachStartsForDay.includes(slot.hour)
-                  const isLaneInactiveAtHalfHour = isHalfHour && !laneActiveSet.has(slot.hour) && !booked && !blocked && !isCoachHalfStart
+                  const isLaneInactiveAtHalfHour = isHalfHour && !laneActiveSet.has(slot.hour) && !booked && !blocked && !closedSeg && !isCoachHalfStart
                   // SPEC_RECONFIGURABLE_LANES: per-segment colour band + band-start tag
                   const band = bandClassForSlot(lane.id, dateKey, slot.hour)
                   const bs = bandStart(lane.id, dateKey, slot.hour)
@@ -661,7 +688,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   // Probe the 30-min minimum unit (not a full hour) so a valid 30-min gap-fill
                   // slot is bookable. The real gating is isValidStart + hasDurations (which only
                   // expose a 30-min slot for an unavoidable gap); this is just the space check.
-                  const canBook = !isSelectedDayClosed && !past && !booked && !blocked && isValidStart && canBookSlot(displayBookings, lane.id, dateKey, slot.hour, 30)
+                  const canBook = !isSelectedDayClosed && !past && !booked && !blocked && !closedSeg && isValidStart && canBookSlot(displayBookings, lane.id, dateKey, slot.hour, 30)
                   const hasDurations = !isSelectedDayClosed && !past && !booked && isValidStart ? custDurations.length > 0 || (userIsCoach && validCoachStartsForDay.includes(slot.hour)) || isAdmin : false
                   const timeCheck = canBookTime(dateKey, slot.hour)
                   const tooLate = !past && !booked && !timeCheck.allowed
@@ -719,6 +746,28 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                           <div className="absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border border-gray-400 bg-gray-200/90" style={{ height: `${blockSpan * 32 - 4}px` }}>
                             <div className="text-[9px] font-semibold text-gray-700 truncate">🔧 Unavailable</div>
                             <div className="text-[8px] text-gray-600 truncate">{(blocked as any).reason ?? 'Service'}</div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  }
+
+                  // SPEC_LANE_SEGMENT_BOOKING_TIMES — a CLOSED segment renders like a block
+                  // ("Closed"), gating the grid so the period never shows bookable.
+                  if (closedSeg) {
+                    const isClosedStart = Math.abs(closedSeg.startHour - slot.hour) < 0.01
+                    const closedSpan = (() => {
+                      if (!isClosedStart) return 0
+                      let count = 0
+                      for (const vs of visibleTimeSlots) { if (vs.hour >= closedSeg.startHour && vs.hour < closedSeg.endHour) count++ }
+                      return count
+                    })()
+                    return (
+                      <div key={lane.id} className="relative border-l-2 border-black min-h-[32px] bg-[repeating-linear-gradient(45deg,#f3f4f6,#f3f4f6_4px,#e5e7eb_4px,#e5e7eb_8px)]">
+                        {isClosedStart && (
+                          <div className="absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border border-gray-400 bg-gray-200/90" style={{ height: `${closedSpan * 32 - 4}px` }}>
+                            <div className="text-[9px] font-semibold text-gray-700 truncate">🔒 Closed</div>
+                            <div className="text-[8px] text-gray-600 truncate">{formatTime(closedSeg.startHour)}–{formatTime(closedSeg.endHour)}</div>
                           </div>
                         )}
                       </div>
