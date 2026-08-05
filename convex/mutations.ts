@@ -536,6 +536,7 @@ export async function applyBookingChange(
     regenCode: boolean;           // slot identity changed → new door code + lock re-sync
     newCoachPrice?: number;       // coach bookings
     newPriceInCents?: number;     // customer bookings — stored for future diff
+    newCreditApplied?: number;    // B2 (2026-08): total credit spent on the booking (dollars)
     actorUserId?: string;
     actorName: string;
   }
@@ -604,6 +605,7 @@ export async function applyBookingChange(
     additionalLaneIds: change.newAdditionalLaneIds ?? booking.additionalLaneIds,
     ...(change.newCoachPrice !== undefined ? { coachPrice: change.newCoachPrice } : {}),
     ...(change.newPriceInCents !== undefined ? { priceInCents: change.newPriceInCents } : {}),
+    ...(change.newCreditApplied !== undefined ? { creditApplied: change.newCreditApplied } : {}),
     laneNameSnapshot: newSnap.laneNameSnapshot,
     variantLabelSnapshot: newSnap.variantLabelSnapshot,
     athleteSlots: adjustedAthleteSlots,
@@ -2664,34 +2666,46 @@ export const modifyBooking = mutation({
 
     // Customer: equal or decrease → apply now (+ credit the decrease).
     if (priceDiffCents <= 0) {
-      const { droppedAthletes } = await applyBookingChange(ctx, booking, {
-        newDate: effDate, newStartHour: effStart, newDuration: effDuration,
-        newLaneId: effLane, newVariantId: effVariant ?? undefined, newAdditionalLaneIds: effAddl,
-        newAccessCode: args.newAccessCode, regenCode, newPriceInCents,
-        actorUserId: args.userId, actorName,
-      });
-      let credited = false;
+      const wasPaid = (booking as any).paymentStatus === "paid";
+      // B3 (2026-08): credit a decrease ONLY on a genuinely PAID booking. An unpaid
+      // pending_payment booking still has priceInCents = its gross intended price, so
+      // crediting a decrease against it mints redeemable balance for money never
+      // received (cancelBooking already guards this with `wasPaid`; modify didn't).
       let creditIssuedCents = 0;
-      if (priceDiffCents < 0 && booking.customerEmail) {
-        // NI-3 (Inspector 2026-06-02): credit ONLY what was actually PAID, pro-rata
-        // to the value removed — not the gross list-price difference. `priceInCents`
-        // is the original stored post-discount price (card + any redeemed credit);
-        // reading it here is safe because applyBookingChange patches the DB row, not
-        // this in-memory `booking` object. A $0/comp/100%-off booking credits nothing.
+      if (priceDiffCents < 0 && wasPaid && booking.customerEmail) {
+        // NI-3 (Inspector 2026-06-02): credit ONLY what was actually PAID, pro-rata to
+        // the value removed — not the gross list-price difference. `priceInCents` is
+        // the original stored post-discount cash; reading it here is safe because it's
+        // the pre-patch in-memory value. A $0/comp/100%-off booking credits nothing.
         creditIssuedCents = decreaseCreditCents(
           booking.priceInCents ?? 0,
           oldGrossCents,
           newPriceInCents ?? 0
         );
-        if (creditIssuedCents > 0) {
-          await issueCredit(ctx, {
-            email: booking.customerEmail,
-            amount: creditIssuedCents / 100,
-            reason: "modify_decrease",
-            bookingId: args.id.toString(),
-          });
-          credited = true;
-        }
+      }
+      // B2 (2026-08): keep the "priceInCents = cash settled" invariant. On a PAID
+      // booking the stored cash drops by exactly the credit just refunded, so a later
+      // cancel refunds the right amount (was: stored the new GROSS, which over-credited
+      // on cancel whenever the original used a discount/credit). An unpaid booking keeps
+      // the new gross — confirm rewrites priceInCents to the amount actually paid.
+      const appliedPriceInCents = wasPaid
+        ? Math.max(0, (booking.priceInCents ?? 0) - creditIssuedCents)
+        : newPriceInCents;
+      const { droppedAthletes } = await applyBookingChange(ctx, booking, {
+        newDate: effDate, newStartHour: effStart, newDuration: effDuration,
+        newLaneId: effLane, newVariantId: effVariant ?? undefined, newAdditionalLaneIds: effAddl,
+        newAccessCode: args.newAccessCode, regenCode, newPriceInCents: appliedPriceInCents,
+        actorUserId: args.userId, actorName,
+      });
+      let credited = false;
+      if (creditIssuedCents > 0 && booking.customerEmail) {
+        await issueCredit(ctx, {
+          email: booking.customerEmail,
+          amount: creditIssuedCents / 100,
+          reason: "modify_decrease",
+          bookingId: args.id.toString(),
+        });
+        credited = true;
       }
       return { success: true, requiresPayment: false, credited, creditIssuedCents, priceDifferenceCents: priceDiffCents, droppedAthletes };
     }
@@ -2706,10 +2720,19 @@ export const modifyBooking = mutation({
 
     if (amountDueCents === 0) {
       // Credit fully covers the increase → apply now, redeem the credit.
+      const wasPaid = (booking as any).paymentStatus === "paid";
+      // B2 (2026-08): an increase covered entirely by account credit adds NO new cash.
+      // On a PAID booking keep priceInCents = cash settled (unchanged) and accumulate
+      // the redeemed credit into creditApplied, so a later cancel refunds cash + the
+      // full credit actually spent (was: stored the new GROSS, creditApplied untouched →
+      // cancel over-refunded whenever the original used a discount). Unpaid bookings keep
+      // the new gross (confirm rewrites priceInCents on payment).
       const { droppedAthletes } = await applyBookingChange(ctx, booking, {
         newDate: effDate, newStartHour: effStart, newDuration: effDuration,
         newLaneId: effLane, newVariantId: effVariant ?? undefined, newAdditionalLaneIds: effAddl,
-        newAccessCode: args.newAccessCode, regenCode, newPriceInCents,
+        newAccessCode: args.newAccessCode, regenCode,
+        newPriceInCents: wasPaid ? (booking.priceInCents ?? 0) : newPriceInCents,
+        newCreditApplied: wasPaid ? ((booking.creditApplied ?? 0) + creditUseCents / 100) : undefined,
         actorUserId: args.userId, actorName,
       });
       if (creditUseCents > 0 && booking.customerEmail) {

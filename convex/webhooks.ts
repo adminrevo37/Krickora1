@@ -48,6 +48,11 @@ export const confirmBookingPayment = internalMutation({
         pe.newDate !== undefined || pe.newStartHour !== undefined || pe.newLaneId !== undefined;
 
       if (isUnified) {
+        // Capture the settled cash + applied credit BEFORE applyBookingChange
+        // overwrites priceInCents (B2, 2026-08).
+        const priorCashCents = b.priceInCents ?? 0;
+        const priorCreditApplied = b.creditApplied ?? 0;
+        const wasPaidBefore = b.paymentStatus === "paid";
         // Mark paid first, then apply the full change-set (calendar resync, code
         // regen, athlete keep-what-fits, emails) via the shared helper.
         await ctx.db.patch(booking._id, {
@@ -75,7 +80,17 @@ export const confirmBookingPayment = internalMutation({
           actorUserId: pe.actorUserId ?? b.userId,
           actorName: b.customerName,
         });
-        await ctx.db.patch(booking._id, { status: "confirmed", pendingEdit: undefined });
+        // B2 (2026-08): applyBookingChange stored the new GROSS in priceInCents. On a
+        // PAID extend, override to the money invariant — priceInCents = cash settled
+        // (prior cash + this top-up) and creditApplied accumulates the credit spent —
+        // so a later cancel refunds the right amount (was: gross → over-refund whenever
+        // the original used a discount/credit). An unpaid original keeps the gross.
+        const confirmPatch: Record<string, any> = { status: "confirmed", pendingEdit: undefined };
+        if (wasPaidBefore) {
+          confirmPatch.priceInCents = priorCashCents + args.amountPaid;
+          confirmPatch.creditApplied = priorCreditApplied + (pe.creditApplied ?? 0);
+        }
+        await ctx.db.patch(booking._id, confirmPatch);
         // Redeem any account credit applied to the top-up (atomic on confirm).
         if ((pe.creditApplied ?? 0) > 0 && b.customerEmail) {
           await redeemCredit(ctx, {
@@ -83,6 +98,49 @@ export const confirmBookingPayment = internalMutation({
             amount: pe.creditApplied,
             bookingId: booking._id.toString(),
           });
+        }
+        // B1 (2026-08): record the top-up as its OWN payment row so revenue/statements
+        // count it. The customer self-extend path previously recorded nothing (unlike
+        // the admin recordTopUpPayment path), so getWeeklyReport — which sums
+        // stripePayments by bookingId — undercounted by the top-up. Dedup by session id
+        // (a retry won't re-enter this branch since status is now confirmed, but guard
+        // anyway); do NOT bump priceInCents again (done above).
+        if (args.amountPaid > 0 && b.customerEmail) {
+          const existingForBooking = await ctx.db
+            .query("stripePayments")
+            .withIndex("by_bookingId", (q: any) => q.eq("bookingId", booking._id.toString()))
+            .collect();
+          if (!existingForBooking.some((p: any) => p.stripeSessionId === args.stripeSessionId)) {
+            const updated: any = await ctx.db.get(booking._id);
+            const laneName = laneNameForBooking(updated ?? b);
+            const currency = (args.currency ?? "AUD").toUpperCase();
+            await ctx.db.insert("stripePayments", {
+              bookingId: booking._id.toString(),
+              stripeSessionId: args.stripeSessionId,
+              customerEmail: (b.customerEmail ?? "").toLowerCase().trim(),
+              customerName: b.customerName ?? "Customer",
+              amount: args.amountPaid / 100,
+              currency,
+              status: "paid",
+              laneName,
+              date: newDate,
+              description: `Session extension top-up — ${laneName} ${newDate}`,
+              receiptUrl: args.receiptUrl,
+            } as any);
+            // Receipt to the customer for the top-up (the extend path sent none before).
+            await ctx.scheduler.runAfter(0, internal.emails.sendPaymentConfirmation, {
+              to: b.customerEmail,
+              customerName: b.customerName ?? "there",
+              amount: `$${(args.amountPaid / 100).toFixed(2)} ${currency}`,
+              description: `Session extension — ${laneName} ${newDate}`,
+              reference: args.stripeSessionId,
+              paymentDate: new Date().toLocaleDateString("en-US", {
+                year: "numeric",
+                month: "long",
+                day: "numeric",
+              }),
+            });
+          }
         }
         await releaseHoldForBooking(ctx, booking._id.toString());
         // Slot now confirmed at the new time — clear any waitlist for it (#6).
