@@ -124,23 +124,54 @@ export const adminChangeEmail = mutation({
   handler: async (ctx, { currentEmail, newEmail }) => {
     // SEC-2 (audit 2026-06): changing a user's email is account-takeover-adjacent —
     // require the admin second-factor unlock.
-    await requireAdminUnlocked(ctx);
+    const admin = await requireAdminUnlocked(ctx);
     const oldE = currentEmail.toLowerCase().trim();
     const newE = newEmail.toLowerCase().trim();
+    // Validation + COLLISION GUARD (2026-08): without this, pointing an account at an
+    // email that already has one silently half-updates (the better-auth updateOne
+    // hits a unique-constraint error that was swallowed, while the customers row was
+    // still patched) → two records on one email + a broken login. Refuse up front so
+    // the admin gets a clear error and merges/deletes the duplicate instead.
+    if (!newE.includes("@") || newE.length < 3) {
+      throw new ConvexError("Enter a valid email address.");
+    }
+    if (newE === oldE) {
+      throw new ConvexError("That is already this account's email.");
+    }
+    const clashCustomer = await ctx.db
+      .query("customers")
+      .withIndex("by_email", (q: any) => q.eq("email", newE))
+      .first();
+    if (clashCustomer) {
+      throw new ConvexError(
+        "That email is already used by another account. Merge or delete the duplicate first."
+      );
+    }
+    const clashAuth = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+      model: "user", where: [{ field: "email", value: newE }],
+    }).catch(() => null);
+    if (clashAuth) {
+      throw new ConvexError(
+        "That email already has a login. Merge or delete the duplicate first."
+      );
+    }
+
+    // Update the auth login FIRST. If it fails, throw before touching the customers
+    // row so we never leave the login and record on different emails.
     const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, {
       model: "user", where: [{ field: "email", value: oldE }],
     });
     if (authUser) {
-      try {
-        await ctx.runMutation(components.betterAuth.adapter.updateOne, {
-          input: { model: "user", where: [{ field: "_id", value: authUser._id }], update: { email: newE } as any },
-        });
-      } catch (err) {
-        console.error("Failed to update auth user email:", err);
-      }
+      await ctx.runMutation(components.betterAuth.adapter.updateOne, {
+        input: { model: "user", where: [{ field: "_id", value: authUser._id }], update: { email: newE } as any },
+      });
     }
     const customer = await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", oldE)).first();
     if (customer) await ctx.db.patch(customer._id, { email: newE });
+    await writeRoleAudit(ctx, {
+      targetEmail: newE, field: "email", oldValue: oldE, newValue: newE,
+      changedByEmail: (admin as any)?.email ?? "",
+    });
     return { success: true };
   },
 });

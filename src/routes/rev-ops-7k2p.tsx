@@ -556,6 +556,9 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
   const addCredit = useMutation((api.mutations as any).addCustomerCredit)
   const verifyEmail = useMutation((api.users as any).adminVerifyEmail)
   const logReset = useMutation((api.users as any).adminLogPasswordReset)
+  // Admin account-access: change email + set a password directly (customers + coaches).
+  const changeEmail = useMutation((api.users as any).adminChangeEmail)
+  const setPasswordAction = useAction((api as any).adminPassword.adminSetPassword)
   const ledger = useQuery((api.queries as any).listCreditLedger, { email: user.email }) as any[] | undefined
   const [name, setName] = useState(user.name || '')
   // SPEC_NAME_SPLIT: customers edit first/last (coaches keep the single name).
@@ -584,6 +587,8 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
   // SPEC_ADMIN_MANUAL_POWERS — manual support actions
   const [creditAmount, setCreditAmount] = useState('')
   const [creditNote, setCreditNote] = useState('')
+  const [newEmail, setNewEmail] = useState('')
+  const [newPassword, setNewPassword] = useState('')
   const [actionMsg, setActionMsg] = useState<string | null>(null)
   // Current balance: prefer the latest ledger row (reactive), else the snapshot.
   const currentBalance = ledger && ledger.length > 0
@@ -619,6 +624,34 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
       try { await logReset({ email: user.email }) } catch { /* audit best-effort */ }
       setActionMsg('Password-reset email sent.')
     } catch (err: any) { setActionMsg(getErrorMessage(err) ?? 'Failed to send reset email') }
+    finally { setBusy(false) }
+  }
+
+  const doChangeEmail = async () => {
+    const ne = newEmail.trim().toLowerCase()
+    if (!ne.includes('@')) { setActionMsg('Enter a valid new email address.'); return }
+    if (ne === (user.email ?? '').toLowerCase()) { setActionMsg('That is already this account’s email.'); return }
+    if (!confirm(`Change email\n${user.email}\n→ ${ne}?\n\nThis updates their login and record.`)) return
+    setBusy(true); setActionMsg(null)
+    try {
+      await changeEmail({ currentEmail: user.email, newEmail: ne })
+      setActionMsg(`Email changed to ${ne}. Reopen the account to continue editing.`)
+      setNewEmail('')
+      setTimeout(onClose, 1100)
+    } catch (err: any) { setActionMsg(getErrorMessage(err) ?? 'Failed to change email') }
+    finally { setBusy(false) }
+  }
+
+  const doSetPassword = async () => {
+    const pw = newPassword
+    if (pw.length < 10) { setActionMsg('Password must be at least 10 characters.'); return }
+    if (!confirm(`Set a new password for ${user.email}?\n\nGive it to them directly — they can change it later.`)) return
+    setBusy(true); setActionMsg(null)
+    try {
+      await setPasswordAction({ email: user.email, password: pw })
+      setNewPassword('')
+      setActionMsg('Password updated.')
+    } catch (err: any) { setActionMsg(getErrorMessage(err) ?? 'Failed to set password') }
     finally { setBusy(false) }
   }
 
@@ -784,6 +817,43 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
           {!isCoach && role !== 'coach' && user._id && (
             <StatementAdjustmentsManager subjectType="customer" subjectId={user._id} />
           )}
+
+          {/* Change email (admin) — updates login + record. Blocked on collision. */}
+          <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+            <span className="text-sm font-medium text-gray-700">Change email</span>
+            <div className="flex gap-2">
+              <input
+                type="email"
+                value={newEmail}
+                onChange={e => setNewEmail(e.target.value)}
+                placeholder="new@email.com"
+                className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm"
+              />
+              <button type="button" onClick={doChangeEmail} disabled={busy || !newEmail.trim()} className="px-3 py-2 bg-gray-800 hover:bg-gray-900 text-white rounded-lg text-sm font-semibold disabled:opacity-50 shrink-0">
+                Change
+              </button>
+            </div>
+            <p className="text-[11px] text-gray-400">Updates their login + record. Needs admin unlock. Blocked if the new email already has an account.</p>
+          </div>
+
+          {/* Set password (admin) — sets it directly; hand it to them. */}
+          <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+            <span className="text-sm font-medium text-gray-700">Set password</span>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newPassword}
+                onChange={e => setNewPassword(e.target.value)}
+                placeholder="New password (min 10 chars)"
+                autoComplete="off"
+                className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm"
+              />
+              <button type="button" onClick={doSetPassword} disabled={busy || newPassword.length < 10} className="px-3 py-2 bg-gray-800 hover:bg-gray-900 text-white rounded-lg text-sm font-semibold disabled:opacity-50 shrink-0">
+                Set
+              </button>
+            </div>
+            <p className="text-[11px] text-gray-400">Sets the password directly — give it to the {isCoach ? 'coach' : 'customer'}. Or use “Send password reset” to let them choose their own.</p>
+          </div>
 
           {/* Email verify + password reset */}
           <div className="flex gap-2">
