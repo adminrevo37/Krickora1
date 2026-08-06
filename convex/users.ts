@@ -196,6 +196,11 @@ export const adminChangeEmail = mutation({
       stage = "patch-customer";
       const customer = await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", oldE)).first();
       if (customer) await ctx.db.patch(customer._id, { email: newE });
+      // Repoint the DENORMALISED email stamped on bookings/payments/waitlist — otherwise
+      // the user's own bookings (matched by customerEmail) become invisible after the
+      // rename. Was the bug behind "changed email, now can't see my bookings".
+      stage = "repoint-email-refs";
+      await repointCustomerEmailRefs(ctx, oldE, newE);
     } catch (err: any) {
       throw new ConvexError(`Email change failed at [${stage}]: ${String(err?.message ?? err).slice(0, 220)}`);
     }
@@ -204,6 +209,51 @@ export const adminChangeEmail = mutation({
       changedByEmail: (admin as any)?.email ?? "",
     });
     return { success: true };
+  },
+});
+
+/** Repoint every denormalised customerEmail/userEmail from oldE→newE (both lowercased).
+ *  Mirrors the email-keyed reassignments mergeAccounts does; the customer _id is
+ *  unchanged by a rename, so id-keyed tables (creditLedger/athletes/friendships) need
+ *  nothing. */
+async function repointCustomerEmailRefs(
+  ctx: any, oldE: string, newE: string
+): Promise<{ bookings: number; stripePayments: number; waitlist: number }> {
+  const counts = { bookings: 0, stripePayments: 0, waitlist: 0 };
+  const bookings = await ctx.db.query("bookings").collect();
+  for (const b of bookings) {
+    if ((b.customerEmail ?? "").toLowerCase().trim() === oldE) {
+      await ctx.db.patch(b._id, { customerEmail: newE });
+      counts.bookings++;
+    }
+  }
+  const payments = await ctx.db.query("stripePayments").collect();
+  for (const p of payments) {
+    if ((p.customerEmail ?? "").toLowerCase().trim() === oldE) {
+      await ctx.db.patch(p._id, { customerEmail: newE });
+      counts.stripePayments++;
+    }
+  }
+  const wl = await ctx.db.query("waitlist").collect();
+  for (const w of wl) {
+    if ((w.userEmail ?? "").toLowerCase().trim() === oldE) {
+      await ctx.db.patch(w._id, { userEmail: newE });
+      counts.waitlist++;
+    }
+  }
+  return counts;
+}
+
+/** Standalone repoint for an email that was ALREADY changed (the rename happened before
+ *  repointing was wired in). Admin-only. */
+export const adminRepointCustomerEmailRefs = mutation({
+  args: { fromEmail: v.string(), toEmail: v.string() },
+  handler: async (ctx, { fromEmail, toEmail }) => {
+    await requireAdminUnlocked(ctx);
+    const oldE = fromEmail.toLowerCase().trim();
+    const newE = toEmail.toLowerCase().trim();
+    const counts = await repointCustomerEmailRefs(ctx, oldE, newE);
+    return { success: true, ...counts };
   },
 });
 
