@@ -212,35 +212,37 @@ export const adminChangeEmail = mutation({
   },
 });
 
-/** Repoint every denormalised customerEmail/userEmail from oldE→newE (both lowercased).
- *  Mirrors the email-keyed reassignments mergeAccounts does; the customer _id is
- *  unchanged by a rename, so id-keyed tables (creditLedger/athletes/friendships) need
- *  nothing. */
+/** Repoint every denormalised customer/coach email from oldE→newE (both lowercased)
+ *  across the OPERATIONAL email-keyed tables (the ones that drive visibility,
+ *  notifications, access + payments). The customer _id is unchanged by a rename, so
+ *  id-keyed tables (creditLedger/athletes/friendships/payments/statementAdjustments)
+ *  need nothing. Historical/log tables (analytics, *Events, roleAuditLog) are left as
+ *  records of what happened at the time. Returns the per-field patch counts. */
 async function repointCustomerEmailRefs(
   ctx: any, oldE: string, newE: string
-): Promise<{ bookings: number; stripePayments: number; waitlist: number }> {
-  const counts = { bookings: 0, stripePayments: 0, waitlist: 0 };
-  const bookings = await ctx.db.query("bookings").collect();
-  for (const b of bookings) {
-    if ((b.customerEmail ?? "").toLowerCase().trim() === oldE) {
-      await ctx.db.patch(b._id, { customerEmail: newE });
-      counts.bookings++;
+): Promise<Record<string, number>> {
+  const counts: Record<string, number> = {};
+  const patchField = async (table: string, field: string) => {
+    const rows = await ctx.db.query(table as any).collect();
+    for (const r of rows) {
+      if (((r as any)[field] ?? "").toLowerCase().trim() === oldE) {
+        await ctx.db.patch((r as any)._id, { [field]: newE } as any);
+        counts[`${table}.${field}`] = (counts[`${table}.${field}`] ?? 0) + 1;
+      }
     }
-  }
-  const payments = await ctx.db.query("stripePayments").collect();
-  for (const p of payments) {
-    if ((p.customerEmail ?? "").toLowerCase().trim() === oldE) {
-      await ctx.db.patch(p._id, { customerEmail: newE });
-      counts.stripePayments++;
-    }
-  }
-  const wl = await ctx.db.query("waitlist").collect();
-  for (const w of wl) {
-    if ((w.userEmail ?? "").toLowerCase().trim() === oldE) {
-      await ctx.db.patch(w._id, { userEmail: newE });
-      counts.waitlist++;
-    }
-  }
+  };
+  await patchField("bookings", "customerEmail");
+  await patchField("stripePayments", "customerEmail");
+  await patchField("waitlist", "userEmail");
+  await patchField("waitlistNotifications", "userEmail");
+  await patchField("slotHolds", "userEmail");
+  await patchField("paymentLinks", "customerEmail");
+  await patchField("paymentLinks", "sentToEmail");
+  await patchField("discountRedemptions", "customerEmail");
+  await patchField("pushSubscriptions", "email");
+  await patchField("pushPreferences", "email");
+  await patchField("lockCodes", "customerEmail");
+  await patchField("coachInvites", "email");
   return counts;
 }
 
