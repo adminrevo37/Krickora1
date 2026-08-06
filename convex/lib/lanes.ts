@@ -129,9 +129,14 @@ export function segmentForBooking(
 export function segmentIsClosed(seg: Segment): boolean {
   return seg.bookable === false;
 }
-/** True when an admin has deliberately restricted this segment's customer starts. */
+/** True when a segment's customer starts follow the layout rather than the default
+ *  whole-hour grid: explicit list, set cadence, OR a HALF-HOUR-aligned segment start
+ *  (a deliberate split at e.g. 12:30 → offset hourly starts without a cadence control). */
 export function segmentHasCustomStarts(seg: Segment): boolean {
-  return !segmentIsClosed(seg) && !!(seg.explicitStartHours?.length || seg.startCadenceMinutes);
+  return !segmentIsClosed(seg) && (
+    !!(seg.explicitStartHours?.length || seg.startCadenceMinutes) ||
+    seg.startHour !== Math.floor(seg.startHour)
+  );
 }
 /** Allowed customer start hours for a segment with custom starts. */
 export function segmentStartHours(seg: Segment): number[] {

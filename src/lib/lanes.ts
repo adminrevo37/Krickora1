@@ -112,11 +112,16 @@ export function segmentForBooking(
 export function segmentIsClosed(seg: Segment): boolean {
   return seg.bookable === false
 }
-/** True when an admin has deliberately restricted this segment's customer starts
- *  (cadence or explicit list). Default/legacy segments return false → unchanged
- *  whole-hour + active-half-hour behaviour. */
+/** True when a segment's customer starts follow the layout rather than the default
+ *  whole-hour grid: an explicit list, a set cadence, OR a HALF-HOUR-aligned segment
+ *  start (a deliberate admin split at e.g. 12:30 → offset hourly starts 12:30/1:30/…
+ *  without needing to touch the cadence control). Whole-hour default segments return
+ *  false → unchanged whole-hour + active-half-hour behaviour. */
 export function segmentHasCustomStarts(seg: Segment): boolean {
-  return !segmentIsClosed(seg) && !!(seg.explicitStartHours?.length || seg.startCadenceMinutes)
+  return !segmentIsClosed(seg) && (
+    !!(seg.explicitStartHours?.length || seg.startCadenceMinutes) ||
+    seg.startHour !== Math.floor(seg.startHour)
+  )
 }
 /** The allowed customer start hours for a segment that has custom starts.
  *  Closed → none. Explicit list wins; else cadence (default 60) from startHour. */
