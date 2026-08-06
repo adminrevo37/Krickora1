@@ -195,24 +195,26 @@ async function deleteAuthLogin(ctx: any, email: string) {
     const sessions: any = await ctx.runQuery(components.betterAuth.adapter.findMany, {
       model: "session",
       where: [{ field: "userId", value: (authUser as any)._id }],
+      paginationOpts: { numItems: 2000, cursor: null },
     } as any).catch(() => null);
-    const sessionList = Array.isArray(sessions) ? sessions : (sessions?.docs ?? sessions?.page ?? []);
+    const sessionList = Array.isArray(sessions) ? sessions : (sessions?.page ?? sessions?.docs ?? []);
     for (const s of sessionList) {
-      await ctx.runMutation(components.betterAuth.adapter.deleteOne, { model: "session", where: [{ field: "_id", value: s._id }] } as any).catch(() => {});
+      await ctx.runMutation(components.betterAuth.adapter.deleteOne, { input: { model: "session", where: [{ field: "_id", value: s._id }] } } as any).catch(() => {});
     }
   } catch (e) { console.error("merge: clear sessions failed:", e); }
   try {
     const accounts: any = await ctx.runQuery(components.betterAuth.adapter.findMany, {
       model: "account",
       where: [{ field: "userId", value: (authUser as any)._id }],
+      paginationOpts: { numItems: 2000, cursor: null },
     } as any).catch(() => null);
-    const accountList = Array.isArray(accounts) ? accounts : (accounts?.docs ?? accounts?.page ?? []);
+    const accountList = Array.isArray(accounts) ? accounts : (accounts?.page ?? accounts?.docs ?? []);
     for (const acc of accountList) {
-      await ctx.runMutation(components.betterAuth.adapter.deleteOne, { model: "account", where: [{ field: "_id", value: acc._id }] } as any).catch(() => {});
+      await ctx.runMutation(components.betterAuth.adapter.deleteOne, { input: { model: "account", where: [{ field: "_id", value: acc._id }] } } as any).catch(() => {});
     }
   } catch (e) { console.error("merge: clear accounts failed:", e); }
   try {
-    await ctx.runMutation(components.betterAuth.adapter.deleteOne, { model: "user", where: [{ field: "_id", value: (authUser as any)._id }] } as any);
+    await ctx.runMutation(components.betterAuth.adapter.deleteOne, { input: { model: "user", where: [{ field: "_id", value: (authUser as any)._id }] } } as any);
   } catch (e) { console.error("merge: delete auth user failed:", e); }
 }
 

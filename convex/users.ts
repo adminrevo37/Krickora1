@@ -147,27 +147,58 @@ export const adminChangeEmail = mutation({
         "That email is already used by another account. Merge or delete the duplicate first."
       );
     }
-    const clashAuth = await ctx.runQuery(components.betterAuth.adapter.findOne, {
-      model: "user", where: [{ field: "email", value: newE }],
-    }).catch(() => null);
-    if (clashAuth) {
-      throw new ConvexError(
-        "That email already has a login. Merge or delete the duplicate first."
-      );
-    }
+    // Everything below touches the better-auth component adapter, which can throw
+    // opaquely. Wrap it so the admin sees the REAL cause instead of "Server Error".
+    let stage = "start";
+    try {
+      // clashCustomer was already confirmed absent above. If a LOGIN still exists on the
+      // target email it is ORPHANED debris (a prior delete/recreate left the better-auth
+      // user behind after its customers row was removed) — its lingering unique email is
+      // exactly what makes the raw updateOne throw "user email already exists". Find it
+      // via findMany (the adapter's findOne unreliably misses these) + case-insensitive
+      // match, then delete its sessions/accounts/user so the rename can proceed.
+      stage = "scan-orphan-logins";
+      const pag = { numItems: 2000, cursor: null };
+      const usersRes: any = await ctx.runQuery(components.betterAuth.adapter.findMany, {
+        model: "user", where: [{ field: "email", value: newE }], paginationOpts: pag,
+      } as any).catch(() => null);
+      const userList: any[] = Array.isArray(usersRes) ? usersRes : (usersRes?.page ?? usersRes?.docs ?? []);
+      const orphans = userList.filter((u: any) => (u.email ?? "").toLowerCase().trim() === newE);
+      for (const orphan of orphans) {
+        stage = "delete-orphan-login";
+        for (const model of ["session", "account"]) {
+          const rowsRes: any = await ctx.runQuery(components.betterAuth.adapter.findMany, {
+            model, where: [{ field: "userId", value: orphan._id }], paginationOpts: pag,
+          } as any).catch(() => null);
+          const rows: any[] = Array.isArray(rowsRes) ? rowsRes : (rowsRes?.page ?? rowsRes?.docs ?? []);
+          for (const r of rows) {
+            await ctx.runMutation(components.betterAuth.adapter.deleteOne, {
+              input: { model, where: [{ field: "_id", value: r._id }] },
+            } as any).catch(() => {});
+          }
+        }
+        await ctx.runMutation(components.betterAuth.adapter.deleteOne, {
+          input: { model: "user", where: [{ field: "_id", value: orphan._id }] },
+        } as any).catch(() => {});
+      }
 
-    // Update the auth login FIRST. If it fails, throw before touching the customers
-    // row so we never leave the login and record on different emails.
-    const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, {
-      model: "user", where: [{ field: "email", value: oldE }],
-    });
-    if (authUser) {
-      await ctx.runMutation(components.betterAuth.adapter.updateOne, {
-        input: { model: "user", where: [{ field: "_id", value: authUser._id }], update: { email: newE } as any },
-      });
+      // Update the auth login FIRST so the login and record never diverge.
+      stage = "find-current-login";
+      const authUser = await ctx.runQuery(components.betterAuth.adapter.findOne, {
+        model: "user", where: [{ field: "email", value: oldE }],
+      }).catch(() => null);
+      if (authUser) {
+        stage = "update-login-email";
+        await ctx.runMutation(components.betterAuth.adapter.updateOne, {
+          input: { model: "user", where: [{ field: "_id", value: (authUser as any)._id }], update: { email: newE } as any },
+        });
+      }
+      stage = "patch-customer";
+      const customer = await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", oldE)).first();
+      if (customer) await ctx.db.patch(customer._id, { email: newE });
+    } catch (err: any) {
+      throw new ConvexError(`Email change failed at [${stage}]: ${String(err?.message ?? err).slice(0, 220)}`);
     }
-    const customer = await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", oldE)).first();
-    if (customer) await ctx.db.patch(customer._id, { email: newE });
     await writeRoleAudit(ctx, {
       targetEmail: newE, field: "email", oldValue: oldE, newValue: newE,
       changedByEmail: (admin as any)?.email ?? "",
@@ -296,11 +327,12 @@ export const adminDeleteUser = mutation({
           const sessions: any = await ctx.runQuery(components.betterAuth.adapter.findMany, {
             model: "session",
             where: [{ field: "userId", value: authUser._id }],
+            paginationOpts: { numItems: 2000, cursor: null },
           } as any);
-          const sessionList = Array.isArray(sessions) ? sessions : (sessions?.docs ?? []);
+          const sessionList = Array.isArray(sessions) ? sessions : (sessions?.page ?? sessions?.docs ?? []);
           for (const s of sessionList) {
             await ctx.runMutation(components.betterAuth.adapter.deleteOne, {
-              model: "session", where: [{ field: "_id", value: s._id }],
+              input: { model: "session", where: [{ field: "_id", value: s._id }] },
             } as any).catch(() => {});
           }
         } catch (e) {
@@ -311,11 +343,12 @@ export const adminDeleteUser = mutation({
           const accounts: any = await ctx.runQuery(components.betterAuth.adapter.findMany, {
             model: "account",
             where: [{ field: "userId", value: authUser._id }],
+            paginationOpts: { numItems: 2000, cursor: null },
           } as any);
-          const accountList = Array.isArray(accounts) ? accounts : (accounts?.docs ?? []);
+          const accountList = Array.isArray(accounts) ? accounts : (accounts?.page ?? accounts?.docs ?? []);
           for (const a of accountList) {
             await ctx.runMutation(components.betterAuth.adapter.deleteOne, {
-              model: "account", where: [{ field: "_id", value: a._id }],
+              input: { model: "account", where: [{ field: "_id", value: a._id }] },
             } as any).catch(() => {});
           }
         } catch (e) {
@@ -323,7 +356,7 @@ export const adminDeleteUser = mutation({
         }
         // Delete the user record
         await ctx.runMutation(components.betterAuth.adapter.deleteOne, {
-          model: "user", where: [{ field: "_id", value: authUser._id }],
+          input: { model: "user", where: [{ field: "_id", value: authUser._id }] },
         } as any);
       } catch (err) {
         console.error("Failed to delete auth user:", err);

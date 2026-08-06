@@ -44,16 +44,16 @@ async function deleteAuthLogin(ctx: any, email: string): Promise<boolean> {
   for (const model of ["session", "account"]) {
     try {
       const rows: any = await ctx
-        .runQuery(components.betterAuth.adapter.findMany, { model, where: [{ field: "userId", value: uid }] } as any)
+        .runQuery(components.betterAuth.adapter.findMany, { model, where: [{ field: "userId", value: uid }], paginationOpts: { numItems: 2000, cursor: null } } as any)
         .catch(() => null);
       const list = Array.isArray(rows) ? rows : rows?.page ?? rows?.docs ?? [];
       for (const r of list) {
-        await ctx.runMutation(components.betterAuth.adapter.deleteOne, { model, where: [{ field: "_id", value: r._id }] } as any).catch(() => {});
+        await ctx.runMutation(components.betterAuth.adapter.deleteOne, { input: { model, where: [{ field: "_id", value: r._id }] } } as any).catch(() => {});
       }
     } catch (e) { console.error(`adminCleanup: clear ${model} failed`, e); }
   }
   try {
-    await ctx.runMutation(components.betterAuth.adapter.deleteOne, { model: "user", where: [{ field: "_id", value: uid }] } as any);
+    await ctx.runMutation(components.betterAuth.adapter.deleteOne, { input: { model: "user", where: [{ field: "_id", value: uid }] } } as any);
   } catch (e) { console.error("adminCleanup: delete auth user failed", e); }
   return true;
 }
