@@ -259,6 +259,39 @@ export const adminRepointCustomerEmailRefs = mutation({
   },
 });
 
+/** Force-log-out a user everywhere: delete ALL their better-auth sessions. Their next
+ *  request returns a clean null session → the client signs out + they must log in
+ *  again. (Their password/account are untouched.) Admin-only. */
+export const adminLogoutUser = mutation({
+  args: { email: v.string() },
+  handler: async (ctx, { email }) => {
+    await requireAdminUnlocked(ctx);
+    const e = email.toLowerCase().trim();
+    const pag = { numItems: 2000, cursor: null };
+    const usersRes: any = await ctx.runQuery(components.betterAuth.adapter.findMany, {
+      model: "user", where: [{ field: "email", value: e }], paginationOpts: pag,
+    } as any).catch(() => null);
+    const users: any[] = Array.isArray(usersRes) ? usersRes : (usersRes?.page ?? usersRes?.docs ?? []);
+    let sessionsDeleted = 0;
+    let userFound = false;
+    for (const u of users) {
+      if ((u.email ?? "").toLowerCase().trim() !== e) continue;
+      userFound = true;
+      const sessRes: any = await ctx.runQuery(components.betterAuth.adapter.findMany, {
+        model: "session", where: [{ field: "userId", value: u._id }], paginationOpts: pag,
+      } as any).catch(() => null);
+      const sessions: any[] = Array.isArray(sessRes) ? sessRes : (sessRes?.page ?? sessRes?.docs ?? []);
+      for (const s of sessions) {
+        await ctx.runMutation(components.betterAuth.adapter.deleteOne, {
+          input: { model: "session", where: [{ field: "_id", value: s._id }] },
+        } as any).catch(() => {});
+        sessionsDeleted++;
+      }
+    }
+    return { success: true, userFound, sessionsDeleted };
+  },
+});
+
 export const adminUpdateUserProfile = mutation({
   args: { email: v.string(), name: v.optional(v.string()), firstName: v.optional(v.string()), lastName: v.optional(v.string()), phone: v.optional(v.string()), role: v.optional(v.string()), coachTier: v.optional(v.string()), color: v.optional(v.string()), defaultSessionDuration: v.optional(v.number()), athleteCapacity: v.optional(v.number()), postcode: v.optional(v.string()), suburb: v.optional(v.string()), hideFromPublicCoachList: v.optional(v.boolean()), flexibleBookingWindow: v.optional(v.boolean()) },
   handler: async (ctx, { email, name, firstName, lastName, phone, role, coachTier, color, defaultSessionDuration, athleteCapacity, postcode, suburb, hideFromPublicCoachList, flexibleBookingWindow }) => {
