@@ -434,6 +434,8 @@ export const sendWaitlistConfirmation = internalAction({
     slots: v.array(v.object({
       date: v.string(),
       hour: v.number(),
+      // SPEC_WAITLIST_SPLIT_BM_RU — which pool the entry joined ("BM"/"RU").
+      pool: v.optional(v.string()),
     })),
   },
   handler: async (ctx, args) => {
@@ -451,18 +453,20 @@ export const sendWaitlistConfirmation = internalAction({
       return `${display}:${min.toString().padStart(2, "0")} ${period}`;
     };
     // Group by date
-    const byDate = new Map<string, number[]>();
+    const byDate = new Map<string, { hour: number; pool?: string }[]>();
     for (const s of args.slots) {
       if (!byDate.has(s.date)) byDate.set(s.date, []);
-      byDate.get(s.date)!.push(s.hour);
+      byDate.get(s.date)!.push({ hour: s.hour, pool: s.pool });
     }
     const sortedDates = Array.from(byDate.keys()).sort();
     const slotsHtml = sortedDates.map((date) => {
-      const hours = byDate.get(date)!.sort((a, b) => a - b);
+      const slots = byDate.get(date)!.sort((a, b) => a.hour - b.hour);
       const formattedDate = new Date(date + "T00:00:00").toLocaleDateString("en-US", {
         weekday: "long", year: "numeric", month: "long", day: "numeric",
       });
-      const times = hours.map((h) => `${fmtHour(h)} – ${fmtHour(h + 1)}`).join(", ");
+      const times = slots
+        .map((s) => `${fmtHour(s.hour)} – ${fmtHour(s.hour + 1)}${s.pool ? ` (${s.pool})` : ""}`)
+        .join(", ");
       return `<div style=\"margin-bottom:10px;\"><p style=\"margin:0 0 2px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#10151c;font-size:14px;font-weight:600;\">${formattedDate}</p><p style=\"margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#23292f;font-size:14px;\">${times}</p></div>`;
     }).join("");
     const cleanedHtml = slotsHtml;

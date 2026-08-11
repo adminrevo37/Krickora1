@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import {
   LANES,
   getCoachRolling7Days,
@@ -18,6 +18,7 @@ import {
   getAvailableStartTimes,
   getCustomerDurations,
   getValidCoachStartTimes,
+  isLaneCustomStart,
   isWeekday,
   type Booking,
   type Lane,
@@ -124,7 +125,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   const [modalOpen, setModalOpen] = useState(false)
   const [selectedSlot, setSelectedSlot] = useState<{ lane: Lane; date: Date; startHour: number } | null>(null)
   const [authModalOpen, setAuthModalOpen] = useState(false)
-  const [pendingAction, setPendingAction] = useState<{ type: 'book'; lane: Lane; slot: TimeSlot } | { type: 'waitlist'; hour: number } | null>(null)
+  const [pendingAction, setPendingAction] = useState<{ type: 'book'; lane: Lane; slot: TimeSlot } | { type: 'waitlist'; hour: number; pool: 'bm' | 'ru' } | null>(null)
   // SPEC_MOBILE_BOOKING_UPDATES §4 — the "waitlist mode" toggle is gone; the modal
   // is opened directly from a full row's JOIN WAITLIST band, pre-seeded with the hour.
   const [waitlistSelections, setWaitlistSelections] = useState<{ laneId: string; date: string; hour: number }[]>([])
@@ -173,58 +174,34 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   const isSelectedDayClosed = closedDates.has(dateKey)
   const selectedClosureReason = closedDates.get(dateKey)
 
-  // SPEC_MOBILE_BOOKING_UPDATES §4.5 — PUBLIC waitlist data from Convex (the single
-  // source of truth; the old local waitlist-store was removed). Counts only ACTIVE
-  // waiters; the per-day positions power "You're #k in the queue".
+  // SPEC_WAITLIST_SPLIT_BM_RU — the waitlist is split into BM / RU pools keyed
+  // by each lane's MODE at (date, hour). PUBLIC waitlist data from Convex: rows
+  // across the pool sentinels ('*bm' / '*ru' / legacy '*'); counts only ACTIVE
+  // waiters, per hour PER POOL (a legacy '*' row counts toward both pools). The
+  // per-day positions power "#k in the queue" per pool band.
   const waitlistRows = (useQuery(
-    api.queries.listWaitlistByLaneDate,
-    user ? { laneId: '*', date: dateKey } : 'skip'
-  ) ?? []) as Array<{ hour: number; status?: string; isMine?: boolean }>
-  const myWaitlistPositions = (useQuery(
-    api.waitlist.myWaitlistDayPositions,
+    api.queries.listWaitlistPoolsByDate,
     user ? { date: dateKey } : 'skip'
-  ) ?? {}) as Record<string, number>
+  ) ?? []) as Array<{ laneId: string; hour: number; status?: string; isMine?: boolean }>
+  const myWaitlistPositions = (useQuery(
+    api.waitlist.myWaitlistDayPoolPositions,
+    user ? { date: dateKey } : 'skip'
+  ) ?? {}) as Record<string, { bm?: number; ru?: number }>
   const waitlistByHour = useMemo(() => {
-    const count = new Map<number, number>()
-    const mine = new Set<number>()
+    const count = { bm: new Map<number, number>(), ru: new Map<number, number>() }
+    const mine = { bm: new Set<number>(), ru: new Set<number>() }
     for (const r of waitlistRows) {
       const st = r.status ?? 'waiting'
       if (st !== 'waiting' && st !== 'offered') continue
-      count.set(r.hour, (count.get(r.hour) ?? 0) + 1)
-      if (r.isMine) mine.add(r.hour)
+      const pools: Array<'bm' | 'ru'> =
+        r.laneId === '*bm' ? ['bm'] : r.laneId === '*ru' ? ['ru'] : ['bm', 'ru']
+      for (const p of pools) {
+        count[p].set(r.hour, (count[p].get(r.hour) ?? 0) + 1)
+        if (r.isMine) mine[p].add(r.hour)
+      }
     }
     return { count, mine }
   }, [waitlistRows])
-
-  // The full-row JOIN WAITLIST label is centred on the part of the matrix that is
-  // actually ON SCREEN (the grid scrolls horizontally on mobile), and auto-tracks
-  // the visible lane area as the user scrolls sideways — so the full text is always
-  // readable instead of sitting off-screen in the middle of the 5-lane band.
-  const TIME_COL_W = 70
-  const gridScrollRef = useRef<HTMLDivElement>(null)
-  const [waitlistLabelX, setWaitlistLabelX] = useState(0)
-  useEffect(() => {
-    const el = gridScrollRef.current
-    if (!el) return
-    const update = () => {
-      const bandW = el.scrollWidth - TIME_COL_W
-      if (bandW <= 0) return
-      const half = Math.min(120, bandW / 2)
-      let c = el.scrollLeft + (el.clientWidth + TIME_COL_W) / 2 - TIME_COL_W
-      c = Math.max(half, Math.min(bandW - half, c))
-      setWaitlistLabelX(c)
-    }
-    update()
-    el.addEventListener('scroll', update, { passive: true })
-    window.addEventListener('resize', update)
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : null
-    ro?.observe(el)
-    return () => {
-      el.removeEventListener('scroll', update)
-      window.removeEventListener('resize', update)
-      ro?.disconnect()
-    }
-  }, [dateKey])
 
   const laneActiveHalfHours = useMemo(() => {
     const map = new Map<string, Set<number>>()
@@ -313,7 +290,9 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     if (!timeCheck.allowed) return
     if (!isAdmin) {
       if (userIsCoach) {
-        if (!validCoachStartsForDay.includes(slot.hour)) return
+        // Day-level coach starts OR a per-lane segment CUSTOM start (e.g. a
+        // Saturday split offering 9:30/10:30/… — SPEC_LANE_SEGMENT_BOOKING_TIMES).
+        if (!validCoachStartsForDay.includes(slot.hour) && !isLaneCustomStart(lane.id, dateKey, slot.hour)) return
       } else {
         const validStarts = laneStartTimes.get(lane.id) ?? []
         if (!validStarts.includes(slot.hour)) return
@@ -331,24 +310,34 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     setModalOpen(true)
   }
 
-  // §4.2 — open the waitlist modal for a full row, pre-seeded with this hour. The
-  // modal lets the user add the day's other full hours in one confirm (§4.3).
-  const openWaitlistForHour = (hour: number) => {
-    if (!user) { setPendingAction({ type: 'waitlist', hour }); setAuthModalOpen(true); return }
-    setWaitlistSelections([{ laneId: '*', date: dateKey, hour }])
+  // §4.2 + SPEC_WAITLIST_SPLIT_BM_RU — open the waitlist modal for a full POOL
+  // (BM or RU), pre-seeded with this hour. The modal lets the user add the day's
+  // other full hours FOR THAT POOL in one confirm (§4.3).
+  const [waitlistPool, setWaitlistPool] = useState<'bm' | 'ru'>('bm')
+  const openWaitlistForHour = (hour: number, pool: 'bm' | 'ru') => {
+    if (!user) { setPendingAction({ type: 'waitlist', hour, pool }); setAuthModalOpen(true); return }
+    setWaitlistPool(pool)
+    setWaitlistSelections([{ laneId: `*${pool}`, date: dateKey, hour }])
     setWaitlistModalOpen(true)
   }
 
-  // Check if ALL lanes are booked/unavailable at this hour (so we can offer waitlist)
-  const isTimeSlotFullyBooked = (date: string, hour: number) => {
-    return LANES.every(lane => {
-      const laneActiveSet = laneActiveHalfHours.get(lane.id) ?? new Set()
-      const isHalf = hour !== Math.floor(hour)
-      const booked = isSlotBooked(displayBookings, lane.id, date, hour)
-      if (booked) return true
-      if (isHalf && !laneActiveSet.has(hour)) return true // lane inactive at this half-hour
-      return false
-    })
+  // SPEC_WAITLIST_SPLIT_BM_RU — a lane's pool at (date, hour), from the resolved
+  // lane layout (override + intra-day-segment aware): a lane running as BM for
+  // part of a day is BM-pool for exactly those hours. Closed segments are in
+  // NEITHER pool (never bookable → never waitlistable).
+  const lanePoolAt = (laneId: string, hour: number): 'bm' | 'ru' | null => {
+    const seg = resolveSegment(getDaySegments(laneId, dateKey).segments, hour)
+    if (segmentIsClosed(seg)) return null
+    return seg.mode === 'RU' ? 'ru' : 'bm'
+  }
+
+  // A POOL is full at a whole hour when every one of its (non-closed) lanes has a
+  // booking. Service-blocked lanes count as NOT booked — a blocked lane suppresses
+  // its pool's band, matching the old whole-row behaviour.
+  const isPoolFullAtHour = (hour: number, pool: 'bm' | 'ru') => {
+    const poolLanes = LANES.filter(lane => lanePoolAt(lane.id, hour) === pool)
+    if (poolLanes.length === 0) return false
+    return poolLanes.every(lane => !!isSlotBooked(displayBookings, lane.id, dateKey, hour))
   }
 
   // FEB-3 (audit 2026-06): getCustomerDurations is O(slots×5×bookings) and was called
@@ -366,34 +355,47 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayBookings, dateKey, visibleTimeSlots, settings, laneConfig])
 
-  // FEB-4: isTimeSlotFullyBooked (a 5-lane scan) was recomputed per cell for the
-  // full-row check + the waitlist-band probe. Memoize once per row.
-  const fullyBookedByHour = useMemo(() => {
-    const m = new Map<number, boolean>()
-    for (const s of visibleTimeSlots) m.set(s.hour, isTimeSlotFullyBooked(dateKey, s.hour))
+  // FEB-4: pool fullness (a per-lane scan) is recomputed per cell for the band
+  // probe otherwise. Memoize once per row per pool.
+  const poolFullByHour = useMemo(() => {
+    const m = new Map<number, { bm: boolean; ru: boolean }>()
+    for (const s of visibleTimeSlots) {
+      if (s.hour !== Math.floor(s.hour)) continue // bands are whole-hour only
+      m.set(s.hour, { bm: isPoolFullAtHour(s.hour, 'bm'), ru: isPoolFullAtHour(s.hour, 'ru') })
+    }
     return m
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleTimeSlots, dateKey, displayBookings, laneActiveHalfHours])
+  }, [visibleTimeSlots, dateKey, displayBookings, laneConfig])
 
-  // Whole-hour rows the CURRENT user's OWN (non-cancelled) booking occupies on this
-  // day. A fully-booked row is normally collapsed into a single JOIN WAITLIST band
-  // for customers — but if the customer OWNS a slot on that row, the band hides their
-  // own booking entirely. (The renderBlockHere rescue below only re-anchors a booking
-  // that SPILLS into a non-band row; a booking whose rows are ALL full had nowhere to
-  // anchor → invisible.) So a row the user owns is NEVER banded — it renders per-lane,
-  // showing their blue "Your booking" beside the other booked lanes. Matches the
-  // whole-hour semantics of isSlotBooked (hour h booked iff start ≤ h < end).
-  const myBookedHoursToday = useMemo(() => {
-    const s = new Set<number>()
-    if (!user || isAdmin) return s
+  // Whole-hour rows + POOLS the CURRENT user's OWN (non-cancelled) booking occupies
+  // on this day. A full pool is normally collapsed into a JOIN WAITLIST band for
+  // customers — but if the customer OWNS a lane of that pool on that row, the band
+  // would hide their own booking entirely. (The renderBlockHere rescue below only
+  // re-anchors a booking that SPILLS into a non-band row; a booking whose rows are
+  // ALL banded had nowhere to anchor → invisible.) So a pool the user owns a lane
+  // in is NEVER banded on that hour — it renders per-lane, showing their blue
+  // "Your booking" beside the other booked lanes. The OTHER pool can still band.
+  const myBookedPoolHours = useMemo(() => {
+    const m = new Map<number, Set<'bm' | 'ru'>>()
+    if (!user || isAdmin) return m
     for (const b of displayBookings) {
       if (b.date !== dateKey || b.status === 'cancelled' || !ownerMatch(b)) continue
       const end = b.startHour + b.duration / 60
-      for (let h = Math.floor(b.startHour); h < end; h++) if (h >= b.startHour) s.add(h)
+      const laneIds = [b.laneId, ...((b as any).additionalLaneIds ?? [])]
+      for (let h = Math.floor(b.startHour); h < end; h++) {
+        if (h < b.startHour) continue
+        for (const lid of laneIds) {
+          const p = lanePoolAt(lid, h)
+          if (!p) continue
+          const set = m.get(h) ?? new Set<'bm' | 'ru'>()
+          set.add(p)
+          m.set(h, set)
+        }
+      }
     }
-    return s
+    return m
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [displayBookings, dateKey, user, isAdmin])
+  }, [displayBookings, dateKey, user, isAdmin, laneConfig])
 
   const handleAuthSuccess = () => {
     setAuthModalOpen(false)
@@ -405,7 +407,8 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       setSelectedSlot({ lane: pendingAction.lane, date: selectedDay, startHour: pendingAction.slot.hour })
       setModalOpen(true)
     } else if (pendingAction?.type === 'waitlist') {
-      setWaitlistSelections([{ laneId: '*', date: dateKey, hour: pendingAction.hour }])
+      setWaitlistPool(pendingAction.pool)
+      setWaitlistSelections([{ laneId: `*${pendingAction.pool}`, date: dateKey, hour: pendingAction.hour }])
       setWaitlistModalOpen(true)
     }
     setPendingAction(null)
@@ -421,14 +424,21 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     setSelectedSlot(null)
   }
 
-  // Other full/waitlistable hours on this day (for the modal's multi-hour join, §4.3).
-  const fullHoursToday = useMemo(
-    () => visibleTimeSlots
-      .filter(s => !isPast(selectedDay, s.hour) && !isSelectedDayClosed && isTimeSlotFullyBooked(dateKey, s.hour))
-      .map(s => s.hour),
+  // Other full/waitlistable hours on this day PER POOL (for the modal's
+  // multi-hour join, §4.3 — the checklist only offers hours full for the pool
+  // the user is joining).
+  const fullHoursByPool = useMemo(() => {
+    const out: Record<'bm' | 'ru', number[]> = { bm: [], ru: [] }
+    for (const s of visibleTimeSlots) {
+      if (s.hour !== Math.floor(s.hour)) continue
+      if (isPast(selectedDay, s.hour) || isSelectedDayClosed) continue
+      const full = poolFullByHour.get(s.hour)
+      if (full?.bm) out.bm.push(s.hour)
+      if (full?.ru) out.ru.push(s.hour)
+    }
+    return out
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [visibleTimeSlots, selectedDay, isSelectedDayClosed, dateKey, bookings, laneActiveHalfHours]
-  )
+  }, [visibleTimeSlots, selectedDay, isSelectedDayClosed, dateKey, poolFullByHour])
 
   // SPEC_PUSH_NOTIFICATIONS_V2 §5/§8 + MOBILE §4.6 — handle waitlist push deep-links:
   //   ?book=<lane>&date=<d>&hour=<h>(&wl=1) → open the held slot's booking (checkout)
@@ -576,7 +586,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
           <span className="text-sm text-gray-400">Loading bookings…</span>
         </div>
       )}
-      <div ref={gridScrollRef} className="bg-white rounded-2xl border-2 border-black shadow-sm overflow-auto max-h-[60dvh] sm:max-h-[72vh]">
+      <div className="bg-white rounded-2xl border-2 border-black shadow-sm overflow-auto max-h-[60dvh] sm:max-h-[72vh]">
         <div className="min-w-0 sm:min-w-[560px]">
         <div className="grid grid-cols-[48px_repeat(5,minmax(0,1fr))] sm:grid-cols-[70px_repeat(5,1fr)] border-b-2 border-black bg-white sticky top-0 z-30">
           <div className="p-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider flex items-center justify-center sticky left-0 z-40 bg-white">Time</div>
@@ -597,47 +607,68 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
         <div className={isSelectedDayClosed ? 'opacity-40 pointer-events-none' : ''}>
           {visibleTimeSlots.map((slot, slotIdx) => {
             const isHalfHour = slot.hour !== Math.floor(slot.hour)
-            const rowPast = isPast(selectedDay, slot.hour)
-            // §4.2 — a fully-booked row becomes a single amber JOIN WAITLIST band for
-            // regular customers (admins/coaches keep the per-lane booking view).
-            // SPEC_30MIN_GAP_FILL: NEVER on a half-hour row (e.g. 3:30) — those only
-            // appear to show a coach booking that occupies them; the other lanes are
-            // merely "inactive" there, not bookable, so offering a waitlist for a time we
-            // don't normally sell is confusing. Half-hour rows always render per-lane (so
-            // the coach booking shows as "Booked" and empty cells stay blank).
-            const rowFull = !rowPast && !isSelectedDayClosed && (fullyBookedByHour.get(slot.hour) ?? false)
-            // Never collapse a full row into the waitlist band if the user owns a
-            // booking on this hour — render per-lane so their "Your booking" shows
-            // (they don't need a waitlist for an hour they're already booked into).
-            // Also off when acting as a coach (real or admin-viewing-as-coach) —
-            // coaches always see the per-lane view, never the band.
-            const showWaitlistBand = rowFull && !isAdmin && !renderAsCoachOwner && !isHalfHour && !myBookedHoursToday.has(slot.hour)
-            const hourWaitCount = waitlistByHour.count.get(slot.hour) ?? 0
-            const myQueuePos = myWaitlistPositions[String(slot.hour)]
-            const onThisHour = waitlistByHour.mine.has(slot.hour) || myQueuePos != null
+            // SPEC_WAITLIST_SPLIT_BM_RU §4.2 — a fully-booked POOL (all BM-mode
+            // lanes, or all RU-mode lanes, at this hour) collapses into an amber
+            // JOIN {BM|RU} WAITLIST band spanning that pool's CONTIGUOUS lane
+            // columns; the other pool's lanes keep the per-lane view on the same
+            // row (both pools can band at once). Never for admins/coaches, never
+            // on a half-hour row (SPEC_30MIN_GAP_FILL — those only exist to show
+            // a coach booking; other lanes are merely "inactive" there), and
+            // never for a pool the user owns a booking in that hour (their blue
+            // "Your booking" must render).
+            const poolBandedAt = (h: number, pool: 'bm' | 'ru') =>
+              h === Math.floor(h) && !isAdmin && !renderAsCoachOwner &&
+              !isPast(selectedDay, h) && !isSelectedDayClosed &&
+              (poolFullByHour.get(h)?.[pool] ?? false) &&
+              !(myBookedPoolHours.get(h)?.has(pool))
+            // Contiguous runs of same-pool banded columns → the FIRST lane of a
+            // run renders the band button (span = run length); the rest render
+            // nothing. On override days where modes interleave, each run bands
+            // separately (decision #1).
+            const bandRun = new Map<string, number | 'hidden'>()
+            if (!isHalfHour) {
+              let i = 0
+              while (i < LANES.length) {
+                const p = lanePoolAt(LANES[i].id, slot.hour)
+                if (p && poolBandedAt(slot.hour, p)) {
+                  let j = i
+                  while (j < LANES.length && lanePoolAt(LANES[j].id, slot.hour) === p) j++
+                  bandRun.set(LANES[i].id, j - i)
+                  for (let k = i + 1; k < j; k++) bandRun.set(LANES[k].id, 'hidden')
+                  i = j
+                } else i++
+              }
+            }
             return (
               <div key={slot.hour} className={`grid grid-cols-[48px_repeat(5,minmax(0,1fr))] sm:grid-cols-[70px_repeat(5,1fr)] ${slotIdx < visibleTimeSlots.length - 1 ? `border-b ${isHalfHour ? 'border-gray-300' : 'border-black'}` : ''}`}>
                 <div className="p-1 sm:p-1.5 flex items-center justify-center sticky left-0 z-20 bg-white">
                   <span className={`text-[10px] sm:text-[11px] font-medium text-gray-500 ${isHalfHour ? 'opacity-60' : ''}`}>{slot.label}</span>
                 </div>
-                {showWaitlistBand ? (
-                  <button type="button" onClick={() => { if (!onThisHour) openWaitlistForHour(slot.hour) }}
-                    className={`relative z-30 col-span-5 border-l-2 border-black min-h-[40px] transition-colors ${onThisHour ? 'bg-amber-100 cursor-default' : 'bg-amber-50 hover:bg-amber-100 cursor-pointer'}`}>
-                    {/* Absolutely positioned + centred on the visible lane area (waitlistLabelX),
-                        so it tracks horizontal scroll and stays fully readable on mobile. */}
-                    <span
-                      style={{ left: waitlistLabelX }}
-                      className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-[11px] font-semibold text-amber-700 pointer-events-none">
-                      {onThisHour ? (
-                        <>✓ You're #{myQueuePos ?? '—'} in the queue · {hourWaitCount} waiting</>
-                      ) : (
-                        <>🔔 JOIN WAITLIST · {hourWaitCount > 0 ? `${hourWaitCount} ${hourWaitCount === 1 ? 'person' : 'people'} waiting` : 'Be first on the waitlist'}</>
-                      )}
-                    </span>
-                  </button>
-                ) : (
-                <>
                 {LANES.map((lane) => {
+                  // SPEC_WAITLIST_SPLIT_BM_RU — pool band cells.
+                  const runState = bandRun.get(lane.id)
+                  if (runState === 'hidden') return null
+                  if (typeof runState === 'number') {
+                    const pool = lanePoolAt(lane.id, slot.hour) as 'bm' | 'ru'
+                    const poolTag = pool.toUpperCase()
+                    const hourWaitCount = waitlistByHour.count[pool].get(slot.hour) ?? 0
+                    const myQueuePos = myWaitlistPositions[String(slot.hour)]?.[pool]
+                    const onThisPool = waitlistByHour.mine[pool].has(slot.hour) || myQueuePos != null
+                    return (
+                      <button key={lane.id} type="button"
+                        onClick={() => { if (!onThisPool) openWaitlistForHour(slot.hour, pool) }}
+                        style={{ gridColumn: `span ${runState} / span ${runState}` }}
+                        className={`relative z-30 border-l-2 border-black min-h-[40px] px-1 flex items-center justify-center transition-colors ${onThisPool ? 'bg-amber-100 cursor-default' : 'bg-amber-50 hover:bg-amber-100 cursor-pointer'}`}>
+                        <span className="text-center text-[10px] sm:text-[11px] leading-tight font-semibold text-amber-700 pointer-events-none">
+                          {onThisPool ? (
+                            <>✓ #{myQueuePos ?? '—'} in {poolTag} queue · {hourWaitCount} waiting</>
+                          ) : (
+                            <>🔔 JOIN {poolTag} WAITLIST{hourWaitCount > 0 ? ` · ${hourWaitCount} waiting` : ''}</>
+                          )}
+                        </span>
+                      </button>
+                    )
+                  }
                   const laneActiveSet = laneActiveHalfHours.get(lane.id) ?? new Set()
                   const booked = isSlotBooked(displayBookings, lane.id, dateKey, slot.hour)
                   const blocked = !booked ? isLaneBlocked(lane.id, dateKey, slot.hour) : null
@@ -650,7 +681,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   // A half-hour cell is "inactive" (renders "–") unless a booking is
                   // active there — EXCEPT a coach valid half-hour start (e.g. weekday
                   // 7:30am–3:30pm), which must render as a bookable "+" for coaches.
-                  const isCoachHalfStart = userIsCoach && validCoachStartsForDay.includes(slot.hour)
+                  const isCoachHalfStart = userIsCoach && (validCoachStartsForDay.includes(slot.hour) || isLaneCustomStart(lane.id, dateKey, slot.hour))
                   const isLaneInactiveAtHalfHour = isHalfHour && !laneActiveSet.has(slot.hour) && !booked && !blocked && !closedSeg && !isCoachHalfStart
                   // SPEC_RECONFIGURABLE_LANES: per-segment colour band + band-start tag
                   const band = bandClassForSlot(lane.id, dateKey, slot.hour)
@@ -658,16 +689,17 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
 
                   const isStartOfBooking = booked && Math.abs(booked.startHour - slot.hour) < 0.01
                   const isMiddleOfBooking = booked && !isStartOfBooking
-                  // A fully-booked whole-hour row renders as a single JOIN WAITLIST band
-                  // INSTEAD of per-lane cells, so a booking whose true start row is that band
-                  // never renders its "Booked" block there → its continuation rows below look
-                  // empty. Anchor the block at the booking's FIRST visible row that is NOT a
-                  // band, so it always shows.
+                  // A banded POOL hour hides its lanes' cells, so a booking whose true
+                  // start row is banded never renders its "Booked" block there → its
+                  // continuation rows below would look empty. Anchor the block at the
+                  // booking's FIRST visible row where ITS OWN pool isn't banded, so it
+                  // always shows. (Pool-aware: the other pool banding never hides this
+                  // lane's cells.)
                   const bookingEndHour = booked ? booked.startHour + booked.duration / 60 : 0
-                  const isWaitlistBandRow = (h: number) =>
-                    !isAdmin && !renderAsCoachOwner && h === Math.floor(h) &&
-                    !isPast(selectedDay, h) && !isSelectedDayClosed && (fullyBookedByHour.get(h) ?? false) &&
-                    !myBookedHoursToday.has(h)
+                  const isWaitlistBandRow = (h: number) => {
+                    const p = lanePoolAt(lane.id, h)
+                    return p != null && poolBandedAt(h, p)
+                  }
                   let renderBlockHere = false
                   if (booked) {
                     for (const vs of visibleTimeSlots) {
@@ -830,8 +862,6 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                     </div>
                   )
                 })}
-                </>
-                )}
               </div>
             )
           })}
@@ -847,7 +877,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       )}
       {authModalOpen && <AuthModal onClose={() => { setAuthModalOpen(false); setPendingAction(null) }} onSuccess={handleAuthSuccess} />}
       {waitlistModalOpen && (
-        <WaitlistModal selectedSlots={waitlistSelections} availableHours={fullHoursToday} date={dateKey}
+        <WaitlistModal pool={waitlistPool} selectedSlots={waitlistSelections} availableHours={fullHoursByPool[waitlistPool]} date={dateKey}
           onClose={() => setWaitlistModalOpen(false)}
           onSuccess={() => { setWaitlistModalOpen(false); setWaitlistSelections([]) }} />
       )}

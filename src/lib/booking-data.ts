@@ -492,6 +492,21 @@ export function getValidCoachStartTimes(date: Date, tier?: 'L1' | 'L2'): number[
   return times
 }
 
+// SPEC_LANE_SEGMENT_BOOKING_TIMES (coach fix 2026-08-11): is `hour` an admin-
+// defined CUSTOM bookable start of this lane's governing segment on this date?
+// Custom starts (e.g. a Saturday split offering 9:30/10:30/…) must be bookable
+// by COACHES too — the day-level getValidCoachStartTimes list (whole hours on
+// weekends) knows nothing about per-lane segments, so coach click/confirm paths
+// OR this in as an additional valid start. Server-side createBooking never
+// validates the coach start grid (only closed segments + boundary crossing), so
+// no backend change is needed.
+export function isLaneCustomStart(laneId: string, dateKey: string, hour: number): boolean {
+  const { segments } = getDaySegments(laneId, dateKey)
+  const seg = resolveSegment(segments, hour)
+  if (segmentIsClosed(seg) || !segmentHasCustomStarts(seg)) return false
+  return segmentStartHours(seg).some(s => Math.abs(s - hour) < 1e-6)
+}
+
 // Max duration
 export function getMaxDuration(bookings: Booking[], laneId: string, dateKey: string, startHour: number, isCoach: boolean): number {
   const s = getSettingsStore().get()

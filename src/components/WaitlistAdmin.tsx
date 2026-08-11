@@ -7,12 +7,12 @@ import { api } from '../../convex/_generated/api'
 // and admin overrides: "Offer now" (re-kick the engine) and "Clear offer" (drop
 // the live offer + hold and roll to the next member).
 
-const LANE_NAMES: Record<string, string> = {
-  bm1: 'Bowling Machine Lane 1',
-  bm2: 'Bowling Machine Lane 2',
-  bm3: 'Bowling Machine Lane 3',
-  ru1: 'Run-Up Lane 1',
-  ru2: 'Run-Up Lane 2',
+// SPEC_WAITLIST_SPLIT_BM_RU — entries are keyed by POOL sentinel, not a lane:
+// '*bm' (bowling machines) / '*ru' (run-ups) / legacy '*' (any lane, pre-split).
+const GROUP_NAMES: Record<string, string> = {
+  '*bm': '🏏 BM waitlist',
+  '*ru': '🏃 RU waitlist',
+  '*': 'Any lane (legacy)',
 }
 
 function fmtHour12(h: number): string {
@@ -101,8 +101,14 @@ export default function WaitlistAdmin() {
     return da === db ? Number(ha) - Number(hb) : da < db ? -1 : 1
   })
 
-  const holdFor = (laneId: string, date: string, hour: number): Hold | undefined =>
-    holds.find(h => h.laneId === laneId && h.date === date && h.startHour === hour)
+  // A waitlist hold sits on a REAL lane while entries are keyed by pool
+  // sentinel — match the hold by (date, hour) + a member of this group. (The
+  // old laneId equality could never match a sentinel → the countdown and
+  // Clear-offer button never showed. Fixed with the BM/RU split.)
+  const holdFor = (group: Entry[], date: string, hour: number): Hold | undefined => {
+    const members = new Set(group.map(e => e.userId))
+    return holds.find(h => h.date === date && h.startHour === hour && members.has(h.userId))
+  }
 
   return (
     <div className="space-y-4">
@@ -117,12 +123,12 @@ export default function WaitlistAdmin() {
       {sortedKeys.map(key => {
         const list = groups.get(key)!
         const { laneId, date, hour } = list[0]
-        const hold = holdFor(laneId, date, hour)
+        const hold = holdFor(list, date, hour)
         return (
           <div key={key} className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
             <div className="px-6 py-3 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
               <div>
-                <span className="font-semibold text-gray-800">{LANE_NAMES[laneId] ?? laneId}</span>
+                <span className="font-semibold text-gray-800">{GROUP_NAMES[laneId] ?? laneId}</span>
                 <span className="text-gray-500 text-sm ml-2">
                   {fmtDate(date)} · {fmtHour12(hour)} – {fmtHour12(hour + 1)}
                 </span>

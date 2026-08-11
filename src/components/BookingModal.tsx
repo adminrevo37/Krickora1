@@ -4,7 +4,7 @@ import { trackFunnelStep, clearBookingFlow } from '../lib/tracker'
 import { getErrorMessage } from '../lib/errors'
 import {
   LANES, canBookSlot, formatDateKey, formatTime, getCustomerPrice, getCoachPrice, getCoachPerHourRate,
-  getCoachDurations, getCustomerDurations, getValidCoachStartTimes,
+  getCoachDurations, getCustomerDurations, getValidCoachStartTimes, isLaneCustomStart,
   generateGoogleCalendarUrl, roundCoachBookingDuration, getMinCoachDurationFromAthletes,
   type Booking, type Lane, type LaneVariant, type AthleteSlot,
 } from '../lib/booking-data'
@@ -80,7 +80,9 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   // for all coaches; the 6:30am pre-open slot for L1 only).
   const coachTierNorm: 'L1' | 'L2' = ((customerRecord as any)?.coachTier === 'L2' || (customerRecord as any)?.coachTier === 'BowlingL2') ? 'L2' : 'L1'
   const validCoachStarts = useMemo(() => getValidCoachStartTimes(date, coachTierNorm), [date, coachTierNorm])
-  const isValidCoachStart = !isCoach || validCoachStarts.includes(startHour)
+  // A per-lane segment CUSTOM start (e.g. a Saturday split offering 9:30/10:30/…)
+  // is bookable by coaches too — SPEC_LANE_SEGMENT_BOOKING_TIMES coach fix.
+  const isValidCoachStart = !isCoach || validCoachStarts.includes(startHour) || isLaneCustomStart(lane.id, dkForSeg, startHour)
 
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [step, setStep] = useState<'details' | 'confirm' | 'processing' | 'success'>('details')

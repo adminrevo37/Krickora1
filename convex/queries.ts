@@ -774,6 +774,30 @@ export const listWaitlistByLaneDate = query({
   },
 });
 
+// SPEC_WAITLIST_SPLIT_BM_RU — all of a day's waitlist rows across the pool
+// sentinels ('*bm' / '*ru' / legacy '*'), PII-scoped. The calendar groups them
+// per hour per pool for the band counts ("n waiting"); a legacy '*' row counts
+// toward BOTH pools (it matches either — slight over-count that drains as
+// legacy entries resolve, accepted per spec decision #3).
+export const listWaitlistPoolsByDate = query({
+  args: { date: v.string() },
+  handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.identity) return [];
+    const rows: any[] = [];
+    for (const sentinel of ["*", "*bm", "*ru"]) {
+      const some = await ctx.db
+        .query("waitlist")
+        .withIndex("by_laneId_date", (q: any) =>
+          q.eq("laneId", sentinel).eq("date", args.date)
+        )
+        .collect();
+      rows.push(...some);
+    }
+    return scopeWaitlist(rows, caller);
+  },
+});
+
 // List waitlist notifications for a user — self or admin only.
 export const listWaitlistNotifications = query({
   args: { userId: v.string() },

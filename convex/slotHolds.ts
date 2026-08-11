@@ -86,6 +86,7 @@ async function releaseAbandonedBooking(ctx: any, booking: any): Promise<boolean>
   // its CONFIRMED slot, so the engine there just sees it filled and no-ops.
   await scheduleWaitlistAdvance(ctx, {
     laneId: booking.laneId,
+    additionalLaneIds: (booking as any).additionalLaneIds ?? undefined,
     date: booking.date,
     startHour: booking.startHour,
     duration: booking.duration,

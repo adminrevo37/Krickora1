@@ -647,6 +647,7 @@ export async function applyBookingChange(
   // covering the old hours, so the engine just sees it filled and no-ops.
   await scheduleWaitlistAdvance(ctx, {
     laneId: booking.laneId,
+    additionalLaneIds: (booking as any).additionalLaneIds ?? undefined,
     date: booking.date,
     startHour: booking.startHour,
     duration: booking.duration,
@@ -654,6 +655,7 @@ export async function applyBookingChange(
   // The NEW slot is now filled by this booking — clear any waitlist on it (#6).
   await scheduleWaitlistAdvance(ctx, {
     laneId: change.newLaneId,
+    additionalLaneIds: (booking as any).additionalLaneIds ?? undefined,
     date: change.newDate,
     startHour: change.newStartHour,
     duration: change.newDuration,
@@ -1523,6 +1525,7 @@ export const createBooking = mutation({
     // harmless no-op. Idempotent + hour-based (see advanceWaitlistOffer).
     await scheduleWaitlistAdvance(ctx, {
       laneId: args.laneId,
+      additionalLaneIds: args.additionalLaneIds ?? undefined,
       date: args.date,
       startHour: args.startHour,
       duration: args.duration,
@@ -1952,6 +1955,7 @@ export const updateBooking = mutation({
       await releaseHoldForBooking(ctx, id.toString());
       await scheduleWaitlistAdvance(ctx, {
         laneId: (existing as any).laneId,
+        additionalLaneIds: (existing as any).additionalLaneIds ?? undefined,
         date: (existing as any).date,
         startHour: (existing as any).startHour,
         duration: (existing as any).duration,
@@ -2203,6 +2207,7 @@ export const cancelBooking = mutation({
     // waitlisted member (sequential first-refusal). Auto-triggered, no admin.
     await scheduleWaitlistAdvance(ctx, {
       laneId: booking.laneId,
+      additionalLaneIds: (booking as any).additionalLaneIds ?? undefined,
       date: booking.date,
       startHour: booking.startHour,
       duration: booking.duration,
@@ -4878,34 +4883,55 @@ export const addToWaitlist = mutation({
     const ids: string[] = [];
     const insertedEntries: typeof args.entries = [];
     for (const entry of args.entries) {
-      const existing = await ctx.db
-        .query("waitlist")
-        .withIndex("by_slot", (q: any) =>
-          q.eq("laneId", entry.laneId).eq("date", entry.date).eq("hour", entry.hour)
-        )
-        .collect();
-      const isDuplicate = existing.some((e) => e.userId === callerUserId);
+      // SPEC_WAITLIST_SPLIT_BM_RU — entries are keyed by POOL sentinel: '*bm'
+      // (bowling machines) / '*ru' (run-ups). Legacy '*' (any lane, pre-split
+      // cached clients) stays valid; anything else is coerced to '*'.
+      const laneId = ["*", "*bm", "*ru"].includes(entry.laneId) ? entry.laneId : "*";
+      // Duplicate scan: the target sentinel + any group whose queue overlaps it —
+      // a live legacy '*' row already sits in BOTH pools' queues, so joining a
+      // pool on top of it would give the user two positions in one FIFO; and a
+      // '*' join duplicates any live pool row.
+      const dupSentinels =
+        laneId === "*" ? ["*", "*bm", "*ru"] : Array.from(new Set([laneId, "*"]));
+      const existing: any[] = [];
+      for (const s of dupSentinels) {
+        const rows = await ctx.db
+          .query("waitlist")
+          .withIndex("by_slot", (q: any) =>
+            q.eq("laneId", s).eq("date", entry.date).eq("hour", entry.hour)
+          )
+          .collect();
+        existing.push(...rows);
+      }
+      // F2 fix (SPEC_CODE_REVIEW_IMPROVEMENTS_2026-08): only a live entry
+      // (waiting/offered) is a duplicate. Expired / declined / booked rows no
+      // longer block rejoining — a fresh row goes to the back of the queue.
+      const isDuplicate = existing.some((e) => {
+        const s = (e as any).status ?? "waiting";
+        return e.userId === callerUserId && (s === "waiting" || s === "offered");
+      });
       if (isDuplicate) continue;
 
       const id = await ctx.db.insert("waitlist", {
         userId: callerUserId,
         userName: authedName ?? entry.userName,
         userEmail: authedEmail ?? entry.userEmail,
-        laneId: entry.laneId,
+        laneId,
         date: entry.date,
         hour: entry.hour,
         notified: false,
       });
       ids.push(id);
-      insertedEntries.push(entry);
+      insertedEntries.push({ ...entry, laneId });
     }
     // Send waitlist confirmation email (replicates booking-confirmation pattern)
     if (ids.length > 0 && insertedEntries.length > 0) {
       const first = insertedEntries[0];
+      const poolLabel = (lid: string) => (lid === "*bm" ? "BM" : lid === "*ru" ? "RU" : undefined);
       await ctx.scheduler.runAfter(0, internal.emails.sendWaitlistConfirmation, {
         to: authedEmail ?? first.userEmail,
         customerName: authedName ?? first.userName,
-        slots: insertedEntries.map((e) => ({ date: e.date, hour: e.hour })),
+        slots: insertedEntries.map((e) => ({ date: e.date, hour: e.hour, pool: poolLabel(e.laneId) })),
       });
     }
     return ids;
@@ -4950,11 +4976,22 @@ export const removeFromWaitlist = mutation({
         .query("slotHolds")
         .withIndex("by_date", (q: any) => q.eq("date", entry.date))
         .collect();
-      for (const h of holds) {
-        if (h.holdType !== "waitlist") continue;
-        if (h.userId !== entry.userId && h.userEmail?.toLowerCase().trim() !== emailLc) continue;
+      // SPEC_WAITLIST_SPLIT_BM_RU — a user may hold live offers in BOTH pools
+      // for the same hour. Release only THIS offer's hold: instance-matched by
+      // expiresAt === the entry's offerExpiresAt (the same key the expiry
+      // reminder uses); fall back to user-scoped only if nothing matched.
+      const offExp = (entry as any).offerExpiresAt
+        ? new Date((entry as any).offerExpiresAt).getTime()
+        : 0;
+      const userHolds = holds.filter((h: any) => {
+        if (h.holdType !== "waitlist") return false;
+        if (h.userId !== entry.userId && h.userEmail?.toLowerCase().trim() !== emailLc) return false;
         const hEnd = h.startHour + h.duration / 60;
-        if (entry.hour < hEnd && slotEnd > h.startHour) await ctx.db.delete(h._id);
+        return entry.hour < hEnd && slotEnd > h.startHour;
+      });
+      const instanceHolds = userHolds.filter((h: any) => h.expiresAt === offExp);
+      for (const h of instanceHolds.length > 0 ? instanceHolds : userHolds) {
+        await ctx.db.delete(h._id);
       }
       await ctx.scheduler.runAfter(0, internal.waitlist.advanceWaitlistOffer, {
         laneId: entry.laneId,

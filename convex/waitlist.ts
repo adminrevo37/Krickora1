@@ -2,6 +2,7 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import { requireAdmin, getCallerContext } from "./lib/adminGuard";
+import { resolveLanesAtHour } from "./lanes";
 
 /**
  * Waitlist — sequential first-refusal engine (SPEC_WAITLIST_OFFER_REDESIGN).
@@ -22,13 +23,16 @@ import { requireAdmin, getCallerContext } from "./lib/adminGuard";
 
 const DEFAULT_HOLD_MINUTES = 15;
 
-const LANE_NAME_MAP: Record<string, string> = {
-  bm1: "Bowling Machine Lane 1",
-  bm2: "Bowling Machine Lane 2",
-  bm3: "Bowling Machine Lane 3",
-  ru1: "Run-Up Lane 1",
-  ru2: "Run-Up Lane 2",
-};
+// SPEC_WAITLIST_SPLIT_BM_RU — the waitlist is split into two POOLS keyed by the
+// lane MODE at the entry's (date, hour): BM (bowling machines, incl. Truman) and
+// RU (run-ups). Entries carry a sentinel laneId: '*bm' / '*ru'. Legacy '*' rows
+// (pre-split "any lane") are honoured as matching EITHER pool until they resolve.
+// Pool membership of a real lane is resolved from live lane config per hour
+// (resolveLanesAtHour) — a lane running as BM for part of a day is in the BM pool
+// for exactly those hours. This also removed the old hardcoded LANE_NAME_MAP (F3).
+export type WaitlistPool = "bm" | "ru";
+export const POOL_SENTINELS: Record<WaitlistPool, string> = { bm: "*bm", ru: "*ru" };
+const ALL_SENTINELS = ["*", "*bm", "*ru"];
 
 function fmtHour12(h: number): string {
   const hr = Math.floor(h);
@@ -102,17 +106,31 @@ async function logWaitlistOfferEvent(
  */
 export async function scheduleWaitlistAdvance(
   ctx: any,
-  args: { laneId: string; date: string; startHour: number; duration: number }
+  args: {
+    laneId: string;
+    // SPEC_WAITLIST_SPLIT_BM_RU — a freed REAL lane services only ITS pool's
+    // queue now, so a multi-lane booking (primary + additionalLaneIds spanning
+    // BM and RU lanes) must schedule an advance for EVERY freed lane, or the
+    // other pool's waiters are never offered the freed lane. The engine is
+    // idempotent — a second invocation for the same pool no-ops / offer_lives.
+    additionalLaneIds?: string[];
+    date: string;
+    startHour: number;
+    duration: number;
+  }
 ): Promise<void> {
   const endHour = args.startHour + args.duration / 60;
   const firstHour = Math.floor(args.startHour);
   const lastHour = Math.ceil(endHour) - 1;
-  for (let h = firstHour; h <= lastHour; h++) {
-    await ctx.scheduler.runAfter(0, internal.waitlist.advanceWaitlistOffer, {
-      laneId: args.laneId,
-      date: args.date,
-      hour: h,
-    });
+  const lanes = Array.from(new Set([args.laneId, ...(args.additionalLaneIds ?? [])]));
+  for (const laneId of lanes) {
+    for (let h = firstHour; h <= lastHour; h++) {
+      await ctx.scheduler.runAfter(0, internal.waitlist.advanceWaitlistOffer, {
+        laneId,
+        date: args.date,
+        hour: h,
+      });
+    }
   }
 }
 
@@ -143,13 +161,19 @@ export async function consumeWaitlistHoldForBooking(
   }
   if (!consumedAny) return;
 
-  // Entries are keyed any-lane ('*') — the customer waitlisted for the HOUR, not
-  // this specific lane (see advanceWaitlistOffer). Look them up by '*', not the
-  // booked lane, or the offeree's entry is never marked booked.
-  const entries = await ctx.db
-    .query("waitlist")
-    .withIndex("by_laneId_date", (q: any) => q.eq("laneId", "*").eq("date", args.date))
-    .collect();
+  // Entries are keyed by pool sentinel ('*bm'/'*ru', legacy '*') — the customer
+  // waitlisted for the HOUR, not this specific lane. Look them up by sentinel,
+  // not the booked lane, or the offeree's entry is never marked booked. Booking
+  // ANY lane in the hour retires their entries in BOTH pools (they have a
+  // session that hour — decision #2 of SPEC_WAITLIST_SPLIT_BM_RU).
+  const entries: any[] = [];
+  for (const sentinel of ALL_SENTINELS) {
+    const rows = await ctx.db
+      .query("waitlist")
+      .withIndex("by_laneId_date", (q: any) => q.eq("laneId", sentinel).eq("date", args.date))
+      .collect();
+    entries.push(...rows);
+  }
   for (const e of entries) {
     if (e.userId !== args.userId) continue;
     const eEnd = e.hour + 1;
@@ -174,21 +198,45 @@ export const advanceWaitlistOffer = internalMutation({
     const slotStart = hour;
     const slotEnd = hour + 1;
     const now = Date.now();
-    const ALL_LANES = Object.keys(LANE_NAME_MAP);
 
-    // FIX — the waitlist auto-offer was dead in production. Customers join the
-    // waitlist for an HOUR (any lane): BookingCalendar stores `laneId: '*'`. But
-    // every trigger (cancel/reschedule/abandon) passed the freed booking's SPECIFIC
-    // lane, so the old `by_slot(laneId)` lookup queried e.g. 'bm3' and never matched
-    // the '*' entries → no offer ever fired. The engine is now hour-based: entries
-    // are read with '*', occupancy is computed across ALL lanes (primary AND
-    // additionalLaneIds), and the exclusive offer + hold land on a currently-free lane.
-    const entries = await ctx.db
-      .query("waitlist")
-      .withIndex("by_slot", (q: any) =>
-        q.eq("laneId", "*").eq("date", date).eq("hour", hour)
-      )
-      .collect();
+    // SPEC_WAITLIST_SPLIT_BM_RU — the engine is POOL-aware. Lane set + each
+    // lane's pool ('bm'/'ru') come from live lane config resolved at this
+    // (date, hour) (override + segment aware — the F3 fix), so a lane running
+    // as BM for part of a day is BM-pool for exactly those hours. A freed REAL
+    // lane services its own pool's queue; '*'/'*bm'/'*ru' invocations (manual
+    // kicks, roll-ons, legacy triggers) service the named pool(s). One
+    // invocation can make one offer PER pool (two holds on different lanes).
+    const lanesAt = await resolveLanesAtHour(ctx, date, hour);
+    const laneInfo = new Map(lanesAt.map((l) => [l.laneId, l]));
+    const openLanes = lanesAt.filter((l) => !l.closed);
+    const poolLaneIds = (p: WaitlistPool) =>
+      openLanes.filter((l) => l.pool === p).map((l) => l.laneId);
+
+    let targetPools: WaitlistPool[];
+    if (preferLaneId === "*bm") targetPools = ["bm"];
+    else if (preferLaneId === "*ru") targetPools = ["ru"];
+    else if (laneInfo.has(preferLaneId)) targetPools = [laneInfo.get(preferLaneId)!.pool];
+    else targetPools = ["bm", "ru"];
+
+    // Entries: each pool's queue = its sentinel rows + legacy '*' (any-lane)
+    // rows, FIFO by creation time across both.
+    const readEntries = async (sentinel: string) =>
+      await ctx.db
+        .query("waitlist")
+        .withIndex("by_slot", (q: any) =>
+          q.eq("laneId", sentinel).eq("date", date).eq("hour", hour)
+        )
+        .collect();
+    const legacyEntries = await readEntries("*");
+    const byCreation = (a: any, b: any) => a._creationTime - b._creationTime;
+    const entriesByPool: Record<WaitlistPool, any[]> = {
+      bm: [...(await readEntries("*bm")), ...legacyEntries].sort(byCreation),
+      ru: [...(await readEntries("*ru")), ...legacyEntries].sort(byCreation),
+    };
+    const allEntries = [
+      ...entriesByPool.bm,
+      ...entriesByPool.ru.filter((e) => e.laneId !== "*"),
+    ];
 
     const overlaps = (b: any) => {
       const bEnd = b.startHour + b.duration / 60;
@@ -211,186 +259,250 @@ export const advanceWaitlistOffer = internalMutation({
     const laneInFlight = (lid: string) =>
       dayBookings.some((b: any) => IN_FLIGHT.includes(b.status) && occupiesLane(b, lid));
 
-    // Delete every 'waitlist' hold overlapping this hour, on ANY lane.
-    const deleteWaitlistHolds = async () => {
-      for (const lid of ALL_LANES) {
-        const holds = await ctx.db
-          .query("slotHolds")
-          .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", date))
-          .collect();
-        for (const h of holds) {
-          if (h.holdType !== "waitlist") continue;
-          const hEnd = h.startHour + h.duration / 60;
-          if (slotStart < hEnd && slotEnd > h.startHour) await ctx.db.delete(h._id);
-        }
+    // Waitlist holds overlapping this hour (by_date — no hardcoded lane loop).
+    // Pool-scoped deletion resolves each hold's lane to its pool, so clearing
+    // one pool never drops the OTHER pool's live offer hold.
+    const dayHolds = await ctx.db
+      .query("slotHolds")
+      .withIndex("by_date", (q: any) => q.eq("date", date))
+      .collect();
+    const hourWaitlistHolds = dayHolds.filter(
+      (h: any) =>
+        h.holdType === "waitlist" &&
+        slotStart < h.startHour + h.duration / 60 &&
+        slotEnd > h.startHour
+    );
+    const deleted = new Set<string>();
+    const deleteHoldsForPool = async (p: WaitlistPool | "all") => {
+      for (const h of hourWaitlistHolds) {
+        if (deleted.has(h._id)) continue;
+        if (p !== "all" && laneInfo.get(h.laneId)?.pool !== p) continue;
+        await ctx.db.delete(h._id);
+        deleted.add(h._id);
       }
     };
 
     // COL-3 (audit 2026-06): never hand out a slot the offeree can't actually
-    // book. Respect facility closures + per-lane service blocks exactly as
-    // createBooking does. If the whole day is closed there is no offerable lane —
-    // clear stale holds and stop (don't roll on; nothing to offer).
+    // book. Whole-day closure → no offerable lane in EITHER pool: revert any
+    // outstanding offers to 'waiting' (the roll-on re-evaluates on reopen) and
+    // clear all waitlist holds for the hour.
     const closure = await ctx.db
       .query("closures")
       .withIndex("by_date", (q: any) => q.eq("date", date))
       .first();
     if (closure) {
-      // Don't leave a live offer pointing at a hold we're about to delete: an
-      // un-close before the scheduled roll-on would otherwise see status
-      // 'offered' (exp in future) and report offer_live with NO protecting hold,
-      // letting another customer book the lane out from under the offeree. Revert
-      // any outstanding offer to 'waiting' (the roll-on re-evaluates on reopen).
-      for (const e of entries) {
+      for (const e of allEntries) {
         if (statusOf(e) === "offered") {
           await ctx.db.patch(e._id, { status: "waiting", offerExpiresAt: undefined });
         }
       }
-      await deleteWaitlistHolds();
+      await deleteHoldsForPool("all");
       return { result: "closed" };
     }
+
     // Lanes with a service/repair block overlapping this hour aren't offerable.
     const blockedLanes = new Set<string>();
-    for (const lid of ALL_LANES) {
+    for (const l of openLanes) {
       const blocks = await ctx.db
         .query("laneBlocks")
-        .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", date))
+        .withIndex("by_laneId_date", (q: any) => q.eq("laneId", l.laneId).eq("date", date))
         .collect();
       if (
         blocks.some(
           (b: any) => slotStart < b.startHour + b.duration / 60 && slotEnd > b.startHour
         )
       ) {
-        blockedLanes.add(lid);
+        blockedLanes.add(l.laneId);
       }
     }
 
-    // 1. Hour fully booked (every lane has a CONFIRMED booking) → queue dies
-    // (decision #6). B-2: only a confirmed booking destroys the queue.
-    const filled = ALL_LANES.every((lid) => laneConfirmed(lid));
-    if (filled) {
-      await deleteWaitlistHolds();
-      for (const e of entries) {
-        const st = statusOf(e);
-        if (st === "waiting" || st === "offered") {
-          await ctx.db.patch(e._id, { status: "expired", offerExpiresAt: undefined });
-          // Only an OUTSTANDING offer that lapsed counts as a no-action expiry.
-          if (st === "offered") await logWaitlistOfferEvent(ctx, "expired", e, { date, hour });
+    // Legacy '*' entries only die when EVERY open lane (both pools) is confirmed.
+    const allOpenConfirmed =
+      openLanes.length > 0 && openLanes.every((l) => laneConfirmed(l.laneId));
+
+    const results: Record<string, string> = {};
+    // An entry may appear in both pools' lists (legacy '*') — never offer it twice
+    // in one invocation.
+    const claimed = new Set<string>();
+
+    for (const pool of targetPools) {
+      const lanes = poolLaneIds(pool);
+      const entries = entriesByPool[pool];
+      if (lanes.length === 0) {
+        // No lanes of this mode at this hour (layout override / all closed) —
+        // nothing to offer OR expire; the queue survives a layout change back.
+        results[pool] = "no_lanes";
+        continue;
+      }
+
+      // 1. Pool fully booked (every lane of this mode has a CONFIRMED booking)
+      // → this pool's queue dies. B-2: only confirmed bookings destroy a queue.
+      const filled = lanes.every((lid) => laneConfirmed(lid));
+      if (filled) {
+        await deleteHoldsForPool(pool);
+        for (const e of entries) {
+          const st = statusOf(e);
+          const isLegacy = e.laneId === "*";
+          if ((st === "waiting" || st === "offered") && (!isLegacy || allOpenConfirmed)) {
+            await ctx.db.patch(e._id, { status: "expired", offerExpiresAt: undefined });
+            if (st === "offered") await logWaitlistOfferEvent(ctx, "expired", e, { date, hour });
+          } else if (isLegacy && st === "offered") {
+            // Legacy '*' offer surviving a pool-fill (the other pool still has
+            // room): if its protecting hold was on THIS pool's just-cleared
+            // lanes, don't leave a hold-less live offer — revert it to waiting
+            // so the other pool's advance can re-offer it a fresh lane. If its
+            // hold sits in the other pool, it's untouched and the offer stands.
+            const hasLiveHold = hourWaitlistHolds.some(
+              (h: any) => !deleted.has(h._id) && h.userId === e.userId
+            );
+            if (!hasLiveHold) {
+              await ctx.db.patch(e._id, { status: "waiting", offerExpiresAt: undefined });
+            }
+          }
+        }
+        results[pool] = "filled_cleared";
+        continue;
+      }
+
+      // 2. Live offer outstanding? A pool-sentinel offer blocks only its pool.
+      // A live LEGACY '*' offer conservatively blocks both pools (its held lane
+      // isn't recorded on the entry; resolves within the hold window).
+      const offered = entries.find((e: any) => statusOf(e) === "offered" && !claimed.has(e._id));
+      if (offered) {
+        const exp = offered.offerExpiresAt ? new Date(offered.offerExpiresAt).getTime() : 0;
+        if (exp > now) {
+          results[pool] = "offer_live";
+          continue;
+        }
+        // Expired offer → retire it and roll on. The offeree never pressed a button.
+        // Hold cleanup: this pool's lanes + (for a legacy '*' entry, whose held
+        // lane could sit in either pool) THIS offer instance's hold, matched by
+        // expiresAt — never the same user's live offer in the other pool.
+        const offeredExp = offered.offerExpiresAt
+          ? new Date(offered.offerExpiresAt).getTime()
+          : 0;
+        await ctx.db.patch(offered._id, { status: "expired", offerExpiresAt: undefined });
+        await logWaitlistOfferEvent(ctx, "expired", offered, { date, hour });
+        await deleteHoldsForPool(pool);
+        if (offered.laneId === "*") {
+          for (const h of hourWaitlistHolds) {
+            if (deleted.has(h._id)) continue;
+            if (h.userId === offered.userId && h.expiresAt === offeredExp) {
+              await ctx.db.delete(h._id);
+              deleted.add(h._id);
+            }
+          }
         }
       }
-      return { result: "filled_cleared" };
+
+      // 3. Choose the lane to offer: prefer the freed lane if it's in this pool,
+      // else any free lane OF THIS POOL. A lane is offerable if it has no
+      // confirmed booking and nothing mid-checkout.
+      const isFree = (lid: string) =>
+        !laneConfirmed(lid) && !laneInFlight(lid) && !blockedLanes.has(lid);
+      const offerLane =
+        lanes.includes(preferLaneId) && isFree(preferLaneId)
+          ? preferLaneId
+          : lanes.find((lid) => isFree(lid));
+      if (!offerLane) {
+        // No free lane in this pool right now (e.g. the only openings are
+        // mid-checkout) — the checkout hold protects the slot; revisit on
+        // confirm / abandonment.
+        results[pool] = "in_flight";
+        continue;
+      }
+
+      // 4. Next waiting member (oldest first).
+      const next = entries.find((e: any) => statusOf(e) === "waiting" && !claimed.has(e._id));
+      if (!next) {
+        await deleteHoldsForPool(pool);
+        results[pool] = "no_waiting";
+        continue;
+      }
+      claimed.add(next._id);
+
+      // 5. Make the exclusive offer (hold + email + roll-on) on the free lane.
+      const settings = await ctx.db
+        .query("siteSettings")
+        .withIndex("by_key", (q: any) => q.eq("key", "global"))
+        .first();
+      const holdMinutes = (settings as any)?.waitlistOfferHoldMinutes ?? DEFAULT_HOLD_MINUTES;
+      const holdMs = holdMinutes * 60 * 1000;
+      const expiresAtMs = now + holdMs;
+
+      await ctx.db.patch(next._id, {
+        status: "offered",
+        offerExpiresAt: new Date(expiresAtMs).toISOString(),
+        offeredAt: now,
+      });
+      await logWaitlistOfferEvent(ctx, "offered", { ...next, offeredAt: now }, { laneId: offerLane, date, hour });
+      await ctx.db.insert("slotHolds", {
+        laneId: offerLane,
+        date,
+        startHour: hour,
+        duration: 60,
+        holdType: "waitlist",
+        userId: next.userId,
+        userEmail: next.userEmail,
+        expiresAt: expiresAtMs,
+        createdAt: new Date().toISOString(),
+      });
+
+      // 6. Email the exclusive offer with the AWST deadline. Lane name comes from
+      // the resolved config ("BM 2" / "RU 4") — it carries the pool naturally.
+      const laneName = laneInfo.get(offerLane)?.name ?? offerLane;
+      await ctx.scheduler.runAfter(0, internal.emails.sendWaitlistVacancy, {
+        to: next.userEmail,
+        customerName: next.userName,
+        laneName,
+        date: fmtAwstDateLabel(date),
+        timeSlot: `${fmtHour12(hour)} - ${fmtHour12(hour + 1)}`,
+        bookingUrl: `https://cricketrevolution.com.au/?book=${offerLane}&date=${date}&hour=${hour}`,
+        otherWaitlistCount: "0",
+        offerDeadline: `${fmtAwstTime(expiresAtMs)} AWST`,
+      });
+
+      // SPEC_PWA_PUSH §5.1 + V2 §5/§8 — waitlist vacancy offer push (time-sensitive),
+      // deep-linked straight to checkout for the held slot (&wl=1) with Accept/Deny
+      // action buttons. Accept → checkout; Deny → release + roll to the next person.
+      const checkoutUrl = `/?book=${offerLane}&date=${date}&hour=${hour}&wl=1`;
+      const declineUrl = `/?wlDecline=${offerLane}&date=${date}&hour=${hour}`;
+      await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+        email: next.userEmail,
+        category: "waitlist-offers",
+        title: "Waitlist session has been allocated to you! 🏏",
+        body: `${laneName} · ${fmtAwstDateLabel(date)}, ${fmtHour12(hour)} - ${fmtHour12(hour + 1)} — reserved for you. Accept to pay, or Deny to pass it on (until ${fmtAwstTime(expiresAtMs)} AWST).`,
+        url: checkoutUrl,
+        tag: `waitlist-${offerLane}-${date}-${hour}`,
+        actions: [
+          { action: "accept", title: "Accept", url: checkoutUrl },
+          { action: "deny", title: "Pass", url: declineUrl },
+        ],
+      });
+
+      // 7. Roll on at expiry if they don't book — targeted at THIS pool.
+      await ctx.scheduler.runAfter(holdMs, internal.waitlist.advanceWaitlistOffer, {
+        laneId: POOL_SENTINELS[pool],
+        date,
+        hour,
+      });
+
+      // V2 §6.3 — "expiring soon" reminder push a few minutes before the hold lapses
+      // (only if the hold is long enough to make it meaningful). It re-checks the
+      // offer is still live + unclaimed before sending.
+      const EXPIRY_REMINDER_LEAD_MS = 5 * 60 * 1000;
+      if (holdMs > EXPIRY_REMINDER_LEAD_MS + 60 * 1000) {
+        await ctx.scheduler.runAfter(
+          holdMs - EXPIRY_REMINDER_LEAD_MS,
+          internal.waitlist.remindWaitlistOfferExpiring,
+          { waitlistId: next._id, offerLane, laneName, date, hour, expiresAtMs }
+        );
+      }
+
+      results[pool] = "offered";
     }
 
-    // 2. Is there a live offer outstanding?
-    const offered = entries.find((e: any) => statusOf(e) === "offered");
-    if (offered) {
-      const exp = offered.offerExpiresAt ? new Date(offered.offerExpiresAt).getTime() : 0;
-      if (exp > now) return { result: "offer_live" };
-      // Expired offer → retire it and roll on. The offeree never pressed a button.
-      await ctx.db.patch(offered._id, { status: "expired", offerExpiresAt: undefined });
-      await logWaitlistOfferEvent(ctx, "expired", offered, { date, hour });
-      await deleteWaitlistHolds();
-    }
-
-    // 3. Choose the lane to offer: prefer the freed lane, else any lane free this
-    // hour. A lane is offerable if it has no confirmed booking and nothing
-    // mid-checkout (a checkout hold corresponds to a pending booking = inFlight).
-    const isFree = (lid: string) =>
-      !laneConfirmed(lid) && !laneInFlight(lid) && !blockedLanes.has(lid);
-    const offerLane =
-      preferLaneId !== "*" && isFree(preferLaneId)
-        ? preferLaneId
-        : ALL_LANES.find((lid) => isFree(lid));
-    if (!offerLane) {
-      // No free lane right now (e.g. the only openings are mid-checkout) — the
-      // checkout hold protects the slot; revisit on confirm / abandonment.
-      return { result: "in_flight" };
-    }
-
-    // 4. Next waiting member (oldest first).
-    const next = entries.find((e: any) => statusOf(e) === "waiting");
-    if (!next) {
-      await deleteWaitlistHolds();
-      return { result: "no_waiting" };
-    }
-
-    // 5. Make the exclusive offer (hold + email + roll-on) on the free lane.
-    const settings = await ctx.db
-      .query("siteSettings")
-      .withIndex("by_key", (q: any) => q.eq("key", "global"))
-      .first();
-    const holdMinutes = (settings as any)?.waitlistOfferHoldMinutes ?? DEFAULT_HOLD_MINUTES;
-    const holdMs = holdMinutes * 60 * 1000;
-    const expiresAtMs = now + holdMs;
-
-    await ctx.db.patch(next._id, {
-      status: "offered",
-      offerExpiresAt: new Date(expiresAtMs).toISOString(),
-      offeredAt: now,
-    });
-    await logWaitlistOfferEvent(ctx, "offered", { ...next, offeredAt: now }, { laneId: offerLane, date, hour });
-    await ctx.db.insert("slotHolds", {
-      laneId: offerLane,
-      date,
-      startHour: hour,
-      duration: 60,
-      holdType: "waitlist",
-      userId: next.userId,
-      userEmail: next.userEmail,
-      expiresAt: expiresAtMs,
-      createdAt: new Date().toISOString(),
-    });
-
-    // 6. Email the exclusive offer with the AWST deadline.
-    const laneName = LANE_NAME_MAP[offerLane] ?? offerLane;
-    await ctx.scheduler.runAfter(0, internal.emails.sendWaitlistVacancy, {
-      to: next.userEmail,
-      customerName: next.userName,
-      laneName,
-      date: fmtAwstDateLabel(date),
-      timeSlot: `${fmtHour12(hour)} - ${fmtHour12(hour + 1)}`,
-      bookingUrl: `https://cricketrevolution.com.au/?book=${offerLane}&date=${date}&hour=${hour}`,
-      otherWaitlistCount: "0",
-      offerDeadline: `${fmtAwstTime(expiresAtMs)} AWST`,
-    });
-
-    // SPEC_PWA_PUSH §5.1 + V2 §5/§8 — waitlist vacancy offer push (time-sensitive),
-    // deep-linked straight to checkout for the held slot (&wl=1) with Accept/Deny
-    // action buttons. Accept → checkout; Deny → release + roll to the next person.
-    const checkoutUrl = `/?book=${offerLane}&date=${date}&hour=${hour}&wl=1`;
-    const declineUrl = `/?wlDecline=${offerLane}&date=${date}&hour=${hour}`;
-    await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
-      email: next.userEmail,
-      category: "waitlist-offers",
-      title: "Waitlist session has been allocated to you! 🏏",
-      body: `${laneName} · ${fmtAwstDateLabel(date)}, ${fmtHour12(hour)} - ${fmtHour12(hour + 1)} — reserved for you. Accept to pay, or Deny to pass it on (until ${fmtAwstTime(expiresAtMs)} AWST).`,
-      url: checkoutUrl,
-      tag: `waitlist-${offerLane}-${date}-${hour}`,
-      actions: [
-        { action: "accept", title: "Accept", url: checkoutUrl },
-        { action: "deny", title: "Pass", url: declineUrl },
-      ],
-    });
-
-    // 7. Roll on at expiry if they don't book.
-    await ctx.scheduler.runAfter(holdMs, internal.waitlist.advanceWaitlistOffer, {
-      laneId: preferLaneId,
-      date,
-      hour,
-    });
-
-    // V2 §6.3 — "expiring soon" reminder push a few minutes before the hold lapses
-    // (only if the hold is long enough to make it meaningful). It re-checks the
-    // offer is still live + unclaimed before sending.
-    const EXPIRY_REMINDER_LEAD_MS = 5 * 60 * 1000;
-    if (holdMs > EXPIRY_REMINDER_LEAD_MS + 60 * 1000) {
-      await ctx.scheduler.runAfter(
-        holdMs - EXPIRY_REMINDER_LEAD_MS,
-        internal.waitlist.remindWaitlistOfferExpiring,
-        { waitlistId: next._id, offerLane, date, hour, expiresAtMs }
-      );
-    }
-
-    return { result: "offered", userId: next.userId };
+    return { results };
   },
 });
 
@@ -414,24 +526,41 @@ export const manualAdvanceWaitlistOffer = mutation({
 });
 
 // Admin: clear the live offer + hold for a slot and roll to the next member.
+// laneId is the entry-group sentinel ('*bm'/'*ru'/legacy '*') from the admin tab.
+// Clearing a pool group also retires a legacy '*' offer (its hold may sit on
+// either pool's lane); hold deletion is by (date, hour) across all lanes — the
+// immediate re-advance re-establishes any offer that should still stand.
 export const adminClearWaitlistOffer = mutation({
   args: { laneId: v.string(), date: v.string(), hour: v.number() },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
-    const entries = await ctx.db
-      .query("waitlist")
-      .withIndex("by_slot", (q: any) =>
-        q.eq("laneId", args.laneId).eq("date", args.date).eq("hour", args.hour)
-      )
-      .collect();
-    for (const e of entries) {
-      if (statusOf(e) === "offered") {
-        await ctx.db.patch(e._id, { status: "expired", offerExpiresAt: undefined });
+    // The hold deletion below is by (date, hour) across all lanes, so no group's
+    // offer may be left "live" — it would stand with no protecting hold (another
+    // customer could book the lane out from under the offeree). The TARGET group's
+    // offer is expired (that's what the admin asked to clear); other groups'
+    // offers revert to 'waiting' (they keep their queue position and the
+    // immediate '*' re-advance re-offers them a lane straight away).
+    const targetSentinel = ALL_SENTINELS.includes(args.laneId) ? args.laneId : null;
+    for (const sentinel of ALL_SENTINELS) {
+      const entries = await ctx.db
+        .query("waitlist")
+        .withIndex("by_slot", (q: any) =>
+          q.eq("laneId", sentinel).eq("date", args.date).eq("hour", args.hour)
+        )
+        .collect();
+      const isTarget = targetSentinel === null || sentinel === targetSentinel;
+      for (const e of entries) {
+        if (statusOf(e) === "offered") {
+          await ctx.db.patch(e._id, {
+            status: isTarget ? "expired" : "waiting",
+            offerExpiresAt: undefined,
+          });
+        }
       }
     }
     const holds = await ctx.db
       .query("slotHolds")
-      .withIndex("by_laneId_date", (q: any) => q.eq("laneId", args.laneId).eq("date", args.date))
+      .withIndex("by_date", (q: any) => q.eq("date", args.date))
       .collect();
     const slotEnd = args.hour + 1;
     for (const h of holds) {
@@ -439,9 +568,10 @@ export const adminClearWaitlistOffer = mutation({
       const hEnd = h.startHour + h.duration / 60;
       if (args.hour < hEnd && slotEnd > h.startHour) await ctx.db.delete(h._id);
     }
-    // Roll to the next member immediately.
+    // Roll to the next member immediately — '*' so BOTH pools re-evaluate (the
+    // non-target group's reverted offeree gets re-offered right away).
     await ctx.scheduler.runAfter(0, internal.waitlist.advanceWaitlistOffer, {
-      laneId: args.laneId,
+      laneId: "*",
       date: args.date,
       hour: args.hour,
     });
@@ -455,62 +585,110 @@ export const adminClearWaitlistOffer = mutation({
 // Ordered by insertion time (_creationTime); only waiting/offered entries count.
 // ---------------------------------------------------------------------------
 export const myWaitlistPosition = query({
-  args: { date: v.string(), hour: v.number() },
+  args: { date: v.string(), hour: v.number(), pool: v.optional(v.string()) },
   handler: async (ctx, args): Promise<number | null> => {
     const caller = await getCallerContext(ctx);
     if (!caller.identity) return null;
     const email = (caller.email ?? "").toLowerCase().trim();
     const subject = caller.identity.subject;
-    const entries = await ctx.db
-      .query("waitlist")
-      .withIndex("by_slot", (q: any) =>
-        q.eq("laneId", "*").eq("date", args.date).eq("hour", args.hour)
-      )
-      .collect();
-    const active = entries
-      .filter((e: any) => {
-        const s = e.status ?? "waiting";
-        return s === "waiting" || s === "offered";
-      })
-      .sort((a: any, b: any) => a._creationTime - b._creationTime);
-    const idx = active.findIndex(
-      (e: any) => e.userEmail?.toLowerCase().trim() === email || e.userId === subject
-    );
-    return idx === -1 ? null : idx + 1;
+    // SPEC_WAITLIST_SPLIT_BM_RU — a pool's queue = its sentinel rows + legacy
+    // '*' rows, FIFO. Without a pool arg, return the caller's best position in
+    // either pool.
+    const pools: WaitlistPool[] =
+      args.pool === "bm" ? ["bm"] : args.pool === "ru" ? ["ru"] : ["bm", "ru"];
+    const read = async (sentinel: string) =>
+      await ctx.db
+        .query("waitlist")
+        .withIndex("by_slot", (q: any) =>
+          q.eq("laneId", sentinel).eq("date", args.date).eq("hour", args.hour)
+        )
+        .collect();
+    const legacy = await read("*");
+    let best: number | null = null;
+    for (const p of pools) {
+      const active = [...(await read(POOL_SENTINELS[p])), ...legacy]
+        .filter((e: any) => {
+          const s = e.status ?? "waiting";
+          return s === "waiting" || s === "offered";
+        })
+        .sort((a: any, b: any) => a._creationTime - b._creationTime);
+      const idx = active.findIndex(
+        (e: any) => e.userEmail?.toLowerCase().trim() === email || e.userId === subject
+      );
+      if (idx !== -1 && (best === null || idx + 1 < best)) best = idx + 1;
+    }
+    return best;
   },
 });
 
-// SPEC_MOBILE_BOOKING_UPDATES §4.5 — the caller's 1-based queue position for EVERY
-// hour they're queued on `date`, as { [hour]: position }. One query for the whole
-// day so the calendar can show "You're #k" per row without a hook-in-a-loop.
-export const myWaitlistDayPositions = query({
-  args: { date: v.string() },
-  handler: async (ctx, args): Promise<Record<string, number>> => {
-    const caller = await getCallerContext(ctx);
-    if (!caller.identity) return {};
-    const email = (caller.email ?? "").toLowerCase().trim();
-    const subject = caller.identity.subject;
-    const entries = await ctx.db
+// Shared: the caller's 1-based queue position PER POOL for every hour they're
+// queued on `date`. A pool's queue = its sentinel rows + legacy '*' rows, FIFO;
+// a legacy entry holds a position in both pools.
+async function computeDayPoolPositions(
+  ctx: any,
+  date: string
+): Promise<Record<string, { bm?: number; ru?: number }>> {
+  const caller = await getCallerContext(ctx);
+  if (!caller.identity) return {};
+  const email = (caller.email ?? "").toLowerCase().trim();
+  const subject = caller.identity.subject;
+  const read = async (sentinel: string) =>
+    await ctx.db
       .query("waitlist")
-      .withIndex("by_laneId_date", (q: any) => q.eq("laneId", "*").eq("date", args.date))
+      .withIndex("by_laneId_date", (q: any) => q.eq("laneId", sentinel).eq("date", date))
       .collect();
+  const isActive = (e: any) => {
+    const s = e.status ?? "waiting";
+    return s === "waiting" || s === "offered";
+  };
+  const legacy = (await read("*")).filter(isActive);
+  const out: Record<string, { bm?: number; ru?: number }> = {};
+  for (const pool of ["bm", "ru"] as WaitlistPool[]) {
+    const rows = (await read(POOL_SENTINELS[pool])).filter(isActive);
     const byHour = new Map<number, any[]>();
-    for (const e of entries) {
-      const s = e.status ?? "waiting";
-      if (s !== "waiting" && s !== "offered") continue;
+    for (const e of [...rows, ...legacy]) {
       const arr = byHour.get(e.hour) ?? [];
       arr.push(e);
       byHour.set(e.hour, arr);
     }
-    const out: Record<string, number> = {};
     for (const [hour, arr] of byHour) {
       arr.sort((a: any, b: any) => a._creationTime - b._creationTime);
       const idx = arr.findIndex(
         (e: any) => e.userEmail?.toLowerCase().trim() === email || e.userId === subject
       );
-      if (idx !== -1) out[String(hour)] = idx + 1;
+      if (idx !== -1) {
+        const key = String(hour);
+        out[key] = { ...(out[key] ?? {}), [pool]: idx + 1 };
+      }
+    }
+  }
+  return out;
+}
+
+// SPEC_MOBILE_BOOKING_UPDATES §4.5 — LEGACY SHAPE, kept for already-deployed
+// PWA clients (the backend deploys before the frontend, and stale installs
+// render this value directly as a React child — an object would CRASH their
+// calendar). Returns the caller's BEST position across the two pools per hour.
+// New clients use myWaitlistDayPoolPositions below.
+export const myWaitlistDayPositions = query({
+  args: { date: v.string() },
+  handler: async (ctx, args): Promise<Record<string, number>> => {
+    const pools = await computeDayPoolPositions(ctx, args.date);
+    const out: Record<string, number> = {};
+    for (const [hour, p] of Object.entries(pools)) {
+      const best = Math.min(p.bm ?? Infinity, p.ru ?? Infinity);
+      if (Number.isFinite(best)) out[hour] = best;
     }
     return out;
+  },
+});
+
+// SPEC_WAITLIST_SPLIT_BM_RU — pool-aware positions, { [hour]: { bm?, ru? } }.
+// One query for the whole day so the calendar shows "#k in the queue" per band.
+export const myWaitlistDayPoolPositions = query({
+  args: { date: v.string() },
+  handler: async (ctx, args): Promise<Record<string, { bm?: number; ru?: number }>> => {
+    return await computeDayPoolPositions(ctx, args.date);
   },
 });
 
@@ -523,6 +701,8 @@ export const remindWaitlistOfferExpiring = internalMutation({
   args: {
     waitlistId: v.id("waitlist"),
     offerLane: v.string(),
+    // Resolved display name captured at offer time (config-derived — F3 fix).
+    laneName: v.optional(v.string()),
     date: v.string(),
     hour: v.number(),
     expiresAtMs: v.number(),
@@ -536,7 +716,7 @@ export const remindWaitlistOfferExpiring = internalMutation({
     if (exp !== args.expiresAtMs) return { sent: false, reason: "superseded" };
     if (Date.now() >= exp) return { sent: false, reason: "already expired" };
 
-    const laneName = LANE_NAME_MAP[args.offerLane] ?? args.offerLane;
+    const laneName = args.laneName ?? args.offerLane;
     const checkoutUrl = `/?book=${args.offerLane}&date=${args.date}&hour=${args.hour}&wl=1`;
     const declineUrl = `/?wlDecline=${args.offerLane}&date=${args.date}&hour=${args.hour}`;
     await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
@@ -571,16 +751,42 @@ export const declineWaitlistOffer = mutation({
     const subject = caller.identity.subject;
 
     const slotEnd = args.hour + 1;
-    // Entries are keyed any-lane ('*'); find THIS caller's offered entry for the hour.
-    const entries = await ctx.db
-      .query("waitlist")
-      .withIndex("by_slot", (q: any) => q.eq("laneId", "*").eq("date", args.date).eq("hour", args.hour))
-      .collect();
-    const mine = entries.find(
+    // Entries are keyed by pool sentinel ('*bm'/'*ru', legacy '*'); find THIS
+    // caller's offered entry for the hour across all of them.
+    const entries: any[] = [];
+    for (const sentinel of ALL_SENTINELS) {
+      const rows = await ctx.db
+        .query("waitlist")
+        .withIndex("by_slot", (q: any) =>
+          q.eq("laneId", sentinel).eq("date", args.date).eq("hour", args.hour)
+        )
+        .collect();
+      entries.push(...rows);
+    }
+    const mineAll = entries.filter(
       (e: any) =>
         statusOf(e) === "offered" &&
         (e.userEmail?.toLowerCase().trim() === email || e.userId === subject)
     );
+    // SPEC_WAITLIST_SPLIT_BM_RU — a user may hold live offers in BOTH pools for
+    // the same hour. The decline deep-link carries the OFFERED LANE (args.laneId):
+    // prefer the entry whose offer instance (offerExpiresAt) matches the hold on
+    // that lane, so tapping "Pass" on the BM push never kills the RU offer.
+    const dayHolds = await ctx.db
+      .query("slotHolds")
+      .withIndex("by_date", (q: any) => q.eq("date", args.date))
+      .collect();
+    const myHourHolds = dayHolds.filter((h: any) => {
+      if (h.holdType !== "waitlist") return false;
+      if (h.userId !== subject && h.userEmail?.toLowerCase().trim() !== email) return false;
+      const hEnd = h.startHour + h.duration / 60;
+      return args.hour < hEnd && slotEnd > h.startHour;
+    });
+    const expOf = (e: any) => (e.offerExpiresAt ? new Date(e.offerExpiresAt).getTime() : 0);
+    const mine =
+      mineAll.find((e: any) =>
+        myHourHolds.some((h: any) => h.laneId === args.laneId && h.expiresAt === expOf(e))
+      ) ?? mineAll[0];
     if (!mine) {
       // Nothing to decline (already rolled / booked / never offered to them).
       return { declined: false, reason: "no live offer" };
@@ -588,18 +794,11 @@ export const declineWaitlistOffer = mutation({
     await ctx.db.patch(mine._id, { status: "expired", offerExpiresAt: undefined });
     await logWaitlistOfferEvent(ctx, "declined", mine, { laneId: args.laneId, date: args.date, hour: args.hour });
 
-    // Release this user's waitlist hold(s) overlapping the hour, on any lane.
-    for (const lid of Object.keys(LANE_NAME_MAP)) {
-      const holds = await ctx.db
-        .query("slotHolds")
-        .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", args.date))
-        .collect();
-      for (const h of holds) {
-        if (h.holdType !== "waitlist") continue;
-        if (h.userId !== mine.userId && h.userEmail?.toLowerCase().trim() !== email) continue;
-        const hEnd = h.startHour + h.duration / 60;
-        if (args.hour < hEnd && slotEnd > h.startHour) await ctx.db.delete(h._id);
-      }
+    // Release only THIS offer's hold (instance-matched by expiresAt); fall back
+    // to all the user's hour holds only if nothing matched (defensive).
+    const instanceHolds = myHourHolds.filter((h: any) => h.expiresAt === expOf(mine));
+    for (const h of instanceHolds.length > 0 ? instanceHolds : myHourHolds) {
+      await ctx.db.delete(h._id);
     }
 
     // Roll to the next waiting member immediately.

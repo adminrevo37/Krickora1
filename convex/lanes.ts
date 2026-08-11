@@ -128,6 +128,31 @@ export async function resolveLaneSnapshot(
 }
 
 /**
+ * SPEC_WAITLIST_SPLIT_BM_RU — every lane's resolved pool/name at (date, hour),
+ * override + intra-day-segment aware. Powers the pool-split waitlist engine and
+ * is the F3 fix: the engine derives the lane set from live config, never a
+ * hardcoded list. `closed` = the governing segment is closed (never offerable).
+ */
+export async function resolveLanesAtHour(
+  ctx: any,
+  date: string,
+  hour: number
+): Promise<Array<{ laneId: string; pool: "bm" | "ru"; name: string; closed: boolean }>> {
+  const rows = await loadLaneRows(ctx);
+  const overrides = await loadOverridesForDate(ctx, date);
+  return rows.map((row) => {
+    const { segments } = resolveDaySegments(row, overrides, date);
+    const seg = resolveSegment(segments, hour);
+    return {
+      laneId: row.laneId,
+      pool: seg.mode === "RU" ? ("ru" as const) : ("bm" as const),
+      name: laneName(seg.mode, row.bayNumber),
+      closed: segmentIsClosed(seg),
+    };
+  });
+}
+
+/**
  * Validate a booking's lane/variant/duration against the resolved config:
  *  - the chosen variant must be offered by the resolved segment at (date, startHour)
  *  - the booking [start, start+duration) must NOT cross a segment boundary (§2.14)

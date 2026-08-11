@@ -1,20 +1,26 @@
 import { useState } from 'react'
 import { useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
-// Time-slot based waitlist — lane is '*' (any)
+// SPEC_WAITLIST_SPLIT_BM_RU — time-slot based waitlist, split into BM / RU pools.
+// Entries are keyed by pool sentinel laneId: '*bm' (bowling machines) / '*ru'
+// (run-ups). The pool prop drives labels + the sentinel written to the server.
 import { useAuth } from '../hooks/useAuth'
 
 interface WaitlistModalProps {
+  pool: 'bm' | 'ru'
   selectedSlots: { laneId: string; date: string; hour: number }[]
-  // SPEC_MOBILE_BOOKING_UPDATES §4.3 — the day's other full/waitlistable hours, so
-  // the user can join several in one confirm. The tapped hour(s) start pre-ticked.
+  // SPEC_MOBILE_BOOKING_UPDATES §4.3 — the day's other full/waitlistable hours
+  // FOR THIS POOL, so the user can join several in one confirm. The tapped
+  // hour(s) start pre-ticked.
   availableHours?: number[]
   date?: string
   onClose: () => void
   onSuccess: () => void
 }
 
-export default function WaitlistModal({ selectedSlots, availableHours, date, onClose, onSuccess }: WaitlistModalProps) {
+export default function WaitlistModal({ pool, selectedSlots, availableHours, date, onClose, onSuccess }: WaitlistModalProps) {
+  const poolTag = pool.toUpperCase()
+  const poolNoun = pool === 'bm' ? 'BM (bowling machine) lane' : 'RU (run-up) lane'
   const { user } = useAuth()
   const addToWaitlistServer = useMutation(api.mutations.addToWaitlist)
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -49,13 +55,14 @@ export default function WaitlistModal({ selectedSlots, availableHours, date, onC
     setIsSubmitting(true)
     await new Promise(r => setTimeout(r, 600))
 
-    // One entry per (date, hour) — any lane opening at that time notifies.
+    // One entry per (date, hour) — any lane OF THIS POOL opening at that time
+    // notifies. laneId is the pool sentinel ('*bm' / '*ru').
     const uniqueSlots = Array.from(new Set(chosenHours)).map(h => ({ date: seedDate, hour: h }))
     const entries = uniqueSlots.map(s => ({
       userId: user.id,
       userName: user.name,
       userEmail: user.email,
-      laneId: '*',
+      laneId: `*${pool}`,
       date: s.date,
       hour: s.hour,
     }))
@@ -77,8 +84,8 @@ export default function WaitlistModal({ selectedSlots, availableHours, date, onC
         <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
         <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm overflow-hidden">
           <div className="bg-gradient-to-r from-amber-500 to-orange-500 p-5 text-white">
-            <h3 className="text-lg font-bold">Added to Waitlist! 🔔</h3>
-            <p className="text-white/80 text-sm mt-0.5">You will be notified when slots open up</p>
+            <h3 className="text-lg font-bold">Added to {poolTag} Waitlist! 🔔</h3>
+            <p className="text-white/80 text-sm mt-0.5">You will be notified when a {poolTag} slot opens up</p>
           </div>
           <div className="p-6 text-center">
             <div className="w-14 h-14 bg-amber-100 dark:bg-amber-900/30 rounded-full flex items-center justify-center mx-auto mb-3">
@@ -101,7 +108,7 @@ export default function WaitlistModal({ selectedSlots, availableHours, date, onC
         <div className="bg-gradient-to-r from-amber-500 to-orange-500 p-5 text-white shrink-0">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-bold">Join Waitlist</h3>
+              <h3 className="text-lg font-bold">Join {poolTag} Waitlist</h3>
               <p className="text-white/80 text-sm mt-0.5">
                 {chosenHours.length} slot{chosenHours.length === 1 ? '' : 's'} selected
               </p>
@@ -117,8 +124,8 @@ export default function WaitlistModal({ selectedSlots, availableHours, date, onC
 
         <div className="p-5 space-y-4 overflow-y-auto flex-1">
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Pick the times you'd like a net for on <strong>{formatDate(seedDate)}</strong>. We'll
-            notify you when any lane opens — first in the queue gets first refusal.
+            Pick the times you'd like a {poolNoun} for on <strong>{formatDate(seedDate)}</strong>. We'll
+            notify you when any {poolTag} lane opens — first in the queue gets first refusal.
           </p>
 
           <div className="flex flex-wrap gap-2">
@@ -138,7 +145,7 @@ export default function WaitlistModal({ selectedSlots, availableHours, date, onC
           </div>
 
           <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 text-xs text-gray-500 dark:text-gray-400">
-            <strong className="text-gray-700 dark:text-gray-300">How it works:</strong> You will get an email notification the moment ANY lane becomes available at these times (from cancellations, changes, etc). It does not matter which lane — you will be notified as soon as anything opens up.
+            <strong className="text-gray-700 dark:text-gray-300">How it works:</strong> You will get a notification the moment any {poolTag} lane becomes available at these times (from cancellations, changes, etc). It does not matter which {poolTag} lane — you will be notified as soon as anything opens up.
           </div>
         </div>
 
@@ -154,7 +161,7 @@ export default function WaitlistModal({ selectedSlots, availableHours, date, onC
                 Adding...
               </>
             ) : (
-              <>🔔 Join Waitlist for {chosenHours.length} Slot{chosenHours.length === 1 ? '' : 's'}</>
+              <>🔔 Join {poolTag} Waitlist for {chosenHours.length} Slot{chosenHours.length === 1 ? '' : 's'}</>
             )}
           </button>
         </div>

@@ -146,6 +146,7 @@ export const confirmBookingPayment = internalMutation({
         // Slot now confirmed at the new time — clear any waitlist for it (#6).
         await scheduleWaitlistAdvance(ctx, {
           laneId: newLaneId,
+          additionalLaneIds: (b as any).additionalLaneIds ?? undefined,
           date: newDate,
           startHour: newStartHour,
           duration: pe.newDuration ?? b.duration,
@@ -298,6 +299,7 @@ export const confirmBookingPayment = internalMutation({
     if (patch.status === "confirmed") {
       await scheduleWaitlistAdvance(ctx, {
         laneId: b.laneId,
+        additionalLaneIds: (b as any).additionalLaneIds ?? undefined,
         date: b.date,
         startHour: b.startHour,
         duration: b.duration,
