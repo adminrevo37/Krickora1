@@ -212,19 +212,23 @@ function HourBoard({ lanes, hour }: { lanes: Lane[]; hour: number }) {
                     {visible.flatMap((b, i) => {
                       const c = blockColors(lane, b)
                       if (b.isCoach) {
-                        // One block per visible hour slot — never reveals full booking extent
+                        // One block per visible hour slot — never reveals full booking extent.
+                        // Each slot block is CLIPPED to the booking's real start/end so a
+                        // half-hour start (e.g. 2:30pm) doesn't paint the whole 2pm hour.
                         const slots: React.ReactElement[] = []
                         for (let slotH = gridStart; slotH < gridEnd; slotH++) {
-                          if (b.startHour >= slotH + 1 || b.endHour <= slotH) continue
-                          const isNow = slotH <= hour && hour < slotH + 1
+                          const segStart = Math.max(b.startHour, slotH)
+                          const segEnd = Math.min(b.endHour, slotH + 1)
+                          if (segEnd - segStart <= 1e-6) continue
+                          const isNow = segStart <= hour && hour < segEnd
                           slots.push(
                             <div
                               key={`${i}-${slotH}`}
                               className="rounded-lg overflow-hidden"
                               style={{
                                 position: 'absolute',
-                                top: (slotH - gridStart) * pph + 2,
-                                height: Math.max(24, pph - 8),
+                                top: (segStart - gridStart) * pph + 2,
+                                height: Math.max(24, (segEnd - segStart) * pph - 8),
                                 left: 5,
                                 right: 5,
                                 background: c.bg,
