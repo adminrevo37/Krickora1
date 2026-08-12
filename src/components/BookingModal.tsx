@@ -5,7 +5,7 @@ import { getErrorMessage } from '../lib/errors'
 import {
   LANES, canBookSlot, formatDateKey, formatTime, getCustomerPrice, getCoachPrice, getCoachPerHourRate,
   getCoachDurations, getCustomerDurations, getValidCoachStartTimes, isLaneCustomStart, isCoachEdgeStart,
-  generateGoogleCalendarUrl, roundCoachBookingDuration, getMinCoachDurationFromAthletes,
+  generateGoogleCalendarUrl, roundCoachBookingDuration, getMinCoachDurationFromAthletes, getCoachSplitOptions,
   type Booking, type Lane, type LaneVariant, type AthleteSlot,
 } from '../lib/booking-data'
 import { createCheckoutSession, cancelUnpaidCheckout, type CheckoutSessionRequest } from '../lib/stripe'
@@ -87,6 +87,33 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     isLaneCustomStart(lane.id, dkForSeg, startHour) ||
     isCoachEdgeStart(existingBookings, lane.id, dkForSeg, startHour)
 
+  // SPEC_COACH_SPLIT_LANE_BOOKING — split the session across two lanes (coach
+  // self-serve). The option graph pre-filters every lane/changeover/finish combo
+  // by availability, segment boundaries and THE gap rule on both lanes.
+  const [splitOn, setSplitOn] = useState(false)
+  const [splitLaneId, setSplitLaneId] = useState<string | null>(null)
+  const [splitChangeover, setSplitChangeover] = useState<number | null>(null)
+  const [splitEnd, setSplitEnd] = useState<number | null>(null)
+  const splitOptions = useMemo(
+    () => (isCoach ? getCoachSplitOptions(existingBookings, lane.id, dkForSeg, startHour) : []),
+    [isCoach, existingBookings, lane.id, dkForSeg, startHour]
+  )
+  // Keep the split selection valid as options resync (self-heals on any change).
+  useEffect(() => {
+    if (!splitOn) return
+    const laneOpt = splitOptions.find(o => o.laneId === splitLaneId) ?? splitOptions[0] ?? null
+    if (!laneOpt) {
+      if (splitLaneId !== null) { setSplitLaneId(null); setSplitChangeover(null); setSplitEnd(null) }
+      return
+    }
+    if (laneOpt.laneId !== splitLaneId) { setSplitLaneId(laneOpt.laneId); return }
+    const plan = laneOpt.plans.find(p => p.changeover === splitChangeover) ?? laneOpt.plans[0]
+    if (plan.changeover !== splitChangeover) { setSplitChangeover(plan.changeover); return }
+    if (splitEnd == null || !plan.ends.includes(splitEnd)) setSplitEnd(plan.ends[0])
+  }, [splitOn, splitOptions, splitLaneId, splitChangeover, splitEnd])
+  const splitReady = splitOn && splitLaneId != null && splitChangeover != null && splitEnd != null
+  const splitTotalMins = splitReady ? Math.round((splitEnd! - startHour) * 60) : 0
+
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [step, setStep] = useState<'details' | 'confirm' | 'processing' | 'success'>('details')
   const [error, setError] = useState<string | null>(null)
@@ -162,11 +189,14 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
 
   const dateKey = formatDateKey(date)
   const endHour = startHour + duration / 60
-  const price = isCoach ? getCoachPrice(duration) : getCustomerPrice(lane, selectedVariant?.id ?? null, duration)
+  // A split session prices on the TOTAL window (one price across both lanes).
+  const effCoachMins = splitReady ? splitTotalMins : duration
+  const price = isCoach ? getCoachPrice(effCoachMins) : getCustomerPrice(lane, selectedVariant?.id ?? null, duration)
   const creditBalance = user ? getCreditBalance(user.id) : 0
   const customerName = user?.name ?? ''
   const customerEmail = user?.email ?? ''
   const createBookingForStripe = useMutation(api.mutations.createBooking)
+  const createSplitBookingMut = useMutation(api.mutations.createSplitBooking)
   const convex = useConvex()
   // C3: the door code is generated SERVER-SIDE. After the booking persists, read
   // the real code back (the booking is inserted synchronously, so it's there).
@@ -244,6 +274,13 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       setDuration(availableDurations[0])
     }
   }, [availableDurations])
+
+  // Split mode is a single-lane-per-leg shape: extra simultaneous lanes and
+  // at-create athlete slots are cleared (athletes are added after booking via
+  // Edit athletes — allocations may span both lanes).
+  useEffect(() => {
+    if (splitOn) { setAdditionalLanes([]); setAthleteSlots([]) }
+  }, [splitOn])
 
   // Keep the selected variant valid for the resolved segment (SPEC_RECONFIGURABLE_LANES)
   useEffect(() => {
@@ -452,6 +489,40 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
 
   const handleCoachBooking = async () => {
     if (!user) return
+    // SPEC_COACH_SPLIT_LANE_BOOKING — the split path creates two linked legs via
+    // its own mutation (one price, one door code, one confirmation email).
+    if (splitReady) {
+      setIsSubmitting(true); setError(null); setStep('processing')
+      try {
+        const res: any = await createSplitBookingMut({
+          date: dateKey,
+          startHour,
+          duration: splitTotalMins,
+          changeoverHour: splitChangeover!,
+          laneId: lane.id,
+          secondLaneId: splitLaneId!,
+          customerName,
+          customerEmail,
+          customerPhone: user.phone,
+          userId: user.id,
+        })
+        const serverCode = await fetchServerCode(res.carrierId as string)
+        const booking: Booking = {
+          id: res.carrierId as string, laneId: lane.id, variantId: null,
+          date: dateKey, startHour, duration: splitTotalMins, customerName, customerEmail, customerPhone: user.phone,
+          userId: user.id, status: 'confirmed', isCoachBooking: true, coachPrice: getCoachPrice(splitTotalMins),
+          accessCode: serverCode,
+        }
+        setConfirmedBooking(booking); setStep('success')
+        setTimeout(() => onConfirm(booking), 4000)
+      } catch (err: any) {
+        setError(getErrorMessage(err) ?? 'Could not confirm your booking. Please try again.')
+        setStep('details')
+      } finally {
+        setIsSubmitting(false)
+      }
+      return
+    }
     setIsSubmitting(true); setError(null); setStep('processing')
 
     let finalDuration = duration
@@ -750,17 +821,74 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Duration</label>
               {isCoach ? (
                 <>
-                  <select value={duration} onChange={e => setDuration(Number(e.target.value))} className="w-full px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 text-sm">
-                    {availableDurations.map(d => {
-                      const hrs = Math.floor(d / 60); const mins = d % 60
-                      const label = hrs > 0 ? `${hrs}hr${mins > 0 ? ` ${mins}min` : ''}` : `${mins}min`
-                      const halfHours = d / 30
-                      return <option key={d} value={d}>{label} — ${getCoachPrice(d)} (${getCoachPerHourRate()}/hr)</option>
-                    })}
-                  </select>
-                  <div className="mt-2 text-[11px] text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-900/20 rounded-lg px-3 py-2 border border-orange-200 dark:border-orange-800/30">
-                    <span className="font-semibold">Coach rate:</span> ${getCoachPerHourRate()} per hour &middot; Selected: <span className="font-bold">${getCoachPrice(duration)}</span> for {duration >= 60 ? `${Math.floor(duration/60)}hr${duration%60>0?` ${duration%60}min`:''}` : `${duration}min`}
-                  </div>
+                  {!splitOn && (
+                    <>
+                      <select value={duration} onChange={e => setDuration(Number(e.target.value))} className="w-full px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 text-sm">
+                        {availableDurations.map(d => {
+                          const hrs = Math.floor(d / 60); const mins = d % 60
+                          const label = hrs > 0 ? `${hrs}hr${mins > 0 ? ` ${mins}min` : ''}` : `${mins}min`
+                          const halfHours = d / 30
+                          return <option key={d} value={d}>{label} — ${getCoachPrice(d)} (${getCoachPerHourRate()}/hr)</option>
+                        })}
+                      </select>
+                      <div className="mt-2 text-[11px] text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-900/20 rounded-lg px-3 py-2 border border-orange-200 dark:border-orange-800/30">
+                        <span className="font-semibold">Coach rate:</span> ${getCoachPerHourRate()} per hour &middot; Selected: <span className="font-bold">${getCoachPrice(duration)}</span> for {duration >= 60 ? `${Math.floor(duration/60)}hr${duration%60>0?` ${duration%60}min`:''}` : `${duration}min`}
+                      </div>
+                    </>
+                  )}
+                  {/* SPEC_COACH_SPLIT_LANE_BOOKING — split across two lanes.
+                      Keep the checkbox rendered while split mode is ON even if
+                      options collapse (review 2026-08-12: otherwise the toggle
+                      vanished and the modal dead-ended on the amber notice). */}
+                  {(splitOptions.length > 0 || splitOn) && (
+                    <label className="mt-2 flex items-center gap-2 text-xs font-medium text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                      <input type="checkbox" checked={splitOn} onChange={e => setSplitOn(e.target.checked)}
+                        className="w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-400" />
+                      <span>Split across two lanes <span className="text-gray-400">(finish the session on a different lane)</span></span>
+                    </label>
+                  )}
+                  {splitOn && !splitReady && (
+                    <div className="mt-2 text-[11px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-3 py-2">
+                      No split works from this start time without leaving a short unbookable gap — try a different start.
+                    </div>
+                  )}
+                  {splitReady && (() => {
+                    const laneOpt = splitOptions.find(o => o.laneId === splitLaneId)!
+                    const plan = laneOpt.plans.find(p => p.changeover === splitChangeover) ?? laneOpt.plans[0]
+                    return (
+                      <div className="mt-2 space-y-2 rounded-xl border border-orange-200 dark:border-orange-800/30 bg-orange-50/50 dark:bg-orange-900/10 p-3">
+                        <div>
+                          <label className="text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 block uppercase tracking-wider">Second lane</label>
+                          <select value={splitLaneId!} onChange={e => { setSplitLaneId(e.target.value); setSplitChangeover(null); setSplitEnd(null) }}
+                            className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 text-sm">
+                            {splitOptions.map(o => <option key={o.laneId} value={o.laneId}>{laneNm(o.laneId)}</option>)}
+                          </select>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 block uppercase tracking-wider">Switch lanes at</label>
+                            <select value={splitChangeover!} onChange={e => { setSplitChangeover(Number(e.target.value)); setSplitEnd(null) }}
+                              className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 text-sm">
+                              {laneOpt.plans.map(p => <option key={p.changeover} value={p.changeover}>{formatTime(p.changeover)}</option>)}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 block uppercase tracking-wider">Finish at</label>
+                            <select value={splitEnd!} onChange={e => setSplitEnd(Number(e.target.value))}
+                              className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 text-sm">
+                              {plan.ends.map(en => <option key={en} value={en}>{formatTime(en)}</option>)}
+                            </select>
+                          </div>
+                        </div>
+                        <div className="text-[11px] text-gray-700 dark:text-gray-300 font-medium">
+                          {formatTime(startHour)}–{formatTime(splitChangeover!)} {resolvedLaneName} → {formatTime(splitChangeover!)}–{formatTime(splitEnd!)} {laneNm(splitLaneId!)} · <span className="font-bold">${getCoachPrice(splitTotalMins)}</span> total
+                        </div>
+                        <div className="text-[10px] text-gray-500 dark:text-gray-400">
+                          One booking, one door code, one statement line. Add athletes after booking via "Edit athletes" — allocations can span both lanes. Options exclude combinations that would strand a short unbookable gap.
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </>
               ) : (
                 <div className="grid grid-cols-2 gap-3">
@@ -776,8 +904,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               )}
             </div>
 
-            {/* Multi-lane */}
-            {availableAdditionalLanes.length > 0 && maxAdditionalLanes > 0 && (
+            {/* Multi-lane (hidden in split mode — one lane per leg) */}
+            {!splitOn && availableAdditionalLanes.length > 0 && maxAdditionalLanes > 0 && (
               <div>
                 <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Add More Lanes <span className="text-xs font-normal text-gray-400">{isCoach ? '(optional)' : `(optional · up to ${maxLanesPerBooking} lanes total)`}</span></label>
                 <div className="flex flex-wrap gap-2">
@@ -795,8 +923,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               </div>
             )}
 
-            {/* Coach: Athlete Tracking — Dropdown from Convex */}
-            {isCoach && (
+            {/* Coach: Athlete Tracking — Dropdown from Convex (post-create only for splits) */}
+            {isCoach && !splitOn && (
               <div>
                 <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Assign Athletes <span className="text-xs font-normal text-gray-400">(min 30min &middot; auto-rounds booking)</span></label>
                 
@@ -980,7 +1108,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               </div>
             )}
 
-            <button onClick={handleContinueToPayment} disabled={availableDurations.length === 0 || (isCoach && !isValidCoachStart)}
+            <button onClick={handleContinueToPayment} disabled={(splitOn ? !splitReady : availableDurations.length === 0) || (isCoach && !isValidCoachStart)}
               className={`w-full py-3 font-semibold rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600' : totalPrice === 0 ? 'bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600' : 'bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600'}`}>
               {!user ? 'Sign In to Book →' : isCoach ? `Confirm — $${totalPrice} →` : totalPrice === 0 ? 'Confirm Free Booking →' : `Continue to Payment — $${totalPrice} →`}
             </button>

@@ -207,6 +207,14 @@ export interface Booking {
   isClubBooking?: boolean
   // SPEC_CLUB_TEAM_BOOKINGS_2026-07: shared id for a block booked together (multi-date).
   bookingGroupId?: string
+  // SPEC_COACH_SPLIT_LANE_BOOKING_2026-08: set on LEG 2 of a coach split-lane
+  // session, pointing at leg 1 (the carrier). The coach card merges the pair;
+  // cancel acts on both; Repeat/allocation live on the carrier.
+  splitParentId?: string
+  // CLIENT-ONLY (never stored): set on a merged split CARRIER by MyBookings'
+  // display merge — leg 2's window, so the card can show "BM 3 until 8pm, then
+  // RU 1" while the merged duration spans the whole session.
+  splitLeg2?: { laneId: string; startHour: number; duration: number }
   // Audit trail of admin modifications
   modificationHistory?: Array<{
     modifiedAt: string
@@ -546,6 +554,111 @@ export function isLaneCustomStart(laneId: string, dateKey: string, hour: number)
   const seg = resolveSegment(segments, hour)
   if (segmentIsClosed(seg) || !segmentHasCustomStarts(seg)) return false
   return segmentStartHours(seg).some(s => Math.abs(s - hour) < 1e-6)
+}
+
+// ============================================================
+// SPEC_COACH_SPLIT_LANE_BOOKING_2026-08 — coach split-lane sessions
+// ============================================================
+
+// THE gap rule, client mirror of convex/mutations.ts splitGapViolation (which is
+// authoritative): a split leg must not strand a free window shorter than 60 min
+// on its lane — the ONLY exemption is a window ending exactly at the day's close.
+// Windows are measured against bookings, the leg's segment boundaries and
+// open/close (service blocks are server-side only). Returns the offending gap or
+// null when the leg is clean.
+export function splitGapViolation(
+  bookings: Booking[],
+  laneId: string,
+  dateKey: string,
+  legStart: number,
+  legEnd: number
+): { side: 'before' | 'after'; minutes: number } | null {
+  const EPS = 1e-6
+  const { open, close } = getHoursForDate(getSettingsStore().get(), dateKey)
+  const { segments } = getDaySegments(laneId, dateKey)
+  const seg = resolveSegment(segments, legStart)
+  const occupied = bookings
+    .filter(b => bookingOccupiesLane(b, laneId) && b.date === dateKey && b.status !== 'cancelled')
+    .map(b => ({ start: b.startHour, end: b.startHour + b.duration / 60 }))
+
+  let afterEnd = Math.min(seg.endHour, close)
+  for (const o of occupied) {
+    if (o.start >= legEnd - EPS && o.start < afterEnd) afterEnd = o.start
+  }
+  const afterW = afterEnd - legEnd
+  if (afterW > EPS && afterW < 1 - EPS && Math.abs(afterEnd - close) > EPS) {
+    return { side: 'after', minutes: Math.round(afterW * 60) }
+  }
+
+  let beforeStart = Math.max(seg.startHour, open)
+  for (const o of occupied) {
+    if (o.end <= legStart + EPS && o.end > beforeStart) beforeStart = o.end
+  }
+  const beforeW = legStart - beforeStart
+  if (beforeW > EPS && beforeW < 1 - EPS) {
+    return { side: 'before', minutes: Math.round(beforeW * 60) }
+  }
+  return null
+}
+
+// The valid split-plan graph for a coach split starting at (laneId, startHour):
+// for each OTHER lane, the changeover times (leg-1 ends) that work and, per
+// changeover, the finish times that work — every combination pre-filtered by
+// lane availability, segment boundaries/closures, the coach max duration and
+// the gap rule on BOTH lanes. Both split UIs (BookingModal +
+// AdminManualBookingModal) drive their pickers from this.
+export interface SplitLaneOptions {
+  laneId: string
+  plans: Array<{ changeover: number; ends: number[] }>
+}
+export function getCoachSplitOptions(
+  bookings: Booking[],
+  primaryLaneId: string,
+  dateKey: string,
+  startHour: number
+): SplitLaneOptions[] {
+  const EPS = 1e-6
+  const s = getSettingsStore().get()
+  const coachMaxH = (s.coachMaxDurationMinutes ?? 600) / 60
+  const { close } = getHoursForDate(s, dateKey)
+
+  const occupiedFor = (laneId: string) =>
+    bookings
+      .filter(b => bookingOccupiesLane(b, laneId) && b.date === dateKey && b.status !== 'cancelled')
+      .map(b => ({ start: b.startHour, end: b.startHour + b.duration / 60 }))
+  const overlaps = (occ: Array<{ start: number; end: number }>, a: number, b: number) =>
+    occ.some(o => a < o.end - EPS && b > o.start + EPS)
+
+  const { segments: seg1s } = getDaySegments(primaryLaneId, dateKey)
+  const seg1 = resolveSegment(seg1s, startHour)
+  if (segmentIsClosed(seg1)) return []
+  const occ1 = occupiedFor(primaryLaneId)
+  const leg1Cap = Math.min(seg1.endHour, close, startHour + coachMaxH - 0.5)
+
+  const out: SplitLaneOptions[] = []
+  for (const l2 of LANES) {
+    if (l2.id === primaryLaneId) continue
+    const occ2 = occupiedFor(l2.id)
+    const plans: Array<{ changeover: number; ends: number[] }> = []
+    for (let c = startHour + 0.5; c <= leg1Cap + EPS; c += 0.5) {
+      if (overlaps(occ1, startHour, c)) break // lane 1 blocked from here on
+      if (splitGapViolation(bookings, primaryLaneId, dateKey, startHour, c)) continue
+      const { segments: seg2s } = getDaySegments(l2.id, dateKey)
+      const seg2 = resolveSegment(seg2s, c)
+      if (segmentIsClosed(seg2)) continue
+      const endCap = Math.min(seg2.endHour, close, startHour + coachMaxH)
+      const ends: number[] = []
+      for (let e = c + 0.5; e <= endCap + EPS; e += 0.5) {
+        if (overlaps(occ2, c, e)) break
+        if (Math.round((e - startHour) * 60) < 60) continue // 1-hour session minimum
+        if (splitGapViolation(bookings, l2.id, dateKey, c, e)) continue
+        ends.push(e)
+      }
+      if (ends.length > 0) plans.push({ changeover: c, ends })
+    }
+    if (plans.length > 0) out.push({ laneId: l2.id, plans })
+  }
+  return out
 }
 
 // Max duration

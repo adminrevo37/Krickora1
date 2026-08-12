@@ -62,6 +62,9 @@ export const getBookingsNeedingReminder = internalQuery({
       if (!b.customerEmail) return false;
       // SPEC_CLUB_TEAM_BOOKINGS: clubs never get emails (synthetic address).
       if (b.isClubBooking) return false;
+      // SPEC_COACH_SPLIT_LANE_BOOKING: leg 2 of a split never reminds — the
+      // carrier leg's reminder covers the whole session (same door code).
+      if ((b as any).splitParentId) return false;
 
       // Calculate hours until booking
       const [bYear, bMonth, bDay] = b.date.split("-").map(Number);

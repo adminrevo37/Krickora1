@@ -503,6 +503,12 @@ export default defineSchema({
     // paid/unpaid) apply to the whole block at once. Additive/optional → no migration;
     // legacy/single bookings may have none (treated as a group of one).
     bookingGroupId: v.optional(v.string()),
+    // SPEC_COACH_SPLIT_LANE_BOOKING_2026-08: set on LEG 2 of a split-lane coach
+    // session, pointing at leg 1 (the "carrier" — holds the full coachPrice, the
+    // shared door code and the athlete allocation; leg 2 is $0 + statementExcluded).
+    // Cancel/repeat act on the pair; the reminder cron skips leg-2 rows. Additive/
+    // optional → no migration; absent = a normal standalone booking.
+    splitParentId: v.optional(v.id("bookings")),
   })
     .index("by_date", ["date"])
     .index("by_laneId_date", ["laneId", "date"])
@@ -510,7 +516,8 @@ export default defineSchema({
     .index("by_customerEmail", ["customerEmail"])
     .index("by_status", ["status"])
     .index("by_createdAt", ["createdAt"])
-    .index("by_bookingGroupId", ["bookingGroupId"]),
+    .index("by_bookingGroupId", ["bookingGroupId"])
+    .index("by_splitParentId", ["splitParentId"]),
 
   // SPEC_ADD_A_MATE: persistent saved-mates list (the "friendships" book). One
   // row per (owner → mate) pair the owner has added to a booking at least once,

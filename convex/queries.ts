@@ -283,6 +283,35 @@ export const listMyAthleteSessions = query({
 // STRIPE PAYMENT QUERIES
 // ============================================================================
 
+// SPEC_COACH_SPLIT_LANE_BOOKING — the OTHER leg of a split session (either
+// direction), admin only. Powers the admin details modal's split banner + the
+// group-window allocation editor (an athlete slot may span the lane change).
+export const getSplitSibling = query({
+  args: { id: v.id("bookings") },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const b: any = await ctx.db.get(args.id);
+    if (!b) return null;
+    const sib: any = b.splitParentId
+      ? await ctx.db.get(b.splitParentId)
+      : await ctx.db
+          .query("bookings")
+          .withIndex("by_splitParentId", (q: any) => q.eq("splitParentId", args.id))
+          .first();
+    if (!sib) return null;
+    return {
+      id: sib._id,
+      laneId: sib.laneId,
+      laneNameSnapshot: sib.laneNameSnapshot ?? null,
+      startHour: sib.startHour,
+      duration: sib.duration,
+      status: sib.status,
+      // true → the OPENED booking is leg 2 (the sibling is the carrier).
+      targetIsLeg2: !!b.splitParentId,
+    };
+  },
+});
+
 // List all stripePayments — admin only (contains customer PII + payment amounts)
 export const listStripePayments = query({
   args: {},

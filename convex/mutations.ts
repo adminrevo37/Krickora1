@@ -1681,6 +1681,458 @@ export const createBooking = mutation({
   },
 });
 
+// ============================================================================
+// SPEC_COACH_SPLIT_LANE_BOOKING_2026-08 — one coach session across two lanes
+// (two contiguous legs, e.g. 1hr BM 3 → 30min RU 1). Stored as two linked
+// bookings: leg 1 = the "carrier" (full coachPrice, shared door code, athlete
+// allocation), leg 2 = $0 + statementExcluded + splitParentId → carrier.
+// ============================================================================
+
+// THE gap rule (Inspector, 2026-08-12): the split must not strand a free window
+// SHORTER THAN 60 MINUTES on either lane — the single exemption is a window that
+// ends exactly at the day's close (e.g. ending 9:30pm with a 10pm close leaves a
+// fine 30-min tail). A sub-60 window anywhere earlier — including flush against
+// an existing booking — is blocked, for coaches AND admin. Windows are measured
+// against bookings, service blocks, the leg's own segment boundaries (a booking
+// can't cross one) and open/close. Applies ONLY to split bookings; normal coach
+// bookings keep today's behaviour (no coach gap prevention).
+// Mirrored client-side in src/lib/booking-data.ts (splitGapViolation) for the
+// changeover picker; this server copy is authoritative.
+function splitGapViolation(opts: {
+  laneLabel: string;
+  legStart: number;
+  legEnd: number;
+  open: number;
+  close: number;
+  segStart: number;
+  segEnd: number;
+  // Non-cancelled bookings + service blocks on this lane (hours, [start,end)).
+  occupied: Array<{ start: number; end: number }>;
+}): string | null {
+  const EPS = 1e-6;
+  const { laneLabel, legStart, legEnd, open, close, segStart, segEnd, occupied } = opts;
+  // Window AFTER the leg: legEnd → the next obstruction (booking/block start,
+  // the segment end, or close). Allowed only when it's ≥60 min, zero, or ends
+  // exactly at close.
+  let afterEnd = Math.min(segEnd, close);
+  for (const o of occupied) {
+    if (o.start >= legEnd - EPS && o.start < afterEnd) afterEnd = o.start;
+  }
+  const afterW = afterEnd - legEnd;
+  if (afterW > EPS && afterW < 1 - EPS && Math.abs(afterEnd - close) > EPS) {
+    return `it would leave a ${Math.round(afterW * 60)}-minute gap on ${laneLabel} that's unlikely to be booked`;
+  }
+  // Window BEFORE the leg: the previous obstruction (booking/block end, segment
+  // start, or open) → legStart. It ends at the leg start — never at close — so
+  // any sub-60 window here is a stranded orphan.
+  let beforeStart = Math.max(segStart, open);
+  for (const o of occupied) {
+    if (o.end <= legStart + EPS && o.end > beforeStart) beforeStart = o.end;
+  }
+  const beforeW = legStart - beforeStart;
+  if (beforeW > EPS && beforeW < 1 - EPS) {
+    return `it would leave a ${Math.round(beforeW * 60)}-minute gap on ${laneLabel} that's unlikely to be booked`;
+  }
+  return null;
+}
+
+export const createSplitBooking = mutation({
+  args: {
+    date: v.string(),
+    startHour: v.number(),
+    duration: v.number(), // TOTAL minutes across both legs
+    changeoverHour: v.number(), // absolute hour where the lane switches
+    laneId: v.string(), // leg 1 lane
+    secondLaneId: v.string(), // leg 2 lane
+    customerName: v.string(),
+    customerEmail: v.string(),
+    customerPhone: v.optional(v.string()),
+    userId: v.optional(v.string()),
+    athleteSlots: v.optional(
+      v.array(
+        v.object({
+          athleteId: v.optional(v.id("athletes")),
+          athleteName: v.string(),
+          startHour: v.number(),
+          durationMinutes: v.number(),
+          accessCode: v.optional(v.string()),
+          codeGeneratedAt: v.optional(v.string()),
+        })
+      )
+    ),
+    notes: v.optional(v.string()),
+    createdByAdmin: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    // Auth — same self-or-admin gate as createBooking.
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError("Authentication required.");
+    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
+    const callerCustomer: any = await resolveCanonicalCustomerByEmail(ctx, callerEmail);
+    const isAdminCaller = callerCustomer?.role === "admin";
+    const isForSelf =
+      (args.userId != null && args.userId === identity.subject) ||
+      args.customerEmail.toLowerCase() === callerEmail;
+    if (!isForSelf && !isAdminCaller) {
+      throw new ConvexError("You can only create bookings for yourself.");
+    }
+    if (!isAdminCaller) {
+      await enforceRateLimit(
+        ctx,
+        { action: "create-booking", identifier: identity.subject ?? callerEmail, max: 15, windowMs: 60_000 },
+        "Too many booking attempts — please wait a minute and try again."
+      );
+    }
+
+    // The SUBJECT must be a coach — splits are a coach facility (self-serve or
+    // admin on the coach's behalf). Customers/clubs never split.
+    const subjectEmailKey = args.customerEmail.toLowerCase().trim();
+    const subjectCustomer: any =
+      callerCustomer && callerCustomer.email === subjectEmailKey
+        ? callerCustomer
+        : await ctx.db
+            .query("customers")
+            .withIndex("by_email", (q: any) => q.eq("email", subjectEmailKey))
+            .first();
+    if (subjectCustomer?.role !== "coach") {
+      throw new ConvexError("Split-lane sessions are available for coach bookings only.");
+    }
+
+    // Leg geometry: two contiguous legs on two DIFFERENT lanes, each ≥30 min in
+    // 30-min steps.
+    if (args.laneId === args.secondLaneId) {
+      throw new ConvexError("A split session needs two different lanes.");
+    }
+    const endHour = args.startHour + args.duration / 60;
+    const legs = [
+      { laneId: args.laneId, start: args.startHour, end: args.changeoverHour },
+      { laneId: args.secondLaneId, start: args.changeoverHour, end: endHour },
+    ];
+    for (const leg of legs) {
+      const mins = Math.round((leg.end - leg.start) * 60);
+      if (mins < 30) throw new ConvexError("Each part of a split session must be at least 30 minutes.");
+      if (mins % 30 !== 0) throw new ConvexError("Split session parts must be in 30-minute steps.");
+    }
+    if (args.duration < 60) throw new ConvexError("Minimum booking duration is 1 hour.");
+
+    const siteSettings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    const coachMax = (siteSettings as any)?.coachMaxDurationMinutes ?? 600;
+    if (args.duration > coachMax) {
+      throw new ConvexError("That session length exceeds the maximum coach booking duration.");
+    }
+
+    // Operating hours (per-day SSOT, same resolution as createBooking).
+    const DOW_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const [yy, mm, dd] = args.date.split("-").map(Number);
+    const dowName = DOW_NAMES[new Date(yy, mm - 1, dd).getDay()];
+    const dayHours = (siteSettings as any)?.dailyHours?.find((h: any) => h.day === dowName);
+    const OPENING_HOUR = dayHours ? dayHours.open : ((siteSettings as any)?.openingHour ?? 7);
+    const CLOSING_HOUR = dayHours ? dayHours.close : ((siteSettings as any)?.closingHour ?? 21);
+    if (dayHours?.closed) throw new ConvexError("The facility is closed on this day.");
+    const callerIsL1Coach =
+      callerCustomer?.role === "coach" &&
+      !(callerCustomer?.coachTier === "L2" || callerCustomer?.coachTier === "BowlingL2");
+    const allowPreOpen = (callerIsL1Coach && args.startHour === 6.5) || isAdminCaller;
+    if (args.startHour < OPENING_HOUR && !allowPreOpen) {
+      throw new ConvexError("Booking starts before opening time.");
+    }
+    const AFTER_HOURS_CEILING = 22;
+    const allowAfterHours =
+      isAdminCaller && endHour > CLOSING_HOUR && endHour <= AFTER_HOURS_CEILING + 1e-9;
+    if (endHour > CLOSING_HOUR && !allowAfterHours) {
+      throw new ConvexError("Booking extends past closing time.");
+    }
+
+    // Weekly-release horizon + lead time (coach/L-tier rules; admin exempt).
+    const callerRole: WindowRole = isAdminCaller ? "admin" : "coach";
+    const callerTier: WindowTier =
+      callerCustomer?.coachTier === "L2" || callerCustomer?.coachTier === "BowlingL2" ? "L2" : "L1";
+    const awstNow = getAWSTNow();
+    const horizonError = checkBookingHorizon(callerRole, callerTier, siteSettings ?? {}, args.date, awstNow);
+    if (horizonError) throw new ConvexError(horizonError);
+    if (!isAdminCaller) {
+      const leadError = checkLeadTime(
+        args.date,
+        args.startHour,
+        (siteSettings as any)?.minBookingNoticeMinutes ?? 10,
+        awstNow
+      );
+      if (leadError) throw new ConvexError(leadError);
+    }
+
+    // Closed dates.
+    const closure = await ctx.db
+      .query("closures")
+      .withIndex("by_date", (q: any) => q.eq("date", args.date))
+      .first();
+    if (closure) {
+      throw new ConvexError(`Facility is closed on this date${closure.reason ? `: ${closure.reason}` : "."}`);
+    }
+
+    // Conflicts + service blocks + slot holds, per leg. BUGM-1 pattern: test each
+    // booking's FULL lane set. Also collect each lane's occupied intervals for the
+    // gap rule below.
+    const dayBookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.eq("date", args.date))
+      .collect();
+    const occupiesLane = (b: any, lid: string) =>
+      b.laneId === lid || ((b.additionalLaneIds as string[]) ?? []).includes(lid);
+    const laneOccupied = new Map<string, Array<{ start: number; end: number }>>();
+    for (const leg of legs) {
+      const laneBookings = dayBookings.filter(
+        (b: any) => b.status !== "cancelled" && occupiesLane(b, leg.laneId)
+      );
+      if (laneBookings.some((b: any) => leg.start < b.startHour + b.duration / 60 && leg.end > b.startHour)) {
+        throw new ConvexError("This slot is no longer available. Please choose another time.");
+      }
+      const laneBlocks = await ctx.db
+        .query("laneBlocks")
+        .withIndex("by_laneId_date", (q: any) => q.eq("laneId", leg.laneId).eq("date", args.date))
+        .collect();
+      if (laneBlocks.some((b: any) => leg.start < b.startHour + b.duration / 60 && leg.end > b.startHour)) {
+        throw new ConvexError("This lane is blocked for service/repair during this time.");
+      }
+      if (
+        await hasActiveHoldConflict(ctx, {
+          laneIds: [leg.laneId],
+          date: args.date,
+          startHour: leg.start,
+          endHour: leg.end,
+          callerUserId: args.userId,
+          bypassWaitlistHolds: true, // coach/admin — same as createBooking's non-customer path
+        })
+      ) {
+        throw new ConvexError("This slot is no longer available. Please choose another time.");
+      }
+      laneOccupied.set(leg.laneId, [
+        ...laneBookings.map((b: any) => ({ start: b.startHour, end: b.startHour + b.duration / 60 })),
+        ...laneBlocks.map((b: any) => ({ start: b.startHour, end: b.startHour + b.duration / 60 })),
+      ]);
+    }
+
+    // Segment validation + name snapshots per leg (closed segments + boundary
+    // crossing rejected inside; coaches skip the variant/cadence checks).
+    const legSnaps = [] as Array<{ laneNameSnapshot: string; variantLabelSnapshot: string; segment: any }>;
+    for (const leg of legs) {
+      legSnaps.push(
+        await validateAndSnapshotLane(ctx, {
+          laneId: leg.laneId,
+          variantId: undefined,
+          date: args.date,
+          startHour: leg.start,
+          durationMinutes: Math.round((leg.end - leg.start) * 60),
+          skipVariantCheck: true,
+          allowAfterHours,
+          isAdmin: isAdminCaller,
+          isCoach: true,
+        })
+      );
+    }
+
+    // THE gap rule — both sides of both legs, hard block for everyone.
+    for (let i = 0; i < legs.length; i++) {
+      const leg = legs[i];
+      const seg = legSnaps[i].segment;
+      const violation = splitGapViolation({
+        laneLabel: legSnaps[i].laneNameSnapshot,
+        legStart: leg.start,
+        legEnd: leg.end,
+        open: OPENING_HOUR,
+        close: CLOSING_HOUR,
+        segStart: seg.startHour,
+        segEnd: seg.endHour,
+        occupied: laneOccupied.get(leg.laneId) ?? [],
+      });
+      if (violation) {
+        throw new ConvexError(`Can't book this split — ${violation}.`);
+      }
+    }
+
+    // One price (coach rate × total hours), one door code shared by both legs.
+    const coachPerHour = (siteSettings as any)?.coachPerHour ?? PRICE_DEFAULTS.coachPerHour;
+    const totalCoachPrice = Math.round((args.duration / 60) * coachPerHour * 100) / 100;
+    const reservedSet = new Set<string>((siteSettings as any)?.reservedAccessCodes ?? DEFAULT_RESERVED_CODES);
+    const accessCode = generateServerAccessCode(await collectActiveAccessCodes(ctx), reservedSet);
+
+    // Athlete allocation lives on the CARRIER; slots may span the changeover
+    // (the whole split is one continuous session for athletes).
+    const nowIso = new Date().toISOString();
+    const codedSlots = args.athleteSlots?.map((s) => ({
+      ...s,
+      accessCode,
+      codeGeneratedAt: s.codeGeneratedAt ?? nowIso,
+    }));
+    const normalizedSlots = await attachAthleteSuburbs(ctx, codedSlots);
+
+    const leg1Duration = Math.round((args.changeoverHour - args.startHour) * 60);
+    const leg2Duration = args.duration - leg1Duration;
+    const managedByAdmin = isAdminCaller && args.createdByAdmin ? true : undefined;
+
+    const carrierId = await ctx.db.insert("bookings", {
+      laneId: args.laneId,
+      date: args.date,
+      startHour: args.startHour,
+      duration: leg1Duration,
+      customerName: args.customerName,
+      customerEmail: args.customerEmail,
+      customerPhone: args.customerPhone,
+      userId: args.userId,
+      status: "confirmed",
+      isCoachBooking: true,
+      coachPrice: totalCoachPrice, // whole-split price — ONE statement line
+      athleteSlots: normalizedSlots,
+      accessCode,
+      notes: args.notes,
+      laneNameSnapshot: legSnaps[0].laneNameSnapshot,
+      variantLabelSnapshot: legSnaps[0].variantLabelSnapshot,
+      createdByAdmin: managedByAdmin,
+      createdAt: Date.now(),
+    });
+    const leg2Id = await ctx.db.insert("bookings", {
+      laneId: args.secondLaneId,
+      date: args.date,
+      startHour: args.changeoverHour,
+      duration: leg2Duration,
+      customerName: args.customerName,
+      customerEmail: args.customerEmail,
+      customerPhone: args.customerPhone,
+      userId: args.userId,
+      status: "confirmed",
+      isCoachBooking: true,
+      coachPrice: 0, // price carried by the leg-1 row
+      statementExcluded: true, // no $0 line on the statement
+      accessCode, // shared door code
+      splitParentId: carrierId,
+      notes: args.notes,
+      laneNameSnapshot: legSnaps[1].laneNameSnapshot,
+      variantLabelSnapshot: legSnaps[1].variantLabelSnapshot,
+      createdByAdmin: managedByAdmin,
+      createdAt: Date.now(),
+    });
+
+    // Live feed: one create event covering the whole split.
+    await recordBookingEvent(ctx, {
+      type: "created",
+      bookingId: carrierId.toString(),
+      customerName: args.customerName,
+      actorName: args.customerName,
+      isCoachBooking: true,
+      after: {
+        date: args.date,
+        startHour: args.startHour,
+        duration: args.duration,
+        lane: `${legSnaps[0].laneNameSnapshot} → ${legSnaps[1].laneNameSnapshot}`,
+        variant: undefined,
+      },
+    });
+
+    // Each lane's hour just got taken — reconcile the waitlist queues per leg.
+    for (const leg of legs) {
+      await scheduleWaitlistAdvance(ctx, {
+        laneId: leg.laneId,
+        additionalLaneIds: undefined,
+        date: args.date,
+        startHour: leg.start,
+        duration: Math.round((leg.end - leg.start) * 60),
+      });
+    }
+
+    // ONE confirmation email covering the whole window (combined lane label).
+    await ctx.scheduler.runAfter(
+      0,
+      internal.emails.sendBookingConfirmation,
+      buildConfirmationEmailArgs({
+        customerEmail: args.customerEmail,
+        customerName: args.customerName,
+        laneId: args.laneId,
+        laneNameSnapshot: `${legSnaps[0].laneNameSnapshot} then ${legSnaps[1].laneNameSnapshot}`,
+        date: args.date,
+        startHour: args.startHour,
+        duration: args.duration,
+        accessCode,
+        coachPrice: totalCoachPrice,
+        creditApplied: undefined,
+      })
+    );
+    // Admin-managed split → tell the coach (parity with createBooking).
+    if (managedByAdmin) {
+      await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+        email: args.customerEmail,
+        category: "coach-allocation",
+        title: "Session booked for you",
+        body: `${legSnaps[0].laneNameSnapshot} → ${legSnaps[1].laneNameSnapshot} · ${fmtAwstDateLabel(args.date)}, ${fmtTimeRange(args.startHour, args.duration)}`,
+        url: "/bookings",
+        tag: `booking-${carrierId.toString()}`,
+      });
+    }
+
+    // Athlete allocation emails (slots live on the carrier; door code shared).
+    if (normalizedSlots && normalizedSlots.length > 0) {
+      await scheduleAllocationEmails(ctx, {
+        slots: normalizedSlots,
+        laneId: args.laneId,
+        date: args.date,
+        bookingAccessCode: accessCode,
+        coachName: args.customerName,
+      });
+    }
+
+    // One Google Calendar event PER LEG, each on its own lane calendar with the
+    // shared door code — HA lighting/machine automations follow each lane's own
+    // event window; the door-code reconcile dedupes the identical code. Athlete
+    // lines ride on the carrier's event only.
+    await ctx.scheduler.runAfter(0, internal.googleCalendar.createCalendarEvent, {
+      bookingId: carrierId.toString(),
+      laneId: args.laneId,
+      variantId: undefined,
+      date: args.date,
+      startHour: args.startHour,
+      duration: leg1Duration,
+      customerName: args.customerName,
+      customerEmail: args.customerEmail,
+      customerPhone: args.customerPhone,
+      status: "confirmed",
+      isCoachBooking: true,
+      accessCode,
+      additionalLaneIds: undefined,
+      athleteSlots: normalizedSlots?.map((s: any) => ({
+        athleteName: s.athleteName,
+        startHour: s.startHour,
+        durationMinutes: s.durationMinutes,
+      })),
+      laneNameSnapshot: legSnaps[0].laneNameSnapshot,
+      variantLabelSnapshot: legSnaps[0].variantLabelSnapshot,
+    });
+    await ctx.scheduler.runAfter(0, internal.googleCalendar.createCalendarEvent, {
+      bookingId: leg2Id.toString(),
+      laneId: args.secondLaneId,
+      variantId: undefined,
+      date: args.date,
+      startHour: args.changeoverHour,
+      duration: leg2Duration,
+      customerName: args.customerName,
+      customerEmail: args.customerEmail,
+      customerPhone: args.customerPhone,
+      status: "confirmed",
+      isCoachBooking: true,
+      accessCode,
+      additionalLaneIds: undefined,
+      athleteSlots: undefined,
+      laneNameSnapshot: legSnaps[1].laneNameSnapshot,
+      variantLabelSnapshot: legSnaps[1].variantLabelSnapshot,
+    });
+
+    // Weekly billing cap: the carrier carries the whole charge — reconcile once.
+    await scheduleCapReconcileForBooking(ctx, args.customerEmail, args.date);
+
+    return { carrierId, leg2Id };
+  },
+});
+
 // Update a booking (partial update) — ADMIN ONLY
 export const updateBooking = mutation({
   args: {
@@ -2058,6 +2510,58 @@ export const updateBooking = mutation({
       }
     }
 
+    // SPEC_COACH_SPLIT_LANE_BOOKING: an admin Status→cancelled/no_show edit on one
+    // leg of a split takes the SIBLING leg down too, with the SAME minimal
+    // semantics as this dropdown path gives the target (status patch + calendar
+    // delete + hold release + waitlist advance) — NOT cancelBookingCore, whose
+    // full policy engine would evaluate the late-cancel charge / athlete emails
+    // on the sibling, making the billing outcome depend on WHICH leg's modal the
+    // admin happened to use (review finding 2026-08-12). The dedicated Cancel
+    // button (cancelBooking) remains the policy-evaluated path for both legs.
+    if (existing && statusChangingToCancelled) {
+      const sib: any = (existing as any).splitParentId
+        ? await ctx.db.get((existing as any).splitParentId)
+        : await ctx.db
+            .query("bookings")
+            .withIndex("by_splitParentId", (q: any) => q.eq("splitParentId", id))
+            .first();
+      if (sib && sib.status !== "cancelled") {
+        await ctx.db.patch(sib._id, { status: "cancelled", cancelledAt: new Date().toISOString() });
+        await recordBookingEvent(ctx, {
+          type: "cancelled",
+          bookingId: sib._id.toString(),
+          customerName: sib.customerName ?? "Unknown",
+          isCoachBooking: sib.isCoachBooking,
+          after: {
+            date: sib.date,
+            startHour: sib.startHour,
+            duration: sib.duration,
+            lane: sib.laneNameSnapshot ?? sib.laneId ?? "",
+            variant: sib.variantLabelSnapshot ?? undefined,
+          },
+        });
+        if (sib.googleCalendarEventId || ((sib.googleCalendarEventIds?.length ?? 0) > 0)) {
+          await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
+            googleCalendarEventId: sib.googleCalendarEventId ?? "",
+            laneCalendarEventIds: sib.googleCalendarEventIds,
+          });
+          await ctx.db.patch(sib._id, { googleCalendarEventId: undefined, googleCalendarEventIds: undefined });
+        }
+        await releaseHoldForBooking(ctx, sib._id.toString());
+        await scheduleWaitlistAdvance(ctx, {
+          laneId: sib.laneId,
+          additionalLaneIds: sib.additionalLaneIds ?? undefined,
+          date: sib.date,
+          startHour: sib.startHour,
+          duration: sib.duration,
+        });
+        // Coach billing: the pair's charge lives on the carrier — re-cap its week.
+        if (sib.isCoachBooking) {
+          await scheduleCapReconcileForBooking(ctx, sib.customerEmail, sib.date);
+        }
+      }
+    }
+
     return id;
   },
 });
@@ -2069,6 +2573,39 @@ export const cancelBooking = mutation({
     cancelledByUserId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // SPEC_COACH_SPLIT_LANE_BOOKING: cancel acts on the WHOLE split — resolve the
+    // sibling leg up front (either direction), cancel the target, then the
+    // sibling with comms suppressed (one cancellation email covers the session).
+    // Atomic: a guard throwing on either leg reverts both.
+    const splitTarget: any = await ctx.db.get(args.id);
+    if (!splitTarget) throw new ConvexError("Booking not found.");
+    const splitSibling: any = splitTarget.splitParentId
+      ? await ctx.db.get(splitTarget.splitParentId)
+      : await ctx.db
+          .query("bookings")
+          .withIndex("by_splitParentId", (q: any) => q.eq("splitParentId", args.id))
+          .first();
+    await cancelBookingCore(ctx, args);
+    if (splitSibling && splitSibling.status !== "cancelled") {
+      await cancelBookingCore(ctx, {
+        id: splitSibling._id,
+        cancelledByUserId: args.cancelledByUserId,
+        suppressComms: true,
+      });
+    }
+    return args.id;
+  },
+});
+
+// The single-booking cancel engine — the pre-split cancelBooking body, unchanged
+// bar the suppressComms gate. Auth, policy windows, credit, waitlist advance,
+// calendar delete, emails: everything for ONE row. suppressComms skips only the
+// booker-facing cancellation email+push (used for the second leg of a split; the
+// athlete cancellation emails fire from the carrier's slots exactly once).
+async function cancelBookingCore(
+  ctx: any,
+  args: { id: any; cancelledByUserId?: string; suppressComms?: boolean }
+) {
     const booking = await ctx.db.get(args.id);
     if (!booking) throw new ConvexError("Booking not found.");
     if (booking.status === "cancelled")
@@ -2230,8 +2767,9 @@ export const cancelBooking = mutation({
       });
     }
 
-    // Send cancellation confirmation email
-    if (booking.customerEmail) {
+    // Send cancellation confirmation email (suppressed for a split's second leg —
+    // the first leg's email covers the whole session).
+    if (booking.customerEmail && !args.suppressComms) {
       const whole = Math.floor(booking.startHour);
       const mins = Math.round((booking.startHour - whole) * 60);
       const period = whole >= 12 ? "PM" : "AM";
@@ -2289,15 +2827,30 @@ export const cancelBooking = mutation({
     }
 
     return args.id;
-  },
-});
+}
 
 // Delete a booking — ADMIN ONLY
 export const deleteBooking = mutation({
   args: { id: v.id("bookings") },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
-    const delBooking = await ctx.db.get(args.id);
+    const firstBooking = await ctx.db.get(args.id);
+    // SPEC_COACH_SPLIT_LANE_BOOKING: deleting one leg removes the WHOLE split
+    // (either direction). The sibling gets the same credit/calendar cleanup but
+    // no second cancellation email.
+    const delSibling: any = firstBooking
+      ? (firstBooking as any).splitParentId
+        ? await ctx.db.get((firstBooking as any).splitParentId)
+        : await ctx.db
+            .query("bookings")
+            .withIndex("by_splitParentId", (q: any) => q.eq("splitParentId", args.id))
+            .first()
+      : null;
+    const delRows: Array<{ delId: any; delBooking: any; emailOk: boolean }> = [];
+    delRows.push({ delId: args.id, delBooking: firstBooking, emailOk: true });
+    if (delSibling) delRows.push({ delId: delSibling._id, delBooking: delSibling, emailOk: false });
+
+    for (const { delId, delBooking, emailOk } of delRows) {
     if (delBooking) {
       // DI-7: Add account credit for the booking's value (credit, not Stripe refund).
       // Coach bookings are billed weekly (not prepaid online), so they are NOT
@@ -2313,7 +2866,7 @@ export const deleteBooking = mutation({
             email: delBooking.customerEmail,
             amount: creditAmt,
             reason: "cancellation",
-            bookingId: args.id.toString(),
+            bookingId: delId.toString(),
             note: "Booking deleted by admin",
           });
         }
@@ -2328,8 +2881,8 @@ export const deleteBooking = mutation({
         });
       }
 
-      // DI-7: Send cancellation email to customer
-      if (delBooking.customerEmail && delBooking.status !== "cancelled") {
+      // DI-7: Send cancellation email to customer (first row of a split only)
+      if (delBooking.customerEmail && delBooking.status !== "cancelled" && emailOk) {
         const whole = Math.floor(delBooking.startHour);
         const mins = Math.round((delBooking.startHour - whole) * 60);
         const period = whole >= 12 ? "PM" : "AM";
@@ -2352,13 +2905,14 @@ export const deleteBooking = mutation({
             title: "Booking cancelled",
             body: `${delBooking.laneNameSnapshot || defaultLaneName(delBooking.laneId)} · ${fmtAwstDateLabel(delBooking.date)}, ${timeSlot}`,
             url: "/bookings",
-            tag: `booking-${args.id.toString()}`,
+            tag: `booking-${delId.toString()}`,
           });
         }
       }
     }
 
-    await ctx.db.delete(args.id);
+    await ctx.db.delete(delId);
+    }
     return args.id;
   },
 });
@@ -2429,6 +2983,21 @@ export const modifyBooking = mutation({
     // only for the coach — non-admin modify is rejected.
     if ((booking as any).createdByAdmin && !isAdmin) {
       throw new ConvexError("This booking is managed by admin — please contact admin.");
+    }
+    // SPEC_COACH_SPLIT_LANE_BOOKING v1: split legs can't be self-modified (a leg
+    // edit would break the pair's contiguity/price/gap invariants) — cancel and
+    // rebook instead. Admin may still adjust each leg via the admin details modal
+    // (updateBooking), which is a deliberate per-leg edit.
+    if (!isAdmin) {
+      const isSplitLeg =
+        (booking as any).splitParentId != null ||
+        (await ctx.db
+          .query("bookings")
+          .withIndex("by_splitParentId", (q: any) => q.eq("splitParentId", args.id))
+          .first()) != null;
+      if (isSplitLeg) {
+        throw new ConvexError("Split sessions can't be modified — cancel and rebook to change one.");
+      }
     }
 
     const settings = await ctx.db
@@ -3471,7 +4040,19 @@ export const updateBookingAthleteSlots = mutation({
     // "Min athlete slot" admin setting is retired). Allocation options are
     // {30,45,60,75,90}; legacy sub-30 slots snap up on their next edit.
     const minAthleteMins = 30;
-    const bookingEnd = booking.startHour + booking.duration / 60;
+    // SPEC_COACH_SPLIT_LANE_BOOKING: the allocation on a split CARRIER spans the
+    // WHOLE session — a slot may run past the leg-1 end into the second lane's
+    // window (the split is one continuous session for athletes).
+    let bookingEnd = booking.startHour + booking.duration / 60;
+    const splitChild: any = await ctx.db
+      .query("bookings")
+      .withIndex("by_splitParentId", (q: any) => q.eq("splitParentId", args.id))
+      .first();
+    // Same-date guard (review 2026-08-12): an admin per-leg edit may move leg 2
+    // to another date — raw hour comparison across dates would corrupt the window.
+    if (splitChild && splitChild.status !== "cancelled" && splitChild.date === booking.date) {
+      bookingEnd = Math.max(bookingEnd, splitChild.startHour + splitChild.duration / 60);
+    }
     for (const slot of args.athleteSlots) {
       const slotEnd = slot.startHour + slot.durationMinutes / 60;
       if (slot.startHour < booking.startHour || slotEnd > bookingEnd + 0.001) {
@@ -3796,10 +4377,17 @@ async function writeCoachSessionCopy(
     reserved?: Set<string>;
     actorUserId?: string;
     actorName?: string;
+    // SPEC_COACH_SPLIT_LANE_BOOKING — repeating a split copies BOTH legs with a
+    // SHARED fresh code; the leg-2 copy carries the link + the $0/no-statement
+    // conventions (price override 0 + statementExcluded), leg 1 the total.
+    forcedCode?: string;
+    splitParentId?: any;
+    coachPriceOverride?: number;
+    statementExcluded?: boolean;
   }
 ): Promise<string> {
   const { src, coach, targetDate, coachPerHour, analysis, existingCodes, reserved } = opts;
-  const newCode = generateServerAccessCode(existingCodes, reserved);
+  const newCode = opts.forcedCode ?? generateServerAccessCode(existingCodes, reserved);
   const nowIso = new Date().toISOString();
   const copiedSlots = analysis.keptSlots.map((s) => ({
     athleteId: s.athleteId,
@@ -3814,7 +4402,10 @@ async function writeCoachSessionCopy(
 
   // M6: per-lane — the copy carries src.additionalLaneIds below, so price all lanes.
   const copyLaneCount = 1 + ((src.additionalLaneIds as any[])?.length ?? 0);
-  const newCoachPrice = Math.round((src.duration / 60) * coachPerHour * copyLaneCount * 100) / 100;
+  const newCoachPrice =
+    opts.coachPriceOverride !== undefined
+      ? opts.coachPriceOverride
+      : Math.round((src.duration / 60) * coachPerHour * copyLaneCount * 100) / 100;
   const newId = await ctx.db.insert("bookings", {
     laneId: src.laneId,
     variantId: src.variantId,
@@ -3831,6 +4422,8 @@ async function writeCoachSessionCopy(
     additionalLaneIds: src.additionalLaneIds,
     athleteSlots: copiedSlotsWithSuburbs.length > 0 ? copiedSlotsWithSuburbs : undefined,
     accessCode: newCode,
+    statementExcluded: opts.statementExcluded ? true : undefined,
+    splitParentId: opts.splitParentId,
     laneNameSnapshot: analysis.laneNameSnapshot,
     variantLabelSnapshot: analysis.variantLabelSnapshot,
     // SPEC_TEAM_BOOKING_AUTODOOR_2026-07: a repeated/repeat-to-dates/multi-date copy
@@ -3913,7 +4506,7 @@ async function writeCoachSessionCopy(
 async function loadCoachBookingForRepeat(
   ctx: any,
   bookingId: any
-): Promise<{ src: any; coach: any; callerCustomer: any; targetDate: string }> {
+): Promise<{ src: any; coach: any; callerCustomer: any; targetDate: string; splitLeg2: any }> {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) throw new ConvexError("Authentication required.");
   const callerEmail = identity.email?.toLowerCase().trim() ?? "";
@@ -3921,6 +4514,16 @@ async function loadCoachBookingForRepeat(
   const src: any = await ctx.db.get(bookingId);
   if (!src || !src.isCoachBooking) throw new ConvexError("Coach booking not found.");
   if (src.status === "cancelled") throw new ConvexError("Cannot repeat a cancelled booking.");
+  // SPEC_COACH_SPLIT_LANE_BOOKING: repeat operates on the CARRIER (leg 1) and
+  // copies both legs; the UI hides Repeat on leg 2 — this is the server gate.
+  if (src.splitParentId) {
+    throw new ConvexError("This is the second part of a split session — repeat it from the first part.");
+  }
+  const splitLeg2Row: any = await ctx.db
+    .query("bookings")
+    .withIndex("by_splitParentId", (q: any) => q.eq("splitParentId", bookingId))
+    .first();
+  const splitLeg2 = splitLeg2Row && splitLeg2Row.status !== "cancelled" ? splitLeg2Row : null;
 
   const coach: any = await ctx.db
     .query("customers")
@@ -3941,7 +4544,60 @@ async function loadCoachBookingForRepeat(
     throw new ConvexError("This booking is managed by admin — please contact admin.");
   }
 
-  return { src, coach, callerCustomer, targetDate: addDaysKey(src.date, 7) };
+  return { src, coach, callerCustomer, targetDate: addDaysKey(src.date, 7), splitLeg2 };
+}
+
+// SPEC_COACH_SPLIT_LANE_BOOKING — the gap rule re-checked on a repeat's TARGET
+// date (both legs, both sides), against that day's bookings + service blocks +
+// the target-date-resolved segments. Returns the violation message or null.
+async function splitRepeatGapViolation(
+  ctx: any,
+  legs: Array<{ laneId: string; startHour: number; duration: number }>,
+  targetDate: string
+): Promise<string | null> {
+  const settings = await ctx.db
+    .query("siteSettings")
+    .withIndex("by_key", (q: any) => q.eq("key", "global"))
+    .first();
+  const DOW_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  const [yy, mm, dd] = targetDate.split("-").map(Number);
+  const dowName = DOW_NAMES[new Date(yy, mm - 1, dd).getDay()];
+  const dayHours = (settings as any)?.dailyHours?.find((h: any) => h.day === dowName);
+  const open = dayHours ? dayHours.open : ((settings as any)?.openingHour ?? 7);
+  const close = dayHours ? dayHours.close : ((settings as any)?.closingHour ?? 21);
+
+  const dayBookings = await ctx.db
+    .query("bookings")
+    .withIndex("by_date", (q: any) => q.eq("date", targetDate))
+    .collect();
+  const occupies = (b: any, lid: string) =>
+    b.laneId === lid || ((b.additionalLaneIds as string[]) ?? []).includes(lid);
+
+  for (const leg of legs) {
+    const legStart = leg.startHour;
+    const legEnd = leg.startHour + leg.duration / 60;
+    const laneBookings = dayBookings.filter((b: any) => b.status !== "cancelled" && occupies(b, leg.laneId));
+    const laneBlocks = await ctx.db
+      .query("laneBlocks")
+      .withIndex("by_laneId_date", (q: any) => q.eq("laneId", leg.laneId).eq("date", targetDate))
+      .collect();
+    const snap = await resolveLaneSnapshot(ctx, leg.laneId, undefined, targetDate, legStart);
+    const violation = splitGapViolation({
+      laneLabel: snap.laneNameSnapshot,
+      legStart,
+      legEnd,
+      open,
+      close,
+      segStart: snap.segment.startHour,
+      segEnd: snap.segment.endHour,
+      occupied: [
+        ...laneBookings.map((b: any) => ({ start: b.startHour, end: b.startHour + b.duration / 60 })),
+        ...laneBlocks.map((b: any) => ({ start: b.startHour, end: b.startHour + b.duration / 60 })),
+      ],
+    });
+    if (violation) return violation;
+  }
+  return null;
 }
 
 // Read-only preview for the confirm modal: the single target session + its
@@ -3949,7 +4605,7 @@ async function loadCoachBookingForRepeat(
 export const previewRepeatCoachBooking = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
-    const { src, coach } = await loadCoachBookingForRepeat(ctx, args.bookingId);
+    const { src, coach, splitLeg2 } = await loadCoachBookingForRepeat(ctx, args.bookingId);
     const settings = await ctx.db
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
@@ -3966,6 +4622,48 @@ export const previewRepeatCoachBooking = query({
     });
     const targetDate = addDaysKey(src.date, 7);
 
+    // SPEC_COACH_SPLIT_LANE_BOOKING: a split carrier repeats BOTH legs — analyze
+    // leg 2 + re-run the gap rule on the target date; the preview reports the
+    // combined verdict (either leg blocked / gap violated → blocked).
+    let effStatus = analysis.status as string;
+    let effReason = analysis.reason as string | undefined;
+    let splitInfo: any = undefined;
+    if (splitLeg2) {
+      const a2 = await analyzeCoachSessionCopy(ctx, {
+        src: splitLeg2,
+        coach,
+        targetDate,
+        dailyHours,
+        coachIdForms,
+      });
+      splitInfo = {
+        laneId: splitLeg2.laneId,
+        laneNameSnapshot: a2.laneNameSnapshot,
+        startHour: splitLeg2.startHour,
+        duration: splitLeg2.duration,
+        status: a2.status,
+        reason: a2.reason,
+      };
+      if (effStatus === "ok" && a2.status !== "ok") {
+        effStatus = a2.status;
+        effReason = a2.reason ? `second lane: ${a2.reason}` : a2.reason;
+      }
+      if (effStatus === "ok") {
+        const gap = await splitRepeatGapViolation(
+          ctx,
+          [
+            { laneId: src.laneId, startHour: src.startHour, duration: src.duration },
+            { laneId: splitLeg2.laneId, startHour: splitLeg2.startHour, duration: splitLeg2.duration },
+          ],
+          targetDate
+        );
+        if (gap) {
+          effStatus = "blocked";
+          effReason = gap;
+        }
+      }
+    }
+
     return {
       sourceDate: src.date,
       targetDate,
@@ -3975,14 +4673,15 @@ export const previewRepeatCoachBooking = query({
       variantId: src.variantId,
       laneNameSnapshot: analysis.laneNameSnapshot,
       variantLabelSnapshot: analysis.variantLabelSnapshot,
-      status: analysis.status, // "ok" | "blocked" | "duplicate"
-      reason: analysis.reason,
+      status: effStatus, // "ok" | "blocked" | "duplicate"
+      reason: effReason,
       droppedCount: analysis.droppedCount,
       allocations: analysis.keptSlots.map((s) => ({
         athleteName: s.athleteName,
         startHour: s.startHour,
         durationMinutes: s.durationMinutes,
       })),
+      split: splitInfo,
     };
   },
 });
@@ -3990,7 +4689,7 @@ export const previewRepeatCoachBooking = query({
 export const repeatCoachBooking = mutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
-    const { src, coach, callerCustomer } = await loadCoachBookingForRepeat(ctx, args.bookingId);
+    const { src, coach, callerCustomer, splitLeg2 } = await loadCoachBookingForRepeat(ctx, args.bookingId);
     const targetDate = addDaysKey(src.date, 7);
 
     const settings = await ctx.db
@@ -4016,9 +4715,40 @@ export const repeatCoachBooking = mutation({
       );
     }
 
+    // SPEC_COACH_SPLIT_LANE_BOOKING: a split carrier repeats BOTH legs or neither
+    // — leg 2 must also pass, plus the gap rule on the target date.
+    let leg2Analysis: CoachCopyAnalysis | null = null;
+    if (splitLeg2) {
+      leg2Analysis = await analyzeCoachSessionCopy(ctx, {
+        src: splitLeg2,
+        coach,
+        targetDate,
+        dailyHours,
+        coachIdForms,
+      });
+      if (leg2Analysis.status !== "ok") {
+        throw new ConvexError(
+          leg2Analysis.status === "duplicate"
+            ? "That session is already booked next week."
+            : `Can't repeat: second lane — ${leg2Analysis.reason}.`
+        );
+      }
+      const gap = await splitRepeatGapViolation(
+        ctx,
+        [
+          { laneId: src.laneId, startHour: src.startHour, duration: src.duration },
+          { laneId: splitLeg2.laneId, startHour: splitLeg2.startHour, duration: splitLeg2.duration },
+        ],
+        targetDate
+      );
+      if (gap) throw new ConvexError(`Can't repeat — ${gap}.`);
+    }
+
     // Seed the in-use code set from live bookings + honour reserved staff codes.
     const existingCodes = await collectActiveAccessCodes(ctx);
     const reserved = await getReservedCodes(ctx);
+    // A split shares ONE fresh code across both leg copies.
+    const sharedCode = splitLeg2 ? generateServerAccessCode(existingCodes, reserved) : undefined;
     const newBookingId = await writeCoachSessionCopy(ctx, {
       src,
       coach,
@@ -4029,7 +4759,32 @@ export const repeatCoachBooking = mutation({
       reserved,
       actorUserId: callerCustomer?._id ?? coach._id,
       actorName: coach.name,
+      forcedCode: sharedCode,
+      // Carrier copy carries the whole-split price, recomputed at the CURRENT
+      // coach rate over the TOTAL window (review 2026-08-12: copying the stored
+      // src.coachPrice froze old rates forever, and its nullish fallback would
+      // have priced leg 1 only — silently unbilling the leg-2 portion).
+      coachPriceOverride: splitLeg2
+        ? Math.round(((src.duration + splitLeg2.duration) / 60) * coachPerHour * 100) / 100
+        : undefined,
     });
+    if (splitLeg2 && leg2Analysis) {
+      await writeCoachSessionCopy(ctx, {
+        src: splitLeg2,
+        coach,
+        targetDate,
+        coachPerHour,
+        analysis: leg2Analysis,
+        existingCodes,
+        reserved,
+        actorUserId: callerCustomer?._id ?? coach._id,
+        actorName: coach.name,
+        forcedCode: sharedCode,
+        splitParentId: newBookingId,
+        coachPriceOverride: 0,
+        statementExcluded: true,
+      });
+    }
 
     return {
       bookingId: newBookingId,
@@ -4051,7 +4806,10 @@ export const repeatCoachBooking = mutation({
 export const previewRepeatCoachBookingToDates = query({
   args: { bookingId: v.id("bookings"), dates: v.array(v.string()) },
   handler: async (ctx, args) => {
-    const { src, coach } = await loadCoachBookingForRepeat(ctx, args.bookingId);
+    const { src, coach, splitLeg2 } = await loadCoachBookingForRepeat(ctx, args.bookingId);
+    // SPEC_COACH_SPLIT_LANE_BOOKING v1: multi-date repeat doesn't support splits —
+    // guard here so a carrier can't be half-copied (only the +7 Repeat pairs legs).
+    if (splitLeg2) throw new ConvexError("Multi-date repeat doesn't support split sessions yet — use the weekly Repeat.");
     const settings = await ctx.db
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
@@ -4084,7 +4842,9 @@ export const repeatCoachBookingToDates = mutation({
   handler: async (ctx, args) => {
     if (args.dates.length === 0) throw new ConvexError("Pick at least one date.");
     if (args.dates.length > 60) throw new ConvexError("Too many dates (max 60 per repeat).");
-    const { src, coach, callerCustomer } = await loadCoachBookingForRepeat(ctx, args.bookingId);
+    const { src, coach, callerCustomer, splitLeg2 } = await loadCoachBookingForRepeat(ctx, args.bookingId);
+    // SPEC_COACH_SPLIT_LANE_BOOKING v1: no split support here (see preview guard).
+    if (splitLeg2) throw new ConvexError("Multi-date repeat doesn't support split sessions yet — use the weekly Repeat.");
 
     const settings = await ctx.db
       .query("siteSettings")

@@ -41,6 +41,7 @@ function toBooking(doc: any): Booking {
     autoDoor: doc.autoDoor, // SPEC_TEAM_BOOKING_AUTODOOR
     isClubBooking: doc.isClubBooking, // SPEC_CLUB_TEAM_BOOKINGS
     bookingGroupId: doc.bookingGroupId, // SPEC_CLUB_TEAM_BOOKINGS block id
+    splitParentId: doc.splitParentId, // SPEC_COACH_SPLIT_LANE_BOOKING leg-2 link
   }
 }
 

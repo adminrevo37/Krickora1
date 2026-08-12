@@ -272,7 +272,34 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     const seen = new Set(owned.map(b => b.id))
     const merged = [...owned]
     for (const b of myAthleteSessions) if (!seen.has(b.id)) merged.push(b)
-    return merged.sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour)
+    // SPEC_COACH_SPLIT_LANE_BOOKING — merge split pairs into ONE display card:
+    // the CARRIER absorbs leg 2's window (duration runs to the leg-2 end) and
+    // carries a splitLeg2 marker for the label; the merged leg-2 row is dropped.
+    // Cancel / Repeat / allocation all act via the carrier id (the server pairs
+    // the legs). Merge ONLY while the pair is still same-date and contiguous —
+    // an admin per-leg edit can break the shape (review 2026-08-12), in which
+    // case both legs render as ordinary separate cards instead of a garbage
+    // negative-duration merge.
+    const leg2ByParent = new Map<string, Booking>()
+    for (const b of merged) if (b.splitParentId) leg2ByParent.set(b.splitParentId, b)
+    let display = merged
+    if (leg2ByParent.size > 0) {
+      const absorbedLeg2Ids = new Set<string>()
+      display = merged.map(b => {
+        if (b.splitParentId) return b
+        const leg2 = leg2ByParent.get(b.id)
+        if (!leg2) return b
+        const carrierEnd = b.startHour + b.duration / 60
+        if (leg2.date !== b.date || leg2.startHour < carrierEnd - 1e-6) return b
+        absorbedLeg2Ids.add(leg2.id)
+        return {
+          ...b,
+          duration: Math.round((leg2.startHour + leg2.duration / 60 - b.startHour) * 60),
+          splitLeg2: { laneId: leg2.laneId, startHour: leg2.startHour, duration: leg2.duration },
+        }
+      }).filter(b => !(b.splitParentId && absorbedLeg2Ids.has(b.id)))
+    }
+    return display.sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [myBookings, myAthleteSessions, user, athleteNameCandidates, myAthleteIds, effectiveEmail, impersonatedEmail])
 
@@ -658,9 +685,19 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
               ) : null}
             </div>
             <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              {lane?.icon} {laneNames.join(', ')}
-              {laneCount > 1 && (
-                <span className="ml-1 text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded-full align-middle">{laneCount} lanes</span>
+              {/* SPEC_COACH_SPLIT_LANE_BOOKING — a merged split shows the lane change */}
+              {booking.splitLeg2 ? (
+                <>
+                  {lane?.icon} {laneNames[0]} until {formatTime(booking.splitLeg2.startHour)}, then {getLane(booking.splitLeg2.laneId)?.name ?? booking.splitLeg2.laneId}
+                  <span className="ml-1 text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded-full align-middle">Split session</span>
+                </>
+              ) : (
+                <>
+                  {lane?.icon} {laneNames.join(', ')}
+                  {laneCount > 1 && (
+                    <span className="ml-1 text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded-full align-middle">{laneCount} lanes</span>
+                  )}
+                </>
               )}
               {variantName && <span className="ml-1 text-gray-400">· {variantName}</span>}
               <span className="ml-1 text-gray-400">· {formatDuration(booking.duration)}</span>
@@ -703,7 +740,9 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                 🏏 Edit athletes
               </button>
             )}
-            {cancelCheck.allowed && (
+            {/* SPEC_COACH_SPLIT_LANE_BOOKING v1: splits can't be self-modified
+                (server-rejected too) — cancel and rebook to change one. */}
+            {cancelCheck.allowed && !booking.splitLeg2 && (
               <button
                 onClick={(e) => { e.stopPropagation(); setModifyBookingData(booking) }}
                 className="text-[11px] px-2.5 py-1 rounded-lg border border-violet-200 dark:border-violet-800 text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors"

@@ -58,6 +58,16 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave, ope
     api.queries.getCustomerByEmail,
     booking.isCoachBooking && booking.customerEmail ? { email: booking.customerEmail } : 'skip'
   ) as any
+  // SPEC_COACH_SPLIT_LANE_BOOKING — the other leg of a split (null when not a
+  // split). Drives the split banner + the group-window allocation editor.
+  const splitSibling = useQuery(
+    (api.queries as any).getSplitSibling,
+    booking.isCoachBooking ? { id: booking.id } : 'skip'
+  ) as { id: string; laneId: string; laneNameSnapshot: string | null; startHour: number; duration: number; status: string; targetIsLeg2: boolean } | null | undefined
+  // Whole-session window for a split CARRIER (allocation may span the lane change).
+  const splitGroupDuration = splitSibling && !splitSibling.targetIsLeg2 && splitSibling.status !== 'cancelled'
+    ? Math.round((splitSibling.startHour + splitSibling.duration / 60 - booking.startHour) * 60)
+    : null
   const handleSaveAthleteSlots = async (
     slots: AthleteSlot[],
     opts?: { confirmedOverride?: boolean },
@@ -465,6 +475,16 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave, ope
             </div>
           )}
 
+          {/* SPEC_COACH_SPLIT_LANE_BOOKING — split-session awareness banner */}
+          {splitSibling && (
+            <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800/50 rounded-lg p-3 text-xs text-indigo-700 dark:text-indigo-300">
+              <span className="font-semibold">Split session — {splitSibling.targetIsLeg2 ? 'leg 2 of 2' : 'leg 1 of 2'}.</span>{' '}
+              The other leg is {formatTime(splitSibling.startHour)}–{formatTime(splitSibling.startHour + splitSibling.duration / 60)} on {splitSibling.laneNameSnapshot ?? splitSibling.laneId}
+              {splitSibling.status === 'cancelled' ? ' (cancelled)' : ''}. Cancel / Status→cancelled takes BOTH legs down; per-leg edits here are deliberate.
+              {!splitSibling.targetIsLeg2 && ' Price, door code and athletes live on this leg.'}
+            </div>
+          )}
+
           {!editing ? (
             <>
               {/* UX-1: View mode reads from local state so it reflects the last saved values */}
@@ -563,13 +583,19 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave, ope
                     <h4 className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">
                       🏏 Athlete Allocations ({(booking.athleteSlots ?? []).length})
                     </h4>
-                    {status !== 'cancelled' && (
+                    {/* SPEC_COACH_SPLIT_LANE_BOOKING: allocations live on the
+                        CARRIER — editing them onto a leg-2 row would strand slots
+                        the coach's merged card never shows (review 2026-08-12). */}
+                    {status !== 'cancelled' && !splitSibling?.targetIsLeg2 && (
                       <button
                         onClick={() => setShowAthleteEditor(true)}
                         className="text-[11px] px-2.5 py-1 rounded-lg border border-orange-200 dark:border-orange-800 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors font-semibold"
                       >
                         ✏️ Edit athletes
                       </button>
+                    )}
+                    {status !== 'cancelled' && splitSibling?.targetIsLeg2 && (
+                      <span className="text-[10px] text-gray-400">managed on leg 1</span>
                     )}
                   </div>
                   {(booking.athleteSlots ?? []).length > 0 ? (
@@ -1046,10 +1072,10 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave, ope
         </div>
       </div>
       {/* SPEC_COACH_ALLOCATION — admin allocates athletes to the booking's coach. */}
-      {showAthleteEditor && booking.isCoachBooking && (
+      {showAthleteEditor && booking.isCoachBooking && !splitSibling?.targetIsLeg2 && (
         <AthleteAllocationEditor
           bookingStartHour={booking.startHour}
-          bookingDuration={booking.duration}
+          bookingDuration={splitGroupDuration ?? booking.duration}
           currentSlots={booking.athleteSlots ?? []}
           coachId={booking.customerEmail}
           onSave={handleSaveAthleteSlots}

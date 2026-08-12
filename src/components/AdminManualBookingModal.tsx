@@ -1,10 +1,10 @@
 import { useMemo, useState, useEffect } from 'react'
-import { useAction, useQuery } from 'convex/react'
+import { useAction, useMutation, useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
 import {
   formatDateKey, formatTime, getCustomerPrice, getCoachPrice,
-  bookingOccupiesLane, LANES, type Lane, type LaneVariant, type Booking,
+  bookingOccupiesLane, LANES, getCoachSplitOptions, type Lane, type LaneVariant, type Booking,
 } from '../lib/booking-data'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
@@ -200,6 +200,38 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
     setAdditionalLaneIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
   }
 
+  // SPEC_COACH_SPLIT_LANE_BOOKING — admin books a coach split (one session across
+  // two lanes). Single-date only (no recurrence combo in v1); the option graph
+  // pre-filters by availability, segments and THE gap rule on both lanes.
+  const [splitOn, setSplitOn] = useState(false)
+  const [splitLaneId, setSplitLaneId] = useState<string | null>(null)
+  const [splitChangeover, setSplitChangeover] = useState<number | null>(null)
+  const [splitEnd, setSplitEnd] = useState<number | null>(null)
+  const createSplitBookingMut = useMutation(api.mutations.createSplitBooking)
+  const splitOptions = useMemo(
+    () => (isCoach ? getCoachSplitOptions(existingBookings, lane.id, dateKey, startHour) : []),
+    [isCoach, existingBookings, lane.id, dateKey, startHour]
+  )
+  useEffect(() => {
+    if (!splitOn) return
+    const laneOpt = splitOptions.find(o => o.laneId === splitLaneId) ?? splitOptions[0] ?? null
+    if (!laneOpt) {
+      if (splitLaneId !== null) { setSplitLaneId(null); setSplitChangeover(null); setSplitEnd(null) }
+      return
+    }
+    if (laneOpt.laneId !== splitLaneId) { setSplitLaneId(laneOpt.laneId); return }
+    const plan = laneOpt.plans.find(p => p.changeover === splitChangeover) ?? laneOpt.plans[0]
+    if (plan.changeover !== splitChangeover) { setSplitChangeover(plan.changeover); return }
+    if (splitEnd == null || !plan.ends.includes(splitEnd)) setSplitEnd(plan.ends[0])
+  }, [splitOn, splitOptions, splitLaneId, splitChangeover, splitEnd])
+  // Split mode is single-lane-per-leg + single-date: clear the incompatible options.
+  useEffect(() => {
+    if (splitOn) { setAdditionalLaneIds([]); setRecurrence('none') }
+  }, [splitOn])
+  const splitReady = splitOn && splitLaneId != null && splitChangeover != null && splitEnd != null
+  const splitTotalMins = splitReady ? Math.round((splitEnd! - startHour) * 60) : 0
+  const laneNm = (id: string) => resolveLaneAt(id, dateKey, startHour).name
+
   // Determine which other lanes are available for the same start + duration (no conflicts on first occurrence)
   const otherLanes = useMemo(() => {
     // SPEC_ADMIN_AFTER_HOURS_BOOKING_2026-07: the admin's effective close is the 22:00
@@ -225,7 +257,8 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
   // MF-5: Apply price override if provided
   const priceOverride = priceOverrideStr !== '' && !isNaN(Number(priceOverrideStr)) ? Number(priceOverrideStr) : null
   const effectivePricePerLane = priceOverride !== null ? priceOverride : pricePerLane
-  const price = effectivePricePerLane * selectedLaneCount
+  // A split session prices on the TOTAL window (server-authoritative standard rate).
+  const price = splitReady ? getCoachPrice(splitTotalMins) : effectivePricePerLane * selectedLaneCount
   const endHour = startHour + duration / 60
 
   // G1 — account-credit derivation (customer subjects only; comp is already $0;
@@ -288,6 +321,32 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
 
   const handleConfirm = async () => {
     setSubmitting(true); setError(null)
+    // SPEC_COACH_SPLIT_LANE_BOOKING — a split creates its two linked legs via the
+    // dedicated mutation (grid updates reactively; the parent create loop is not
+    // involved). Price/discount overrides don't apply (standard coach rate).
+    if (splitReady) {
+      try {
+        await createSplitBookingMut({
+          date: dateKey,
+          startHour,
+          duration: splitTotalMins,
+          changeoverHour: splitChangeover!,
+          laneId: lane.id,
+          secondLaneId: splitLaneId!,
+          customerName: customer.name,
+          customerEmail: customer.email,
+          customerPhone: customer.phone,
+          userId: customer._id,
+          notes: notes.trim() || undefined,
+          createdByAdmin: managedByAdmin ? true : undefined,
+        })
+        onClose()
+      } catch (e: any) {
+        setError(getErrorMessage(e) ?? 'Failed to create split booking.')
+        setSubmitting(false)
+      }
+      return
+    }
     try {
       const validOccurrences = occurrenceInfo.filter(o => !o.conflict)
       if (validOccurrences.length === 0) throw new Error('No valid dates available — all selected dates have conflicts.')
@@ -478,7 +537,7 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
 
           <div>
             <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Duration</label>
-            {availableDurations.length === 0 ? (
+            {!splitOn && (availableDurations.length === 0 ? (
               <div className="text-xs text-red-500 bg-red-50 dark:bg-red-900/20 rounded-lg p-3">No available durations for this slot.</div>
             ) : (
               <select value={duration} onChange={e => setDuration(Number(e.target.value))}
@@ -490,10 +549,62 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
                   return <option key={d} value={d}>{label} — ${(dPrice as number).toFixed(2)}</option>
                 })}
               </select>
+            ))}
+            {/* SPEC_COACH_SPLIT_LANE_BOOKING — coach split across two lanes.
+                Checkbox stays rendered while ON even if options collapse. */}
+            {isCoach && (splitOptions.length > 0 || splitOn) && (
+              <label className="mt-2 flex items-center gap-2 text-xs font-medium text-gray-600 dark:text-gray-400 cursor-pointer select-none">
+                <input type="checkbox" checked={splitOn} onChange={e => setSplitOn(e.target.checked)}
+                  className="w-4 h-4 rounded border-gray-300 text-orange-500 focus:ring-orange-400" />
+                <span>Split across two lanes <span className="text-gray-400">(finish on a different lane; single date, standard rate)</span></span>
+              </label>
             )}
+            {splitOn && !splitReady && (
+              <div className="mt-2 text-[11px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 rounded-lg px-3 py-2">
+                No split works from this start time without leaving a short unbookable gap.
+              </div>
+            )}
+            {splitReady && (() => {
+              const laneOpt = splitOptions.find(o => o.laneId === splitLaneId)!
+              const plan = laneOpt.plans.find(p => p.changeover === splitChangeover) ?? laneOpt.plans[0]
+              return (
+                <div className="mt-2 space-y-2 rounded-xl border border-orange-200 dark:border-orange-800/30 bg-orange-50/50 dark:bg-orange-900/10 p-3">
+                  <div>
+                    <label className="text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 block uppercase tracking-wider">Second lane</label>
+                    <select value={splitLaneId!} onChange={e => { setSplitLaneId(e.target.value); setSplitChangeover(null); setSplitEnd(null) }}
+                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 text-sm">
+                      {splitOptions.map(o => <option key={o.laneId} value={o.laneId}>{laneNm(o.laneId)}</option>)}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 block uppercase tracking-wider">Switch lanes at</label>
+                      <select value={splitChangeover!} onChange={e => { setSplitChangeover(Number(e.target.value)); setSplitEnd(null) }}
+                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 text-sm">
+                        {laneOpt.plans.map(p => <option key={p.changeover} value={p.changeover}>{formatTime(p.changeover)}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 block uppercase tracking-wider">Finish at</label>
+                      <select value={splitEnd!} onChange={e => setSplitEnd(Number(e.target.value))}
+                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 text-sm">
+                        {plan.ends.map(en => <option key={en} value={en}>{formatTime(en)}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-gray-700 dark:text-gray-300 font-medium">
+                    {formatTime(startHour)}–{formatTime(splitChangeover!)} {resolvedLane.name} → {formatTime(splitChangeover!)}–{formatTime(splitEnd!)} {laneNm(splitLaneId!)} · <span className="font-bold">${getCoachPrice(splitTotalMins)}</span> total
+                  </div>
+                  <div className="text-[10px] text-gray-500 dark:text-gray-400">
+                    One booking, one door code, one statement line. Athletes are allocated after create via the booking's "Edit athletes". Options exclude combinations that would strand a short unbookable gap.
+                  </div>
+                </div>
+              )
+            })()}
           </div>
 
-          {/* Additional Lanes */}
+          {/* Additional Lanes (hidden in split mode — one lane per leg) */}
+          {!splitOn && (
           <div>
             <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">
               ➕ Additional Lanes <span className="text-[11px] font-normal text-gray-500">(book multiple lanes at the same time)</span>
@@ -532,7 +643,9 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
               </div>
             )}
           </div>
+          )}
 
+          {!splitOn && (
           <div>
             <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">🔁 Recurrence</label>
             <div className="grid grid-cols-3 gap-2">
@@ -586,6 +699,7 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
               </div>
             )}
           </div>
+          )}
 
           {/* MF-5: Admin overrides — discount code + price override */}
           <div>
@@ -808,7 +922,7 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
 
           <div className="flex gap-3">
             <button onClick={onClose} disabled={submitting} className="flex-1 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all disabled:opacity-50">Cancel</button>
-            <button onClick={handleConfirm} disabled={submitting || availableDurations.length === 0 || (totalSessions - conflictCount) === 0}
+            <button onClick={handleConfirm} disabled={submitting || (splitOn ? !splitReady : (availableDurations.length === 0 || (totalSessions - conflictCount) === 0))}
               className={`flex-[2] py-3 font-semibold rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600' : 'bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600'}`}>
               {submitting
                 ? 'Creating...'
