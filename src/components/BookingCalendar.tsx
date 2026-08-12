@@ -665,8 +665,8 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                       <button key={lane.id} type="button"
                         onClick={() => { if (!onThisPool) openWaitlistForHour(slot.hour, pool) }}
                         style={{ gridColumn: `span ${runState} / span ${runState}` }}
-                        className={`relative z-30 border-l-2 border-black min-h-[40px] px-1 flex items-center justify-center transition-colors ${onThisPool ? 'bg-amber-100 cursor-default' : 'bg-amber-50 hover:bg-amber-100 cursor-pointer'}`}>
-                        <span className="text-center text-[10px] sm:text-[11px] leading-tight font-semibold text-amber-700 pointer-events-none">
+                        className={`relative z-30 border-l-2 border-black min-h-[40px] px-1 flex items-center justify-center transition-colors ${onThisPool ? 'bg-emerald-50 cursor-default' : 'bg-amber-50 hover:bg-amber-100 cursor-pointer'}`}>
+                        <span className={`text-center text-[10px] sm:text-[11px] leading-tight font-semibold pointer-events-none ${onThisPool ? 'text-emerald-700' : 'text-amber-700'}`}>
                           {onThisPool ? (
                             <>✓ #{myQueuePos ?? '—'} in {poolTag} queue · {hourWaitCount} waiting</>
                           ) : (
@@ -907,6 +907,7 @@ function LegendRow() {
       {item('bg-red-100 border border-red-300', 'Booked')}
       {item('bg-blue-100 border border-blue-300', 'Your booking')}
       {item('bg-amber-100 border border-amber-300', 'Waitlist')}
+      {item('bg-emerald-50 border border-emerald-300', 'On waitlist')}
       {item('bg-gray-200 border border-gray-300', 'Past')}
     </div>
   )
