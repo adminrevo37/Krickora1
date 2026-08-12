@@ -137,7 +137,7 @@ export async function resolveLanesAtHour(
   ctx: any,
   date: string,
   hour: number
-): Promise<Array<{ laneId: string; pool: "bm" | "ru"; name: string; closed: boolean }>> {
+): Promise<Array<{ laneId: string; pool: "bm" | "ru"; name: string; closed: boolean; segment: Segment }>> {
   const rows = await loadLaneRows(ctx);
   const overrides = await loadOverridesForDate(ctx, date);
   return rows.map((row) => {
@@ -148,6 +148,9 @@ export async function resolveLanesAtHour(
       pool: seg.mode === "RU" ? ("ru" as const) : ("bm" as const),
       name: laneName(seg.mode, row.bayNumber),
       closed: segmentIsClosed(seg),
+      // The governing segment — the waitlist engine snaps an offer's start to
+      // the segment's allowed times (custom-start grids reject :00 starts).
+      segment: seg,
     };
   });
 }

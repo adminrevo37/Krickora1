@@ -3,6 +3,7 @@ import { v, ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import { requireAdmin, getCallerContext } from "./lib/adminGuard";
 import { resolveLanesAtHour } from "./lanes";
+import { segmentHasCustomStarts, segmentStartHours } from "./lib/lanes";
 
 /**
  * Waitlist — sequential first-refusal engine (SPEC_WAITLIST_OFFER_REDESIGN).
@@ -259,18 +260,18 @@ export const advanceWaitlistOffer = internalMutation({
     const laneInFlight = (lid: string) =>
       dayBookings.some((b: any) => IN_FLIGHT.includes(b.status) && occupiesLane(b, lid));
 
-    // Waitlist holds overlapping this hour (by_date — no hardcoded lane loop).
+    // THIS hour's waitlist holds (by_date — no hardcoded lane loop). Owned-hour
+    // scoping is by floor(startHour), NOT window overlap: a SNAPPED offer hold
+    // (e.g. 10:30–11:30 on a custom-start grid) spills into the next hour, and
+    // hour-11 engine runs must never clean up hour-10's live offer hold.
     // Pool-scoped deletion resolves each hold's lane to its pool, so clearing
-    // one pool never drops the OTHER pool's live offer hold.
+    // one pool never drops the OTHER pool's live offer hold either.
     const dayHolds = await ctx.db
       .query("slotHolds")
       .withIndex("by_date", (q: any) => q.eq("date", date))
       .collect();
     const hourWaitlistHolds = dayHolds.filter(
-      (h: any) =>
-        h.holdType === "waitlist" &&
-        slotStart < h.startHour + h.duration / 60 &&
-        slotEnd > h.startHour
+      (h: any) => h.holdType === "waitlist" && Math.floor(h.startHour) === hour
     );
     const deleted = new Set<string>();
     const deleteHoldsForPool = async (p: WaitlistPool | "all") => {
@@ -301,12 +302,16 @@ export const advanceWaitlistOffer = internalMutation({
     }
 
     // Lanes with a service/repair block overlapping this hour aren't offerable.
+    // Keep the rows per lane too — a SNAPPED offer window (custom-start grid)
+    // can extend past the hour and must be re-checked against blocks.
     const blockedLanes = new Set<string>();
+    const blocksByLane = new Map<string, any[]>();
     for (const l of openLanes) {
       const blocks = await ctx.db
         .query("laneBlocks")
         .withIndex("by_laneId_date", (q: any) => q.eq("laneId", l.laneId).eq("date", date))
         .collect();
+      blocksByLane.set(l.laneId, blocks);
       if (
         blocks.some(
           (b: any) => slotStart < b.startHour + b.duration / 60 && slotEnd > b.startHour
@@ -395,17 +400,90 @@ export const advanceWaitlistOffer = internalMutation({
         }
       }
 
-      // 3. Choose the lane to offer: prefer the freed lane if it's in this pool,
-      // else any free lane OF THIS POOL. A lane is offerable if it has no
-      // confirmed booking and nothing mid-checkout.
+      // 3. Choose the lane AND the exact start to offer: prefer the freed lane
+      // if it's in this pool, else any free lane OF THIS POOL. A lane is
+      // offerable if it has no confirmed booking and nothing mid-checkout.
+      // OFFER-SNAP (2026-08-11): on a segment with admin-defined custom starts,
+      // an :00 deep-link would be server-rejected (off-cadence) — snap to the
+      // earliest allowed start inside [hour, hour+1) whose 60-min window is
+      // conflict-free, stays inside the segment, and passes the Option A
+      // end-alignment. No such start → the lane isn't offerable this hour.
       const isFree = (lid: string) =>
         !laneConfirmed(lid) && !laneInFlight(lid) && !blockedLanes.has(lid);
-      const offerLane =
-        lanes.includes(preferLaneId) && isFree(preferLaneId)
-          ? preferLaneId
-          : lanes.find((lid) => isFree(lid));
+      const overlapsWindow = (b: any, ws: number, we: number) => {
+        const bEnd = b.startHour + b.duration / 60;
+        return ws < bEnd && we > b.startHour;
+      };
+      const windowTaken = (lid: string, ws: number, we: number) =>
+        dayBookings.some(
+          (b: any) =>
+            (b.status === "confirmed" || IN_FLIGHT.includes(b.status)) &&
+            occupiesLane(b, lid) &&
+            overlapsWindow(b, ws, we)
+        );
+      const windowBlocked = (lid: string, ws: number, we: number) =>
+        (blocksByLane.get(lid) ?? []).some(
+          (b: any) => ws < b.startHour + b.duration / 60 && we > b.startHour
+        );
+      // Another live waitlist hold overlapping the window (e.g. a neighbouring
+      // hour's SNAPPED offer spilling into this one) — never double-hold a lane.
+      const windowHeldByOther = (lid: string, ws: number, we: number) =>
+        dayHolds.some(
+          (h: any) =>
+            h.holdType === "waitlist" &&
+            !deleted.has(h._id) &&
+            h.laneId === lid &&
+            ws < h.startHour + h.duration / 60 &&
+            we > h.startHour
+        );
+      const offerStartFor = (lid: string): number | null => {
+        if (!isFree(lid)) return null;
+        const seg = laneInfo.get(lid)?.segment;
+        if (!seg || !segmentHasCustomStarts(seg)) {
+          return windowHeldByOther(lid, hour, hour + 1) ? null : hour;
+        }
+        const allowed = segmentStartHours(seg);
+        const cands = allowed
+          .filter((s) => s >= hour - 1e-6 && s < hour + 1 - 1e-6)
+          .sort((a, b) => a - b);
+        for (const s of cands) {
+          const end = s + 1;
+          if (end > seg.endHour + 1e-6) continue; // would cross the segment
+          const endAligned =
+            Math.abs(end - seg.endHour) < 1e-6 ||
+            allowed.some((h2) => Math.abs(h2 - end) < 1e-6) ||
+            dayBookings.some(
+              (b: any) =>
+                b.status !== "cancelled" &&
+                occupiesLane(b, lid) &&
+                Math.abs(b.startHour - end) < 1e-6
+            );
+          if (!endAligned) continue; // duration-alignment would reject the booking
+          if (windowTaken(lid, s, end) || windowBlocked(lid, s, end)) continue;
+          if (windowHeldByOther(lid, s, end)) continue;
+          return s;
+        }
+        return null;
+      };
+      let offerLane: string | undefined;
+      let offerStart = hour;
+      const preferSnap = lanes.includes(preferLaneId) ? offerStartFor(preferLaneId) : null;
+      if (preferSnap != null) {
+        offerLane = preferLaneId;
+        offerStart = preferSnap;
+      } else {
+        for (const lid of lanes) {
+          if (lid === preferLaneId) continue;
+          const s = offerStartFor(lid);
+          if (s != null) {
+            offerLane = lid;
+            offerStart = s;
+            break;
+          }
+        }
+      }
       if (!offerLane) {
-        // No free lane in this pool right now (e.g. the only openings are
+        // No offerable lane in this pool right now (e.g. the only openings are
         // mid-checkout) — the checkout hold protects the slot; revisit on
         // confirm / abandonment.
         results[pool] = "in_flight";
@@ -439,7 +517,7 @@ export const advanceWaitlistOffer = internalMutation({
       await ctx.db.insert("slotHolds", {
         laneId: offerLane,
         date,
-        startHour: hour,
+        startHour: offerStart,
         duration: 60,
         holdType: "waitlist",
         userId: next.userId,
@@ -450,14 +528,17 @@ export const advanceWaitlistOffer = internalMutation({
 
       // 6. Email the exclusive offer with the AWST deadline. Lane name comes from
       // the resolved config ("BM 2" / "RU 4") — it carries the pool naturally.
+      // The BOOK deep-link uses the SNAPPED start (what they'll actually book);
+      // the DECLINE link keeps the entry's hour (declineWaitlistOffer looks the
+      // entry up by its queued hour).
       const laneName = laneInfo.get(offerLane)?.name ?? offerLane;
       await ctx.scheduler.runAfter(0, internal.emails.sendWaitlistVacancy, {
         to: next.userEmail,
         customerName: next.userName,
         laneName,
         date: fmtAwstDateLabel(date),
-        timeSlot: `${fmtHour12(hour)} - ${fmtHour12(hour + 1)}`,
-        bookingUrl: `https://cricketrevolution.com.au/?book=${offerLane}&date=${date}&hour=${hour}`,
+        timeSlot: `${fmtHour12(offerStart)} - ${fmtHour12(offerStart + 1)}`,
+        bookingUrl: `https://cricketrevolution.com.au/?book=${offerLane}&date=${date}&hour=${offerStart}`,
         otherWaitlistCount: "0",
         offerDeadline: `${fmtAwstTime(expiresAtMs)} AWST`,
       });
@@ -465,13 +546,13 @@ export const advanceWaitlistOffer = internalMutation({
       // SPEC_PWA_PUSH §5.1 + V2 §5/§8 — waitlist vacancy offer push (time-sensitive),
       // deep-linked straight to checkout for the held slot (&wl=1) with Accept/Deny
       // action buttons. Accept → checkout; Deny → release + roll to the next person.
-      const checkoutUrl = `/?book=${offerLane}&date=${date}&hour=${hour}&wl=1`;
+      const checkoutUrl = `/?book=${offerLane}&date=${date}&hour=${offerStart}&wl=1`;
       const declineUrl = `/?wlDecline=${offerLane}&date=${date}&hour=${hour}`;
       await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
         email: next.userEmail,
         category: "waitlist-offers",
         title: "Waitlist session has been allocated to you! 🏏",
-        body: `${laneName} · ${fmtAwstDateLabel(date)}, ${fmtHour12(hour)} - ${fmtHour12(hour + 1)} — reserved for you. Accept to pay, or Deny to pass it on (until ${fmtAwstTime(expiresAtMs)} AWST).`,
+        body: `${laneName} · ${fmtAwstDateLabel(date)}, ${fmtHour12(offerStart)} - ${fmtHour12(offerStart + 1)} — reserved for you. Accept to pay, or Deny to pass it on (until ${fmtAwstTime(expiresAtMs)} AWST).`,
         url: checkoutUrl,
         tag: `waitlist-${offerLane}-${date}-${hour}`,
         actions: [
@@ -495,7 +576,7 @@ export const advanceWaitlistOffer = internalMutation({
         await ctx.scheduler.runAfter(
           holdMs - EXPIRY_REMINDER_LEAD_MS,
           internal.waitlist.remindWaitlistOfferExpiring,
-          { waitlistId: next._id, offerLane, laneName, date, hour, expiresAtMs }
+          { waitlistId: next._id, offerLane, laneName, date, hour, offerStartHour: offerStart, expiresAtMs }
         );
       }
 
@@ -562,11 +643,12 @@ export const adminClearWaitlistOffer = mutation({
       .query("slotHolds")
       .withIndex("by_date", (q: any) => q.eq("date", args.date))
       .collect();
-    const slotEnd = args.hour + 1;
+    // Owned-hour scoping (floor of startHour), matching the engine — a window-
+    // overlap test would collaterally delete a NEIGHBOURING hour's snapped
+    // offer hold (e.g. 10:30–11:30 belongs to hour 10, not hour 11).
     for (const h of holds) {
       if (h.holdType !== "waitlist") continue;
-      const hEnd = h.startHour + h.duration / 60;
-      if (args.hour < hEnd && slotEnd > h.startHour) await ctx.db.delete(h._id);
+      if (Math.floor(h.startHour) === args.hour) await ctx.db.delete(h._id);
     }
     // Roll to the next member immediately — '*' so BOTH pools re-evaluate (the
     // non-target group's reverted offeree gets re-offered right away).
@@ -705,6 +787,9 @@ export const remindWaitlistOfferExpiring = internalMutation({
     laneName: v.optional(v.string()),
     date: v.string(),
     hour: v.number(),
+    // OFFER-SNAP: the actual offered start (may be e.g. :30 on a custom-start
+    // grid). Book deep-links use this; the entry stays keyed by `hour`.
+    offerStartHour: v.optional(v.number()),
     expiresAtMs: v.number(),
   },
   handler: async (ctx, args) => {
@@ -717,13 +802,14 @@ export const remindWaitlistOfferExpiring = internalMutation({
     if (Date.now() >= exp) return { sent: false, reason: "already expired" };
 
     const laneName = args.laneName ?? args.offerLane;
-    const checkoutUrl = `/?book=${args.offerLane}&date=${args.date}&hour=${args.hour}&wl=1`;
+    const startH = args.offerStartHour ?? args.hour;
+    const checkoutUrl = `/?book=${args.offerLane}&date=${args.date}&hour=${startH}&wl=1`;
     const declineUrl = `/?wlDecline=${args.offerLane}&date=${args.date}&hour=${args.hour}`;
     await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
       email: entry.userEmail,
       category: "waitlist-offers",
       title: "Your net is about to be released ⏳",
-      body: `${laneName} · ${fmtAwstDateLabel(args.date)}, ${fmtHour12(args.hour)} - ${fmtHour12(args.hour + 1)} — claim it before ${fmtAwstTime(exp)} AWST.`,
+      body: `${laneName} · ${fmtAwstDateLabel(args.date)}, ${fmtHour12(startH)} - ${fmtHour12(startH + 1)} — claim it before ${fmtAwstTime(exp)} AWST.`,
       url: checkoutUrl,
       // Distinct tag so it doesn't overwrite the original offer notification.
       tag: `waitlist-expiry-${args.offerLane}-${args.date}-${args.hour}`,
