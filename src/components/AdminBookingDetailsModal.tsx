@@ -25,7 +25,6 @@ interface Props {
   openAthleteEditor?: boolean
 }
 
-const ALL_DURATION_OPTIONS = [30, 60, 90, 120, 150, 180, 240, 300, 360]
 const STATUS_OPTIONS = ['confirmed', 'cancelled']
 
 /** Convert an ISO timestamp to a relative string like "2h ago" or "3d ago". */
@@ -147,16 +146,24 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave, ope
   // Duration options capped at the day's closing hour — but this admin-only modal
   // may extend an evening / team (club) booking past the public close up to the
   // after-hours 10pm ceiling (SPEC_ADMIN_AFTER_HOURS_BOOKING). updateBooking has no
-  // close-check and the server accepts endHour ≤ 22:00 for admins, so an 8pm team
-  // booking could previously only offer 1hr — the reason club durations weren't editable.
-  // Math.max(close, 22) only ever WIDENS late-start options; daytime is already bounded
-  // by ALL_DURATION_OPTIONS (max 6hr), so it's unaffected.
+  // close-check and the server accepts endHour ≤ 22:00 for admins.
+  // Every 30-min step is offered up to the coach max (10hr) — an admin is deciding
+  // deliberately, same ladder as AdminManualBookingModal. (The old hardcoded list
+  // skipped 3.5hr/4.5hr/5.5hr and stopped at 6hr, so e.g. an evening booking could
+  // not be extended to a 3.5hr end at the 10pm close, and a 7am–4pm coach block's
+  // own 9hr length wasn't selectable.)
   const ADMIN_AFTER_HOURS_CLOSE = 22
   const durationOptions = useMemo(() => {
-    const { close } = getHoursForDate(getSettingsStore().get(), date)
+    const s = getSettingsStore().get()
+    const { close } = getHoursForDate(s, date)
     const ceiling = Math.max(close, ADMIN_AFTER_HOURS_CLOSE)
-    const maxMinutes = Math.round((ceiling - startHour) * 60)
-    return ALL_DURATION_OPTIONS.filter(d => d >= 60 && d <= maxMinutes)
+    const maxMinutes = Math.min(
+      Math.round((ceiling - startHour) * 60),
+      s.coachMaxDurationMinutes ?? 600,
+    )
+    const out: number[] = []
+    for (let d = 30; d <= maxMinutes; d += 30) out.push(d)
+    return out
   }, [date, startHour])
 
   // Computed customer price — for display reference (payment already processed).
