@@ -2529,6 +2529,10 @@ export const modifyBooking = mutation({
 
     // SPEC_RECONFIGURABLE_LANES: the new slot's variant must be offered by the
     // resolved segment, and the booking may not cross a segment boundary (§2.14).
+    // isAdmin/isCoach were previously omitted here, so a COACH modify on a
+    // custom-start segment was wrongly held to the CUSTOMER start grid (and
+    // would now also hit the customer duration-alignment). Customers-only, as
+    // on the create path.
     await validateAndSnapshotLane(ctx, {
       laneId: effLane,
       variantId: effVariant,
@@ -2536,6 +2540,8 @@ export const modifyBooking = mutation({
       startHour: effStart,
       durationMinutes: effDuration,
       skipVariantCheck: isCoach || isAdmin,
+      isAdmin,
+      isCoach,
     });
 
     const awstNow = getAWSTNow();

@@ -208,6 +208,33 @@ export async function validateAndSnapshotLane(
     if (!allowed.some((h) => Math.abs(h - args.startHour) < 1e-6)) {
       throw new ConvexError("That start time isn't available for this lane. Please refresh and try again.");
     }
+    // Option A duration alignment (2026-08-11): the booking must TILE the admin
+    // grid — its end must land on another allowed start, the segment end, or
+    // flush against an existing booking on this lane (which also can't strand
+    // time). Prevents e.g. a 1.5h booking on an hourly :30 grid leaving an
+    // unsellable 30-min orphan. Customers only, mirroring the start guard.
+    const endHour = args.startHour + args.durationMinutes / 60;
+    const onGrid =
+      Math.abs(endHour - segment.endHour) < 1e-6 ||
+      allowed.some((h) => Math.abs(h - endHour) < 1e-6);
+    if (!onGrid) {
+      const dayBookings = await ctx.db
+        .query("bookings")
+        .withIndex("by_date", (q: any) => q.eq("date", args.date))
+        .collect();
+      const flush = dayBookings.some(
+        (b: any) =>
+          b.status !== "cancelled" &&
+          (b.laneId === args.laneId ||
+            (Array.isArray(b.additionalLaneIds) && b.additionalLaneIds.includes(args.laneId))) &&
+          Math.abs(b.startHour - endHour) < 1e-6
+      );
+      if (!flush) {
+        throw new ConvexError(
+          "That session length isn't available for this lane's time grid — please pick a length that ends on a bookable start time."
+        );
+      }
+    }
   }
   // Variant must be offered by the segment (normalise to canonical key for the check).
   if (!args.skipVariantCheck && args.variantId) {

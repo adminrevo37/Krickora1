@@ -377,8 +377,29 @@ export function getCustomerDurations(bookings: Booking[], laneId: string, dateKe
   if (startsOnHalfHour && 90 <= customerMax) candidates.push(90)
   candidates.sort((a, b) => a - b)
 
+  // SPEC_LANE_SEGMENT_BOOKING_TIMES — Option A duration alignment (2026-08-11):
+  // on a segment with admin-defined custom starts, a customer booking must TILE
+  // the grid — its end must land on another allowed start, the segment end, or
+  // flush against the next existing booking. Keeps the admin's grid intact (no
+  // stranded, unsellable 30-min orphans from e.g. a 1.5h booking on an hourly
+  // :30 grid). Coaches/admin are exempt (this function is customer-only).
+  const { segments: alignSegs } = getDaySegments(laneId, dateKey)
+  const alignSeg = resolveSegment(alignSegs, startHour)
+  const gridEnds = segmentHasCustomStarts(alignSeg)
+    ? [...segmentStartHours(alignSeg), alignSeg.endHour]
+    : null
+  const dayCloseForAlign = getHoursForDate(getSettingsStore().get(), dateKey).close
+  const endAligned = (d: number): boolean => {
+    if (!gridEnds) return true
+    const end = startHour + d / 60
+    if (gridEnds.some(h => Math.abs(h - end) < 1e-6)) return true
+    // Flush against the next real booking tiles perfectly too (no gap possible).
+    return Math.abs(end - nextStart) < 1e-6 && nextStart < dayCloseForAlign - 1e-6
+  }
+
   for (const d of candidates) {
     if (d > maxMins) continue
+    if (!endAligned(d)) continue
     const createsGap = wouldCreateDeadGap(startHour, d, nextStart)
     if (!createsGap) {
       // No gap issue — always allow
@@ -395,8 +416,9 @@ export function getCustomerDurations(bookings: Booking[], laneId: string, dateKe
     }
   }
 
-  // Final fallback: if nothing passed but there's physical space, allow 60 min
-  if (durations.length === 0 && maxMins >= 60) durations.push(60)
+  // Final fallback: if nothing passed but there's physical space, allow 60 min —
+  // but never a misaligned 60 on a custom-start grid (the server would reject it).
+  if (durations.length === 0 && maxMins >= 60 && endAligned(60)) durations.push(60)
   return durations
 }
 
