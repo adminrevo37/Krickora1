@@ -4,6 +4,8 @@ import { v } from "convex/values";
 // of a local hardcoded map (which used stale "Bowling Machine N"/"9m Run Up N"
 // names and ignored laneNameSnapshot → wrong names after a reconfigurable-lane flip).
 import { laneNameForBooking } from "./lib/lanes";
+// SPEC_CUSTOMER_INSESSION_EXTEND — live lane config for the T-10 extend-offer check.
+import { resolveLanesAtHour } from "./lanes";
 
 export function formatHourToTime(hour: number): string {
   const whole = Math.floor(hour);
@@ -65,6 +67,9 @@ export const getBookingsNeedingReminder = internalQuery({
       // SPEC_COACH_SPLIT_LANE_BOOKING: leg 2 of a split never reminds — the
       // carrier leg's reminder covers the whole session (same door code).
       if ((b as any).splitParentId) return false;
+      // SPEC_CUSTOMER_INSESSION_EXTEND: an extension row never reminds — the
+      // customer is already IN the building when it exists (same door code).
+      if ((b as any).extensionOfId) return false;
 
       // Calculate hours until booking
       const [bYear, bMonth, bDay] = b.date.split("-").map(Number);
@@ -219,5 +224,110 @@ export const markFacilityAccessPushSent = internalMutation({
   args: { customerId: v.id("customers") },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.customerId, { facilityAccessPushSent: true });
+  },
+});
+
+// SPEC_CUSTOMER_INSESSION_EXTEND_2026-08 §4 — confirmed CUSTOMER bookings ending
+// in ≤12 min (today, AWST) that haven't had the one-time T-10 "extend?" push AND
+// where at least one lane is actually free for +30 min after their end. The
+// availability check here is deliberately LIGHT (bookings + blocks + close +
+// segment; slot holds are skipped — extendBookingLive is authoritative and the
+// modal shows the exact live options). One push per booking row, ever
+// (`extendOfferPushSent`); an extension row is itself a later candidate, so a
+// chained extend gets its own nudge before ITS end.
+export const getBookingsForExtendOfferPush = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const now = new Date();
+    const awstOffset = 8 * 60 * 60 * 1000;
+    const awstNow = new Date(now.getTime() + awstOffset + now.getTimezoneOffset() * 60 * 1000);
+    const todayStr = `${awstNow.getFullYear()}-${String(awstNow.getMonth() + 1).padStart(2, "0")}-${String(awstNow.getDate()).padStart(2, "0")}`;
+    const currentHourAWST = awstNow.getHours() + awstNow.getMinutes() / 60;
+
+    const todayBookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.eq("date", todayStr))
+      .collect();
+
+    const candidates = todayBookings.filter((b: any) => {
+      if (b.status !== "confirmed") return false;
+      if (!b.customerEmail) return false;
+      if (b.isCoachBooking) return false;
+      if (b.isClubBooking) return false;
+      if (b.extendOfferPushSent) return false;
+      if (b.paymentStatus === "unpaid") return false; // extendBookingLive rejects these
+      // Already extended → no nudge for the parent; the chain's newest row is
+      // itself a candidate and gets its own T-10 before ITS end.
+      if (
+        todayBookings.some(
+          (e: any) =>
+            e.extensionOfId &&
+            String(e.extensionOfId) === String(b._id) &&
+            e.status === "confirmed"
+        )
+      )
+        return false;
+      const minsToEnd = (b.startHour + b.duration / 60 - currentHourAWST) * 60;
+      // 0 < minsToEnd ≤ 12: the 5-min cron guarantees one tick inside the window;
+      // the per-booking flag stops repeats.
+      return minsToEnd > 0 && minsToEnd <= 12;
+    });
+    if (candidates.length === 0) return [];
+
+    const siteSettings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    const DOW_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const dowName = DOW_NAMES[awstNow.getDay()];
+    const dayHours = (siteSettings as any)?.dailyHours?.find((h: any) => h.day === dowName);
+    const closeHour = dayHours ? dayHours.close : ((siteSettings as any)?.closingHour ?? 21);
+
+    const occupiesLane = (b: any, lid: string) =>
+      b.laneId === lid || ((b.additionalLaneIds as string[]) ?? []).includes(lid);
+
+    const result: Array<{ id: any; customerEmail: string; endTime: string }> = [];
+    for (const b of candidates) {
+      const extStart = b.startHour + b.duration / 60;
+      const extEnd = extStart + 0.5; // the smallest offer (+30 min)
+      if (extEnd > closeHour + 1e-9) continue;
+      // Live lane config at the extension hour: skip closed segments and segments
+      // that would force a boundary cross for even a 30-min extension.
+      const lanes = await resolveLanesAtHour(ctx, todayStr, extStart);
+      let anyFree = false;
+      for (const lane of lanes) {
+        if (lane.closed) continue;
+        if (extEnd > lane.segment.endHour + 1e-9) continue;
+        const conflict = todayBookings.some((ob: any) => {
+          if (ob.status === "cancelled") return false;
+          if (!occupiesLane(ob, lane.laneId)) return false;
+          const obEnd = ob.startHour + ob.duration / 60;
+          return extStart < obEnd && extEnd > ob.startHour;
+        });
+        if (conflict) continue;
+        const blocks = await ctx.db
+          .query("laneBlocks")
+          .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lane.laneId).eq("date", todayStr))
+          .collect();
+        const blocked = blocks.some((blk: any) => {
+          const blkEnd = blk.startHour + blk.duration / 60;
+          return extStart < blkEnd && extEnd > blk.startHour;
+        });
+        if (blocked) continue;
+        anyFree = true;
+        break;
+      }
+      if (!anyFree) continue;
+      result.push({ id: b._id, customerEmail: b.customerEmail, endTime: formatHourToTime(extStart) });
+    }
+    return result;
+  },
+});
+
+// Mark a booking's one-time T-10 extend-offer push as sent (never reset).
+export const markExtendOfferPushSent = internalMutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.bookingId, { extendOfferPushSent: true });
   },
 });

@@ -25,6 +25,7 @@ function toBooking(doc: any): Booking {
     isCoachBooking: doc.isCoachBooking,
     coachPrice: doc.coachPrice,
     priceInCents: doc.priceInCents,
+    paymentStatus: doc.paymentStatus, // owner rows only (stripped for non-owners)
     additionalLaneIds: doc.additionalLaneIds,
     athleteSlots: doc.athleteSlots,
     creditApplied: doc.creditApplied,
@@ -42,6 +43,7 @@ function toBooking(doc: any): Booking {
     isClubBooking: doc.isClubBooking, // SPEC_CLUB_TEAM_BOOKINGS
     bookingGroupId: doc.bookingGroupId, // SPEC_CLUB_TEAM_BOOKINGS block id
     splitParentId: doc.splitParentId, // SPEC_COACH_SPLIT_LANE_BOOKING leg-2 link
+    extensionOfId: doc.extensionOfId, // SPEC_CUSTOMER_INSESSION_EXTEND parent link
   }
 }
 

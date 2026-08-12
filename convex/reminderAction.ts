@@ -89,6 +89,38 @@ export const sendBookingReminders = internalAction({
       console.error("facility-access push phase failed:", e);
     }
 
+    // ── Phase 3: EXTEND-OFFER push (SPEC_CUSTOMER_INSESSION_EXTEND_2026-08 §4) —
+    // ~10 min before a customer session ends, when space is actually free for a
+    // +30 extension. Once per booking row; deep-links to the booking card where
+    // the Extend button lives. Own opt-out category "extend-offer" (default ON).
+    try {
+      const extendOffers: any[] = await ctx.runQuery(
+        internal.reminderQueries.getBookingsForExtendOfferPush,
+        {}
+      );
+      for (const eo of extendOffers) {
+        try {
+          await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+            email: eo.customerEmail,
+            category: "extend-offer",
+            title: "Extend your session? ⏱",
+            body: `Space is free after ${eo.endTime} — extend by 30 min or 1 hour and pay in the app.`,
+            url: "/bookings",
+            tag: `extend-offer-${eo.id}`,
+          });
+          // Marked sent regardless of device availability (same pattern as the
+          // reminder + facility-access phases) so the row isn't re-checked 5-minutely.
+          await ctx.runMutation(internal.reminderQueries.markExtendOfferPushSent, {
+            bookingId: eo.id,
+          });
+        } catch (e) {
+          console.error(`Failed extend-offer push for ${eo.customerEmail}:`, e);
+        }
+      }
+    } catch (e) {
+      console.error("extend-offer push phase failed:", e);
+    }
+
     return { sent, total: bookings.length };
   },
 });

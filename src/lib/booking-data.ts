@@ -215,6 +215,24 @@ export interface Booking {
   // display merge — leg 2's window, so the card can show "BM 3 until 8pm, then
   // RU 1" while the merged duration spans the whole session.
   splitLeg2?: { laneId: string; startHour: number; duration: number }
+  // SPEC_CUSTOMER_INSESSION_EXTEND_2026-08: set on an EXTENSION row, pointing at
+  // the booking it extends. The extension is a normal paid customer booking for
+  // the extra window, sharing the parent's door code.
+  extensionOfId?: string
+  // CLIENT-ONLY (never stored): confirmed extension rows absorbed into the parent
+  // card by MyBookings' display merge, in chain order. Parent fields stay
+  // UNTOUCHED (Modify/Cancel must see the original row) — the card computes the
+  // displayed end/price from this list. `id` of the LAST entry is the target for
+  // a further chained extend.
+  extensions?: Array<{
+    id: string
+    laneId: string
+    additionalLaneIds?: string[]
+    variantId?: string | null
+    startHour: number
+    duration: number
+    priceInCents?: number
+  }>
   // Audit trail of admin modifications
   modificationHistory?: Array<{
     modifiedAt: string

@@ -25,7 +25,7 @@ import {
 } from "./lib/bookingWindow";
 import { computeCustomerPriceCents, decreaseCreditCents } from "./lib/pricing";
 import { validateAndSnapshotLane, resolveLaneSnapshot } from "./lanes";
-import { defaultLaneName } from "./lib/lanes";
+import { defaultLaneName, variantRatePerHour, DEFAULT_LANE_META } from "./lib/lanes";
 import { PRICE_DEFAULTS } from "./lib/priceDefaults";
 import { composeName, splitName } from "./lib/names";
 import { resolveCanonicalCustomerByEmail } from "./lib/identity";
@@ -2130,6 +2130,422 @@ export const createSplitBooking = mutation({
     await scheduleCapReconcileForBooking(ctx, args.customerEmail, args.date);
 
     return { carrierId, leg2Id };
+  },
+});
+
+// ============================================================================
+// SPEC_CUSTOMER_INSESSION_EXTEND_2026-08 — in-session customer extend + pay
+// ============================================================================
+// Once a customer's session has STARTED, they may extend by +30/+60 min on any
+// free lane(s): own lanes preferred (UI), different-lane fallback allowed
+// (decision #7). The extension is a NEW LINKED bookings row (`extensionOfId`)
+// for the extra window, sharing the parent's DOOR CODE — so it reuses the whole
+// checkout machinery verbatim (pending_payment + hold + embedded checkout +
+// webhook confirm) and HA needs zero changes (the per-minute reconcile dedupes
+// identical codes; spec §6). Window: parent start → parent end + 7 min.
+const EXTEND_GRACE_MIN = 7;
+
+export const extendBookingLive = mutation({
+  args: {
+    parentId: v.id("bookings"),
+    durationMinutes: v.number(), // 30 | 60 only
+    laneIds: v.array(v.string()), // lanes for the extension window (≤ parent's lane count)
+    applyCredit: v.optional(v.boolean()), // server clamps to min(balance, price)
+  },
+  handler: async (ctx, args) => {
+    // Auth — caller must own the parent booking (or be admin, for support).
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError("Authentication required.");
+    const callerEmail = identity.email?.toLowerCase().trim() ?? "";
+    const callerCustomer = await resolveCanonicalCustomerByEmail(ctx, callerEmail);
+    const isAdminCaller = callerCustomer?.role === "admin";
+
+    const parent: any = await ctx.db.get(args.parentId);
+    if (!parent) throw new ConvexError("Booking not found.");
+    const ownsParent =
+      (parent.userId != null && parent.userId === identity.subject) ||
+      (parent.customerEmail ?? "").toLowerCase().trim() === callerEmail;
+    if (!ownsParent && !isAdminCaller) {
+      throw new ConvexError("You can only extend your own booking.");
+    }
+
+    if (!isAdminCaller) {
+      await enforceRateLimit(
+        ctx,
+        {
+          action: "extend-booking",
+          identifier: identity.subject ?? callerEmail,
+          max: 10,
+          windowMs: 60_000,
+        },
+        "Too many extend attempts — please wait a minute and try again."
+      );
+    }
+
+    // Eligibility — confirmed, settled, non-coach, non-club customer booking.
+    // (paymentStatus 'unpaid' = admin offline/invoice booking awaiting payment;
+    // absent paymentStatus on a confirmed booking = settled by convention —
+    // credit-covered / comp / legacy rows never carry the field.)
+    if (parent.status !== "confirmed") {
+      throw new ConvexError("Only a confirmed booking can be extended.");
+    }
+    if (parent.isCoachBooking) {
+      throw new ConvexError("In-session extend is for customer bookings (coach sessions bill via statement).");
+    }
+    if (parent.isClubBooking) {
+      throw new ConvexError("Club bookings are extended by the admin.");
+    }
+    if (parent.paymentStatus === "unpaid") {
+      throw new ConvexError("This booking has an outstanding balance — please settle it before extending.");
+    }
+    if (parent.pendingEdit) {
+      throw new ConvexError("A change to this booking is awaiting payment — finish or cancel it first.");
+    }
+
+    if (args.durationMinutes !== 30 && args.durationMinutes !== 60) {
+      throw new ConvexError("Extensions are 30 minutes or 1 hour.");
+    }
+
+    // Chain root — a chained extend (parent is itself an extension row) anchors
+    // the "session has started" gate on the ROOT booking's start, not the
+    // extension row's (review MED-1: at 7:40 a customer extended-to-8:30 must be
+    // able to extend again even though the 8:00 extension row hasn't "started").
+    let chainRoot: any = parent;
+    for (let i = 0; i < 12 && chainRoot.extensionOfId; i++) {
+      const up = await ctx.db.get(chainRoot.extensionOfId);
+      if (!up) break;
+      chainRoot = up;
+    }
+
+    // Time gate — server-enforced: now ∈ [chain-root start, parent end + 7 min].
+    // Perth is fixed UTC+8 (no DST) → wall-clock times as epoch ms.
+    const wallMs = (dateStr: string, hour: number): number => {
+      const [wy, wm, wd] = String(dateStr).split("-").map(Number);
+      const whole = Math.floor(hour);
+      const mins = Math.round((hour - whole) * 60);
+      return Date.UTC(wy, wm - 1, wd, whole - 8, mins);
+    };
+    const rootStartMs = wallMs(chainRoot.date, chainRoot.startHour);
+    const parentEndMs = wallMs(parent.date, parent.startHour) + parent.duration * 60_000;
+    const nowMs = Date.now();
+    if (nowMs < rootStartMs) {
+      throw new ConvexError("Your session hasn't started yet — use Modify to extend an upcoming booking.");
+    }
+    if (nowMs > parentEndMs + EXTEND_GRACE_MIN * 60_000) {
+      throw new ConvexError("This session ended more than a few minutes ago and can no longer be extended.");
+    }
+    const [py, pmn, pdy] = String(parent.date).split("-").map(Number);
+
+    // Lane set — non-empty, unique, known lane ids, ≤ the parent's lane count.
+    // ANY lanes are allowed (decision #7 different-lane fallback); the own-lanes-
+    // first preference is UI logic only.
+    const requestedLanes = Array.from(new Set(args.laneIds));
+    if (requestedLanes.length === 0) throw new ConvexError("Pick at least one lane.");
+    const parentLaneCount = 1 + ((parent.additionalLaneIds as string[] | undefined)?.length ?? 0);
+    if (requestedLanes.length > parentLaneCount) {
+      throw new ConvexError("An extension can't span more lanes than the original booking.");
+    }
+    const KNOWN_LANE_IDS = new Set(DEFAULT_LANE_META.map((m) => m.laneId));
+    for (const lid of requestedLanes) {
+      if (!KNOWN_LANE_IDS.has(lid)) throw new ConvexError("Unknown lane.");
+    }
+    // Parent's own primary lane stays primary when included (it carries the variant).
+    const primaryLane = requestedLanes.includes(parent.laneId)
+      ? parent.laneId
+      : requestedLanes[0];
+    const additionalLanes = requestedLanes.filter((l) => l !== primaryLane);
+
+    // Extension geometry — starts exactly at the parent's end, same date.
+    const extStart = parent.startHour + parent.duration / 60;
+    const extEnd = extStart + args.durationMinutes / 60;
+
+    const siteSettings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+
+    // Day close — same per-day resolution as createBooking. No customer
+    // after-hours: the extension must end by close (spec §3).
+    const DOW_NAMES = [
+      "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+    ];
+    const dowName = DOW_NAMES[new Date(py, pmn - 1, pdy).getDay()];
+    const dayHours = (siteSettings as any)?.dailyHours?.find((h: any) => h.day === dowName);
+    const CLOSING_HOUR = dayHours ? dayHours.close : ((siteSettings as any)?.closingHour ?? 21);
+    if (dayHours?.closed) throw new ConvexError("The facility is closed on this day.");
+    if (extEnd > CLOSING_HOUR + 1e-9) {
+      throw new ConvexError("The facility closes before the extension would end.");
+    }
+
+    // Facility closure check (same convention as every other booking write —
+    // shielded in practice by addClosure's auto-cancel sweep, kept for parity).
+    const closures = await ctx.db
+      .query("closures")
+      .withIndex("by_date", (q: any) => q.eq("date", parent.date))
+      .collect();
+    if (closures.length > 0) {
+      throw new ConvexError("The facility is closed on this day.");
+    }
+
+    // Per-lane availability (§3): closed segment / boundary cross / variant-offered
+    // via validateAndSnapshotLane (skipStartGrid — an extension is exempt from the
+    // customer start grid: it starts flush at the parent's end), then booking
+    // conflicts (BUGM-1 full-lane-set day scan) + service blocks per lane.
+    const dayBookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.eq("date", parent.date))
+      .collect();
+    const occupiesLane = (b: any, lid: string) =>
+      b.laneId === lid || ((b.additionalLaneIds as string[]) ?? []).includes(lid);
+
+    // Review MED-2 (2026-08-13) — double-extend guard: a stale card / second
+    // device can request the SAME window again; the own lane then conflicts
+    // (taken by the FIRST extension) so the different-lane fallback would
+    // happily sell the window a second time. Reject any overlap with a
+    // non-cancelled row in this booking's own extension chain (pending rows
+    // included — they're mid-payment).
+    const chainIds = new Set<string>([chainRoot._id.toString()]);
+    let chainGrew = true;
+    while (chainGrew) {
+      chainGrew = false;
+      for (const b of dayBookings) {
+        if (b.status === "cancelled") continue;
+        const pid = (b as any).extensionOfId ? String((b as any).extensionOfId) : null;
+        if (pid && chainIds.has(pid) && !chainIds.has(b._id.toString())) {
+          chainIds.add(b._id.toString());
+          chainGrew = true;
+        }
+      }
+    }
+    const chainOverlap = dayBookings.some((b: any) => {
+      if (b.status === "cancelled") return false;
+      if (!chainIds.has(b._id.toString())) return false;
+      const bEnd = b.startHour + b.duration / 60;
+      return extStart < bEnd && extEnd > b.startHour;
+    });
+    if (chainOverlap) {
+      throw new ConvexError(
+        "You've already extended this session over that time — check My Bookings for the extension (it may be awaiting payment)."
+      );
+    }
+
+    const laneSnaps = new Map<string, { laneNameSnapshot: string; variantLabelSnapshot: string }>();
+    for (const lid of requestedLanes) {
+      // The parent's variant applies only when continuing on the parent's primary
+      // lane; every other lane is booked at its base setup (no silent Truman charge).
+      const laneVariant = lid === parent.laneId ? (parent.variantId ?? null) : null;
+      const snap = await validateAndSnapshotLane(ctx, {
+        laneId: lid,
+        variantId: laneVariant,
+        date: parent.date,
+        startHour: extStart,
+        durationMinutes: args.durationMinutes,
+        skipStartGrid: true,
+      });
+      laneSnaps.set(lid, snap);
+
+      const hasConflict = dayBookings.some((b: any) => {
+        if (b.status === "cancelled") return false;
+        if (b._id === parent._id) return false; // parent ends exactly at extStart anyway
+        if (!occupiesLane(b, lid)) return false;
+        const bEnd = b.startHour + b.duration / 60;
+        return extStart < bEnd && extEnd > b.startHour;
+      });
+      if (hasConflict) {
+        throw new ConvexError("That lane is no longer free for the extension — please refresh and try again.");
+      }
+
+      const laneBlocks = await ctx.db
+        .query("laneBlocks")
+        .withIndex("by_laneId_date", (q: any) => q.eq("laneId", lid).eq("date", parent.date))
+        .collect();
+      const blocked = laneBlocks.some((b: any) => {
+        const bEnd = b.startHour + b.duration / 60;
+        return extStart < bEnd && extEnd > b.startHour;
+      });
+      if (blocked) {
+        throw new ConvexError("This lane is blocked for service/repair during the extension window.");
+      }
+    }
+
+    // Slot holds — a waitlist first-refusal hold WINS over an extension
+    // (decision #5): customers never bypass waitlist holds here.
+    if (
+      await hasActiveHoldConflict(ctx, {
+        laneIds: requestedLanes,
+        date: parent.date,
+        startHour: extStart,
+        endHour: extEnd,
+        callerUserId: parent.userId ?? undefined,
+        bypassWaitlistHolds: false,
+      })
+    ) {
+      throw new ConvexError("That window is currently held for another customer — please try again shortly.");
+    }
+
+    // Server-authoritative price — PRO-RATA of each lane's hourly rate (decision
+    // #2; deliberately NOT the flat 30-min gap-fill price, which is decoupled from
+    // the hourly rate). Parent's variant rate on its own primary lane, base rate
+    // everywhere else.
+    const proRataCents = (variantId: string | null) =>
+      Math.round(variantRatePerHour(variantId, siteSettings as any) * (args.durationMinutes / 60) * 100);
+    let serverPriceCents = 0;
+    for (const lid of requestedLanes) {
+      serverPriceCents += proRataCents(lid === parent.laneId ? (parent.variantId ?? null) : null);
+    }
+
+    // Credit — clamp to min(balance, price); same A$0.50 minimum-charge floor as
+    // createBooking. Balance belongs to the booking OWNER (admin-on-behalf safe).
+    const ownerEmail = (parent.customerEmail ?? "").toLowerCase().trim();
+    const ownerCustomer =
+      ownerEmail === callerEmail ? callerCustomer : await resolveCanonicalCustomerByEmail(ctx, ownerEmail);
+    let creditAppliedEff: number | undefined = undefined;
+    if (args.applyCredit) {
+      const realBalCents = Math.max(0, Math.round(((ownerCustomer as any)?.creditBalance ?? 0) * 100));
+      const clampedCents = Math.min(realBalCents, serverPriceCents);
+      creditAppliedEff = clampedCents > 0 ? clampedCents / 100 : undefined;
+    }
+    const netDueCents = Math.max(0, serverPriceCents - Math.round((creditAppliedEff ?? 0) * 100));
+    const effectiveStatus = netDueCents >= 50 ? "pending_payment" : "confirmed";
+
+    // Door code — the PARENT's code, server-copied (C3 client-code ban holds), so
+    // the keypad code stays continuously valid across the whole extended window.
+    const reservedSet = new Set<string>((siteSettings as any)?.reservedAccessCodes ?? DEFAULT_RESERVED_CODES);
+    const accessCode: string =
+      parent.accessCode ?? generateServerAccessCode(await collectActiveAccessCodes(ctx), reservedSet);
+
+    const primarySnap = laneSnaps.get(primaryLane)!;
+    const id = await ctx.db.insert("bookings", {
+      laneId: primaryLane,
+      variantId: primaryLane === parent.laneId ? parent.variantId : undefined,
+      date: parent.date,
+      startHour: extStart,
+      duration: args.durationMinutes,
+      customerName: parent.customerName,
+      customerEmail: parent.customerEmail,
+      customerPhone: parent.customerPhone,
+      userId: parent.userId,
+      status: effectiveStatus,
+      additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
+      creditApplied: creditAppliedEff,
+      accessCode,
+      priceInCents: serverPriceCents,
+      bookingPostcode: parent.bookingPostcode,
+      bookingSuburb: parent.bookingSuburb,
+      laneNameSnapshot: primarySnap.laneNameSnapshot,
+      variantLabelSnapshot: primarySnap.variantLabelSnapshot,
+      // Continuity: if the parent auto-opened the door, keep the token on the
+      // extension's event so HA's close window follows the true session end.
+      autoDoor: parent.autoDoor ? true : undefined,
+      extensionOfId: args.parentId,
+      createdAt: Date.now(),
+    });
+
+    await recordBookingEvent(ctx, {
+      type: "created",
+      bookingId: id.toString(),
+      customerName: parent.customerName,
+      actorName: isAdminCaller && !ownsParent ? (callerCustomer?.name ?? "Admin") : parent.customerName,
+      isCoachBooking: false,
+      after: {
+        date: parent.date,
+        startHour: extStart,
+        duration: args.durationMinutes,
+        lane: primarySnap.laneNameSnapshot,
+        variant: primarySnap.variantLabelSnapshot ?? undefined,
+      },
+    });
+
+    // If the owner happened to hold a waitlist first-refusal offer on this very
+    // window, extending consumes it (marks their entry booked) — same as booking.
+    await consumeWaitlistHoldForBooking(ctx, {
+      userId: parent.userId,
+      laneId: primaryLane,
+      date: parent.date,
+      startHour: extStart,
+      duration: args.durationMinutes,
+    });
+
+    // Waitlist reconcile for the taken window (idempotent; clears queues when the
+    // hour is now full — decision #6 of the waitlist engine).
+    await scheduleWaitlistAdvance(ctx, {
+      laneId: primaryLane,
+      additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
+      date: parent.date,
+      startHour: extStart,
+      duration: args.durationMinutes,
+    });
+
+    if (effectiveStatus === "pending_payment") {
+      // Same hold machinery as createBooking — abandoned checkout releases it.
+      await createCheckoutHold(ctx, {
+        bookingId: id.toString(),
+        laneId: primaryLane,
+        additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
+        date: parent.date,
+        startHour: extStart,
+        duration: args.durationMinutes,
+        userId: parent.userId,
+        userEmail: parent.customerEmail,
+        expiresAtMs: Date.now() + (await abandonedCheckoutMs(ctx)),
+      });
+    } else {
+      // Confirmed at create (credit / $0 covered): redeem credit + notify + sync
+      // the calendar now. Stripe-paid extensions do all of this in
+      // confirmBookingPayment (the row is a normal pending_payment booking).
+      if ((creditAppliedEff ?? 0) > 0 && parent.customerEmail) {
+        await redeemCredit(ctx, {
+          email: parent.customerEmail,
+          amount: creditAppliedEff as number,
+          bookingId: id.toString(),
+        });
+      }
+      if (parent.customerEmail) {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.emails.sendBookingConfirmation,
+          buildConfirmationEmailArgs({
+            customerEmail: parent.customerEmail,
+            customerName: parent.customerName,
+            laneId: primaryLane,
+            laneNameSnapshot: primarySnap.laneNameSnapshot,
+            date: parent.date,
+            startHour: extStart,
+            duration: args.durationMinutes,
+            accessCode,
+            coachPrice: undefined,
+            creditApplied: creditAppliedEff,
+          }),
+        );
+        await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+          email: parent.customerEmail,
+          category: "booking-confirmation",
+          title: "Session extended ✅",
+          body: `${primarySnap.laneNameSnapshot ?? defaultLaneName(primaryLane)} · until ${fmtHour12(extEnd)} · same door code ${accessCode}`,
+          url: "/bookings",
+          tag: `booking-${id.toString()}`,
+        });
+      }
+      await ctx.scheduler.runAfter(0, internal.googleCalendar.createCalendarEvent, {
+        bookingId: id.toString(),
+        laneId: primaryLane,
+        variantId: primaryLane === parent.laneId ? parent.variantId : undefined,
+        date: parent.date,
+        startHour: extStart,
+        duration: args.durationMinutes,
+        customerName: parent.customerName,
+        customerEmail: parent.customerEmail,
+        customerPhone: parent.customerPhone,
+        status: effectiveStatus,
+        isCoachBooking: false,
+        accessCode,
+        additionalLaneIds: additionalLanes.length > 0 ? additionalLanes : undefined,
+        laneNameSnapshot: primarySnap.laneNameSnapshot,
+        variantLabelSnapshot: primarySnap.variantLabelSnapshot,
+      });
+    }
+
+    return { id: id.toString(), status: effectiveStatus, dueCents: netDueCents };
   },
 });
 

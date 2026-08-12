@@ -12,6 +12,7 @@ export type PushCategoryKey =
   | "facility-access"
   | "booking-changes"
   | "waitlist-offers"
+  | "extend-offer"
   | "mate-alerts"
   | "child-coaching"
   | "coach-allocation"
@@ -55,6 +56,14 @@ export const PUSH_CATEGORIES: PushCategory[] = [
     key: "waitlist-offers",
     label: "Waitlist offers",
     description: "When a slot you're waitlisted for opens up for you.",
+    roles: ["customer"],
+  },
+  {
+    // SPEC_CUSTOMER_INSESSION_EXTEND_2026-08 §1 decision #4 — T-10 "extend?" nudge,
+    // push-only (no email), once per booking, only when an extension is available.
+    key: "extend-offer",
+    label: "Extend your session",
+    description: "A nudge near the end of your session when the lane is free to extend.",
     roles: ["customer"],
   },
   {

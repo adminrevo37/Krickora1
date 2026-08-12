@@ -509,6 +509,16 @@ export default defineSchema({
     // Cancel/repeat act on the pair; the reminder cron skips leg-2 rows. Additive/
     // optional → no migration; absent = a normal standalone booking.
     splitParentId: v.optional(v.id("bookings")),
+    // SPEC_CUSTOMER_INSESSION_EXTEND_2026-08: set on an in-session EXTENSION row,
+    // pointing at the booking it extends (the extension is a normal paid customer
+    // booking for the extra window — own laneId set, own priceInCents — sharing the
+    // parent's door code). MyBookings merges the pair for display; the reminder
+    // cron skips extension rows. Additive/optional → no migration.
+    extensionOfId: v.optional(v.id("bookings")),
+    // SPEC_CUSTOMER_INSESSION_EXTEND_2026-08: true once the one-time T-10 "extend
+    // your session?" push was sent for this booking (only sent when an extension
+    // is actually available at send time). Additive/optional → no migration.
+    extendOfferPushSent: v.optional(v.boolean()),
   })
     .index("by_date", ["date"])
     .index("by_laneId_date", ["laneId", "date"])
@@ -517,7 +527,8 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_createdAt", ["createdAt"])
     .index("by_bookingGroupId", ["bookingGroupId"])
-    .index("by_splitParentId", ["splitParentId"]),
+    .index("by_splitParentId", ["splitParentId"])
+    .index("by_extensionOfId", ["extensionOfId"]),
 
   // SPEC_ADD_A_MATE: persistent saved-mates list (the "friendships" book). One
   // row per (owner → mate) pair the owner has added to a booking at least once,

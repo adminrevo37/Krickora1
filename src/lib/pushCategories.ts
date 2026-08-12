@@ -7,6 +7,7 @@ export type PushCategoryKey =
   | 'facility-access'
   | 'booking-changes'
   | 'waitlist-offers'
+  | 'extend-offer'
   | 'mate-alerts'
   | 'child-coaching'
   | 'coach-allocation'
@@ -27,6 +28,7 @@ export const PUSH_CATEGORIES: PushCategory[] = [
   { key: 'facility-access', label: 'Facility access (first visit)', description: 'Before your first session — how to find us, parking and getting in.', roles: ['customer'] },
   { key: 'booking-changes', label: 'Booking changes & cancellations', description: 'When a booking is changed or cancelled.', roles: ['customer'] },
   { key: 'waitlist-offers', label: 'Waitlist offers', description: "When a slot you're waitlisted for opens up for you.", roles: ['customer'] },
+  { key: 'extend-offer', label: 'Extend your session', description: 'A nudge near the end of your session when the lane is free to extend.', roles: ['customer'] },
   { key: 'mate-alerts', label: 'Shared-booking (mate) alerts', description: "When you're added to, removed from, or a shared booking changes.", roles: ['customer'] },
   { key: 'child-coaching', label: 'Child coaching alerts', description: 'When your child is allocated to, moved or removed from a coaching session.', roles: ['customer'] },
   { key: 'coach-allocation', label: 'Coach allocation alerts', description: 'When an athlete is allocated to your session, or admin books you in.', roles: ['coach'] },

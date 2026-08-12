@@ -275,11 +275,21 @@ export const confirmBookingPayment = internalMutation({
     // booking ATOMICALLY on confirmation (never on the abandoned path), and free
     // the checkout slot hold now that the booking is confirmed.
     if ((b.creditApplied ?? 0) > 0 && b.customerEmail) {
-      await redeemCredit(ctx, {
+      const actuallyRedeemed = await redeemCredit(ctx, {
         email: b.customerEmail,
         amount: b.creditApplied,
         bookingId: booking._id.toString(),
       });
+      // Review 2026-08-13 (extend-build MED): redeemCredit clamps to the LIVE
+      // balance — a concurrent pending row can have spent it first, so less than
+      // the stored creditApplied may actually be deducted. Reconcile the stored
+      // value to what was truly redeemed, else a later cancel/refund returns
+      // cashPaid + the INFLATED creditApplied and MINTS the difference.
+      if (actuallyRedeemed !== b.creditApplied) {
+        await ctx.db.patch(booking._id, {
+          creditApplied: actuallyRedeemed > 0 ? actuallyRedeemed : undefined,
+        });
+      }
     }
 
     // Record discount redemption now that payment succeeded (idempotent).

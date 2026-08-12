@@ -180,6 +180,12 @@ export async function validateAndSnapshotLane(
     // reject EVERY booker (like a service block).
     isAdmin?: boolean;
     isCoach?: boolean;
+    // SPEC_CUSTOMER_INSESSION_EXTEND_2026-08: an in-session extension starts exactly
+    // at its parent booking's end (wherever that falls) and is exempt from the
+    // customer start grid + Option-A end alignment — it can never strand time on its
+    // start side (flush against the parent) and extension revenue beats grid purity
+    // (decision #5). Closed-segment + boundary-cross + variant checks still apply.
+    skipStartGrid?: boolean;
   }
 ): Promise<{ laneNameSnapshot: string; variantLabelSnapshot: string; segment: Segment }> {
   const rows = await loadLaneRows(ctx);
@@ -206,7 +212,7 @@ export async function validateAndSnapshotLane(
   // segment, a CUSTOMER booking must start on one of them (coaches keep their own
   // start rules; admin-manual can place any start). Default segments have no custom
   // starts → no enforcement → whole-hour + active-half-hour behaviour is unchanged.
-  if (!args.isAdmin && !args.isCoach && segmentHasCustomStarts(segment)) {
+  if (!args.isAdmin && !args.isCoach && !args.skipStartGrid && segmentHasCustomStarts(segment)) {
     const allowed = segmentStartHours(segment);
     if (!allowed.some((h) => Math.abs(h - args.startHour) < 1e-6)) {
       throw new ConvexError("That start time isn't available for this lane. Please refresh and try again.");

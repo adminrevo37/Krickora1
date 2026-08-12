@@ -38,6 +38,8 @@ import RepeatBookingButton from './RepeatBookingButton'
 // RescheduleModal are retired (files kept, no longer referenced here).
 import ModifyBookingModal from './ModifyBookingModal'
 import FaultReportModal, { type FaultBookingContext } from './FaultReportModal'
+// SPEC_CUSTOMER_INSESSION_EXTEND_2026-08: in-session "Extend session" flow.
+import ExtendBookingModal from './ExtendBookingModal'
 
 // SPEC_SCHEDULE_DAY_VIEW §2.11: facility details for the athlete "SMS Details" deep-link.
 const FACILITY = { name: 'Cricket Revolution', address: '78 Jones St, Stirling WA 6021' }
@@ -157,6 +159,18 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const [toast, setToast] = useState<string | null>(null)
   const [showAuth, setShowAuth] = useState(false)
   const [modifyBookingData, setModifyBookingData] = useState<Booking | null>(null)
+  // SPEC_CUSTOMER_INSESSION_EXTEND — the ID of the card whose Extend modal is
+  // open (the modal resolves the LIVE merged booking each render, so a fresh
+  // extension re-merges into the chain instead of leaving a stale snapshot —
+  // review MED-2), plus a 30-second tick so the button's [start, end+7min]
+  // window opens/closes without waiting for a reactive data push.
+  const [extendBookingData, setExtendBookingData] = useState<string | null>(null)
+  const [nowTick, setNowTick] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 30_000)
+    return () => clearInterval(t)
+  }, [])
+  const nowAwstMs = useMemo(() => getAWSTNow().getTime(), [nowTick])
   // §6 — fault report: a per-booking context, or 'general' for the page-level button.
   const [reportBooking, setReportBooking] = useState<FaultBookingContext | 'general' | null>(null)
   const [athleteEditBooking, setAthleteEditBooking] = useState<Booking | null>(null)
@@ -298,6 +312,49 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           splitLeg2: { laneId: leg2.laneId, startHour: leg2.startHour, duration: leg2.duration },
         }
       }).filter(b => !(b.splitParentId && absorbedLeg2Ids.has(b.id)))
+    }
+    // SPEC_CUSTOMER_INSESSION_EXTEND — absorb CONFIRMED extension rows into their
+    // parent's card. The parent's OWN fields stay untouched (Modify/Cancel must
+    // see the original row); the card reads the client-only `extensions` chain
+    // for the displayed end/price and the next extend target. Pending-payment
+    // extension rows stay standalone (amber Pay-now card); a broken chain
+    // (date mismatch / non-contiguous) renders as ordinary separate cards.
+    const extRowsByParent = new Map<string, Booking[]>()
+    for (const b of display) {
+      if (b.extensionOfId && b.status === 'confirmed') {
+        const list = extRowsByParent.get(b.extensionOfId) ?? []
+        list.push(b)
+        extRowsByParent.set(b.extensionOfId, list)
+      }
+    }
+    if (extRowsByParent.size > 0) {
+      const absorbedExtIds = new Set<string>()
+      display = display.map(b => {
+        // A cancelled parent (admin-only post-start) must NOT absorb a live paid
+        // extension — the extension renders as its own card instead.
+        if (b.extensionOfId || b.status === 'cancelled') return b
+        const chain: NonNullable<Booking['extensions']> = []
+        let cursorId = b.id
+        let cursorEnd = b.startHour + b.duration / 60
+        for (;;) {
+          const next = extRowsByParent.get(cursorId)?.[0]
+          if (!next) break
+          if (next.date !== b.date || Math.abs(next.startHour - cursorEnd) > 1e-6) break
+          chain.push({
+            id: next.id,
+            laneId: next.laneId,
+            additionalLaneIds: next.additionalLaneIds,
+            variantId: next.variantId ?? null,
+            startHour: next.startHour,
+            duration: next.duration,
+            priceInCents: next.priceInCents,
+          })
+          absorbedExtIds.add(next.id)
+          cursorId = next.id
+          cursorEnd = next.startHour + next.duration / 60
+        }
+        return chain.length > 0 ? { ...b, extensions: chain } : b
+      }).filter(b => !(b.extensionOfId && absorbedExtIds.has(b.id)))
     }
     return display.sort((a, b) => a.date.localeCompare(b.date) || a.startHour - b.startHour)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -907,13 +964,37 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     }
 
     const cancelCheck = evaluateCancellation(booking)
-    const calParams = { laneName: lane?.name ?? booking.laneId, variantName: variantName ?? undefined, date: booking.date, startHour: booking.startHour, duration: booking.duration, customerName: booking.customerName, accessCode: booking.accessCode }
+    // SPEC_CUSTOMER_INSESSION_EXTEND — the card shows the FULL extended window
+    // (parent + absorbed confirmed extensions; parent fields stay untouched so
+    // Modify/Cancel see the original row) and offers "Extend session" from the
+    // session's start until 7 min after its (extended) end.
+    const lastExt = booking.extensions?.[booking.extensions.length - 1]
+    const displayEndHour = lastExt
+      ? lastExt.startHour + lastExt.duration / 60
+      : booking.startHour + booking.duration / 60
+    const displayMinutes = Math.round((displayEndHour - booking.startHour) * 60)
+    // Calendar exports cover the full extended window (display consistency).
+    const calParams = { laneName: lane?.name ?? booking.laneId, variantName: variantName ?? undefined, date: booking.date, startHour: booking.startHour, duration: displayMinutes, customerName: booking.customerName, accessCode: booking.accessCode }
+    const extPrice = (booking.extensions ?? []).reduce((s, e) => s + (e.priceInCents ?? 0), 0) / 100
+    const [cy, cm, cd] = booking.date.split('-').map(Number)
+    const cardStartMs = new Date(cy, cm - 1, cd, Math.floor(booking.startHour), Math.round((booking.startHour - Math.floor(booking.startHour)) * 60), 0).getTime()
+    const cardEndMs = cardStartMs + displayMinutes * 60000
+    const canExtendNow =
+      !booking.isClubBooking &&
+      booking.paymentStatus !== 'unpaid' &&
+      nowAwstMs >= cardStartMs &&
+      nowAwstMs <= cardEndMs + 7 * 60000
     return (
       <div key={booking.id} className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm">
         <div className="flex items-start justify-between gap-2 mb-2">
           <div>
-            <div className="text-base font-bold text-gray-900 dark:text-white">
-              {formatTime(booking.startHour)} – {formatTime(booking.startHour + booking.duration / 60)}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-base font-bold text-gray-900 dark:text-white">
+                {formatTime(booking.startHour)} – {formatTime(displayEndHour)}
+              </span>
+              {booking.extensions && booking.extensions.length > 0 && (
+                <span className="text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.5 rounded-full uppercase tracking-wide">Extended</span>
+              )}
             </div>
             <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
               {lane?.icon} {laneNames.join(', ')}
@@ -921,9 +1002,14 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                 <span className="ml-1 text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded-full align-middle">{laneCount} lanes</span>
               )}
               {variantName && <span className="ml-1">· {variantName}</span>}
-              <span className="ml-1">· {formatDuration(booking.duration)}</span>
-              <span className="ml-1 font-semibold text-emerald-600 dark:text-emerald-400">· ${fmtMoney(price)}</span>
+              <span className="ml-1">· {formatDuration(displayMinutes)}</span>
+              <span className="ml-1 font-semibold text-emerald-600 dark:text-emerald-400">· ${fmtMoney(price + extPrice)}</span>
             </div>
+            {lastExt && lastExt.laneId !== booking.laneId && (
+              <div className="text-[11px] text-amber-700 dark:text-amber-300 mt-0.5">
+                Extension on {getLane(lastExt.laneId)?.name ?? lastExt.laneId} from {formatTime(lastExt.startHour)} (same door code).
+              </div>
+            )}
             {/* §2.16 / §4: mate names on the customer card. */}
             {booking.mates && booking.mates.length > 0 && (
               <div className="mt-1"><MateNames bookingId={booking.id} /></div>
@@ -941,6 +1027,15 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           </div>
         )}
         <div className="flex gap-1.5 flex-wrap">
+          {/* SPEC_CUSTOMER_INSESSION_EXTEND — visible session start → end + 7 min. */}
+          {canExtendNow && (
+            <button
+              onClick={() => setExtendBookingData(booking.id)}
+              className="text-[11px] px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-semibold transition-colors"
+            >
+              ⏱ Extend session
+            </button>
+          )}
           <a href={generateGoogleCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">📅 Google</a>
           <a href={generateOutlookCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors">📆 Outlook</a>
           {/* Modify stays available inside the cancellation window — the modify flow
@@ -1537,6 +1632,19 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           onEditAllocation={() => { const b = modifyBookingData; setModifyBookingData(null); if (b) openAthleteEditor(b) }}
         />
       )}
+      {/* SPEC_CUSTOMER_INSESSION_EXTEND — in-session extend + pay. The booking
+          prop is resolved LIVE from the merged list so a just-confirmed
+          extension re-chains before a further extend (review MED-2). */}
+      {extendBookingData && (() => {
+        const liveExtendBooking = userBookings.find(b => b.id === extendBookingData)
+        return liveExtendBooking ? (
+          <ExtendBookingModal
+            booking={liveExtendBooking}
+            creditBalance={user ? getCreditBalance(user.id) : 0}
+            onClose={() => setExtendBookingData(null)}
+          />
+        ) : null
+      })()}
 
       {athleteEditBooking && user && (
         <AthleteAllocationEditor
