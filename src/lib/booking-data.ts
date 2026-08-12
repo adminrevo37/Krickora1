@@ -454,8 +454,12 @@ export function getAvailableStartTimes(bookings: Booking[], laneId: string, date
       // Admin defined the exact bookable starts for this segment (whole or half hour).
       if (!segmentStartHours(seg).some(s => Math.abs(s - h) < 1e-6)) continue
     } else {
-      // Legacy: whole hours always; half-hours only when activated by an adjacent booking.
-      if (isHalfHour && !activeHalfHours.has(h)) continue
+      // Whole hours always; half-hours when activated by an adjacent booking OR
+      // at the segment's own half-hour opening edge (2026-08-11: a changeover
+      // segment starting on :30 — e.g. BM 9:30–18:30 after a lane swap — sells
+      // its first session from 9:30 without needing an explicit start list).
+      const isSegEdge = Math.abs(seg.startHour - h) < 1e-6
+      if (isHalfHour && !activeHalfHours.has(h) && !isSegEdge) continue
     }
     const nextStart = getNextBookingStart(bookings, laneId, dateKey, h)
     const availableMinutes = Math.round((nextStart - h) * 60)
@@ -512,6 +516,21 @@ export function getValidCoachStartTimes(date: Date, tier?: 'L1' | 'L2'): number[
   }
   times.sort((a, b) => a - b)
   return times
+}
+
+// Coach half-hour adjacency (2026-08-11, EVERY day — Inspector decision): a
+// coach may start on a half hour when an existing booking creates that edge
+// (starts or ends there), or at a lane segment's half-hour opening edge (e.g.
+// BM starting 9:30 after a changeover). Mirrors the customer adjacency rule so
+// no booking-created edge is ever coach-unbookable. Whole hours are already
+// valid everywhere; the weekday 7:30am–3:30pm blanket half-hours are unchanged.
+// Frontend-only — the server never validates the coach start grid.
+export function isCoachEdgeStart(bookings: Booking[], laneId: string, dateKey: string, hour: number): boolean {
+  if (hour === Math.floor(hour)) return false
+  if (getActiveHalfHoursForLane(bookings, laneId, dateKey).has(hour)) return true
+  const { segments } = getDaySegments(laneId, dateKey)
+  const seg = resolveSegment(segments, hour)
+  return !segmentIsClosed(seg) && Math.abs(seg.startHour - hour) < 1e-6
 }
 
 // SPEC_LANE_SEGMENT_BOOKING_TIMES (coach fix 2026-08-11): is `hour` an admin-

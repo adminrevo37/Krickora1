@@ -19,6 +19,7 @@ import {
   getCustomerDurations,
   getValidCoachStartTimes,
   isLaneCustomStart,
+  isCoachEdgeStart,
   isWeekday,
   type Booking,
   type Lane,
@@ -291,8 +292,14 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     if (!isAdmin) {
       if (userIsCoach) {
         // Day-level coach starts OR a per-lane segment CUSTOM start (e.g. a
-        // Saturday split offering 9:30/10:30/… — SPEC_LANE_SEGMENT_BOOKING_TIMES).
-        if (!validCoachStartsForDay.includes(slot.hour) && !isLaneCustomStart(lane.id, dateKey, slot.hour)) return
+        // Saturday split offering 9:30/10:30/… — SPEC_LANE_SEGMENT_BOOKING_TIMES)
+        // OR a booking-created / segment-opening half-hour edge (coach adjacency,
+        // every day — 2026-08-11).
+        if (
+          !validCoachStartsForDay.includes(slot.hour) &&
+          !isLaneCustomStart(lane.id, dateKey, slot.hour) &&
+          !isCoachEdgeStart(displayBookings, lane.id, dateKey, slot.hour)
+        ) return
       } else {
         const validStarts = laneStartTimes.get(lane.id) ?? []
         if (!validStarts.includes(slot.hour)) return
@@ -681,8 +688,12 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   // A half-hour cell is "inactive" (renders "–") unless a booking is
                   // active there — EXCEPT a coach valid half-hour start (e.g. weekday
                   // 7:30am–3:30pm), which must render as a bookable "+" for coaches.
-                  const isCoachHalfStart = userIsCoach && (validCoachStartsForDay.includes(slot.hour) || isLaneCustomStart(lane.id, dateKey, slot.hour))
-                  const isLaneInactiveAtHalfHour = isHalfHour && !laneActiveSet.has(slot.hour) && !booked && !blocked && !closedSeg && !isCoachHalfStart
+                  const isCoachHalfStart = userIsCoach && (validCoachStartsForDay.includes(slot.hour) || isLaneCustomStart(lane.id, dateKey, slot.hour) || isCoachEdgeStart(displayBookings, lane.id, dateKey, slot.hour))
+                  // A half-hour cell renders "–" unless a booking activates it, a coach
+                  // may start there, OR it's a valid CUSTOMER start on this lane (admin
+                  // custom starts / segment opening edge — without this, custom-start
+                  // cells rendered as inactive dashes customers couldn't click).
+                  const isLaneInactiveAtHalfHour = isHalfHour && !laneActiveSet.has(slot.hour) && !booked && !blocked && !closedSeg && !isCoachHalfStart && !(laneStartTimes.get(lane.id) ?? []).includes(slot.hour)
                   // SPEC_RECONFIGURABLE_LANES: per-segment colour band + band-start tag
                   const band = bandClassForSlot(lane.id, dateKey, slot.hour)
                   const bs = bandStart(lane.id, dateKey, slot.hour)
