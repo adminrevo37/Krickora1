@@ -482,17 +482,31 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       return
     }
     if (bookLane && dateP && hourP && user) {
+      // U11 — the availability check below is only meaningful once bookings have
+      // loaded; until then an empty list would read as "free".
+      if (bookingsLoading) return
       setDeepLinkHandled(true)
       const lane = LANES.find(l => l.id === bookLane)
       const match = weekDays.find(d => formatDateKey(d) === dateP)
-      if (lane && match) {
+      const hourNum = Number(hourP)
+      // U11 (SPEC_UI_IMPROVEMENTS_2026-08) — a stale offer push used to open the
+      // modal unconditionally: the slot looked bookable and only failed after
+      // "Continue to Payment". And when the date wasn't in the visible week the
+      // link did NOTHING AT ALL — no modal, no message. Validate first, and always
+      // say something.
+      if (!lane || !match) {
+        setDeclineNotice({ ok: false, text: 'That booking link is for a date outside your current booking window.' })
+      } else if (isSlotBooked(bookings, lane.id, dateP, hourNum)) {
+        setDeclineNotice({ ok: false, text: 'That slot is no longer available — someone else took it.' })
         setSelectedDay(match)
-        setSelectedSlot({ lane, date: match, startHour: Number(hourP) })
+      } else {
+        setSelectedDay(match)
+        setSelectedSlot({ lane, date: match, startHour: hourNum })
         setModalOpen(true)
       }
       cleanUrl()
     }
-  }, [deepLinkHandled, user, weekDays, declineWaitlistOffer])
+  }, [deepLinkHandled, user, weekDays, declineWaitlistOffer, bookings, bookingsLoading])
 
   // SPEC_ANALYTICS_BUILD_2026-06 C2.5 — top-of-funnel engagement signal (one per
   // calendar mount), counted above the per-attempt conversion ladder.

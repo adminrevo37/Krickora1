@@ -13,7 +13,8 @@ import { createCheckoutSession, cancelUnpaidCheckout, type CheckoutSessionReques
 import EmbeddedCheckoutModal from './EmbeddedCheckoutModal'
 import { getSettingsStore } from '../lib/settings-store'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
-import { resolveLaneAt, getLaneWarning, variantLabel, variantRatePerHour } from '../lib/lanes'
+import { resolveLaneAt, getLaneWarning, variantLabel, variantRatePerHour, getDaySegments, segmentForBooking, segmentIsClosed } from '../lib/lanes'
+import { useLaneBlocks } from '../hooks/useLaneBlocks'
 import { useAuth } from '../hooks/useAuth'
 import AuthModal from './AuthModal'
 import { formatAccessCode } from '../lib/access-code'
@@ -47,6 +48,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   // the duration cap (a booking may not cross a segment boundary, §2.14), the
   // date-resolved display name + icon, and the auto warning.
   const dkForSeg = formatDateKey(date)
+  const { getBlocksForLaneDate } = useLaneBlocks()
   const resolvedLane = resolveLaneAt(lane.id, dkForSeg, startHour)
   const seg = resolvedLane.segment
   const resolvedLaneName = resolvedLane.name
@@ -212,7 +214,23 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   }
 
   const otherLanes = LANES.filter(l => l.id !== lane.id)
-  const availableAdditionalLanes = otherLanes.filter(l => canBookSlot(existingBookings, l.id, dateKey, startHour, duration))
+  // U14 (SPEC_UI_IMPROVEMENTS_2026-08) — canBookSlot only checks other BOOKINGS.
+  // It is blind to closed periods, segment boundaries and service blocks, so
+  // "Add More Lanes" happily offered a lane that the server would refuse, and the
+  // customer only found out as an error at payment. Mirror the same three checks
+  // the server applies (closed / crosses a segment end / overlaps a block).
+  const laneOfferableAt = (laneId: string): boolean => {
+    if (!canBookSlot(existingBookings, laneId, dateKey, startHour, duration)) return false
+    const { segments } = getDaySegments(laneId, dkForSeg)
+    const { segment, crosses } = segmentForBooking(segments, startHour, duration)
+    if (segmentIsClosed(segment) || crosses) return false
+    const endHour = startHour + duration / 60
+    return !getBlocksForLaneDate(laneId, dateKey).some(b => {
+      const bEnd = b.startHour + b.duration / 60
+      return startHour < bEnd && endHour > b.startHour
+    })
+  }
+  const availableAdditionalLanes = otherLanes.filter(l => laneOfferableAt(l.id))
 
   // Multi-lane cap (SPEC_BOOKING_WINDOW #4) — customers only; coaches uncapped.
   // Cap counts the primary lane, so the max number of ADDITIONAL lanes is cap - 1.
@@ -280,8 +298,23 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   // Split mode is a single-lane-per-leg shape: extra simultaneous lanes and
   // at-create athlete slots are cleared (athletes are added after booking via
   // Edit athletes — allocations may span both lanes).
+  //
+  // U13 (SPEC_UI_IMPROVEMENTS_2026-08) — this used to DESTROY a configured
+  // athlete/lane setup with no warning and no way back: unticking "Split across
+  // two lanes" left the coach with an empty roster they had to rebuild from
+  // memory. Stash both on the way in and restore them on the way out.
+  const preSplitRef = useRef<{ lanes: string[]; slots: typeof athleteSlots } | null>(null)
   useEffect(() => {
-    if (splitOn) { setAdditionalLanes([]); setAthleteSlots([]) }
+    if (splitOn) {
+      preSplitRef.current = { lanes: additionalLanes, slots: athleteSlots }
+      setAdditionalLanes([]); setAthleteSlots([])
+    } else if (preSplitRef.current) {
+      const { lanes, slots } = preSplitRef.current
+      preSplitRef.current = null
+      if (lanes.length) setAdditionalLanes(lanes)
+      if (slots.length) setAthleteSlots(slots)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [splitOn])
 
   // Keep the selected variant valid for the resolved segment (SPEC_RECONFIGURABLE_LANES)
@@ -875,7 +908,19 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Duration</label>
               {isCoach ? (
                 <>
-                  {!splitOn && (
+                  {/* U12 (SPEC_UI_IMPROVEMENTS_2026-08) — the grid marks a sub-60-min
+                      gap bookable using CUSTOMER durations (the 30-min gap-fill rule),
+                      but getCoachDurations starts at 60 and returns [] for that gap.
+                      A coach therefore landed on an EMPTY dropdown with Confirm
+                      silently disabled and nothing explaining why. */}
+                  {!splitOn && availableDurations.length === 0 && (
+                    <div className="bg-amber-50 dark:bg-amber-900/20 rounded-xl p-3 border border-amber-200 dark:border-amber-800/50">
+                      <p className="text-xs text-amber-800 dark:text-amber-300">
+                        This gap is under the 1-hour coach minimum, so no coach session fits here. It stays bookable by a customer as a 30-minute session.
+                      </p>
+                    </div>
+                  )}
+                  {!splitOn && availableDurations.length > 0 && (
                     <>
                       <select value={duration} onChange={e => setDuration(Number(e.target.value))} className="w-full px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 text-sm">
                         {availableDurations.map(d => {

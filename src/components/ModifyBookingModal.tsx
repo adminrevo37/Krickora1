@@ -105,9 +105,19 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
     [dayBookingsRaw, booking.id]
   )
 
+  // U17 (SPEC_UI_IMPROVEMENTS_2026-08) — a multi-lane booking keeps its
+  // additionalLaneIds on submit, but availability was computed against the PRIMARY
+  // lane only. A slot free on the primary yet taken on an additional lane looked
+  // bookable and then dead-ended with a server error at confirm time. Check every
+  // lane the booking will actually occupy.
+  const occupiedLaneIds = useMemo(
+    () => [selectedLaneId, ...(booking.additionalLaneIds ?? [])],
+    [selectedLaneId, booking.additionalLaneIds]
+  )
+
   const availableSlots = useMemo(() => {
     const slots: number[] = []
-    const laneBookings = otherBookings.filter(b => bookingOccupiesLane(b, selectedLaneId) && b.date === selectedDate)
+    const laneBookings = otherBookings.filter(b => occupiedLaneIds.some(l => bookingOccupiesLane(b, l)) && b.date === selectedDate)
     const { open, close } = getHoursForDate(settings, selectedDate)
     const candidateHours: number[] = isCoach
       ? getValidCoachStartTimes(new Date(selectedDate + 'T00:00:00')).filter(h => h >= open && h < close)
@@ -118,12 +128,19 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
       if (!occupied) slots.push(h)
     }
     return slots
-  }, [otherBookings, selectedLaneId, selectedDate, isCoach])
+  }, [otherBookings, occupiedLaneIds, selectedLaneId, selectedDate, isCoach])
 
   const availableDurations = useMemo(() => {
-    if (isCoach) return getCoachDurations(otherBookings, selectedLaneId, selectedDate, selectedStartHour)
-    return getCustomerDurations(otherBookings, selectedLaneId, selectedDate, selectedStartHour)
-  }, [otherBookings, selectedLaneId, selectedDate, selectedStartHour, isCoach])
+    // U17 — intersect across every occupied lane: a duration is only offerable if
+    // it fits on ALL of them.
+    const per = occupiedLaneIds.map(l => new Set(
+      isCoach
+        ? getCoachDurations(otherBookings, l, selectedDate, selectedStartHour)
+        : getCustomerDurations(otherBookings, l, selectedDate, selectedStartHour)
+    ))
+    if (per.length === 0) return []
+    return [...per[0]].filter(d => per.every(s2 => s2.has(d))).sort((a, b) => a - b)
+  }, [otherBookings, occupiedLaneIds, selectedDate, selectedStartHour, isCoach])
 
   const effectiveDuration = availableDurations.includes(selectedDuration)
     ? selectedDuration
@@ -166,7 +183,8 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
     selectedLaneId !== booking.laneId ||
     (selectedVariantId ?? null) !== (booking.variantId ?? null)
 
-  const canSlotFit = canBookSlot(otherBookings, selectedLaneId, selectedDate, selectedStartHour, effectiveDuration)
+  // U17 — the slot must fit on every lane the booking occupies.
+  const canSlotFit = occupiedLaneIds.every(l => canBookSlot(otherBookings, l, selectedDate, selectedStartHour, effectiveDuration))
 
   // Inside-the-cutoff carve-out banner (customers only). Server enforces; this informs.
   const insideWindowNote = useMemo(() => {
@@ -376,8 +394,17 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
             <div>
               <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Lane</label>
               <div className="grid grid-cols-5 gap-2">
+                {/* U18 (SPEC_UI_IMPROVEMENTS_2026-08) — the tap handler always reset
+                    the variant to the lane's FIRST option, including when the coach
+                    or customer simply re-tapped the lane the booking is already on.
+                    A Truman booking silently became Standard, hasChanges flipped
+                    true on a phantom change, and confirming downgraded the machine.
+                    Restore the booking's own variant on its own lane. */}
                 {LANES.map(lane => (
-                  <button key={lane.id} onClick={() => { setSelectedLaneId(lane.id); setSelectedVariantId(lane.variants?.[0]?.id) }}
+                  <button key={lane.id} onClick={() => {
+                    setSelectedLaneId(lane.id)
+                    setSelectedVariantId(lane.id === booking.laneId ? (booking.variantId ?? undefined) : lane.variants?.[0]?.id)
+                  }}
                     className={`p-2 rounded-xl border-2 transition-all text-center ${
                       selectedLaneId === lane.id ? 'border-violet-500 bg-violet-50 dark:bg-violet-900/20 shadow-md' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
                     }`}>
