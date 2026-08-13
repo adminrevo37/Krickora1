@@ -177,6 +177,13 @@ export default function AdminBookingCalendar() {
   // SELECTED day's bookings come from the indexed per-day query (admin → full data);
   // the month-grid badge counts come from a month-windowed query below.
   const selectedDayRaw = useQuery(api.queries.listBookingsByDate, { date: dateKey })
+  // 2026-08-13: mark each customer's FIRST-ever session so staff can spot
+  // first-timers at a glance (distinct colour + "1st" chip on the cell).
+  const firstBookingIdsRaw = useQuery(api.queries.getFirstBookingIdsForDate, { date: dateKey })
+  const firstBookingIds = useMemo(
+    () => new Set((firstBookingIdsRaw ?? []) as string[]),
+    [firstBookingIdsRaw],
+  )
   const selectedDayBookings: Booking[] = useMemo(
     () => ((selectedDayRaw ?? []) as any[]).map((d) => ({ ...d, id: String(d._id) }) as Booking),
     [selectedDayRaw],
@@ -674,6 +681,9 @@ export default function AdminBookingCalendar() {
                   const coachColor    = getCoachColor(booked)
                   const coachTextColor = getContrastText(coachColor)
                   const timeRange = `${fmtHour(booked.startHour)}–${fmtHour(booked.startHour + booked.duration / 60)}`
+                  // 2026-08-13: customer's first-ever session → teal cell + "1st" chip
+                  // (chip = text cue so it's not colour-only).
+                  const isFirstBooking = !booked.isCoachBooking && firstBookingIds.has(booked.id)
 
                   cells.push(
                     <div
@@ -684,7 +694,11 @@ export default function AdminBookingCalendar() {
                         ...(booked.isCoachBooking ? { color: coachTextColor } : {}),
                       }}
                       className={`relative group text-[10px] py-2 px-1 rounded font-semibold flex flex-col ${
-                        booked.isCoachBooking ? '' : 'bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400'
+                        booked.isCoachBooking
+                          ? ''
+                          : isFirstBooking
+                            ? 'bg-teal-100 dark:bg-teal-900/30 text-teal-800 dark:text-teal-300 ring-1 ring-teal-400 dark:ring-teal-600'
+                            : 'bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400'
                       }`}
                     >
                       {/* Admin view: solid coach colour (no amber unallocated bands — admin
@@ -692,10 +706,17 @@ export default function AdminBookingCalendar() {
                       {booked.isCoachBooking && <CoverageBlockBg booking={booked} coachColor={coachColor} solid />}
                       <button
                         onClick={(e) => { e.stopPropagation(); setDetailsBooking(booked) }}
-                        title={`View / modify booking — ${booked.customerName}`}
+                        title={`View / modify booking — ${booked.customerName}${isFirstBooking ? ' (first-ever booking)' : ''}`}
                         className="relative z-10 text-left w-full hover:opacity-80 transition-opacity leading-tight flex-1"
                       >
-                        <div className="break-words font-semibold">{booked.isCoachBooking ? '🏅 Coach: ' : '🔒 '}{booked.customerName}</div>
+                        <div className="break-words font-semibold">
+                          {booked.isCoachBooking ? '🏅 Coach: ' : '🔒 '}{booked.customerName}
+                          {isFirstBooking && (
+                            <span className="ml-1 inline-block align-middle text-[8px] px-1 py-0.5 rounded-full bg-teal-600 text-white font-bold uppercase tracking-wide" title="This customer's first-ever booking">
+                              ✨ 1st
+                            </span>
+                          )}
+                        </div>
                         <div className="text-[9px] opacity-80 mt-0.5 font-medium flex items-center gap-1">
                           {timeRange}
                           {(booked.modificationHistory?.length ?? 0) > 0 && (

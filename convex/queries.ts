@@ -386,6 +386,54 @@ export const listMyStripePayments = query({
 // ============================================================================
 
 // List all customers — admin only (contains PII for all users)
+// Admin calendar (2026-08-13): which of a day's CUSTOMER bookings are that
+// customer's FIRST-ever session — so staff can spot first-timers at a glance
+// (new face; may need the door-code/facility walkthrough). A booking is
+// "first" when it is the earliest (date, startHour) non-cancelled customer
+// booking on that email. Coach/club rows and in-session extension rows are
+// never flagged. Bounded: one by_date read + one by_customerEmail read per
+// distinct customer email that day. Returns booking-id strings.
+export const getFirstBookingIdsForDate = query({
+  args: { date: v.string() },
+  handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.isAdmin) return [];
+    const day = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.eq("date", args.date))
+      .collect();
+    const earliestByEmail = new Map<string, string>(); // email → earliest booking id
+    const out: string[] = [];
+    for (const b of day as any[]) {
+      if (b.status === "cancelled") continue;
+      if (b.isCoachBooking || b.isClubBooking) continue;
+      if (b.extensionOfId) continue;
+      const email = b.customerEmail;
+      if (!email) continue;
+      if (!earliestByEmail.has(email)) {
+        const theirs = await ctx.db
+          .query("bookings")
+          .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", email))
+          .collect();
+        let earliest: any = null;
+        for (const t of theirs as any[]) {
+          if (t.status === "cancelled" || t.isCoachBooking || t.isClubBooking || t.extensionOfId) continue;
+          if (
+            !earliest ||
+            t.date < earliest.date ||
+            (t.date === earliest.date && t.startHour < earliest.startHour)
+          ) {
+            earliest = t;
+          }
+        }
+        earliestByEmail.set(email, earliest ? String(earliest._id) : "");
+      }
+      if (earliestByEmail.get(email) === String(b._id)) out.push(String(b._id));
+    }
+    return out;
+  },
+});
+
 export const listCustomers = query({
   args: {},
   handler: async (ctx) => {
