@@ -198,15 +198,18 @@ export function createAuthOptions(ctx?: GenericCtx<DataModel>): BetterAuthOption
       },
     },
     session: {
-      // SPEC_AUTH_SESSION_PERSISTENCE_2026-08 F2 — rolling 7-day INACTIVITY
-      // window, pinned explicitly (previously library defaults: 7d/24h — a
-      // better-auth upgrade could silently change them). GET /get-session
-      // extends expiresAt to now+expiresIn whenever the session is older than
-      // updateAge, so a user is only logged out after 7 days without opening
-      // the app. updateAge=1h makes "7 days since last access" accurate to ±1h
-      // (the default 24h could log out up to ~1 day early) at the cost of at
-      // most one session-row write per active hour.
-      expiresIn: 60 * 60 * 24 * 7, // 7 days
+      // SPEC_AUTH_SESSION_PERSISTENCE_2026-08 F2 — rolling INACTIVITY window,
+      // pinned explicitly (previously library defaults — a better-auth upgrade
+      // could silently change them). GET /get-session extends expiresAt to
+      // now+expiresIn whenever the session is older than updateAge.
+      // 2026-08-13: 7d → 30d. The 2026-08 logout-recurrence investigation
+      // proved the mechanism works as designed, but the 7-day boundary sat
+      // EXACTLY on the product's weekly booking cadence (a Monday-6:00pm
+      // customer returning Monday 6:30pm the next week was logged out;
+      // fortnightly customers every time). 30 days = only genuinely lapsed
+      // users re-authenticate. On iOS PWA the bearer token IS the session
+      // (cookies blocked), so this window is the whole logout policy.
+      expiresIn: 60 * 60 * 24 * 30, // 30 days rolling inactivity
       updateAge: 60 * 60, // extend on any access >1h since last extension
       cookieCache: {
         enabled: true,
