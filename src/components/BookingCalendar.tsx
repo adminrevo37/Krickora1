@@ -38,6 +38,7 @@ import { useBookings } from '../hooks/useBookingStore'
 import { useLaneBlocks } from '../hooks/useLaneBlocks'
 import { useAuth } from '../hooks/useAuth'
 import { getErrorMessage } from '../lib/errors'
+import ModalShell from './ModalShell'
 import { useSettings } from '../hooks/useSettings'
 import BookingModal from './BookingModal'
 import AuthModal from './AuthModal'
@@ -451,6 +452,18 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   // SPEC_PUSH_NOTIFICATIONS_V2 §5/§8 + MOBILE §4.6 — handle waitlist push deep-links:
   //   ?book=<lane>&date=<d>&hour=<h>(&wl=1) → open the held slot's booking (checkout)
   //   ?wlDecline=<lane>&date=<d>&hour=<h>   → pass the offer to the next person
+  // U15 — "manage my queue place" sheet, opened from the green band.
+  const [manageQueue, setManageQueue] = useState<{ hour: number; pool: 'bm' | 'ru'; position: number | null; waiting: number } | null>(null)
+  const [leavingQueue, setLeavingQueue] = useState(false)
+  const [leaveQueueError, setLeaveQueueError] = useState<string | null>(null)
+  const removeFromWaitlist = useMutation(api.mutations.removeFromWaitlist)
+  // The band data (listWaitlistPoolsByDate) is privacy-trimmed and carries no row
+  // id, so the id for Leave comes from the caller's OWN waitlist rows.
+  const myWaitlistRowsForDay = (useQuery(
+    api.queries.listWaitlistByUser,
+    user?.id ? { userId: user.id } : 'skip',
+  ) ?? []) as Array<{ _id: string; laneId: string; date: string; hour: number; status?: string }>
+
   const declineWaitlistOffer = useMutation(api.waitlist.declineWaitlistOffer)
   const [deepLinkHandled, setDeepLinkHandled] = useState(false)
   // U4 — result of a ?wlDecline deep-link, shown as a banner. Previously the
@@ -541,25 +554,25 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
         <ReleaseBanner role={releaseRole} tier={coachTierNorm} settings={settings} nextWeekOpen={nextWeekOpen} lastDay={weekDays[weekDays.length - 1]} />
       )}
       {/* Week Day Selector */}
-      <div className="bg-white rounded-2xl border border-gray-200 p-4 shadow-sm">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm">
         {/* §2 — hide the "This Week"/month chrome on mobile; keep the day strip below. */}
         <div className="hidden sm:flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold text-gray-800">{headerLabel}</h2>
+          <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200">{headerLabel}</h2>
           <div className="flex items-center gap-2">
             {userIsCoach && (
               <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${coachTierNorm === 'L2' ? 'bg-purple-100 text-purple-700' : 'bg-orange-100 text-orange-700'}`}>🏅 {coachTierNorm === 'L2' ? 'L2 Coach' : 'L1 Coach'}</span>
             )}
-            <span className="text-sm text-gray-500">{weekDays[0].toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} &middot; AWST</span>
+            <span className="text-sm text-gray-500 dark:text-gray-400">{weekDays[0].toLocaleDateString('en-US', { month: 'long', year: 'numeric' })} &middot; AWST</span>
           </div>
         </div>
         {/* §1E — coach back/forward week navigation (read-only review of past weeks). */}
         {userIsCoach && (
           <div className="flex items-center justify-between mb-3">
             <button type="button" onClick={() => setWeekOffset((o) => Math.max(-2, o - 1))} disabled={weekOffset <= -2}
-              className={`text-xs font-semibold px-2.5 py-1 rounded-lg border transition-colors ${weekOffset <= -2 ? 'border-gray-200 text-gray-300 cursor-not-allowed' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>← Prev week</button>
-            <span className="text-[11px] font-medium text-gray-500">{weekOffset === 0 ? 'This week' : weekOffset === -1 ? 'Last week' : `${-weekOffset} weeks ago`}</span>
+              className={`text-xs font-semibold px-2.5 py-1 rounded-lg border transition-colors ${weekOffset <= -2 ? 'border-gray-200 dark:border-gray-800 text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800'}`}>← Prev week</button>
+            <span className="text-[11px] font-medium text-gray-500 dark:text-gray-400">{weekOffset === 0 ? 'This week' : weekOffset === -1 ? 'Last week' : `${-weekOffset} weeks ago`}</span>
             <button type="button" onClick={() => setWeekOffset((o) => Math.min(0, o + 1))} disabled={weekOffset >= 0}
-              className={`text-xs font-semibold px-2.5 py-1 rounded-lg border transition-colors ${weekOffset >= 0 ? 'border-gray-200 text-gray-300 cursor-not-allowed' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>Next week →</button>
+              className={`text-xs font-semibold px-2.5 py-1 rounded-lg border transition-colors ${weekOffset >= 0 ? 'border-gray-200 dark:border-gray-800 text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800'}`}>Next week →</button>
           </div>
         )}
         <div className={`grid ${weekDays.length === 8 ? 'grid-cols-8' : 'grid-cols-7'} gap-2`}>
@@ -577,9 +590,9 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
             const allocDot = userIsCoach ? dayDotState(myBookingsByDay.get(dk) ?? [], true) : null
             return (
               <button key={formatDateKey(day)} onClick={() => setSelectedDay(day)} disabled={dayDisabled}
-                className={`relative flex flex-col items-center py-2.5 px-1 rounded-xl transition-all duration-200 text-center ${active ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 scale-105' : dayDisabled ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : pastDay ? 'bg-gray-100 text-gray-500 hover:bg-emerald-50 cursor-pointer' : 'bg-gray-50 text-gray-700 hover:bg-emerald-50 cursor-pointer'}`}>
+                className={`relative flex flex-col items-center py-2.5 px-1 rounded-xl transition-all duration-200 text-center ${active ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30 scale-105' : dayDisabled ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 dark:text-gray-600 cursor-not-allowed' : pastDay ? 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 cursor-pointer' : 'bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-200 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 cursor-pointer'}`}>
                 {hasOverride && <span title="Custom lane layout" className="absolute top-1 right-1 text-[9px] leading-none text-amber-500">⚙</span>}
-                <span className={`text-xs font-medium ${active ? 'text-emerald-100' : 'text-gray-500'}`}>{formatDayLabel(day)}</span>
+                <span className={`text-xs font-medium ${active ? 'text-emerald-100' : 'text-gray-500 dark:text-gray-400'}`}>{formatDayLabel(day)}</span>
                 <span className={`text-lg font-bold mt-0.5 ${active ? 'text-white' : ''}`}>{day.getDate()}</span>
                 {allocDot ? (
                   <div className={`w-1.5 h-1.5 rounded-full mt-1 ${allocDot === 'green' ? 'bg-emerald-400' : allocDot === 'amber' ? 'bg-amber-400' : 'bg-red-500'}`} />
@@ -592,7 +605,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
         </div>
         {/* §1D — dot key (coach only). */}
         {userIsCoach && (
-          <div className="flex items-center gap-3 flex-wrap text-[10px] text-gray-500 mt-2.5">
+          <div className="flex items-center gap-3 flex-wrap text-[10px] text-gray-500 dark:text-gray-400 mt-2.5">
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />Fully allocated</span>
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />Partly</span>
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500 inline-block" />Needs athletes</span>
@@ -602,9 +615,9 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
 
       {/* §1E — read-only review banner when a coach opens a past day. */}
       {reviewingPast && (
-        <div className="bg-gray-100 border border-gray-300 rounded-2xl px-4 py-2.5 flex items-center gap-2">
+        <div className="bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-2xl px-4 py-2.5 flex items-center gap-2">
           <span className="text-base">🕓</span>
-          <p className="text-sm font-medium text-gray-600">Reviewing past sessions — read only. Showing your bookings only.</p>
+          <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Reviewing past sessions — read only. Showing your bookings only.</p>
         </div>
       )}
 
@@ -612,8 +625,8 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
           legends are removed entirely (the selected day is obvious from the day
           strip above, and the grid gets the full height). */}
       <div className="hidden sm:block">
-        <h3 className="text-xl font-bold text-gray-800">{selectedDay.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</h3>
-        <p className="text-sm text-gray-500 mt-0.5">{isToday(selectedDay) ? '🟢 Today' : formatDayLabel(selectedDay)} &middot; {formatTime(getHoursForDate(settings, selectedDay).open)} - {formatTime(getHoursForDate(settings, selectedDay).close)} AWST &middot; 5 Lanes</p>
+        <h3 className="text-xl font-bold text-gray-800 dark:text-gray-100">{selectedDay.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</h3>
+        <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{isToday(selectedDay) ? '🟢 Today' : formatDayLabel(selectedDay)} &middot; {formatTime(getHoursForDate(settings, selectedDay).open)} - {formatTime(getHoursForDate(settings, selectedDay).close)} AWST &middot; 5 Lanes</p>
       </div>
       <div className="hidden sm:block space-y-3">
         <LegendRow />
@@ -624,8 +637,8 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
           "join waitlist" / green "you're queued" band meanings, leaving the two
           most ambiguous colours on the grid entirely unexplained on the device
           most customers book from. Collapsible so it costs no default height. */}
-      <details className="sm:hidden bg-white rounded-xl border border-gray-200 px-3 py-2">
-        <summary className="text-xs font-semibold text-gray-600 cursor-pointer select-none min-h-[32px] flex items-center">ⓘ Key</summary>
+      <details className="sm:hidden bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 px-3 py-2">
+        <summary className="text-xs font-semibold text-gray-600 dark:text-gray-300 cursor-pointer select-none min-h-[32px] flex items-center">ⓘ Key</summary>
         <div className="pt-2 space-y-3">
           <LegendRow />
           <LaneLegend />
@@ -645,18 +658,18 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
           so users never see a momentarily-empty calendar (all booked slots would
           otherwise flash as available). Once loaded, Convex keeps it live-updated. */}
       {bookingsLoading && (
-        <div className="absolute inset-0 z-50 rounded-2xl bg-white/95 flex flex-col items-center justify-center gap-2">
+        <div className="absolute inset-0 z-50 rounded-2xl bg-white/95 dark:bg-gray-900/95 flex flex-col items-center justify-center gap-2">
           <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
           <span className="text-sm text-gray-400">Loading bookings…</span>
         </div>
       )}
-      <div className="bg-white rounded-2xl border-2 border-black shadow-sm overflow-auto max-h-[60dvh] sm:max-h-[72vh]">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border-2 border-black dark:border-gray-700 shadow-sm overflow-auto max-h-[60dvh] sm:max-h-[72vh]">
         <div className="min-w-0 sm:min-w-[560px]">
         {/* U22 — header must sit ABOVE the waitlist band (z-30); it tied and lost on DOM order. */}
-        <div className="grid grid-cols-[48px_repeat(5,minmax(0,1fr))] sm:grid-cols-[70px_repeat(5,1fr)] border-b-2 border-black bg-white sticky top-0 z-40">
-          <div className="p-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider flex items-center justify-center sticky left-0 z-50 bg-white">Time</div>
+        <div className="grid grid-cols-[48px_repeat(5,minmax(0,1fr))] sm:grid-cols-[70px_repeat(5,1fr)] border-b-2 border-black dark:border-gray-700 bg-white dark:bg-gray-900 sticky top-0 z-40">
+          <div className="p-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider flex items-center justify-center sticky left-0 z-50 bg-white dark:bg-gray-900">Time</div>
           {LANES.map((lane) => (
-            <div key={lane.id} className="p-2 text-center border-l-2 border-black bg-white">
+            <div key={lane.id} className="p-2 text-center border-l-2 border-black dark:border-gray-700 bg-white dark:bg-gray-900">
               <LaneHeaderInner laneId={lane.id} dateKey={dateKey} />
             </div>
           ))}
@@ -706,8 +719,8 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
             }
             return (
               <div key={slot.hour} className={`grid grid-cols-[48px_repeat(5,minmax(0,1fr))] sm:grid-cols-[70px_repeat(5,1fr)] ${slotIdx < visibleTimeSlots.length - 1 ? `border-b ${isHalfHour ? 'border-gray-300' : 'border-black'}` : ''}`}>
-                <div className="p-1 sm:p-1.5 flex items-center justify-center sticky left-0 z-20 bg-white">
-                  <span className={`text-[10px] sm:text-[11px] font-medium text-gray-500 ${isHalfHour ? 'opacity-60' : ''}`}>{slot.label}</span>
+                <div className="p-1 sm:p-1.5 flex items-center justify-center sticky left-0 z-20 bg-white dark:bg-gray-900">
+                  <span className={`text-[10px] sm:text-[11px] font-medium text-gray-500 dark:text-gray-400 ${isHalfHour ? 'opacity-60' : ''}`}>{slot.label}</span>
                 </div>
                 {LANES.map((lane) => {
                   // SPEC_WAITLIST_SPLIT_BM_RU — pool band cells.
@@ -721,10 +734,20 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                     const onThisPool = waitlistByHour.mine[pool].has(slot.hour) || myQueuePos != null
                     return (
                       <button key={lane.id} type="button"
-                        onClick={() => { if (!onThisPool) openWaitlistForHour(slot.hour, pool) }}
+                        aria-label={onThisPool
+                          ? `You are number ${myQueuePos ?? ''} in the ${poolTag} queue at ${formatTime(slot.hour)} — manage`
+                          : `Join the ${poolTag} waitlist at ${formatTime(slot.hour)}`}
+                        // U15 (SPEC_UI_IMPROVEMENTS_2026-08) — the green "you're queued"
+                        // band used to discard clicks entirely: there was no way to see
+                        // your position detail or leave the queue from the calendar at
+                        // all. It now opens a small manage sheet.
+                        onClick={() => {
+                          if (onThisPool) setManageQueue({ hour: slot.hour, pool, position: myQueuePos ?? null, waiting: hourWaitCount })
+                          else openWaitlistForHour(slot.hour, pool)
+                        }}
                         style={{ gridColumn: `span ${runState} / span ${runState}` }}
-                        className={`relative z-30 border-l-2 border-black min-h-[40px] px-1 flex items-center justify-center transition-colors ${onThisPool ? 'bg-emerald-50 cursor-default' : 'bg-amber-50 hover:bg-amber-100 cursor-pointer'}`}>
-                        <span className={`text-center text-[10px] sm:text-[11px] leading-tight font-semibold pointer-events-none ${onThisPool ? 'text-emerald-700' : 'text-amber-700'}`}>
+                        className={`relative z-30 border-l-2 border-black min-h-[40px] px-1 flex items-center justify-center transition-colors ${onThisPool ? 'bg-emerald-50 dark:bg-emerald-900/30 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 cursor-pointer' : 'bg-amber-50 dark:bg-amber-900/30 hover:bg-amber-100 dark:hover:bg-amber-900/50 cursor-pointer'}`}>
+                        <span className={`text-center text-[10px] sm:text-[11px] leading-tight font-semibold pointer-events-none ${onThisPool ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-300'}`}>
                           {onThisPool ? (
                             <>✓ #{myQueuePos ?? '—'} in {poolTag} queue · {hourWaitCount} waiting</>
                           ) : (
@@ -830,7 +853,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
 
                   if (isLaneInactiveAtHalfHour) {
                     return (
-                      <div key={lane.id} className="relative border-l-2 border-black min-h-[32px] bg-white">
+                      <div key={lane.id} className="relative border-l-2 border-black dark:border-gray-700 min-h-[32px] bg-white dark:bg-gray-900">
                         <div className="absolute inset-0 flex items-center justify-center"><div className="w-4 h-[1px] bg-gray-300" /></div>
                       </div>
                     )
@@ -846,11 +869,11 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                       return count
                     })()
                     return (
-                      <div key={lane.id} className="relative border-l-2 border-black min-h-[32px] bg-[repeating-linear-gradient(45deg,#f3f4f6,#f3f4f6_4px,#e5e7eb_4px,#e5e7eb_8px)]">
+                      <div key={lane.id} className="relative border-l-2 border-black dark:border-gray-700 min-h-[32px] bg-[repeating-linear-gradient(45deg,#f3f4f6,#f3f4f6_4px,#e5e7eb_4px,#e5e7eb_8px)] dark:bg-[repeating-linear-gradient(45deg,#1f2937,#1f2937_4px,#374151_4px,#374151_8px)]">
                         {isBlockStart && (
-                          <div className="absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border border-gray-400 bg-gray-200/90" style={{ height: `${blockSpan * 32 - 4}px` }}>
-                            <div className="text-[9px] font-semibold text-gray-700 truncate">🔧 Unavailable</div>
-                            <div className="text-[8px] text-gray-600 truncate">{(blocked as any).reason ?? 'Service'}</div>
+                          <div className="absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border border-gray-400 dark:border-gray-600 bg-gray-200/90 dark:bg-gray-700/90" style={{ height: `${blockSpan * 32 - 4}px` }}>
+                            <div className="text-[9px] font-semibold text-gray-700 dark:text-gray-200 truncate">🔧 Unavailable</div>
+                            <div className="text-[8px] text-gray-600 dark:text-gray-300 truncate">{(blocked as any).reason ?? 'Service'}</div>
                           </div>
                         )}
                       </div>
@@ -868,11 +891,11 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                       return count
                     })()
                     return (
-                      <div key={lane.id} className="relative border-l-2 border-black min-h-[32px] bg-[repeating-linear-gradient(45deg,#f3f4f6,#f3f4f6_4px,#e5e7eb_4px,#e5e7eb_8px)]">
+                      <div key={lane.id} className="relative border-l-2 border-black dark:border-gray-700 min-h-[32px] bg-[repeating-linear-gradient(45deg,#f3f4f6,#f3f4f6_4px,#e5e7eb_4px,#e5e7eb_8px)] dark:bg-[repeating-linear-gradient(45deg,#1f2937,#1f2937_4px,#374151_4px,#374151_8px)]">
                         {isClosedStart && (
-                          <div className="absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border border-gray-400 bg-gray-200/90" style={{ height: `${closedSpan * 32 - 4}px` }}>
-                            <div className="text-[9px] font-semibold text-gray-700 truncate">🔒 Closed</div>
-                            <div className="text-[8px] text-gray-600 truncate">{formatTime(closedSeg.startHour)}–{formatTime(closedSeg.endHour)}</div>
+                          <div className="absolute inset-x-0.5 top-0.5 z-10 rounded-md px-1.5 py-1 border border-gray-400 dark:border-gray-600 bg-gray-200/90 dark:bg-gray-700/90" style={{ height: `${closedSpan * 32 - 4}px` }}>
+                            <div className="text-[9px] font-semibold text-gray-700 dark:text-gray-200 truncate">🔒 Closed</div>
+                            <div className="text-[8px] text-gray-600 dark:text-gray-300 truncate">{formatTime(closedSeg.startHour)}–{formatTime(closedSeg.endHour)}</div>
                           </div>
                         )}
                       </div>
@@ -892,7 +915,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                       role={cellIsBookable ? 'button' : undefined}
                       tabIndex={cellIsBookable ? 0 : undefined}
                       aria-label={cellIsBookable ? `Book ${resolveLaneAt(lane.id, dateKey, slot.hour).name} at ${formatTime(slot.hour)}` : undefined}
-                      className={`relative border-l-2 border-black min-h-[32px] transition-all duration-150 ${cellIsBookable ? 'focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-inset' : ''} ${past ? 'bg-gray-200' : booked ? '' : tooLate ? 'bg-gray-200' : canBook && hasDurations ? 'bg-emerald-50 hover:bg-emerald-100 cursor-pointer group' : band}`}
+                      className={`relative border-l-2 border-black min-h-[32px] transition-all duration-150 ${cellIsBookable ? 'focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-inset' : ''} ${past ? 'bg-gray-200 dark:bg-gray-800' : booked ? '' : tooLate ? 'bg-gray-200 dark:bg-gray-800' : canBook && hasDurations ? 'bg-emerald-50 dark:bg-emerald-900/20 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 cursor-pointer group' : band}`}
                       onKeyDown={cellIsBookable ? (e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault()
@@ -904,7 +927,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                         if (!booked && canBook && hasDurations && timeCheck.allowed) handleSlotClick(lane, slot)
                       }}>
                       {!booked && !past && bs.isStart && bs.multi && (
-                        <div className="absolute top-0 left-0 z-[5] text-[7px] leading-tight font-semibold text-gray-600 bg-white/70 rounded-br px-1 py-0.5 pointer-events-none max-w-full truncate">
+                        <div className="absolute top-0 left-0 z-[5] text-[7px] leading-tight font-semibold text-gray-600 dark:text-gray-300 bg-white/70 dark:bg-gray-900/70 rounded-br px-1 py-0.5 pointer-events-none max-w-full truncate">
                           {bandTagText(lane.id, dateKey, bs.seg)}
                         </div>
                       )}
@@ -971,6 +994,67 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
           onClose={() => setWaitlistModalOpen(false)}
           onSuccess={() => { setWaitlistModalOpen(false); setWaitlistSelections([]) }} />
       )}
+      {/* U15 — manage your place in a pool queue, from the green band. */}
+      {manageQueue && (() => {
+        const poolTag = manageQueue.pool.toUpperCase()
+        const poolLabel = manageQueue.pool === 'bm' ? 'any bowling-machine lane' : 'any run-up lane'
+        const entry = myWaitlistRowsForDay.find(
+          w => w.date === dateKey && w.hour === manageQueue.hour && w.laneId === `*${manageQueue.pool}`
+        )
+        const close = () => { if (!leavingQueue) { setManageQueue(null); setLeaveQueueError(null) } }
+        return (
+          <ModalShell
+            onClose={close}
+            closeOnBackdrop={!leavingQueue}
+            closeOnEscape={!leavingQueue}
+            labelledBy="manage-queue-title"
+            overlayClassName="fixed inset-0 z-[60] flex items-center justify-center p-4"
+            panelClassName="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm p-5"
+          >
+            <h3 id="manage-queue-title" className="text-base font-bold text-gray-900 dark:text-white mb-1">
+              You&apos;re in the {poolTag} queue
+            </h3>
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              {formatDayLabel(selectedDay)} at {formatTime(manageQueue.hour)} · {poolLabel}.
+            </p>
+            <div className="mt-3 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/50 p-3">
+              <div className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">
+                {manageQueue.position != null ? `#${manageQueue.position}` : '—'}
+              </div>
+              <div className="text-xs text-emerald-700 dark:text-emerald-400">
+                {manageQueue.position === 1
+                  ? 'You are next — you get first refusal when a lane frees up.'
+                  : `${manageQueue.waiting} ${manageQueue.waiting === 1 ? 'person is' : 'people are'} waiting for this time.`}
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
+              We&apos;ll notify you the moment a {poolTag} lane opens at this time. First in the queue gets first refusal.
+            </p>
+            {leaveQueueError && <p className="text-xs text-red-600 dark:text-red-400 mt-2">{leaveQueueError}</p>}
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={close}
+                disabled={leavingQueue}
+                className="flex-1 py-2.5 min-h-[40px] bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all disabled:opacity-50"
+              >Stay in queue</button>
+              <button
+                onClick={async () => {
+                  if (!entry) { setLeaveQueueError('Could not find that waitlist entry — try the Waitlist tab in My Bookings.'); return }
+                  setLeavingQueue(true); setLeaveQueueError(null)
+                  try {
+                    await removeFromWaitlist({ id: entry._id as any })
+                    setManageQueue(null)
+                  } catch (err) {
+                    setLeaveQueueError(getErrorMessage(err) ?? 'Could not leave the waitlist — please try again.')
+                  } finally { setLeavingQueue(false) }
+                }}
+                disabled={leavingQueue}
+                className="flex-1 py-2.5 min-h-[40px] bg-red-500 hover:bg-red-600 text-white font-semibold rounded-xl transition-all disabled:opacity-50"
+              >{leavingQueue ? 'Leaving…' : 'Leave waitlist'}</button>
+            </div>
+          </ModalShell>
+        )
+      })()}
     </div>
   )
 }
@@ -978,7 +1062,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
 // Status legend (SPEC_MOBILE_BOOKING_UPDATES §3 adds the blue "Your booking").
 function LegendRow() {
   const item = (cls: string, label: string) => (
-    <div className="flex items-center gap-1.5"><div className={`w-3 h-3 rounded ${cls}`} /><span className="text-gray-600">{label}</span></div>
+    <div className="flex items-center gap-1.5"><div className={`w-3 h-3 rounded ${cls}`} /><span className="text-gray-600 dark:text-gray-300">{label}</span></div>
   )
   return (
     <div className="flex items-center gap-4 text-xs flex-wrap">
@@ -987,7 +1071,7 @@ function LegendRow() {
       {item('bg-blue-100 border border-blue-300', 'Your booking')}
       {item('bg-amber-100 border border-amber-300', 'Waitlist')}
       {item('bg-emerald-50 border border-emerald-300', 'On waitlist')}
-      {item('bg-gray-200 border border-gray-300', 'Past')}
+      {item('bg-gray-200 dark:bg-gray-700 border border-gray-300 dark:border-gray-600', 'Past')}
     </div>
   )
 }
@@ -1031,7 +1115,7 @@ function ReleaseBanner({ role, tier, settings, nextWeekOpen, lastDay }: {
 
   if (nextWeekOpen) {
     return (
-      <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-3 flex items-center gap-2">
+      <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/50 rounded-2xl px-4 py-3 flex items-center gap-2">
         <span className="text-lg">✅</span>
         <p className="text-sm font-medium text-emerald-800">
           Next week is now open — book through {lastDay.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}.

@@ -89,7 +89,7 @@ export function LaneHeaderInner({ laneId, dateKey }: { laneId: string; dateKey: 
     <>
       {/* 🕐 marks an intra-day change; show it once (the icon already is 🕐 when the mode flips) */}
       <div className="text-sm leading-none">{icon}{!multiMode && multiSegment ? ' 🕐' : ''}</div>
-      <div className="text-[11px] font-semibold text-gray-700 mt-0.5 leading-tight flex items-center justify-center gap-1">
+      <div className="text-[11px] font-semibold text-gray-700 dark:text-gray-200 mt-0.5 leading-tight flex items-center justify-center gap-1">
         {name}
         {isOverride && <span title="Custom layout for this date" className="text-amber-500">⚙</span>}
       </div>
@@ -112,7 +112,7 @@ export function LaneLegend() {
       <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-purple-200" />Truman</span>
       <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-200" />9m Run Up</span>
       <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-gray-200 border border-gray-400" />🔒 Closed</span>
-      <span className="text-gray-400">🕐 = changes during the day</span>
+      <span className="text-gray-400 dark:text-gray-500">🕐 = changes during the day</span>
     </div>
   )
 }
