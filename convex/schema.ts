@@ -30,6 +30,16 @@ export default defineSchema({
     // name within a time window, so the named-event range read is indexed.
     .index("by_name_timestamp", ["name", "timestamp"]),
 
+  // C3 (SPEC_CODE_REVIEW_IMPROVEMENTS_2026-08) — tiny first-seen rollup (one row
+  // per visitor identity = auth subject or sessionId), written on the identity's
+  // FIRST tracked event. Lets getUsageAnalytics compute all-time new-vs-returning
+  // without collecting the whole `analytics` table, and keeps the metric all-time
+  // even though `analytics` rows are pruned at 90d (the retention.ts caveat).
+  firstSeenByIdentity: defineTable({
+    identity: v.string(),
+    firstTimestamp: v.number(), // Unix ms of the identity's first event
+  }).index("by_identity", ["identity"]),
+
   // ============================================================================
   // SPEC_ANALYTICS_BUILD_2026-06 C2.2 — persisted end-of-day revenue/usage roll-up.
   // ============================================================================

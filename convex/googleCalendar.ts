@@ -414,6 +414,12 @@ export const updateCalendarEvent = internalAction({
       additionalLanes, athleteSlots: args.athleteSlots, autoDoor,
     });
 
+    // D1 (SPEC_CODE_REVIEW_IMPROVEMENTS_2026-08): a failed PUT must become
+    // VISIBLE — set calendarSyncStatus="failed" so the daily reconcile re-pushes
+    // this booking even when the door code still matches (e.g. a duration-only
+    // extend whose PUT failed → HA would otherwise keep the old window forever).
+    let anyFailed = false;
+
     // Update per-lane events if available — customise the summary per lane so a
     // secondary lane's event shows ITS lane name (mirrors createCalendarEvent).
     if (args.laneCalendarEventIds && args.laneCalendarEventIds.length > 0) {
@@ -435,12 +441,14 @@ export const updateCalendarEvent = internalAction({
             }
           );
           if (!res.ok) {
+            anyFailed = true;
             console.error(
               `Calendar update PUT failed (${res.status}) for event ${entry.eventId} in calendar ${entry.calendarId}:`,
               await res.text().catch(() => "")
             );
           }
         } catch (e) {
+          anyFailed = true;
           console.error(`Failed to update event ${entry.eventId} in calendar ${entry.calendarId}:`, e);
         }
       }
@@ -456,14 +464,25 @@ export const updateCalendarEvent = internalAction({
           }
         );
         if (!res.ok) {
+          anyFailed = true;
           console.error(
             `Calendar update PUT (fallback) failed (${res.status}) for event ${args.googleCalendarEventId}:`,
             await res.text().catch(() => "")
           );
         }
       } catch (e) {
+        anyFailed = true;
         console.error(`Calendar update PUT (fallback) errored for event ${args.googleCalendarEventId}:`, e);
       }
+    }
+
+    // D1: record the outcome when we know the booking (6 update call sites +
+    // the reconcile pass bookingId). 'synced' clears a previous failed flag.
+    if (args.bookingId) {
+      await ctx.runMutation(internal.googleCalendarMutations.setBookingCalendarSyncStatus, {
+        bookingId: args.bookingId,
+        status: anyFailed ? "failed" : "synced",
+      });
     }
 
     return args.googleCalendarEventId;
@@ -476,6 +495,10 @@ export const deleteCalendarEvent = internalAction({
     laneCalendarEventIds: v.optional(
       v.array(v.object({ laneId: v.string(), calendarId: v.string(), eventId: v.string() }))
     ),
+    // D1: when supplied, a failed DELETE flags the booking calendarSyncStatus
+    // "failed" (a live event left behind after a cancel is an access risk —
+    // at minimum make it visible/auditable).
+    bookingId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const tokenInfo = await getValidToken(ctx);
@@ -484,6 +507,7 @@ export const deleteCalendarEvent = internalAction({
     // INT-4 (audit 2026-06): treat 404/410 as success (event already gone); log
     // anything else instead of swallowing it (was an empty catch{}).
     const deleteOk = (status: number) => (status >= 200 && status < 300) || status === 404 || status === 410;
+    let anyFailed = false;
 
     // Delete per-lane events if available
     if (args.laneCalendarEventIds && args.laneCalendarEventIds.length > 0) {
@@ -494,12 +518,14 @@ export const deleteCalendarEvent = internalAction({
             { method: "DELETE", headers: { Authorization: `Bearer ${tokenInfo.accessToken}` } }
           );
           if (!deleteOk(res.status)) {
+            anyFailed = true;
             console.error(
               `Calendar delete failed (${res.status}) for event ${entry.eventId} in calendar ${entry.calendarId}:`,
               await res.text().catch(() => "")
             );
           }
         } catch (e) {
+          anyFailed = true;
           console.error(`Error deleting event ${entry.eventId} in calendar ${entry.calendarId}:`, e);
         }
       }
@@ -511,14 +537,22 @@ export const deleteCalendarEvent = internalAction({
           { method: "DELETE", headers: { Authorization: `Bearer ${tokenInfo.accessToken}` } }
         );
         if (!deleteOk(res.status)) {
+          anyFailed = true;
           console.error(
             `Calendar delete (fallback) failed (${res.status}) for event ${args.googleCalendarEventId}:`,
             await res.text().catch(() => "")
           );
         }
       } catch (e) {
+        anyFailed = true;
         console.error(`Error deleting event ${args.googleCalendarEventId} (fallback):`, e);
       }
+    }
+    if (anyFailed && args.bookingId) {
+      await ctx.runMutation(internal.googleCalendarMutations.setBookingCalendarSyncStatus, {
+        bookingId: args.bookingId,
+        status: "failed",
+      });
     }
     return true;
   },
@@ -686,23 +720,38 @@ export const bulkSyncBookings = action({
 
 const DOOR_CODE_RE = /DOOR CODE:\s*([0-9 ]+)/i;
 
-// GET a Google event and parse its "🔑 DOOR CODE: NNNN" out of the description.
-async function fetchEventDoorCode(
+// D1 (SPEC_CODE_REVIEW_IMPROVEMENTS_2026-08): GET a Google event's full sync
+// state — door code AND start/end — distinguishing a MISSING event (404/410 or
+// Google-side cancelled, previously mis-counted as in-sync) from an UNREADABLE
+// one (transient error → leave untouched, as before).
+type EventState =
+  | { state: "missing" }
+  | { state: "unreadable" }
+  | { state: "ok"; code: string | null; startMs: number | null; endMs: number | null };
+
+async function fetchEventState(
   accessToken: string,
   calendarId: string,
   eventId: string
-): Promise<string | null> {
+): Promise<EventState> {
   try {
     const res = await fetch(
       `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
-    if (!res.ok) return null; // can't read → treat as unknown, leave untouched
+    if (res.status === 404 || res.status === 410) return { state: "missing" };
+    if (!res.ok) return { state: "unreadable" }; // can't read → leave untouched
     const ev = await res.json();
+    if (ev.status === "cancelled") return { state: "missing" };
     const m = DOOR_CODE_RE.exec(ev.description ?? "");
-    return m ? m[1].replace(/\s+/g, "") : null;
+    return {
+      state: "ok",
+      code: m ? m[1].replace(/\s+/g, "") : null,
+      startMs: ev.start?.dateTime ? Date.parse(ev.start.dateTime) : null,
+      endMs: ev.end?.dateTime ? Date.parse(ev.end.dateTime) : null,
+    };
   } catch {
-    return null;
+    return { state: "unreadable" };
   }
 }
 
@@ -711,11 +760,15 @@ interface ReconcileResult {
   inSync: number;
   missing: number;
   staleCode: number;
+  // D1 additions — new divergence classes the reconcile now detects:
+  drift: number; // event start/duration disagrees with the booking
+  missingSecondary: number; // a secondary-lane event is gone / never created
+  failedSync: number; // calendarSyncStatus==="failed" (a PUT failed) with no other symptom
   repaired: number;
   capped: boolean;
   adminCreatedScanned: number;
   adminModifiedScanned: number;
-  divergent: Array<{ bookingId: string; date: string; startHour: number; laneId: string; coach: string; isCoachBooking: boolean; createdByAdmin: boolean; modifiedCount: number; storedCode: string; gcalCode: string | null; issue: "no-event" | "stale-code" }>;
+  divergent: Array<{ bookingId: string; date: string; startHour: number; laneId: string; coach: string; isCoachBooking: boolean; createdByAdmin: boolean; modifiedCount: number; storedCode: string; gcalCode: string | null; issue: "no-event" | "stale-code" | "drift" | "missing-secondary" | "failed-sync" }>;
 }
 
 // Shared core for the cron + any future admin tool. dryRun=true reports without
@@ -725,7 +778,7 @@ async function runCalendarReconcile(
   ctx: any,
   opts: { fromDate: string; toDate: string; dryRun: boolean; limit?: number }
 ): Promise<ReconcileResult> {
-  const empty: ReconcileResult = { scanned: 0, inSync: 0, missing: 0, staleCode: 0, repaired: 0, capped: false, adminCreatedScanned: 0, adminModifiedScanned: 0, divergent: [] };
+  const empty: ReconcileResult = { scanned: 0, inSync: 0, missing: 0, staleCode: 0, drift: 0, missingSecondary: 0, failedSync: 0, repaired: 0, capped: false, adminCreatedScanned: 0, adminModifiedScanned: 0, divergent: [] };
   const tokenInfo = await getValidToken(ctx);
   if (!tokenInfo) {
     console.warn("Calendar reconcile: Google not connected — skipping");
@@ -740,12 +793,44 @@ async function runCalendarReconcile(
   const work = capped ? candidates.slice(0, limit) : candidates;
 
   let inSync = 0, missing = 0, staleCode = 0, repaired = 0;
+  let drift = 0, missingSecondary = 0, failedSync = 0;
   let adminCreatedScanned = 0, adminModifiedScanned = 0;
   const divergent: ReconcileResult["divergent"] = [];
   const meta = (b: any) => ({
     startHour: b.startHour, isCoachBooking: b.isCoachBooking,
     createdByAdmin: b.createdByAdmin === true, modifiedCount: b.modifiedCount ?? 0,
   });
+
+  // Full re-create for a booking whose event set is wrong/gone: tear down any
+  // SURVIVING events first so recreation can never leave orphan duplicates on a
+  // lane calendar (the historical duplicate-event → wrong-door-code class),
+  // then create the whole set fresh (also rewrites the stored ids + sync flag).
+  const recreate = async (b: any, entries: any[]) => {
+    if (entries.length > 0 || b.googleCalendarEventId) {
+      await ctx.runAction(internal.googleCalendar.deleteCalendarEvent, {
+        googleCalendarEventId: b.googleCalendarEventId ?? entries[0]?.eventId ?? "",
+        laneCalendarEventIds: entries,
+      });
+    }
+    await ctx.runAction(internal.googleCalendar.createCalendarEvent, {
+      bookingId: b.bookingId,
+      laneId: b.laneId,
+      variantId: b.variantId,
+      date: b.date,
+      startHour: b.startHour,
+      duration: b.duration,
+      customerName: b.customerName,
+      customerEmail: b.customerEmail,
+      customerPhone: b.customerPhone,
+      status: "confirmed",
+      isCoachBooking: b.isCoachBooking,
+      accessCode: b.accessCode,
+      additionalLaneIds: b.additionalLaneIds,
+      laneNameSnapshot: b.laneNameSnapshot,
+      variantLabelSnapshot: b.variantLabelSnapshot,
+      athleteSlots: b.athleteSlots,
+    });
+  };
 
   for (const b of work) {
     if (b.createdByAdmin === true) adminCreatedScanned++;
@@ -756,64 +841,99 @@ async function runCalendarReconcile(
       missing++;
       divergent.push({ bookingId: b.bookingId, date: b.date, laneId: b.laneId, coach: b.customerName, storedCode: b.accessCode, gcalCode: null, issue: "no-event", ...meta(b) });
       if (!opts.dryRun) {
-        await ctx.runAction(internal.googleCalendar.createCalendarEvent, {
-          bookingId: b.bookingId,
-          laneId: b.laneId,
-          variantId: b.variantId,
-          date: b.date,
-          startHour: b.startHour,
-          duration: b.duration,
-          customerName: b.customerName,
-          customerEmail: b.customerEmail,
-          customerPhone: b.customerPhone,
-          status: "confirmed",
-          isCoachBooking: b.isCoachBooking,
-          accessCode: b.accessCode,
-          additionalLaneIds: b.additionalLaneIds,
-          laneNameSnapshot: b.laneNameSnapshot,
-          variantLabelSnapshot: b.variantLabelSnapshot,
-          athleteSlots: b.athleteSlots,
-        });
+        await recreate(b, []);
         repaired++;
       }
       continue;
     }
 
-    // Event exists — compare the door code on the PRIMARY lane event (the one HA
+    // Event exists — read the PRIMARY lane event's full state (the event HA
     // reads for this booking). A failed lane mapping falls back to the primary id.
     const entries = b.googleCalendarEventIds ?? [];
     const primary = entries.find((e: any) => e.laneId === b.laneId) ?? entries[0];
-    let gcalCode: string | null = null;
-    if (primary) {
-      gcalCode = await fetchEventDoorCode(tokenInfo.accessToken, primary.calendarId, primary.eventId);
-    } else if (b.googleCalendarEventId) {
-      gcalCode = await fetchEventDoorCode(tokenInfo.accessToken, tokenInfo.calendarId, b.googleCalendarEventId);
+    const primaryCalId = primary ? primary.calendarId : tokenInfo.calendarId;
+    const primaryEventId = primary ? primary.eventId : b.googleCalendarEventId;
+    const st = await fetchEventState(tokenInfo.accessToken, primaryCalId, primaryEventId);
+
+    if (st.state === "missing") {
+      // D1: a deleted/404 primary event used to be counted IN-SYNC forever.
+      missing++;
+      divergent.push({ bookingId: b.bookingId, date: b.date, laneId: b.laneId, coach: b.customerName, storedCode: b.accessCode, gcalCode: null, issue: "no-event", ...meta(b) });
+      if (!opts.dryRun) {
+        await recreate(b, entries);
+        repaired++;
+      }
+      continue;
+    }
+    if (st.state === "unreadable") {
+      // Transient read failure → leave untouched this run (same as before).
+      inSync++;
+      continue;
     }
 
-    if (gcalCode != null && gcalCode !== b.accessCode) {
-      staleCode++;
-      divergent.push({ bookingId: b.bookingId, date: b.date, laneId: b.laneId, coach: b.customerName, storedCode: b.accessCode, gcalCode, issue: "stale-code", ...meta(b) });
+    // D1: secondary-lane presence — a multi-lane booking whose secondary event
+    // failed to create (fewer stored entries than lanes) or was later deleted.
+    const expectedLaneCount = 1 + (b.additionalLaneIds?.length ?? 0);
+    let secondaryGone = entries.length > 0 && entries.length < expectedLaneCount;
+    if (!secondaryGone) {
+      for (const entry of entries) {
+        if (primary && entry.eventId === primary.eventId) continue;
+        const s2 = await fetchEventState(tokenInfo.accessToken, entry.calendarId, entry.eventId);
+        if (s2.state === "missing") { secondaryGone = true; break; }
+      }
+    }
+
+    // D1: start/duration drift — e.g. an extend whose PUT failed with the door
+    // code unchanged; HA would power the machine / hold the code for the wrong
+    // window. 60s tolerance.
+    const sh = Math.floor(b.startHour);
+    const sm = Math.round((b.startHour - sh) * 60);
+    const expectedStartMs = Date.parse(
+      `${b.date}T${String(sh).padStart(2, "0")}:${String(sm).padStart(2, "0")}:00+08:00`
+    );
+    const expectedEndMs = expectedStartMs + b.duration * 60_000;
+    const hasDrift =
+      st.startMs != null && st.endMs != null &&
+      (Math.abs(st.startMs - expectedStartMs) > 60_000 || Math.abs(st.endMs - expectedEndMs) > 60_000);
+
+    const staleCodeNow = st.code != null && st.code !== b.accessCode;
+    // D1: act on a recorded failed PUT even when everything readable matches
+    // (the failure may concern fields we don't compare — names, athletes).
+    const failedFlag = b.calendarSyncStatus === "failed";
+
+    if (staleCodeNow || hasDrift || secondaryGone || failedFlag) {
+      const issue = staleCodeNow ? "stale-code" : hasDrift ? "drift" : secondaryGone ? "missing-secondary" : "failed-sync";
+      if (staleCodeNow) staleCode++;
+      else if (hasDrift) drift++;
+      else if (secondaryGone) missingSecondary++;
+      else failedSync++;
+      divergent.push({ bookingId: b.bookingId, date: b.date, laneId: b.laneId, coach: b.customerName, storedCode: b.accessCode, gcalCode: st.code, issue, ...meta(b) });
       if (!opts.dryRun) {
-        await ctx.runAction(internal.googleCalendar.updateCalendarEvent, {
-          googleCalendarEventId: b.googleCalendarEventId ?? primary?.eventId ?? "",
-          laneId: b.laneId,
-          variantId: b.variantId,
-          date: b.date,
-          startHour: b.startHour,
-          duration: b.duration,
-          customerName: b.customerName,
-          customerEmail: b.customerEmail,
-          customerPhone: b.customerPhone,
-          status: "confirmed",
-          isCoachBooking: b.isCoachBooking,
-          accessCode: b.accessCode,
-          additionalLaneIds: b.additionalLaneIds,
-          athleteSlots: b.athleteSlots,
-          laneCalendarEventIds: entries,
-          laneNameSnapshot: b.laneNameSnapshot,
-          variantLabelSnapshot: b.variantLabelSnapshot,
-          bookingId: b.bookingId, // preserve AUTO-DOOR token on stale-code re-push
-        });
+        if (secondaryGone) {
+          // A PUT can't create the missing lane event — rebuild the whole set.
+          await recreate(b, entries);
+        } else {
+          await ctx.runAction(internal.googleCalendar.updateCalendarEvent, {
+            googleCalendarEventId: b.googleCalendarEventId ?? primary?.eventId ?? "",
+            laneId: b.laneId,
+            variantId: b.variantId,
+            date: b.date,
+            startHour: b.startHour,
+            duration: b.duration,
+            customerName: b.customerName,
+            customerEmail: b.customerEmail,
+            customerPhone: b.customerPhone,
+            status: "confirmed",
+            isCoachBooking: b.isCoachBooking,
+            accessCode: b.accessCode,
+            additionalLaneIds: b.additionalLaneIds,
+            athleteSlots: b.athleteSlots,
+            laneCalendarEventIds: entries,
+            laneNameSnapshot: b.laneNameSnapshot,
+            variantLabelSnapshot: b.variantLabelSnapshot,
+            bookingId: b.bookingId, // preserve AUTO-DOOR token + records sync outcome
+          });
+        }
         repaired++;
       }
     } else {
@@ -822,7 +942,7 @@ async function runCalendarReconcile(
   }
 
   if (capped) console.warn(`Calendar reconcile: capped at ${limit} of ${candidates.length} candidates`);
-  return { scanned: work.length, inSync, missing, staleCode, repaired, capped, adminCreatedScanned, adminModifiedScanned, divergent };
+  return { scanned: work.length, inSync, missing, staleCode, drift, missingSecondary, failedSync, repaired, capped, adminCreatedScanned, adminModifiedScanned, divergent };
 }
 
 // SPEC_CALENDAR_SYNC_RELIABILITY_2026-06 (fix #4) — admin-gated READ-ONLY audit of
@@ -862,9 +982,9 @@ export const reconcileCalendarInternal = internalAction({
       toDate: awstDay(14),
       dryRun: false,
     });
-    if (result.missing > 0 || result.staleCode > 0) {
+    if (result.repaired > 0 || result.divergent.length > 0) {
       console.log(
-        `Calendar reconcile: repaired ${result.repaired} (missing=${result.missing}, stale=${result.staleCode}) of ${result.scanned} scanned`
+        `Calendar reconcile: repaired ${result.repaired} (missing=${result.missing}, stale=${result.staleCode}, drift=${result.drift}, missingSecondary=${result.missingSecondary}, failedSync=${result.failedSync}) of ${result.scanned} scanned`
       );
     }
     return result;

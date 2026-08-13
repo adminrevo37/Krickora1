@@ -16,10 +16,10 @@ import { awstDateKey } from "./lib/analyticsHelpers";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const BATCH = 500;
 
-// Retention windows. ⚠️ Pruning `analytics` past 90d makes any analytics-derived
-// "new vs returning visitor" metric (COST-5) window-bounded to 90d. The facility
-// is only weeks old so this deletes nothing yet; persist a first-seen rollup
-// before 90d elapses if that metric must stay all-time.
+// Retention windows. The COST-5 caveat (pruning `analytics` past 90d would have
+// window-bounded "new vs returning") is RESOLVED 2026-08-13: the
+// `firstSeenByIdentity` rollup (analytics.ts trackEvent + startFirstSeenBackfill)
+// keeps first-seen all-time independent of this prune.
 const ANALYTICS_RETENTION_DAYS = 90;
 const EVENT_RETENTION_DAYS = 180;
 const RATELIMIT_STALE_HOURS = 2; // 2× the longest limiter window (1h)

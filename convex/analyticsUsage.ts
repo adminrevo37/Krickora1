@@ -71,19 +71,30 @@ export const getUsageAnalytics = query({
   handler: async (ctx, args) => {
     if (!(await isAdmin(ctx))) return null;
     const { fromMs, toMs } = rangeMs(args.from, args.to, args.fromMs, args.toMs);
-    const allEvents = await ctx.db.query("analytics").collect();
+    // C3 (SPEC_CODE_REVIEW_IMPROVEMENTS_2026-08): bounded, INDEXED reads — never
+    // a whole-table collect of the fastest-growing table. The in-range slice is
+    // served by by_timestamp; all-time first-seen comes from the tiny
+    // firstSeenByIdentity rollup (maintained by trackEvent; seeded once by
+    // analytics.startFirstSeenBackfill). This also keeps new-vs-returning
+    // all-time despite the 90d analytics retention prune (COST-5 caveat).
+    const loBound = Number.isFinite(fromMs) ? fromMs : 0;
+    const hiBound = Number.isFinite(toMs) ? toMs : Number.MAX_SAFE_INTEGER;
+    const events = (await ctx.db
+      .query("analytics")
+      .withIndex("by_timestamp", (q: any) => q.gte("timestamp", loBound).lte("timestamp", hiBound))
+      .collect()) as any[];
 
-    // First-ever timestamp per identity (all-time) for new-vs-returning.
     const idOf = (e: any) => e.userId ?? e.sessionId ?? "";
-    const firstSeen = new Map<string, number>();
-    for (const e of allEvents as any[]) {
+    const rollupRows = await ctx.db.query("firstSeenByIdentity").collect();
+    const firstSeen = new Map<string, number>(
+      (rollupRows as any[]).map((r) => [r.identity, r.firstTimestamp])
+    );
+    // Fallback for identities that predate the rollup + backfill: their earliest
+    // in-window event stands in (index order is ascending timestamp).
+    for (const e of events) {
       const id = idOf(e);
-      if (!id) continue;
-      const prev = firstSeen.get(id);
-      if (prev === undefined || e.timestamp < prev) firstSeen.set(id, e.timestamp);
+      if (id && !firstSeen.has(id)) firstSeen.set(id, e.timestamp);
     }
-
-    const events = (allEvents as any[]).filter((e) => e.timestamp >= fromMs && e.timestamp <= toMs);
 
     const sessions = new Set<string>();
     const users = new Set<string>();
@@ -132,15 +143,22 @@ export const getUsageAnalytics = query({
       else returning++;
     }
 
-    // WAU / MAU relative to the range end (or now if open-ended).
+    // WAU / MAU relative to the range end (or now if open-ended). Indexed
+    // 30-day read (C3) instead of re-walking the whole table.
     const anchor = Number.isFinite(toMs) ? toMs : Date.now();
     const wau = new Set<string>();
     const mau = new Set<string>();
-    for (const e of allEvents as any[]) {
+    const recentEvents = (await ctx.db
+      .query("analytics")
+      .withIndex("by_timestamp", (q: any) =>
+        q.gte("timestamp", anchor - 30 * DAY_MS).lte("timestamp", anchor)
+      )
+      .collect()) as any[];
+    for (const e of recentEvents) {
       const id = idOf(e);
       if (!id) continue;
-      if (e.timestamp >= anchor - 7 * DAY_MS && e.timestamp <= anchor) wau.add(id);
-      if (e.timestamp >= anchor - 30 * DAY_MS && e.timestamp <= anchor) mau.add(id);
+      if (e.timestamp >= anchor - 7 * DAY_MS) wau.add(id);
+      mau.add(id);
     }
 
     // Device / OS / browser split (one vote per session by its first UA).

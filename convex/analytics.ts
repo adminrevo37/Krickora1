@@ -1,4 +1,5 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { getCallerContext } from "./lib/adminGuard";
 import { defaultLaneName } from "./lib/lanes";
@@ -29,6 +30,22 @@ export const trackEvent = mutation({
     const identity = await ctx.auth.getUserIdentity();
     const cap = (s: string | undefined, n: number) =>
       s == null ? undefined : s.slice(0, n);
+    // C3 (SPEC_CODE_REVIEW_IMPROVEMENTS_2026-08): first-seen rollup, written on
+    // an identity's FIRST event only (indexed point-read per event thereafter).
+    // Identity mirrors getUsageAnalytics' idOf(): auth subject, else sessionId.
+    const rollupId = identity?.subject ?? cap(args.sessionId, 128);
+    if (rollupId) {
+      const seen = await ctx.db
+        .query("firstSeenByIdentity")
+        .withIndex("by_identity", (q: any) => q.eq("identity", rollupId))
+        .first();
+      if (!seen) {
+        await ctx.db.insert("firstSeenByIdentity", {
+          identity: rollupId,
+          firstTimestamp: args.timestamp,
+        });
+      }
+    }
     return await ctx.db.insert("analytics", {
       type: args.type.slice(0, 64),
       name: cap(args.name, 128),
@@ -43,6 +60,51 @@ export const trackEvent = mutation({
       userAgent: cap(args.userAgent, 512),
       timestamp: args.timestamp,
     });
+  },
+});
+
+// C3 — one-off backfill: seed firstSeenByIdentity from the existing `analytics`
+// rows so pre-rollup visitors still count as "returning". Batched + indexed
+// (paginate 500 → self-reschedule, the retention.ts pattern). Run ONCE from the
+// authenticated admin browser after deploy:
+//   window.__KRICKORA_CONVEX__.mutation({[Symbol.for("functionName")]:"analytics:startFirstSeenBackfill"}, {})
+export const startFirstSeenBackfill = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.isAdmin) throw new Error("Admin only");
+    await ctx.scheduler.runAfter(0, internal.analytics.backfillFirstSeenBatch, {
+      cursor: null,
+    });
+    return "backfill scheduled";
+  },
+});
+
+export const backfillFirstSeenBatch = internalMutation({
+  args: { cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("analytics")
+      .withIndex("by_timestamp")
+      .paginate({ numItems: 500, cursor: args.cursor });
+    for (const e of page.page as any[]) {
+      const id = e.userId ?? e.sessionId;
+      if (!id) continue;
+      const seen = await ctx.db
+        .query("firstSeenByIdentity")
+        .withIndex("by_identity", (q: any) => q.eq("identity", id))
+        .first();
+      if (!seen) {
+        await ctx.db.insert("firstSeenByIdentity", { identity: id, firstTimestamp: e.timestamp });
+      } else if (e.timestamp < seen.firstTimestamp) {
+        await ctx.db.patch(seen._id, { firstTimestamp: e.timestamp });
+      }
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(1000, internal.analytics.backfillFirstSeenBatch, {
+        cursor: page.continueCursor,
+      });
+    }
   },
 });
 

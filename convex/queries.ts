@@ -216,6 +216,20 @@ export const listMyAthleteSessions = query({
       .withIndex("by_account", (q: any) => q.eq("accountCustomerId", account._id))
       .collect();
     if (myAthletes.length === 0) return [];
+    // C1 (SPEC_CODE_REVIEW_IMPROVEMENTS_2026-08): every account auto-gets a
+    // self-athlete, so the date-window scan below used to run for EVERY customer
+    // — a 320-day whole-table reactive read per viewer, re-run on every booking
+    // write in range, even though an athlete with no coach linkage can never
+    // appear in a coach booking's athleteSlots (allocation always draws from a
+    // coach roster). Gate the scan on ≥1 athlete actually linked to a coach:
+    // for the (majority) unlinked accounts the query's read set never touches
+    // bookings, so booking writes no longer re-run it. Known edge: an athlete
+    // later removed from every roster stops seeing past coach sessions here
+    // (their own bookings still come from the owner-scoped queries).
+    const hasCoachLink = myAthletes.some(
+      (a: any) => Array.isArray(a.assignedCoachIds) && a.assignedCoachIds.length > 0
+    );
+    if (!hasCoachLink) return [];
     const myAthleteIds = new Set<string>(myAthletes.map((a: any) => String(a._id)));
     const myAthleteNames = new Set<string>(
       myAthletes.map((a: any) => String(a.name ?? "").toLowerCase().trim()).filter(Boolean)
