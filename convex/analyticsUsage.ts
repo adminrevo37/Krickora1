@@ -85,15 +85,25 @@ export const getUsageAnalytics = query({
       .collect()) as any[];
 
     const idOf = (e: any) => e.userId ?? e.sessionId ?? "";
-    const rollupRows = await ctx.db.query("firstSeenByIdentity").collect();
-    const firstSeen = new Map<string, number>(
-      (rollupRows as any[]).map((r) => [r.identity, r.firstTimestamp])
-    );
-    // Fallback for identities that predate the rollup + backfill: their earliest
-    // in-window event stands in (index order is ascending timestamp).
+    // C3 hotfix (2026-08-13 #2): per-identity POINT READS instead of collecting
+    // the whole rollup table — (a) the whole-table read-set was invalidated by
+    // every running backfill batch (~1×/s), making this heavy query thrash;
+    // (b) the collect added an entire extra table to the doc-scan budget (the
+    // Usage tab hit Convex's read limit). Point reads touch only identities
+    // actually in range; other identities' inserts don't invalidate them.
+    const windowFirst = new Map<string, number>(); // index order ascending → first hit = earliest in-window
     for (const e of events) {
       const id = idOf(e);
-      if (id && !firstSeen.has(id)) firstSeen.set(id, e.timestamp);
+      if (id && !windowFirst.has(id)) windowFirst.set(id, e.timestamp);
+    }
+    const firstSeen = new Map<string, number>();
+    for (const id of windowFirst.keys()) {
+      const row: any = await ctx.db
+        .query("firstSeenByIdentity")
+        .withIndex("by_identity", (q: any) => q.eq("identity", id))
+        .first();
+      // Fallback for identities not yet backfilled: earliest in-window event.
+      firstSeen.set(id, row ? row.firstTimestamp : windowFirst.get(id)!);
     }
 
     const sessions = new Set<string>();
@@ -143,17 +153,26 @@ export const getUsageAnalytics = query({
       else returning++;
     }
 
-    // WAU / MAU relative to the range end (or now if open-ended). Indexed
-    // 30-day read (C3) instead of re-walking the whole table.
+    // WAU / MAU relative to the range end (or now if open-ended). C3 hotfix
+    // (2026-08-13 #2): when the selected window already covers
+    // [anchor-30d, anchor] — true for the default 3m preset — derive WAU/MAU
+    // from the already-collected slice instead of a second overlapping indexed
+    // read; the double read was what pushed the default view over the
+    // per-query document limit. Only a window NARROWER than 30d (1h/4h/7d
+    // presets) still needs its own bounded read.
     const anchor = Number.isFinite(toMs) ? toMs : Date.now();
     const wau = new Set<string>();
     const mau = new Set<string>();
-    const recentEvents = (await ctx.db
-      .query("analytics")
-      .withIndex("by_timestamp", (q: any) =>
-        q.gte("timestamp", anchor - 30 * DAY_MS).lte("timestamp", anchor)
-      )
-      .collect()) as any[];
+    const mauFloor = anchor - 30 * DAY_MS;
+    const recentEvents: any[] =
+      loBound <= mauFloor && hiBound >= anchor
+        ? events.filter((e) => e.timestamp >= mauFloor && e.timestamp <= anchor)
+        : ((await ctx.db
+            .query("analytics")
+            .withIndex("by_timestamp", (q: any) =>
+              q.gte("timestamp", mauFloor).lte("timestamp", anchor)
+            )
+            .collect()) as any[]);
     for (const e of recentEvents) {
       const id = idOf(e);
       if (!id) continue;
