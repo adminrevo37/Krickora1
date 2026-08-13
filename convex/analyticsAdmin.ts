@@ -235,13 +235,28 @@ export const getBookingDateBounds = query({
   args: {},
   handler: async (ctx) => {
     if (!(await isAdmin(ctx))) return null;
-    const all = await ctx.db.query("bookings").collect();
+    // C4 (SPEC_CODE_REVIEW_IMPROVEMENTS_2026-08): this used to `.collect()` the
+    // ENTIRE bookings table on every RevenueTab load just to read two dates. The
+    // by_date index is already ordered by exactly the value we want, so walk it
+    // inward from each end and stop at the first non-cancelled row. Result is
+    // IDENTICAL; reads drop from O(table) to (number of cancelled rows at that
+    // extreme) + 1 — normally 1 document per end.
+    const SCAN_CAP = 500; // safety valve: a pathological run of cancelled rows
     let min: string | null = null;
     let max: string | null = null;
-    for (const b of all as any[]) {
-      if (b.status === "cancelled") continue;
-      if (min === null || b.date < min) min = b.date;
-      if (max === null || b.date > max) max = b.date;
+    let steps = 0;
+    for await (const b of ctx.db.query("bookings").withIndex("by_date").order("asc")) {
+      if (++steps > SCAN_CAP) break;
+      if ((b as any).status === "cancelled") continue;
+      min = (b as any).date;
+      break;
+    }
+    steps = 0;
+    for await (const b of ctx.db.query("bookings").withIndex("by_date").order("desc")) {
+      if (++steps > SCAN_CAP) break;
+      if ((b as any).status === "cancelled") continue;
+      max = (b as any).date;
+      break;
     }
     return { min, max };
   },
@@ -685,7 +700,6 @@ export const getPeriodSummary = query({
   args: {},
   handler: async (ctx) => {
     if (!(await isAdmin(ctx))) return null;
-    const all = await ctx.db.query("bookings").collect();
     const today = awstDateKey(Date.now());
     const wk = isoWeekKey(today);
     const thisMon = wk.key;
@@ -695,13 +709,33 @@ export const getPeriodSummary = query({
     const todayStartMs = awstDateKeyToMs(today);
     const todayEndMs = todayStartMs + DAY_MS;
 
+    // C4 (SPEC_CODE_REVIEW_IMPROVEMENTS_2026-08): was a full `.collect()` of the
+    // bookings table — and RevenueTab mounts this query TWICE, so an admin paid
+    // for two whole-table scans per view. Every figure it returns is bounded:
+    //  · today / thisWeek / nextWeek  → session DATE within [thisMon .. nextSun]
+    //    (today always falls inside this week, so one range covers all three)
+    //  · createdToday                 → CREATION TIME within [todayStart, todayEnd),
+    //    which is a different axis (a booking created today can sit on any future
+    //    date), so it gets its own read on the existing by_createdAt index.
+    // Two indexed reads, result-identical.
+    const dateWindow = (await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.gte("date", thisMon).lte("date", nextSun))
+      .collect()) as any[];
+    const createdTodayRows = (await ctx.db
+      .query("bookings")
+      .withIndex("by_createdAt", (q: any) =>
+        q.gte("createdAt", todayStartMs).lt("createdAt", todayEndMs),
+      )
+      .collect()) as any[];
+
     const todayB = blankBucket();
     const thisWeek = blankBucket();
     const nextWeek = blankBucket();
     let createdTodayCount = 0;
     let createdTodayRevenue = 0;
 
-    for (const b of all as any[]) {
+    for (const b of dateWindow) {
       if (b.status !== "confirmed") continue;
       const h = (b.duration ?? 0) / 60;
       const rev = b.priceInCents != null ? b.priceInCents / 100 : 0;
@@ -714,10 +748,13 @@ export const getPeriodSummary = query({
       if (b.date === today) add(todayB);
       if (b.date >= thisMon && b.date <= thisSun) add(thisWeek);
       if (b.date >= nextMon && b.date <= nextSun) add(nextWeek);
-      if (typeof b.createdAt === "number" && b.createdAt >= todayStartMs && b.createdAt < todayEndMs) {
-        createdTodayCount++;
-        if (!b.isCoachBooking) createdTodayRevenue += rev;
-      }
+    }
+    for (const b of createdTodayRows) {
+      if (b.status !== "confirmed") continue;
+      // The old single-pass version re-checked the ms bounds here; the index
+      // range already guarantees them.
+      createdTodayCount++;
+      if (!b.isCoachBooking) createdTodayRevenue += b.priceInCents != null ? b.priceInCents / 100 : 0;
     }
     const fin = (bk: PeriodBucket) => ({
       ...bk, custRevenue: round2(bk.custRevenue), coachCharges: round2(bk.coachCharges), hours: round2(bk.hours),
@@ -908,7 +945,24 @@ export const getLaneWearCumulative = query({
     for (const r of resets as any[]) {
       if (!resetByLane[r.laneId] || r.resetDate > resetByLane[r.laneId]) resetByLane[r.laneId] = r.resetDate;
     }
-    const all = (await ctx.db.query("bookings").collect()).filter(
+    // C4 (SPEC_CODE_REVIEW_IMPROVEMENTS_2026-08): the loop below already DISCARDS
+    // any booking dated before its lane's latest reset (`if (reset && b.date <
+    // reset) continue`). So when EVERY tracked lane has been reset, nothing before
+    // the earliest of those resets can contribute to any lane — read from there via
+    // by_date instead of collecting the whole table. If even one lane has never
+    // been reset its wear is genuinely all-time, so the read stays unbounded.
+    const everyLaneReset = LANE_IDS.every((lid) => !!resetByLane[lid]);
+    const earliestReset = everyLaneReset
+      ? LANE_IDS.map((lid) => resetByLane[lid]).sort()[0]
+      : null;
+    const all = (
+      earliestReset
+        ? await ctx.db
+            .query("bookings")
+            .withIndex("by_date", (q: any) => q.gte("date", earliestReset))
+            .collect()
+        : await ctx.db.query("bookings").collect()
+    ).filter(
       (b: any) => b.status === "confirmed"
     );
     // weekKey -> { mondayMs, label, lanes: {laneId: hoursThisWeek} }
