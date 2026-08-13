@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
+import { fmtMoney } from '../lib/money'
 import {
   LANES, formatDateKey, formatTime, canBookSlot, getCustomerPrice, getCoachPrice,
   getCoachDurations, getCustomerDurations, getValidCoachStartTimes, getCoachRolling7Days,
@@ -9,6 +10,7 @@ import {
   type Booking,
 } from '../lib/booking-data'
 import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
+import { resolveLaneAt, variantLabel, variantRatePerHour } from '../lib/lanes'
 // SPEC_EMBEDDED_CHECKOUT — in-app Stripe payment for the extend/modify top-up.
 import { cancelUnpaidCheckout } from '../lib/stripe'
 import EmbeddedCheckoutModal from './EmbeddedCheckoutModal'
@@ -91,6 +93,26 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
   const [embeddedTopUp, setEmbeddedTopUp] = useState<{ clientSecret: string; bookingId: string } | null>(null)
 
   const selectedLane = LANES.find(l => l.id === selectedLaneId) ?? originalLane
+
+  // U26 (SPEC_UI_IMPROVEMENTS_2026-08) — this modal read lane names, icons and
+  // variants off the STATIC LANES table, so on a date whose lane layout differs
+  // (SPEC_RECONFIGURABLE_LANES) it showed the default name and offered variants
+  // the lane doesn't actually run then — while the booking CARD it was opened
+  // from already showed the correct date-resolved name (fixed in E6). Resolve
+  // both by date + hour, exactly like BookingModal.
+  const laneMetaAt = (laneId: string, date: string, hour: number) => resolveLaneAt(laneId, date, hour)
+  const originalMeta = laneMetaAt(booking.laneId, booking.date, booking.startHour)
+  const selectedMeta = laneMetaAt(selectedLaneId, selectedDate, selectedStartHour)
+  // Prefer the snapshot captured at booking time for the ORIGINAL side — it is
+  // what the confirmation email and the card show.
+  const originalLaneName = booking.laneNameSnapshot ?? originalMeta.name
+  const originalLaneIcon = originalMeta.icon
+  // Variants offered by the SELECTED lane's segment at the selected time.
+  const resolvedVariants = selectedMeta.segment.variants.map((vid: string) => ({
+    id: vid,
+    name: variantLabel(vid, selectedMeta.segment.variants.length === 1 && selectedMeta.mode === 'BM'),
+    pricePerHour: variantRatePerHour(vid, settings),
+  }))
 
   // COST-1 / FEA-6: availability is computed for the SELECTED target date only, so
   // fetch just that day via the indexed per-day query instead of subscribing to the
@@ -323,7 +345,7 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
               <p className="text-white/80 text-sm mt-0.5">
                 {step === 'success' ? 'Your changes are saved' :
                  step === 'processing' ? 'Please wait…' :
-                 `${originalLane?.name ?? booking.laneId} — ${formatDate(booking.date)}`}
+                 `${originalLaneName} — ${formatDate(booking.date)}`}
               </p>
             </div>
             {step !== 'processing' && step !== 'success' && (
@@ -362,7 +384,7 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
             <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-4 w-full space-y-2 text-sm">
               <div className="flex justify-between"><span className="text-gray-500">Date</span><span className="font-medium text-gray-800 dark:text-gray-200">{formatDate(selectedDate)}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Time</span><span className="font-medium text-gray-800 dark:text-gray-200">{formatTime(selectedStartHour)} - {formatTime(selectedStartHour + effectiveDuration / 60)}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Lane</span><span className="font-medium text-gray-800 dark:text-gray-200">{selectedLane?.name}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Lane</span><span className="font-medium text-gray-800 dark:text-gray-200">{selectedMeta.name}</span></div>
             </div>
             {resultNote && <p className="text-xs text-gray-500 text-center">{resultNote}</p>}
             <p className="text-xs text-gray-400 text-center">If your date, time, or lane changed, a new door access code has been issued.</p>
@@ -381,8 +403,8 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
             <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 border border-gray-200 dark:border-gray-700">
               <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Current Booking</div>
               <div className="flex items-center gap-2 text-sm flex-wrap">
-                <span>{originalLane?.icon ?? '🏏'}</span>
-                <span className="font-medium text-gray-800 dark:text-gray-200">{originalLane?.name}</span>
+                <span>{originalLaneIcon}</span>
+                <span className="font-medium text-gray-800 dark:text-gray-200">{originalLaneName}</span>
                 <span className="text-gray-400">·</span>
                 <span className="text-gray-600 dark:text-gray-400">{formatDate(booking.date)}</span>
                 <span className="text-gray-400">·</span>
@@ -409,24 +431,24 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
                 {LANES.map(lane => (
                   <button key={lane.id} onClick={() => {
                     setSelectedLaneId(lane.id)
-                    setSelectedVariantId(lane.id === booking.laneId ? (booking.variantId ?? undefined) : lane.variants?.[0]?.id)
+                    setSelectedVariantId(lane.id === booking.laneId ? (booking.variantId ?? undefined) : laneMetaAt(lane.id, selectedDate, selectedStartHour).segment.variants[0])
                   }}
                     className={`p-2 rounded-xl border-2 transition-all text-center ${
                       selectedLaneId === lane.id ? 'border-violet-500 bg-violet-50 dark:bg-violet-900/20 shadow-md' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
                     }`}>
-                    <div className="text-lg">{lane.icon}</div>
-                    <div className="text-[10px] font-medium text-gray-700 dark:text-gray-300 mt-0.5">{lane.shortName}</div>
+                    <div className="text-lg">{laneMetaAt(lane.id, selectedDate, selectedStartHour).icon}</div>
+                    <div className="text-[10px] font-medium text-gray-700 dark:text-gray-300 mt-0.5">{laneMetaAt(lane.id, selectedDate, selectedStartHour).name}</div>
                   </button>
                 ))}
               </div>
             </div>
 
             {/* Variant */}
-            {selectedLane?.variants && selectedLane.variants.length > 0 && !isCoach && (
+            {resolvedVariants.length > 1 && !isCoach && (
               <div>
                 <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Machine Type</label>
                 <div className="grid grid-cols-2 gap-3">
-                  {selectedLane.variants.map(variant => (
+                  {resolvedVariants.map(variant => (
                     <button key={variant.id} onClick={() => setSelectedVariantId(variant.id)}
                       className={`p-3 rounded-xl border-2 transition-all text-left ${
                         selectedVariantId === variant.id
@@ -434,7 +456,7 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
                           : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
                       }`}>
                       <div className="text-sm font-bold text-gray-800 dark:text-gray-200">{variant.name}</div>
-                      <div className="text-xs text-gray-500 mt-0.5">${getCustomerPrice(selectedLane, variant.id, 60)}/hr</div>
+                      <div className="text-xs text-gray-500 mt-0.5">${fmtMoney(variant.pricePerHour)}/hr</div>
                     </button>
                   ))}
                 </div>
@@ -509,7 +531,7 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
                       className={`p-3 rounded-xl border-2 transition-all text-left ${
                         effectiveDuration === d ? 'border-violet-500 bg-violet-50 dark:bg-violet-900/20 shadow-md' : 'border-gray-200 dark:border-gray-700'
                       }`}>
-                      <div className="text-lg font-bold text-gray-800 dark:text-gray-200">${selectedLane ? getCustomerPrice(selectedLane, selectedVariantId ?? null, d) : 0}</div>
+                      <div className="text-lg font-bold text-gray-800 dark:text-gray-200">${fmtMoney(selectedLane ? getCustomerPrice(selectedLane, selectedVariantId ?? null, d) : 0)}</div>
                       <div className="text-sm text-gray-600 dark:text-gray-400">{formatDuration(d)}</div>
                       <div className="text-xs text-gray-500 mt-1">{formatTime(selectedStartHour)} - {formatTime(selectedStartHour + d / 60)}</div>
                     </button>
@@ -578,8 +600,8 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
               <div className="space-y-1">
                 <div className="text-[10px] font-semibold text-red-500 uppercase">From</div>
                 <div className="flex items-center gap-2 bg-red-50 dark:bg-red-900/10 rounded-lg p-2 flex-wrap">
-                  <span>{originalLane?.icon}</span>
-                  <span className="font-medium text-gray-700 dark:text-gray-300">{originalLane?.name}</span>
+                  <span>{originalLaneIcon}</span>
+                  <span className="font-medium text-gray-700 dark:text-gray-300">{originalLaneName}</span>
                   <span className="text-gray-400">·</span>
                   <span className="text-gray-600 dark:text-gray-400">{formatDate(booking.date)}</span>
                   <span className="text-gray-400">·</span>
@@ -589,8 +611,8 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
               <div className="space-y-1">
                 <div className="text-[10px] font-semibold text-green-500 uppercase">To</div>
                 <div className="flex items-center gap-2 bg-green-50 dark:bg-green-900/10 rounded-lg p-2 flex-wrap">
-                  <span>{selectedLane?.icon}</span>
-                  <span className="font-medium text-gray-700 dark:text-gray-300">{selectedLane?.name}</span>
+                  <span>{selectedMeta.icon}</span>
+                  <span className="font-medium text-gray-700 dark:text-gray-300">{selectedMeta.name}</span>
                   <span className="text-gray-400">·</span>
                   <span className="text-gray-600 dark:text-gray-400">{formatDate(selectedDate)}</span>
                   <span className="text-gray-400">·</span>
