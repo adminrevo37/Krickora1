@@ -27,6 +27,8 @@ function toBooking(doc: any): Booking {
     priceInCents: doc.priceInCents,
     paymentStatus: doc.paymentStatus, // owner rows only (stripped for non-owners)
     additionalLaneIds: doc.additionalLaneIds,
+    laneNameSnapshot: doc.laneNameSnapshot, // E6: date-correct lane name
+    variantLabelSnapshot: doc.variantLabelSnapshot,
     athleteSlots: doc.athleteSlots,
     creditApplied: doc.creditApplied,
     cancelledAt: doc.cancelledAt,
@@ -140,17 +142,17 @@ export function useBookingActions() {
     [createBookingMut]
   )
 
+  // E2 fix (SPEC_CODE_REVIEW_IMPROVEMENTS_2026-08): rethrow on failure so the
+  // caller can surface the server's reason — a swallowed error left the user
+  // believing the cancel worked. Sole caller is MyBookings.doCancel, which
+  // catches and displays it.
   const cancelBooking = useCallback(
     async (bookingId: string, userId?: string) => {
-      try {
-        await cancelBookingMut({
-          id: bookingId as Id<"bookings">,
-          cancelledByUserId: userId,
-        })
-        return true
-      } catch {
-        return false
-      }
+      await cancelBookingMut({
+        id: bookingId as Id<"bookings">,
+        cancelledByUserId: userId,
+      })
+      return true
     },
     [cancelBookingMut]
   )

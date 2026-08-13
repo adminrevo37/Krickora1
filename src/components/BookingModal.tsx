@@ -157,6 +157,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const [newAthleteStart, setNewAthleteStart] = useState(startHour)
   // Default the new-athlete slot to the coach's preferred session length (clamped ≤90).
   const [newAthleteDuration, setNewAthleteDuration] = useState(() => Math.min((customerRecord as any)?.defaultSessionDuration ?? 60, 90))
+  const [athleteAddError, setAthleteAddError] = useState<string | null>(null)
   const [athleteDropdownOpen, setAthleteDropdownOpen] = useState(false)
   const [athleteSearchQuery, setAthleteSearchQuery] = useState('')
 
@@ -346,15 +347,19 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const addAthleteSlot = (athlete: { _id: string; name: string }) => {
     if (!athlete.name.trim()) return
     const bookingEnd = startHour + duration / 60
-    const slotEnd = newAthleteStart + newAthleteDuration / 60
+    // E1 fix: use the SNAPPED duration (what the select shows + the slot stores),
+    // not the raw state — and surface a message instead of a silent dead click.
+    const slotEnd = newAthleteStart + effNewAthleteDuration / 60
     if (slotEnd > bookingEnd) {
       const neededDuration = Math.ceil((slotEnd - startHour) * 60 / 30) * 30
       if (availableDurations.includes(neededDuration)) {
         setDuration(neededDuration)
       } else {
+        setAthleteAddError(`That ${effNewAthleteDuration}min slot runs past the end of the booking and the booking can't be extended to fit it. Choose a shorter duration or an earlier start.`)
         return
       }
     }
+    setAthleteAddError(null)
     const newSlot: AthleteSlot = {
       athleteId: athlete._id,
       athleteName: athlete.name.trim(),
@@ -735,7 +740,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               <div className="flex justify-between"><span className="text-gray-500">Lane</span><span className="font-medium text-gray-800 dark:text-gray-200">{resolvedLaneName}{selectedVariant ? ` (${selectedVariant.name})` : ''}</span></div>
               {additionalLanes.length > 0 && <div className="flex justify-between"><span className="text-gray-500">+ Lanes</span><span className="font-medium text-gray-800 dark:text-gray-200">{additionalLanes.map(lid => laneNm(lid)).join(', ')}</span></div>}
               <div className="flex justify-between"><span className="text-gray-500">Time</span><span className="font-medium text-gray-800 dark:text-gray-200">{formatTime(startHour)} - {formatTime(startHour + (confirmedBooking?.duration ?? duration) / 60)}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Total</span><span className="font-bold text-emerald-600 dark:text-emerald-400">{confirmedBooking?.isCoachBooking ? `$${getCoachPrice(confirmedBooking.duration)}` : totalPrice === 0 ? 'FREE' : `$${totalPrice}`}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Total</span><span className="font-bold text-emerald-600 dark:text-emerald-400">{confirmedBooking?.isCoachBooking ? `$${confirmedBooking.coachPrice ?? (getCoachPrice(confirmedBooking.duration) + additionalLanePrice)}` : totalPrice === 0 ? 'FREE' : `$${totalPrice}`}</span></div>
             </div>
             {googleCalUrl && (
               <a href={googleCalUrl} target="_blank" rel="noopener noreferrer" className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-white dark:bg-gray-800 border-2 border-gray-200 dark:border-gray-700 rounded-xl hover:border-blue-400 hover:shadow-md transition-all">
@@ -976,14 +981,14 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                     <div className="grid grid-cols-2 gap-2">
                       <div>
                         <label className="text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 block uppercase tracking-wider">Start Time</label>
-                        <select value={newAthleteStart} onChange={e => setNewAthleteStart(Number(e.target.value))}
+                        <select value={newAthleteStart} onChange={e => { setNewAthleteStart(Number(e.target.value)); setAthleteAddError(null) }}
                           className="w-full text-xs px-2 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200">
                           {athleteStartOptions.map(h => <option key={h} value={h}>{formatTimeDetailed(h)}</option>)}
                         </select>
                       </div>
                       <div>
                         <label className="text-[10px] font-medium text-gray-500 dark:text-gray-400 mb-1 block uppercase tracking-wider">Duration</label>
-                        <select value={effNewAthleteDuration} onChange={e => setNewAthleteDuration(Number(e.target.value))}
+                        <select value={effNewAthleteDuration} onChange={e => { setNewAthleteDuration(Number(e.target.value)); setAthleteAddError(null) }}
                           className="w-full text-xs px-2 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200">
                           {athleteDurationOptions.map(d => <option key={d} value={d}>{d}min</option>)}
                         </select>
@@ -1046,6 +1051,11 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                       )}
                     </div>
 
+                    {athleteAddError && (
+                      <div className="mt-1.5 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg px-2.5 py-1.5">
+                        {athleteAddError}
+                      </div>
+                    )}
 
                   </div>
                 ) : (

@@ -126,8 +126,10 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
   const addlCount = addlLaneIds.length
 
   // Price preview (server is authoritative; this mirrors its computation).
+  // E4 fix: coach price scales by lane count too (server prices × laneCount) —
+  // without it a multi-lane coach booking showed a phantom Original→New delta.
   const newPrice = isCoach
-    ? getCoachPrice(effectiveDuration)
+    ? getCoachPrice(effectiveDuration) * (1 + addlCount)
     : (selectedLane ? getCustomerPrice(selectedLane, selectedVariantId ?? null, effectiveDuration) : 0)
       + addlCount * getCustomerPrice(selectedLane!, null, effectiveDuration)
   const originalPrice = booking.isCoachBooking

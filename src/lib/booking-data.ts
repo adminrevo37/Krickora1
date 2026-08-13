@@ -181,6 +181,11 @@ export interface Booking {
   isCoachBooking?: boolean
   coachPrice?: number
   additionalLaneIds?: string[]
+  // SPEC_RECONFIGURABLE_LANES snapshots (E6): the lane name / variant label as
+  // resolved at booking time — what emails + the calendar event show. Preferred
+  // over a static LANES lookup so a reconfigured date still reads correctly.
+  laneNameSnapshot?: string
+  variantLabelSnapshot?: string
   athleteSlots?: AthleteSlot[]
   creditApplied?: number
   cancelledAt?: string
@@ -1036,7 +1041,9 @@ export function generateGoogleCalendarUrl(booking: {
   const [year, month, day] = booking.date.split('-').map(Number)
   const whole = Math.floor(booking.startHour)
   const mins = Math.round((booking.startHour - whole) * 60)
-  const startDate = new Date(year, month - 1, day, whole, mins, 0)
+  // Booking times are AWST (UTC+8) wall-clock — build via Date.UTC like the
+  // Outlook helper so a device in another timezone gets the right instant.
+  const startDate = new Date(Date.UTC(year, month - 1, day, whole - 8, mins, 0))
   const endDate = new Date(startDate.getTime() + booking.duration * 60 * 1000)
   const formatGCalDate = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
   const laneStr = booking.additionalLanes && booking.additionalLanes.length > 0

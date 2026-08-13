@@ -16,6 +16,7 @@ import {
   getCoachPrice,
   type Booking,
 } from '../lib/booking-data'
+import { resolveLaneAt } from '../lib/lanes'
 import { formatAccessCode } from '../lib/access-code'
 import { trackCodeView } from '../lib/tracker'
 import { getErrorMessage } from '../lib/errors'
@@ -519,7 +520,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       const lane = getLane(booking.laneId)
       const session = await createCheckoutSession({
         laneId: booking.laneId,
-        laneName: lane?.name ?? booking.laneId,
+        laneName: bookingLaneName(booking),
         variantId: booking.variantId ?? null,
         variantName: getVariantName(booking) ?? null,
         date: booking.date,
@@ -601,7 +602,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     const variantName = getVariantName(booking)
     const dateLabel = new Date(booking.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
     const timeRange = `${formatTime(slot.startHour)} – ${formatTime(slot.startHour + slot.durationMinutes / 60)}`
-    const laneName = (lane?.name ?? booking.laneId) + (variantName ? ` (${variantName})` : '')
+    const laneName = bookingLaneName(booking) + (variantName ? ` (${variantName})` : '')
     const code = slot.accessCode ? formatAccessCode(slot.accessCode) : '—'
     const body =
       `${childName} — your cricket session 🏏\n${FACILITY.name}, ${FACILITY.address}\n` +
@@ -623,9 +624,18 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   // ── lane / pricing helpers ──────────────────────────────────────────────────
 
   const getLane = (laneId: string) => LANES.find(l => l.id === laneId)
+  // E6 fix (SPEC_CODE_REVIEW_IMPROVEMENTS_2026-08): date-resolved short lane
+  // names ("BM 3") like the rest of the app — the static LANES names ("Bowling
+  // Machine 3") can be outright wrong on a lane-reconfigured date. Prefer the
+  // booking's stored snapshot (exactly what its email/calendar event said).
+  const laneNameById = (id: string, date: string, hour: number) => {
+    try { return resolveLaneAt(id, date, hour).name } catch { return getLane(id)?.name ?? id }
+  }
+  const bookingLaneName = (b: Booking) => b.laneNameSnapshot ?? laneNameById(b.laneId, b.date, b.startHour)
   const getVariantName = (booking: Booking) => {
     if (!booking.variantId) return null
-    return getLane(booking.laneId)?.variants?.find(v => v.id === booking.variantId)?.name ?? null
+    return booking.variantLabelSnapshot
+      ?? getLane(booking.laneId)?.variants?.find(v => v.id === booking.variantId)?.name ?? null
   }
   // Multi-lane aware. A booking spanning multiple lanes (additionalLaneIds) is
   // charged PER LANE, so the card must reflect the full charge, not one lane's.
@@ -646,7 +656,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const fmtMoney = (n: number) => (Number.isInteger(n) ? `${n}` : n.toFixed(2))
   // All lane names for a booking (primary + additional), e.g. ["BM 3","RU 1","RU 2"].
   const bookingLaneNames = (b: Booking) =>
-    [b.laneId, ...(b.additionalLaneIds ?? [])].map((id) => getLane(id)?.name ?? id)
+    [bookingLaneName(b), ...(b.additionalLaneIds ?? []).map((id) => laneNameById(id, b.date, b.startHour))]
 
   // Waitlist tab is driven by the REAL Convex waitlist table (reactive — anyone
   // joining/leaving updates this live), not the old in-memory store. Remove calls
@@ -745,7 +755,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
               {/* SPEC_COACH_SPLIT_LANE_BOOKING — a merged split shows the lane change */}
               {booking.splitLeg2 ? (
                 <>
-                  {lane?.icon} {laneNames[0]} until {formatTime(booking.splitLeg2.startHour)}, then {getLane(booking.splitLeg2.laneId)?.name ?? booking.splitLeg2.laneId}
+                  {lane?.icon} {laneNames[0]} until {formatTime(booking.splitLeg2.startHour)}, then {laneNameById(booking.splitLeg2.laneId, booking.date, booking.splitLeg2.startHour)}
                   <span className="ml-1 text-[10px] font-semibold bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded-full align-middle">Split session</span>
                 </>
               ) : (
@@ -822,7 +832,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             </button>
             {/* §6 — report an issue about THIS session (pre-attaches its context). */}
             <button
-              onClick={(e) => { e.stopPropagation(); setReportBooking({ id: booking.id, laneId: booking.laneId, laneName: lane?.name, date: booking.date, timeLabel: `${formatTime(booking.startHour)}–${formatTime(booking.startHour + booking.duration / 60)}` }) }}
+              onClick={(e) => { e.stopPropagation(); setReportBooking({ id: booking.id, laneId: booking.laneId, laneName: bookingLaneName(booking), date: booking.date, timeLabel: `${formatTime(booking.startHour)}–${formatTime(booking.startHour + booking.duration / 60)}` }) }}
               className="text-[11px] px-2.5 py-1 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
             >
               🛠️ Report an issue
@@ -859,7 +869,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     return mySlots.map((mySlot, idx) => {
       const childName = mySlot.athleteName
       const isSelfSession = athleteNameCandidates.includes(childName.toLowerCase().trim())
-      const calParams = { laneName: lane?.name ?? booking.laneId, variantName: variantName ?? undefined, date: booking.date, startHour: mySlot.startHour, duration: mySlot.durationMinutes, customerName: childName, accessCode: mySlot.accessCode }
+      const calParams = { laneName: bookingLaneName(booking), variantName: variantName ?? undefined, date: booking.date, startHour: mySlot.startHour, duration: mySlot.durationMinutes, customerName: childName, accessCode: mySlot.accessCode }
       return (
         <div key={`${booking.id}-${idx}`} className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm">
           <div className="flex items-start justify-between gap-2 mb-2">
@@ -874,7 +884,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                 )}
               </div>
               <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                {lane?.icon} {lane?.name ?? booking.laneId}
+                {lane?.icon} {bookingLaneName(booking)}
                 {variantName && <span className="ml-1">· {variantName}</span>}
                 · {formatDuration(mySlot.durationMinutes)}
                 · Coach: {booking.customerName}
@@ -974,7 +984,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       : booking.startHour + booking.duration / 60
     const displayMinutes = Math.round((displayEndHour - booking.startHour) * 60)
     // Calendar exports cover the full extended window (display consistency).
-    const calParams = { laneName: lane?.name ?? booking.laneId, variantName: variantName ?? undefined, date: booking.date, startHour: booking.startHour, duration: displayMinutes, customerName: booking.customerName, accessCode: booking.accessCode }
+    const calParams = { laneName: bookingLaneName(booking), variantName: variantName ?? undefined, date: booking.date, startHour: booking.startHour, duration: displayMinutes, customerName: booking.customerName, accessCode: booking.accessCode }
     const extPrice = (booking.extensions ?? []).reduce((s, e) => s + (e.priceInCents ?? 0), 0) / 100
     const [cy, cm, cd] = booking.date.split('-').map(Number)
     const cardStartMs = new Date(cy, cm - 1, cd, Math.floor(booking.startHour), Math.round((booking.startHour - Math.floor(booking.startHour)) * 60), 0).getTime()
@@ -1066,7 +1076,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const renderSharedBookingCard = (b: SharedBooking) => {
     const lane = getLane(b.laneId)
     const variantName = b.variantId ? lane?.variants?.find(v => v.id === b.variantId)?.name ?? null : null
-    const calParams = { laneName: lane?.name ?? b.laneId, variantName: variantName ?? undefined, date: b.date, startHour: b.startHour, duration: b.duration, customerName: b.ownerName, accessCode: b.accessCode }
+    const calParams = { laneName: laneNameById(b.laneId, b.date, b.startHour), variantName: variantName ?? undefined, date: b.date, startHour: b.startHour, duration: b.duration, customerName: b.ownerName, accessCode: b.accessCode }
     return (
       <div key={`shared-${b.id}`} className="bg-white dark:bg-gray-900 rounded-xl border border-blue-100 dark:border-blue-900/40 p-4 shadow-sm">
         <div className="flex items-start justify-between gap-2 mb-2">
@@ -1078,7 +1088,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
               <span className="text-[10px] font-semibold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded-full">👥 Shared</span>
             </div>
             <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              {lane?.icon} {lane?.name ?? b.laneId}
+              {lane?.icon} {laneNameById(b.laneId, b.date, b.startHour)}
               {variantName && <span className="ml-1">· {variantName}</span>}
               <span className="ml-1">· {formatDuration(b.duration)}</span>
             </div>
@@ -1509,7 +1519,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                   <div key={booking.id} className="bg-red-50/50 dark:bg-red-900/10 rounded-xl border border-red-200 dark:border-red-800/30 px-4 py-3 opacity-70 flex items-center gap-3">
                     <span className="text-lg shrink-0">{lane?.icon ?? '🏏'}</span>
                     <div className="min-w-0">
-                      <div className="text-sm font-medium text-gray-600 dark:text-gray-400 truncate">{lane?.name ?? booking.laneId} <span className="text-red-400 text-xs">(cancelled)</span></div>
+                      <div className="text-sm font-medium text-gray-600 dark:text-gray-400 truncate">{bookingLaneName(booking)} <span className="text-red-400 text-xs">(cancelled)</span></div>
                       <div className="text-xs text-gray-400">{formatDate(booking.date)} · {formatTime(booking.startHour)} – {formatTime(booking.startHour + booking.duration / 60)}</div>
                     </div>
                   </div>
@@ -1527,7 +1537,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                   <div key={booking.id} className="bg-gray-50 dark:bg-gray-900/50 rounded-xl border border-gray-100 dark:border-gray-800 px-4 py-3 opacity-60 flex items-center gap-3">
                     <span className="text-lg shrink-0">{lane?.icon ?? '🏏'}</span>
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium text-gray-600 dark:text-gray-400 truncate">{lane?.name ?? booking.laneId}</div>
+                      <div className="text-sm font-medium text-gray-600 dark:text-gray-400 truncate">{bookingLaneName(booking)}</div>
                       <div className="text-xs text-gray-400">{formatDate(booking.date)} · {formatTime(booking.startHour)} – {formatTime(booking.startHour + booking.duration / 60)} · ${fmtMoney(price)}</div>
                     </div>
                   </div>

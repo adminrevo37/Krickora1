@@ -64,7 +64,10 @@ export default defineConfig({
         // recharts+d3 "charts" chunk is the big, predictable admin-only payload; the
         // lazy admin-analytics route/tab chunks (incl. leaflet via MapTab) are fetched
         // on demand anyway.
-        globIgnores: ["**/charts-*.js", "**/pdflib-*.js", "**/facility-instructions/**", "**/access/**", "**/58f7d9/**", "**/d058cb/**", "**/3fff00/**"],
+        // C2 (SPEC_CODE_REVIEW_IMPROVEMENTS_2026-08): admin-only chunks (~500 KB —
+        // analytics *Tab-*, MapTab/leaflet, rev-ops-7k2p*, AdminBookingCalendar) are
+        // lazy-loaded at runtime; keep them OUT of every customer's PWA precache.
+        globIgnores: ["**/charts-*.js", "**/pdflib-*.js", "**/*Tab-*.js", "**/MapTab-*.css", "**/rev-ops-7k2p*.js", "**/AdminBookingCalendar-*.js", "**/facility-instructions/**", "**/access/**", "**/58f7d9/**", "**/d058cb/**", "**/3fff00/**"],
         // App-shell navigations → NetworkFirst (a new deploy is picked up; falls
         // back to the cached shell offline). NEVER fall back for /api/*.
         navigateFallback: "/index.html",
