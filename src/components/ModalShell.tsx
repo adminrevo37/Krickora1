@@ -37,8 +37,13 @@ function popScrollLock() {
   }
 }
 
+// `iframe` MUST be in this list. Without it the Stripe Embedded Checkout iframe is
+// invisible to the Tab cycle, so the trap below would bounce focus off the ✕ and
+// back to the top of the dialog — making it impossible to tab into the card fields
+// and pay by keyboard. (Once focus IS inside the cross-origin iframe its keydowns
+// never reach our window listener, so the trap correctly stops applying there.)
 const FOCUSABLE =
-  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), iframe, [tabindex]:not([tabindex="-1"])'
 
 export interface ModalShellProps {
   /** Dismiss handler. Omit for a modal that must be dismissed by its own controls. */
@@ -80,6 +85,11 @@ export default function ModalShell({
   const escEnabled = closeOnEscape ?? !!onClose
   const backdropEnabled = closeOnBackdrop ?? !!onClose
 
+  // MOUNT/UNMOUNT ONLY. This deliberately does NOT depend on escEnabled: several
+  // callers derive that from their step ('processing' disables Escape), so a
+  // combined effect re-ran on every step change — releasing and re-taking the
+  // scroll lock and, worse, yanking focus back to the ✕ mid-flow while the user
+  // was filling the form.
   useEffect(() => {
     restoreFocusRef.current = document.activeElement
     pushScrollLock()
@@ -87,7 +97,15 @@ export default function ModalShell({
     // starts from here rather than the top of the page behind.
     const first = panelRef.current?.querySelector<HTMLElement>(FOCUSABLE)
     ;(first ?? panelRef.current)?.focus()
+    return () => {
+      popScrollLock()
+      const prev = restoreFocusRef.current as HTMLElement | null
+      if (prev && typeof prev.focus === 'function') prev.focus()
+    }
+  }, [])
 
+  // Key handling re-binds freely — it holds no resources.
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && escEnabled) {
         e.stopPropagation()
@@ -108,15 +126,7 @@ export default function ModalShell({
       }
     }
     window.addEventListener('keydown', onKey, true)
-    return () => {
-      window.removeEventListener('keydown', onKey, true)
-      popScrollLock()
-      const prev = restoreFocusRef.current as HTMLElement | null
-      if (prev && typeof prev.focus === 'function') prev.focus()
-    }
-    // escEnabled is read through the closure each keypress via the ref for
-    // onClose; it is stable for a given modal instance in practice.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [escEnabled])
 
   return (
