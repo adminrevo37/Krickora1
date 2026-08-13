@@ -11,6 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { EmbeddedCheckoutProvider, EmbeddedCheckout } from '@stripe/react-stripe-js'
 import { getStripePromise } from '../lib/stripe'
+import ModalShell from './ModalShell'
 
 interface EmbeddedCheckoutModalProps {
   clientSecret: string
@@ -44,12 +45,20 @@ export default function EmbeddedCheckoutModal({ clientSecret, onComplete, onClos
   const [confirmingCancel, setConfirmingCancel] = useState(false)
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-      <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-md overflow-hidden max-h-[92dvh] flex flex-col">
+    // U8 — dialog semantics + focus + scroll lock. U2 — backdrop and Escape are
+    // BOTH disabled here: closing releases the held slot, so it must be a
+    // deliberate press on the ✕ (which then confirms).
+    <ModalShell
+      labelledBy="embedded-checkout-title"
+      closeOnBackdrop={false}
+      closeOnEscape={false}
+      overlayClassName="fixed inset-0 z-[60] flex items-center justify-center p-4"
+      backdropClassName="absolute inset-0 bg-black/60 backdrop-blur-sm"
+      panelClassName="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-md overflow-hidden max-h-[92dvh] flex flex-col"
+    >
         <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-gray-800">
           <div>
-            <h3 className="text-base font-bold text-gray-900 dark:text-gray-100">Secure Payment</h3>
+            <h3 id="embedded-checkout-title" className="text-base font-bold text-gray-900 dark:text-gray-100">Secure Payment</h3>
             <p className="text-xs text-gray-500 dark:text-gray-400">Powered by Stripe</p>
           </div>
           <button
@@ -91,7 +100,6 @@ export default function EmbeddedCheckoutModal({ clientSecret, onComplete, onClos
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </ModalShell>
   )
 }

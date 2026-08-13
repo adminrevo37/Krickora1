@@ -21,6 +21,7 @@ import { formatAccessCode } from '../lib/access-code'
 import { trackCodeView } from '../lib/tracker'
 import { getErrorMessage } from '../lib/errors'
 import { fmtMoney } from '../lib/money'
+import ModalShell from './ModalShell'
 // SPEC_CHECKOUT_ABANDONMENT — resume payment / cancel an unpaid booking.
 import { createCheckoutSession, cancelUnpaidCheckout } from '../lib/stripe'
 // SPEC_EMBEDDED_CHECKOUT — in-app Stripe payment (Pay-now / resume).
@@ -761,8 +762,17 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     return (
       <div
         key={booking.id}
+        role={booking.isCoachBooking ? 'button' : undefined}
+        tabIndex={booking.isCoachBooking ? 0 : undefined}
+        aria-label={booking.isCoachBooking ? `Edit athletes for ${formatTime(booking.startHour)} session` : undefined}
         onClick={() => booking.isCoachBooking && openAthleteEditor(booking)}
-        className={`rounded-xl border p-4 shadow-sm transition-all ${cardBg} ${booking.isCoachBooking ? 'cursor-pointer active:scale-[0.99]' : ''}`}
+        onKeyDown={booking.isCoachBooking ? (e) => {
+          // U7 — only when the card itself has focus; never swallow Enter/Space
+          // aimed at one of the action buttons nested inside it.
+          if (e.target !== e.currentTarget) return
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openAthleteEditor(booking) }
+        } : undefined}
+        className={`rounded-xl border p-4 shadow-sm transition-all ${cardBg} ${booking.isCoachBooking ? 'cursor-pointer active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500' : ''}`}
       >
         {/* Top row: time + lane */}
         <div className="flex items-start justify-between gap-2 mb-2">
@@ -817,7 +827,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             {canEditAthletes && (
               <button
                 onClick={(e) => { e.stopPropagation(); openAthleteEditor(booking) }}
-                className="text-[11px] px-2.5 py-1 rounded-lg border border-orange-200 dark:border-orange-800 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"
+                className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-orange-200 dark:border-orange-800 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"
               >
                 🏏 Edit athletes
               </button>
@@ -830,7 +840,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             {canEditAthletes && (
               <button
                 onClick={(e) => { e.stopPropagation(); openAthleteEditor(booking) }}
-                className="text-[11px] px-2.5 py-1 rounded-lg border border-orange-200 dark:border-orange-800 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"
+                className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-orange-200 dark:border-orange-800 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"
               >
                 🏏 Edit athletes
               </button>
@@ -840,17 +850,18 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             {cancelCheck.allowed && !booking.splitLeg2 && (
               <button
                 onClick={(e) => { e.stopPropagation(); setModifyBookingData(booking) }}
-                className="text-[11px] px-2.5 py-1 rounded-lg border border-violet-200 dark:border-violet-800 text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors"
+                className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-violet-200 dark:border-violet-800 text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors"
               >
                 ✏️ Modify
               </button>
             )}
             {booking.isCoachBooking && booking.status !== 'cancelled' && <RepeatBookingButton booking={booking} />}
             <button
-              onClick={() => handleCancel(booking)}
-              disabled={cancellingId === booking.id || !cancelCheck.allowed}
+              onClick={() => { if (!cancelCheck.allowed) { setCancelError(cancelCheck.reason ?? 'This booking can no longer be cancelled.'); return } handleCancel(booking) }}
+              disabled={cancellingId === booking.id}
+              aria-label={!cancelCheck.allowed ? 'Why can’t I cancel?' : 'Cancel booking'}
               title={!cancelCheck.allowed ? cancelCheck.reason : 'Cancel booking'}
-              className={`text-[11px] px-2.5 py-1 rounded-lg border transition-colors disabled:opacity-40 ${
+              className={`text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border transition-colors disabled:opacity-40 ${
                 cancelCheck.allowed
                   ? 'border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20'
                   : 'border-gray-200 dark:border-gray-700 text-gray-400 cursor-not-allowed'
@@ -861,7 +872,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             {/* §6 — report an issue about THIS session (pre-attaches its context). */}
             <button
               onClick={(e) => { e.stopPropagation(); setReportBooking({ id: booking.id, laneId: booking.laneId, laneName: bookingLaneName(booking), date: booking.date, timeLabel: `${formatTime(booking.startHour)}–${formatTime(booking.startHour + booking.duration / 60)}` }) }}
-              className="text-[11px] px-2.5 py-1 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+              className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
             >
               🛠️ Report an issue
             </button>
@@ -933,10 +944,10 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             {/* §2.11/§1G: SMS the child their session details + door code. Gated on
                 the per-slot access code so we never send "🔑 Door code: —". */}
             {mySlot.accessCode && (
-              <button onClick={() => handleSmsDetails(childName, mySlot, booking)} className="text-[11px] px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors">📱 SMS Details</button>
+              <button onClick={() => handleSmsDetails(childName, mySlot, booking)} className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors">📱 SMS Details</button>
             )}
-            <a href={generateGoogleCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">📅 Google</a>
-            <a href={generateOutlookCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors">📆 Outlook</a>
+            <a href={generateGoogleCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">📅 Google</a>
+            <a href={generateOutlookCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors">📆 Outlook</a>
           </div>
         </div>
       )
@@ -992,7 +1003,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             <button
               onClick={() => handleCancelPending(booking)}
               disabled={busy}
-              className="text-[11px] px-2.5 py-1.5 rounded-lg border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 transition-colors"
+              className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 transition-colors"
             >
               Cancel
             </button>
@@ -1078,24 +1089,25 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           {canExtendNow && (
             <button
               onClick={() => setExtendBookingData(booking.id)}
-              className="text-[11px] px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-semibold transition-colors"
+              className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-semibold transition-colors"
             >
               ⏱ Extend session
             </button>
           )}
-          <a href={generateGoogleCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">📅 Google</a>
-          <a href={generateOutlookCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors">📆 Outlook</a>
+          <a href={generateGoogleCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">📅 Google</a>
+          <a href={generateOutlookCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors">📆 Outlook</a>
           {/* Modify stays available inside the cancellation window — the modify flow
               has its own carve-out (extend / move earlier) that the server enforces;
               gating it on canCancel wrongly hid it and blocked allowed extensions. */}
-          <button onClick={() => setModifyBookingData(booking)} className="text-[11px] px-2.5 py-1 rounded-lg border border-violet-200 dark:border-violet-800 text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors">✏️ Modify</button>
+          <button onClick={() => setModifyBookingData(booking)} className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-violet-200 dark:border-violet-800 text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-900/20 transition-colors">✏️ Modify</button>
           {/* SPEC_ADD_A_MATE: one-tap to the Add-a-Mate page (customer bookings only). */}
-          <Link to="/add-mate" search={{ bookingId: booking.id }} className="text-[11px] px-2.5 py-1 rounded-lg border border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors">👥 Add a Mate</Link>
+          <Link to="/add-mate" search={{ bookingId: booking.id }} className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors">👥 Add a Mate</Link>
           <button
-            onClick={() => handleCancel(booking)}
-            disabled={cancellingId === booking.id || !cancelCheck.allowed}
+            onClick={() => { if (!cancelCheck.allowed) { setCancelError(cancelCheck.reason ?? 'This booking can no longer be cancelled.'); return } handleCancel(booking) }}
+            disabled={cancellingId === booking.id}
+            aria-label={!cancelCheck.allowed ? 'Why can’t I cancel?' : 'Cancel booking'}
             title={!cancelCheck.allowed ? cancelCheck.reason : 'Cancel booking'}
-            className={`text-[11px] px-2.5 py-1 rounded-lg border transition-colors disabled:opacity-40 ${
+            className={`text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border transition-colors disabled:opacity-40 ${
               cancelCheck.allowed
                 ? 'border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20'
                 : 'border-gray-200 dark:border-gray-700 text-gray-400 cursor-not-allowed'
@@ -1146,9 +1158,9 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           </div>
         )}
         <div className="flex gap-1.5 flex-wrap">
-          <a href={generateGoogleCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">📅 Google</a>
-          <a href={generateOutlookCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-2.5 py-1 rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors">📆 Outlook</a>
-          <button onClick={() => setLeaveBooking(b)} className="text-[11px] px-2.5 py-1 rounded-lg border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">Leave</button>
+          <a href={generateGoogleCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors">📅 Google</a>
+          <a href={generateOutlookCalendarUrl(calParams)} target="_blank" rel="noopener noreferrer" className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors">📆 Outlook</a>
+          <button onClick={() => setLeaveBooking(b)} className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">Leave</button>
         </div>
       </div>
     )
@@ -1506,7 +1518,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
         <div className="flex items-center gap-2 bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-200 dark:border-red-800/50">
           <span>⚠️</span>
           <p className="text-sm text-red-700 dark:text-red-400 flex-1">{cancelError}</p>
-          <button onClick={() => setCancelError(null)} className="text-red-400 hover:text-red-600 text-xs">✕</button>
+          <button onClick={() => setCancelError(null)} aria-label="Dismiss" className="text-red-400 hover:text-red-600 text-xs w-10 h-10 shrink-0 flex items-center justify-center">✕</button>
         </div>
       )}
 
@@ -1516,7 +1528,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
         <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/20 rounded-xl p-3 border border-emerald-200 dark:border-emerald-800/50">
           <span>✅</span>
           <p className="text-sm text-emerald-700 dark:text-emerald-400 flex-1">{toast}</p>
-          <button onClick={() => setToast(null)} className="text-emerald-400 hover:text-emerald-600 text-xs">✕</button>
+          <button onClick={() => setToast(null)} aria-label="Dismiss" className="text-emerald-400 hover:text-emerald-600 text-xs w-10 h-10 shrink-0 flex items-center justify-center">✕</button>
         </div>
       )}
 
@@ -1789,10 +1801,14 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
 
       {/* §2.16: leave a shared booking — confirm modal. */}
       {leaveBooking && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => { if (!leavingId) { setLeaveBooking(null); setLeaveError(null) } }} />
-          <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm p-5">
-            <h3 className="text-base font-bold text-gray-900 dark:text-white mb-2">Leave this booking?</h3>
+        <ModalShell
+          onClose={() => { if (!leavingId) { setLeaveBooking(null); setLeaveError(null) } }}
+          closeOnBackdrop={!leavingId}
+          closeOnEscape={!leavingId}
+          labelledBy="leave-booking-title"
+          panelClassName="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm p-5"
+        >
+            <h3 id="leave-booking-title" className="text-base font-bold text-gray-900 dark:text-white mb-2">Leave this booking?</h3>
             <p className="text-sm text-gray-600 dark:text-gray-300">
               You'll lose access to the door code for this session, and you'll need a new invite to rejoin.
               <span className="font-semibold"> The booking owner will be notified that you've left.</span>
@@ -1812,8 +1828,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                 className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-xl transition-all disabled:opacity-50"
               >{leavingId ? 'Leaving…' : 'Leave booking'}</button>
             </div>
-          </div>
-        </div>
+        </ModalShell>
       )}
 
       {/* Coach late-cancellation warning — cancelling within the late-cancel window
@@ -1827,12 +1842,16 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
         const charge = cancelConfirm.coachPrice ?? getCoachPrice(cancelConfirm.duration)
         const busy = cancellingId === cancelConfirm.id
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => { if (!busy) { setCancelConfirm(null); setCancelError(null) } }} />
-            <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm p-5">
+          <ModalShell
+            onClose={() => { if (!busy) { setCancelConfirm(null); setCancelError(null) } }}
+            closeOnBackdrop={!busy}
+            closeOnEscape={!busy}
+            labelledBy="cancel-confirm-title"
+            panelClassName="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm p-5"
+          >
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-xl">⚠️</span>
-                <h3 className="text-base font-bold text-gray-900 dark:text-white">Cancel within {hrs} hours?</h3>
+                <h3 id="cancel-confirm-title" className="text-base font-bold text-gray-900 dark:text-white">Cancel within {hrs} hours?</h3>
               </div>
               <p className="text-sm text-gray-600 dark:text-gray-300">
                 This session (<span className="font-medium">{dateLabel}, {timeRange}</span>) starts within {hrs} hours. If you cancel now,{' '}
@@ -1855,8 +1874,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                   className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-xl transition-all disabled:opacity-50"
                 >{busy ? 'Cancelling…' : 'Cancel anyway'}</button>
               </div>
-            </div>
-          </div>
+          </ModalShell>
         )
       })()}
     </div>

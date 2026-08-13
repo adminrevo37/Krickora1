@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
+import ModalShell from './ModalShell'
 // SPEC_WAITLIST_SPLIT_BM_RU — time-slot based waitlist, split into BM / RU pools.
 // Entries are keyed by pool sentinel laneId: '*bm' (bowling machines) / '*ru'
 // (run-ups). The pool prop drives labels + the sentinel written to the server.
@@ -89,11 +90,13 @@ export default function WaitlistModal({ pool, selectedSlots, availableHours, dat
 
   if (done) {
     return (
-      <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-        <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
-        <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm overflow-hidden">
+      <ModalShell
+        labelledBy="waitlist-done-title"
+        overlayClassName="fixed inset-0 z-[60] flex items-center justify-center p-4"
+        panelClassName="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm overflow-hidden"
+      >
           <div className="bg-gradient-to-r from-amber-500 to-orange-500 p-5 text-white">
-            <h3 className="text-lg font-bold">Added to {poolTag} Waitlist! 🔔</h3>
+            <h3 id="waitlist-done-title" className="text-lg font-bold">Added to {poolTag} Waitlist! 🔔</h3>
             <p className="text-white/80 text-sm mt-0.5">You will be notified when a {poolTag} slot opens up</p>
           </div>
           <div className="p-6 text-center">
@@ -105,26 +108,29 @@ export default function WaitlistModal({ pool, selectedSlots, availableHours, dat
               You'll be notified when any of these times open up — accept to grab it.
             </p>
           </div>
-        </div>
-      </div>
+      </ModalShell>
     )
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm overflow-hidden max-h-[85vh] flex flex-col">
+    <ModalShell
+      onClose={onClose}
+      labelledBy="waitlist-title"
+      overlayClassName="fixed inset-0 z-[60] flex items-center justify-center p-4"
+      panelClassName="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm overflow-hidden max-h-[85dvh] flex flex-col"
+    >
         <div className="bg-gradient-to-r from-amber-500 to-orange-500 p-5 text-white shrink-0">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-bold">Join {poolTag} Waitlist</h3>
+              <h3 id="waitlist-title" className="text-lg font-bold">Join {poolTag} Waitlist</h3>
               <p className="text-white/80 text-sm mt-0.5">
                 {chosenHours.length} slot{chosenHours.length === 1 ? '' : 's'} selected
               </p>
             </div>
             <button
               onClick={onClose}
-              className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors"
+              aria-label="Close"
+              className="w-10 h-10 shrink-0 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors"
             >
               ✕
             </button>
@@ -182,7 +188,6 @@ export default function WaitlistModal({ pool, selectedSlots, availableHours, dat
             )}
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   )
 }

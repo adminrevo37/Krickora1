@@ -12,6 +12,7 @@ import { getSettingsStore, getHoursForDate } from '../lib/settings-store'
 // SPEC_EMBEDDED_CHECKOUT — in-app Stripe payment for the extend/modify top-up.
 import { cancelUnpaidCheckout } from '../lib/stripe'
 import EmbeddedCheckoutModal from './EmbeddedCheckoutModal'
+import ModalShell from './ModalShell'
 
 // Result shape returned by the unified modifyBooking mutation (via useBookingStore).
 export interface ModifyResult {
@@ -299,9 +300,14 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
 
   return (
     <>
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={step !== 'processing' ? onClose : undefined} />
-      <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-lg overflow-hidden max-h-[90vh] overflow-y-auto">
+    // U8 — dialog semantics + focus + Escape + scroll lock. U24 — dvh.
+    <ModalShell
+      onClose={onClose}
+      closeOnBackdrop={step !== 'processing'}
+      closeOnEscape={step !== 'processing'}
+      labelledBy="modify-modal-title"
+      panelClassName="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-lg overflow-hidden max-h-[90dvh] overflow-y-auto"
+    >
 
         {/* Header */}
         <div className={`p-5 text-white transition-all duration-500 ${
@@ -312,7 +318,7 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-lg font-bold">
-                {step === 'success' ? '✓ Booking Updated' : step === 'processing' ? 'Saving…' : '✏️ Modify Booking'}
+                <span id="modify-modal-title">{step === 'success' ? '✓ Booking Updated' : step === 'processing' ? 'Saving…' : '✏️ Modify Booking'}</span>
               </h3>
               <p className="text-white/80 text-sm mt-0.5">
                 {step === 'success' ? 'Your changes are saved' :
@@ -321,7 +327,7 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
               </p>
             </div>
             {step !== 'processing' && step !== 'success' && (
-              <button onClick={onClose} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors">✕</button>
+              <button onClick={onClose} aria-label="Close" className="w-10 h-10 shrink-0 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors">✕</button>
             )}
           </div>
         </div>
@@ -462,10 +468,14 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
             {/* Time */}
             <div>
               <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">Time</label>
+              {/* U31 — the slot grid below is an inner scroller inside the already-
+                  scrolling modal, so an upward swipe on it was swallowed instead of
+                  scrolling the modal. overscroll-contain hands the gesture back at
+                  the edge. */}
               {availableSlots.length === 0 ? (
                 <div className="text-sm text-gray-500 bg-gray-50 dark:bg-gray-800 rounded-xl p-4 text-center">No available slots on this date for this lane.</div>
               ) : (
-                <div className="grid grid-cols-4 gap-1.5 max-h-40 overflow-y-auto pr-1">
+                <div className="grid grid-cols-4 gap-1.5 max-h-40 overflow-y-auto overscroll-contain pr-1">
                   {availableSlots.map(h => {
                     const isSelected = h === selectedStartHour
                     const isOriginal = h === booking.startHour && selectedDate === booking.date
@@ -638,8 +648,7 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
             </div>
           </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
     {/* SPEC_EMBEDDED_CHECKOUT — in-app payment for the top-up. onComplete: the
         webhook confirms the modification. onClose (abandon): mirror the old
         cancel_url leg (cancelUnpaidCheckout) and return to the confirm step. */}

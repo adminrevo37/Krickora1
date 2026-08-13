@@ -28,7 +28,7 @@ import {
 import { getHoursForDate } from '../lib/settings-store'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
 import { LaneHeaderInner, LaneLegend, bandClassForSlot, bandStart, bandTagText } from './laneDisplay'
-import { getDaySegments, resolveSegment, segmentIsClosed, segmentHasCustomStarts, segmentStartHours } from '../lib/lanes'
+import { getDaySegments, resolveSegment, segmentIsClosed, segmentHasCustomStarts, segmentStartHours, resolveLaneAt } from '../lib/lanes'
 import { CoachCalendarBlock } from './CoverageTimeline'
 import { dayDotState } from '../lib/coverage'
 import RepeatBookingButton from './RepeatBookingButton'
@@ -619,6 +619,18 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
         <LegendRow />
         <LaneLegend />
       </div>
+      {/* U29 (SPEC_UI_IMPROVEMENTS_2026-08) — the legends were `hidden sm:block`, so
+          on mobile the colour key NEVER rendered. That included the new amber
+          "join waitlist" / green "you're queued" band meanings, leaving the two
+          most ambiguous colours on the grid entirely unexplained on the device
+          most customers book from. Collapsible so it costs no default height. */}
+      <details className="sm:hidden bg-white rounded-xl border border-gray-200 px-3 py-2">
+        <summary className="text-xs font-semibold text-gray-600 cursor-pointer select-none min-h-[32px] flex items-center">ⓘ Key</summary>
+        <div className="pt-2 space-y-3">
+          <LegendRow />
+          <LaneLegend />
+        </div>
+      </details>
 
       {/* Calendar Grid */}
       {/* Frozen lane-header row (top) + frozen Time column (left) so they stay
@@ -640,8 +652,9 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       )}
       <div className="bg-white rounded-2xl border-2 border-black shadow-sm overflow-auto max-h-[60dvh] sm:max-h-[72vh]">
         <div className="min-w-0 sm:min-w-[560px]">
-        <div className="grid grid-cols-[48px_repeat(5,minmax(0,1fr))] sm:grid-cols-[70px_repeat(5,1fr)] border-b-2 border-black bg-white sticky top-0 z-30">
-          <div className="p-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider flex items-center justify-center sticky left-0 z-40 bg-white">Time</div>
+        {/* U22 — header must sit ABOVE the waitlist band (z-30); it tied and lost on DOM order. */}
+        <div className="grid grid-cols-[48px_repeat(5,minmax(0,1fr))] sm:grid-cols-[70px_repeat(5,1fr)] border-b-2 border-black bg-white sticky top-0 z-40">
+          <div className="p-2 text-[10px] font-semibold text-gray-500 uppercase tracking-wider flex items-center justify-center sticky left-0 z-50 bg-white">Time</div>
           {LANES.map((lane) => (
             <div key={lane.id} className="p-2 text-center border-l-2 border-black bg-white">
               <LaneHeaderInner laneId={lane.id} dateKey={dateKey} />
@@ -810,6 +823,10 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   // amber "Awaiting payment", never a plain "Booked" (others still
                   // see it held as red — it's a real hold until it auto-cancels).
                   const isOwnPending = isOwnBooking && booked?.status === 'pending_payment'
+                  // U7 — exactly the condition the click handler acts on, so the cell
+                  // is focusable/announced only when pressing it really books.
+                  const cellIsBookable = !past && !isLaneInactiveAtHalfHour && !booked &&
+                    canBook && hasDurations && timeCheck.allowed
 
                   if (isLaneInactiveAtHalfHour) {
                     return (
@@ -863,8 +880,25 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   }
 
                   return (
+                    /* U7 (SPEC_UI_IMPROVEMENTS_2026-08) — every bookable "+" cell was
+                       a click-only <div>: unfocusable, invisible to screen readers,
+                       and impossible to book with a keyboard at all (the day strip
+                       and waitlist bands were already real buttons). Given the cell
+                       also hosts nested interactive children (the Repeat control on
+                       a coach block), it takes button SEMANTICS rather than becoming
+                       a <button> element — nesting interactive content inside a
+                       button is invalid and breaks those children. */
                     <div key={lane.id}
-                      className={`relative border-l-2 border-black min-h-[32px] transition-all duration-150 ${past ? 'bg-gray-200' : booked ? '' : tooLate ? 'bg-gray-200' : canBook && hasDurations ? 'bg-emerald-50 hover:bg-emerald-100 cursor-pointer group' : band}`}
+                      role={cellIsBookable ? 'button' : undefined}
+                      tabIndex={cellIsBookable ? 0 : undefined}
+                      aria-label={cellIsBookable ? `Book ${resolveLaneAt(lane.id, dateKey, slot.hour).name} at ${formatTime(slot.hour)}` : undefined}
+                      className={`relative border-l-2 border-black min-h-[32px] transition-all duration-150 ${cellIsBookable ? 'focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-inset' : ''} ${past ? 'bg-gray-200' : booked ? '' : tooLate ? 'bg-gray-200' : canBook && hasDurations ? 'bg-emerald-50 hover:bg-emerald-100 cursor-pointer group' : band}`}
+                      onKeyDown={cellIsBookable ? (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          handleSlotClick(lane, slot)
+                        }
+                      } : undefined}
                       onClick={() => {
                         if (past || isLaneInactiveAtHalfHour) return
                         if (!booked && canBook && hasDurations && timeCheck.allowed) handleSlotClick(lane, slot)

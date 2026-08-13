@@ -11,6 +11,7 @@ import {
 } from '../lib/booking-data'
 import { createCheckoutSession, cancelUnpaidCheckout, type CheckoutSessionRequest } from '../lib/stripe'
 import EmbeddedCheckoutModal from './EmbeddedCheckoutModal'
+import ModalShell from './ModalShell'
 import { getSettingsStore } from '../lib/settings-store'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
 import { resolveLaneAt, getLaneWarning, variantLabel, variantRatePerHour, getDaySegments, segmentForBooking, segmentIsClosed } from '../lib/lanes'
@@ -721,14 +722,22 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
 
   return (
     <>
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={step !== 'processing' && step !== 'success' ? onClose : undefined} />
-      <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-md overflow-hidden max-h-[90vh] overflow-y-auto">
+    // U8 — dialog semantics, focus management, Escape and body scroll lock.
+    // U24 — dvh so the CTA isn't buried under the iOS keyboard.
+    // Backdrop/Escape stay disabled mid-processing and on success (U5: the
+    // success screen holds the door code and closes on Done).
+    <ModalShell
+      onClose={onClose}
+      closeOnBackdrop={step !== 'processing' && step !== 'success'}
+      closeOnEscape={step !== 'processing' && step !== 'success'}
+      labelledBy="booking-modal-title"
+      panelClassName="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-md overflow-hidden max-h-[90dvh] overflow-y-auto"
+    >
         {/* Header */}
         <div className={`p-5 text-white transition-all duration-500 ${step === 'success' ? 'bg-gradient-to-r from-green-500 to-emerald-500' : step === 'processing' ? (isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500' : totalPrice === 0 ? 'bg-gradient-to-r from-purple-500 to-indigo-500' : 'bg-gradient-to-r from-blue-500 to-indigo-500') : isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500' : 'bg-gradient-to-r from-emerald-500 to-green-500'}`}>
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-bold">{step === 'success' ? 'Booking Confirmed!' : step === 'processing' ? (totalPrice === 0 ? 'Confirming Booking...' : 'Opening Payment...') : 'Book a Session'}</h3>
+              <h3 id="booking-modal-title" className="text-lg font-bold">{step === 'success' ? 'Booking Confirmed!' : step === 'processing' ? (totalPrice === 0 ? 'Confirming Booking...' : 'Opening Payment...') : 'Book a Session'}</h3>
               <p className="text-white/80 text-sm mt-0.5">{step === 'success' ? 'Your session is booked' : step === 'processing' ? 'Please wait...' : date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
               {isCoach && step === 'details' && <span className="inline-block mt-1 text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-semibold">🏅 Coach Rate &middot; Rolling 8-Day Window</span>}
             </div>
@@ -1108,7 +1117,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                                 value={athleteSearchQuery}
                                 onChange={e => setAthleteSearchQuery(e.target.value)}
                                 placeholder="Search athletes..."
-                                className="w-full pl-8 pr-3 py-2 text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-gray-800 dark:text-gray-200 placeholder-gray-400"
+                                className="w-full pl-8 pr-3 py-2 text-base sm:text-sm bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent outline-none text-gray-800 dark:text-gray-200 placeholder-gray-400"
                                 autoFocus
                               />
                             </div>
@@ -1178,7 +1187,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                       onChange={e => { setDiscountCode(e.target.value); setDiscountError(null) }}
                       onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleApplyDiscount() } }}
                       placeholder="Enter code"
-                      className="flex-1 text-sm px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 placeholder:text-gray-400"
+                      className="flex-1 text-base sm:text-sm px-3 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 placeholder:text-gray-400"
                     />
                     <button onClick={handleApplyDiscount} disabled={discountValidating} className="px-4 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-60 text-white text-sm font-semibold rounded-xl transition-colors">{discountValidating ? 'Checking...' : 'Apply'}</button>
                   </div>
@@ -1247,8 +1256,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
             </div>
           </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
     {/* SPEC_EMBEDDED_CHECKOUT — in-app Stripe payment overlay */}
     {embeddedCheckout && (
       <EmbeddedCheckoutModal

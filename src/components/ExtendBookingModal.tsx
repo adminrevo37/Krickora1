@@ -20,6 +20,7 @@ import {
 import { useLaneBlocks } from '../hooks/useLaneBlocks'
 import { createCheckoutSession, cancelUnpaidCheckout } from '../lib/stripe'
 import EmbeddedCheckoutModal from './EmbeddedCheckoutModal'
+import ModalShell from './ModalShell'
 
 interface ExtendBookingModalProps {
   booking: Booking // the merged parent card booking (client-only `extensions` attached)
@@ -286,17 +287,19 @@ export default function ExtendBookingModal({ booking, creditBalance, onClose }: 
     // checkout mounted, nothing ran cancelUnpaidCheckout and they were left with
     // an unexplained amber "Awaiting payment" 30-min card until the ~30-min
     // backstop expired it.
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
-      onClick={busy || embeddedPay ? undefined : onClose}
+    // U8 — dialog semantics + focus + scroll lock. U24 — dvh.
+    <ModalShell
+      onClose={onClose}
+      closeOnBackdrop={!busy && !embeddedPay}
+      closeOnEscape={!busy && !embeddedPay}
+      labelledBy="extend-modal-title"
+      overlayClassName="fixed inset-0 z-50 flex items-center justify-center p-4"
+      backdropClassName="absolute inset-0 bg-black/50"
+      panelClassName="relative w-full max-w-md rounded-2xl bg-white dark:bg-gray-900 shadow-xl p-5 max-h-[90dvh] overflow-y-auto"
     >
-      <div
-        className="w-full max-w-md rounded-2xl bg-white dark:bg-gray-900 shadow-xl p-5 max-h-[90dvh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
         <div className="flex items-start justify-between mb-3">
           <div>
-            <h2 className="text-lg font-bold text-gray-900 dark:text-white">⏱ Extend session</h2>
+            <h2 id="extend-modal-title" className="text-lg font-bold text-gray-900 dark:text-white">⏱ Extend session</h2>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
               Current session ends {formatTime(extStart)} — same door code carries over.
             </p>
@@ -447,7 +450,6 @@ export default function ExtendBookingModal({ booking, creditBalance, onClose }: 
             }}
           />
         )}
-      </div>
-    </div>
+    </ModalShell>
   )
 }
