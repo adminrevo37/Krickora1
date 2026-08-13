@@ -117,16 +117,26 @@ function formatDate(dateStr: string): string {
 
 export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: string } = {}) {
   const { cancelBooking, modifyBooking, updateAthleteSlots } = useBookingActions()
-  const { user, isCoach, isCustomer, isAdmin, getAllCoaches, assignCoach, removeCoach, customerRecord, getCreditBalance } = useAuth()
+  const { user, isCoach, isCustomer, isAdmin, getAllCoaches, assignCoach, removeCoach, customerRecord, getCreditBalance, profileReady } = useAuth()
   const { settings } = useSettings()
   // When impersonating, filter bookings by the impersonated user's email
   const effectiveEmail = impersonatedEmail ?? user?.email
   // COST-1: source the user's OWN bookings from owner-scoped indexed queries (full
   // past + future), independent of the narrow shared grid window so My Bookings
   // history is never truncated by the calendar's reactive window.
-  const { myBookings } = useMyBookings({ email: effectiveEmail, userId: user?.id, impersonating: !!impersonatedEmail })
+  // SYNC-2: profileReady requires the AUTHORITATIVE customer record, which can only
+  // arrive over an authenticated Convex socket — so it is exactly "identity has
+  // resolved", and distinguishes a real empty result from the unauthenticated [].
+  const identityReady = profileReady
+  const { myBookings } = useMyBookings({ email: effectiveEmail, userId: user?.id, impersonating: !!impersonatedEmail, identityReady })
 
-  const now = new Date()
+  // SYNC-6 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): bookings are AWST wall-clock
+  // dates, so "today" must be AWST — this used the DEVICE clock. A customer on AEST
+  // at 00:30 local (= 22:30 AWST the previous day) computed a todayKey one day
+  // ahead, which pushed that evening's still-upcoming session out of Schedule into
+  // Past and anchored the day-strip/week-offset to the wrong Monday. Everywhere
+  // else (including nowAwstMs below and all of BookingCalendar) already uses AWST.
+  const now = getAWSTNow()
   const todayKey = formatDateKey(now)
 
   // SPEC_SCHEDULE_DAY_VIEW §2.4: L1 coaches get a rolling 8-day strip (no nav);
@@ -169,7 +179,14 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const [nowTick, setNowTick] = useState(() => Date.now())
   useEffect(() => {
     const t = setInterval(() => setNowTick(Date.now()), 30_000)
-    return () => clearInterval(t)
+    // SYNC-8 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): background tabs throttle
+    // intervals to ≥60s and a backgrounded iOS PWA freezes them outright, so on
+    // resume the extend window could be a full tick stale — the button lingering
+    // past its window (server then rejects with a raw error) or not appearing for
+    // up to a minute after it opens. Re-tick immediately when the app comes back.
+    const onVisible = () => { if (!document.hidden) setNowTick(Date.now()) }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', onVisible) }
   }, [])
   const nowAwstMs = useMemo(() => getAWSTNow().getTime(), [nowTick])
   // §6 — fault report: a per-booking context, or 'general' for the page-level button.
@@ -984,7 +1001,13 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       : booking.startHour + booking.duration / 60
     const displayMinutes = Math.round((displayEndHour - booking.startHour) * 60)
     // Calendar exports cover the full extended window (display consistency).
-    const calParams = { laneName: bookingLaneName(booking), variantName: variantName ?? undefined, date: booking.date, startHour: booking.startHour, duration: displayMinutes, customerName: booking.customerName, accessCode: booking.accessCode }
+    // UI-5: when the extension ran on a DIFFERENT lane, the single laneName above
+    // would send the customer to the parent's lane for the whole window — say where
+    // the tail actually is.
+    const extLaneNote = lastExt && lastExt.laneId !== booking.laneId
+      ? `From ${formatTime(lastExt.startHour)} your session continues on ${laneNameById(lastExt.laneId, booking.date, lastExt.startHour)} (same door code).`
+      : undefined
+    const calParams = { laneName: bookingLaneName(booking), variantName: variantName ?? undefined, date: booking.date, startHour: booking.startHour, duration: displayMinutes, customerName: booking.customerName, accessCode: booking.accessCode, extraNote: extLaneNote }
     const extPrice = (booking.extensions ?? []).reduce((s, e) => s + (e.priceInCents ?? 0), 0) / 100
     const [cy, cm, cd] = booking.date.split('-').map(Number)
     const cardStartMs = new Date(cy, cm - 1, cd, Math.floor(booking.startHour), Math.round((booking.startHour - Math.floor(booking.startHour)) * 60), 0).getTime()
@@ -1017,7 +1040,10 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             </div>
             {lastExt && lastExt.laneId !== booking.laneId && (
               <div className="text-[11px] text-amber-700 dark:text-amber-300 mt-0.5">
-                Extension on {getLane(lastExt.laneId)?.name ?? lastExt.laneId} from {formatTime(lastExt.startHour)} (same door code).
+                {/* UI-4: was the STATIC default-layout name with a raw-id fallback
+                    (e.g. "ru4") — every other lane name on this card is snapshot /
+                    date-resolved, so an override day disagreed with itself. */}
+                Extension on {laneNameById(lastExt.laneId, booking.date, lastExt.startHour)} from {formatTime(lastExt.startHour)} (same door code).
               </div>
             )}
             {/* §2.16 / §4: mate names on the customer card. */}
@@ -1148,6 +1174,22 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     )
 
     if (sortedDates.length === 0) {
+      // SYNC-2: on a cold launch the shell paints from the cached user snapshot
+      // while the Convex socket is still unauthenticated, and the owner-scoped
+      // queries return [] rather than throwing — indistinguishable from "no
+      // bookings". Showing the empty state there produced a "where did my bookings
+      // go" flash every launch, so wait until identity actually resolves.
+      if (!identityReady) {
+        return (
+          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-8 text-center">
+            <div className="animate-pulse space-y-2">
+              <div className="h-3 w-32 bg-gray-200 dark:bg-gray-800 rounded mx-auto" />
+              <div className="h-3 w-48 bg-gray-100 dark:bg-gray-800/60 rounded mx-auto" />
+            </div>
+            <p className="text-xs text-gray-400 mt-3">Loading your sessions…</p>
+          </div>
+        )
+      }
       return (
         <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-8 text-center">
           <div className="text-3xl mb-2">📭</div>
@@ -1259,6 +1301,19 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     for (const d of sortedDates) byDate[d].sort((a, b) => a.b.startHour - b.b.startHour)
 
     if (sortedDates.length === 0) {
+      // SYNC-2 — see the customer view above: don't claim "no bookings" until the
+      // Convex identity has resolved, or a cold launch shows it for 0.5–2s.
+      if (!identityReady) {
+        return (
+          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-8 text-center">
+            <div className="animate-pulse space-y-2">
+              <div className="h-3 w-32 bg-gray-200 dark:bg-gray-800 rounded mx-auto" />
+              <div className="h-3 w-48 bg-gray-100 dark:bg-gray-800/60 rounded mx-auto" />
+            </div>
+            <p className="text-xs text-gray-400 mt-3">Loading your sessions…</p>
+          </div>
+        )
+      }
       return (
         <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-8 text-center">
           <div className="text-3xl mb-2">📭</div>
@@ -1640,6 +1695,17 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           onModify={opts => handleModify(modifyBookingData, opts)}
           isCoach={isCoach}
           onEditAllocation={() => { const b = modifyBookingData; setModifyBookingData(null); if (b) openAthleteEditor(b) }}
+          // UI-3: the card shows the MERGED window (parent + paid extensions) but
+          // this modal edits the parent row only, so it opens showing an earlier
+          // end time with no explanation.
+          noticeBanner={(() => {
+            const exts = modifyBookingData.extensions ?? []
+            if (exts.length === 0) return undefined
+            const last = exts[exts.length - 1]
+            const mergedEnd = last.startHour + last.duration / 60
+            const parentEnd = modifyBookingData.startHour + modifyBookingData.duration / 60
+            return `This session has a paid extension to ${formatTime(mergedEnd)}. Changes here apply to the original ${formatTime(modifyBookingData.startHour)}–${formatTime(parentEnd)} booking only — the extension keeps its own time and door code.`
+          })()}
         />
       )}
       {/* SPEC_CUSTOMER_INSESSION_EXTEND — in-session extend + pay. The booking

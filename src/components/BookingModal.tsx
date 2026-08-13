@@ -663,12 +663,20 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     if (ec?.bookingId) { try { await cancelUnpaidCheckout(ec.bookingId) } catch { /* backstops will catch it */ } }
   }
 
+  // UI-6 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): a split booking's confirmed
+  // window spans BOTH legs but confirmedBooking carries only leg 1's lane, so the
+  // success screen and the exported calendar event both claimed the whole session
+  // was on lane 1 — dropping the changeover the coach had just configured.
+  const splitSummary = splitReady
+    ? `${formatTime(startHour)}–${formatTime(splitChangeover!)} ${resolvedLaneName}, then ${formatTime(splitChangeover!)}–${formatTime(splitEnd!)} ${laneNm(splitLaneId!)}`
+    : null
   const googleCalUrl = confirmedBooking ? generateGoogleCalendarUrl({
     laneName: resolvedLaneName, variantName: selectedVariant?.name, date: confirmedBooking.date,
     startHour: confirmedBooking.startHour, duration: confirmedBooking.duration,
     customerName: confirmedBooking.customerName,
     additionalLanes: additionalLanes.map(lid => laneNm(lid)),
     accessCode: confirmedBooking.accessCode,
+    extraNote: splitSummary ? `Lane change: ${splitSummary}.` : undefined,
   }) : null
 
   if (showAuth) return <AuthModal onClose={() => setShowAuth(false)} onSuccess={() => { setShowAuth(false); setStep('confirm') }} />
@@ -737,7 +745,13 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               </div>
             )}
             <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-4 w-full space-y-2 text-sm">
-              <div className="flex justify-between"><span className="text-gray-500">Lane</span><span className="font-medium text-gray-800 dark:text-gray-200">{resolvedLaneName}{selectedVariant ? ` (${selectedVariant.name})` : ''}</span></div>
+              {/* UI-6: on a split booking show BOTH legs — the previous single
+                  "Lane" row silently dropped the changeover the coach configured. */}
+              {splitSummary ? (
+                <div className="flex justify-between gap-3"><span className="text-gray-500 shrink-0">Lanes</span><span className="font-medium text-gray-800 dark:text-gray-200 text-right">{splitSummary}</span></div>
+              ) : (
+                <div className="flex justify-between"><span className="text-gray-500">Lane</span><span className="font-medium text-gray-800 dark:text-gray-200">{resolvedLaneName}{selectedVariant ? ` (${selectedVariant.name})` : ''}</span></div>
+              )}
               {additionalLanes.length > 0 && <div className="flex justify-between"><span className="text-gray-500">+ Lanes</span><span className="font-medium text-gray-800 dark:text-gray-200">{additionalLanes.map(lid => laneNm(lid)).join(', ')}</span></div>}
               <div className="flex justify-between"><span className="text-gray-500">Time</span><span className="font-medium text-gray-800 dark:text-gray-200">{formatTime(startHour)} - {formatTime(startHour + (confirmedBooking?.duration ?? duration) / 60)}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Total</span><span className="font-bold text-emerald-600 dark:text-emerald-400">{confirmedBooking?.isCoachBooking ? `$${confirmedBooking.coachPrice ?? (getCoachPrice(confirmedBooking.duration) + additionalLanePrice)}` : totalPrice === 0 ? 'FREE' : `$${totalPrice}`}</span></div>

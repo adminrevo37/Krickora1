@@ -3133,7 +3133,15 @@ async function cancelBookingCore(
     if (
       !booking.isCoachBooking &&
       booking.status === "confirmed" &&
-      booking.customerEmail
+      booking.customerEmail &&
+      // MON-2 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): voidBookingCharge already
+      // returned this booking's value (as credit, via Stripe, or waived) and marks
+      // it `refunded` — but it deliberately leaves creditApplied/priceInCents intact
+      // and the booking `confirmed`, because the documented workflow is void THEN
+      // cancel to free the slot. Without this guard that second step re-issued
+      // creditApplied: $80 cash + $20 credit voided for $100 then cancelled paid
+      // out another $20.
+      (booking as any).refunded !== true
     ) {
       // C2 (SECURITY): only return CASH as credit when the booking was actually
       // paid (Stripe webhook or admin paid-offline → paymentStatus "paid"). A
@@ -3272,7 +3280,13 @@ export const deleteBooking = mutation({
       // Coach bookings are billed weekly (not prepaid online), so they are NOT
       // credited — only customer-paid value (cash charged + credit previously
       // applied) is returned as credit.
-      if (delBooking.status !== "cancelled" && !delBooking.isCoachBooking) {
+      if (
+        delBooking.status !== "cancelled" &&
+        !delBooking.isCoachBooking &&
+        // MON-2 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): value already returned
+        // by voidBookingCharge — don't hand creditApplied back a second time.
+        (delBooking as any).refunded !== true
+      ) {
         // C2 (SECURITY): cash credited only if actually paid; redeemed credit always returned.
         const wasPaid = (delBooking as any).paymentStatus === "paid";
         const cashPaid = wasPaid && (delBooking as any).priceInCents != null ? (delBooking as any).priceInCents / 100 : 0;
@@ -3735,7 +3749,16 @@ export const modifyBooking = mutation({
         newCreditApplied: wasPaid ? ((booking.creditApplied ?? 0) + creditUseCents / 100) : undefined,
         actorUserId: args.userId, actorName,
       });
-      if (creditUseCents > 0 && booking.customerEmail) {
+      // MON-3 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): only redeem on a PAID
+      // booking. The decrease branch above is already `wasPaid`-gated (B3); this
+      // one was not, so an increase on a still-UNPAID (pending_payment) booking
+      // deducted the credit from the balance immediately while the booking itself
+      // was never paid — and if the customer then abandoned checkout,
+      // releaseAbandonedBooking cancelled it WITHOUT restoring the credit, silently
+      // costing them the money. Unpaid bookings redeem at confirmation instead
+      // (createBooking / confirmBookingPayment own that), matching the invariant
+      // that credit only ever leaves the balance when a booking is confirmed paid.
+      if (creditUseCents > 0 && wasPaid && booking.customerEmail) {
         await redeemCredit(ctx, { email: booking.customerEmail, amount: creditUseCents / 100, bookingId: args.id.toString() });
       }
       return { success: true, requiresPayment: false, creditAppliedCents: creditUseCents, priceDifferenceCents: priceDiffCents, droppedAthletes };

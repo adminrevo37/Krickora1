@@ -5,7 +5,7 @@
 // decision #7). Pays via the shared embedded Stripe checkout (or confirms
 // instantly when account credit covers it). Availability here is a UI mirror —
 // extendBookingLive is authoritative server-side.
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
@@ -76,6 +76,22 @@ export default function ExtendBookingModal({ booking, creditBalance, onClose }: 
 
   const laneDisplayName = (laneId: string) => resolveLaneAt(laneId, booking.date, extStart).name
 
+  // UI-1 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13) — rows belonging to THIS
+  // booking's own chain must never count as a conflict against itself. Without
+  // this, a failed checkout leaves the just-created pending extension row in the
+  // reactive day list; it occupies the very window we're offering, so every option
+  // disappears and the modal claims "the lanes are booked after your session" —
+  // hiding the real error and the retry. Covers the parent, every absorbed
+  // extension, and any not-yet-absorbed (pending) row hanging off the chain.
+  const chainIds = useMemo(() => {
+    const ids = new Set<string>([String(booking.id)])
+    for (const e of booking.extensions ?? []) ids.add(String(e.id))
+    return ids
+  }, [booking])
+  const isOwnChainRow = (b: Booking) =>
+    chainIds.has(String(b.id)) ||
+    (!!b.extensionOfId && chainIds.has(String(b.extensionOfId)))
+
   // Availability mirror of extendBookingLive §3: within close, open segment, no
   // boundary cross, variant still offered (own primary lane), no booking
   // conflict, no service block. Slot holds are server-only — a held window
@@ -92,6 +108,7 @@ export default function ExtendBookingModal({ booking, creditBalance, onClose }: 
       if (!offered.includes(normalizeVariant(lastVariant))) return false
     }
     const conflict = dayBookings.some((b) => {
+      if (isOwnChainRow(b)) return false // UI-1: never conflict with our own chain
       if (!bookingOccupiesLane(b, laneId)) return false
       const bEnd = b.startHour + b.duration / 60
       return extStart < bEnd && extEnd > b.startHour
@@ -124,7 +141,11 @@ export default function ExtendBookingModal({ booking, creditBalance, onClose }: 
       const ownAvail = ownLanes.filter((l) => laneFreeFor(l, durationMinutes))
       if (ownAvail.length > 0) {
         out.push({
-          key: `own-${durationMinutes}`,
+          // SYNC-9: include the lane set in the key. With a duration-only key the
+          // SAME option could silently swap to fewer lanes (and a lower price) when
+          // another booking landed mid-selection — the selection stayed "valid" but
+          // now meant something different from what the user read.
+          key: `own-${durationMinutes}-${ownAvail.join('+')}`,
           durationMinutes,
           laneIds: ownAvail,
           laneNames: ownAvail.map(laneDisplayName),
@@ -170,6 +191,16 @@ export default function ExtendBookingModal({ booking, creditBalance, onClose }: 
 
   // Amber timing note when < 5 min to end (or already past end): the building
   // automation (door code window / machine power) can take 1–2 min to follow.
+  // UI-9 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): tick so the "automation takes
+  // 1–2 minutes" warning actually appears while the modal sits open. It was
+  // evaluated once per render with nothing driving a re-render, so a user who
+  // opened the modal 6 minutes out and deliberated past the 5-minute threshold
+  // never saw it. 30s matches MyBookings' extend-window tick.
+  const [, setNowTick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setNowTick((n) => n + 1), 30_000)
+    return () => clearInterval(t)
+  }, [])
   const nowMs = getAWSTNow().getTime()
   const [y, m, d] = booking.date.split('-').map(Number)
   const endWallMs = new Date(y, m - 1, d, 0, 0, 0).getTime() + extStart * 3600_000
@@ -182,6 +213,9 @@ export default function ExtendBookingModal({ booking, creditBalance, onClose }: 
     setBusy(true)
     setError(null)
     setConfirmedEndHour(extStart + selected.durationMinutes / 60)
+    // UI-1: tracked so the catch can release an extension row that was created but
+    // never reached checkout.
+    let createdId: string | null = null
     try {
       const res: any = await extendLive({
         parentId: lastRow.id as Id<'bookings'>,
@@ -189,6 +223,7 @@ export default function ExtendBookingModal({ booking, creditBalance, onClose }: 
         laneIds: selected.laneIds,
         applyCredit: applyCredit || undefined,
       })
+      createdId = res?.id ? String(res.id) : null
       if (res.status === 'confirmed') {
         setStep('success')
         return
@@ -221,6 +256,13 @@ export default function ExtendBookingModal({ booking, creditBalance, onClose }: 
       throw new Error('Could not start the payment — please try again.')
     } catch (e) {
       setError(getErrorMessage(e) ?? 'Something went wrong — please try again.')
+      // UI-1: if the extension row was created but checkout never opened, release
+      // it. Otherwise it sits `pending_payment` — blocking this booking's own
+      // retry and showing the customer an unexplained "Awaiting payment" card —
+      // until the ~30-min checkout-hold backstop expires.
+      if (createdId && !embeddedPay) {
+        cancelUnpaidCheckout(createdId).catch(() => { /* backstops will catch it */ })
+      }
     } finally {
       setBusy(false)
     }
@@ -266,6 +308,21 @@ export default function ExtendBookingModal({ booking, creditBalance, onClose }: 
           </div>
         ) : (
           <>
+            {/* UI-1: the error lives OUTSIDE the options branch. It used to render
+                only when options existed, so a failure that also emptied the
+                options list took the message and the retry button down with it. */}
+            {error && (
+              <div className="mb-3 rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-3">
+                <p className="text-xs text-red-700 dark:text-red-300">{error}</p>
+                <button
+                  onClick={handleConfirm}
+                  disabled={!selected || busy}
+                  className="mt-2 text-xs font-semibold text-red-800 dark:text-red-200 underline disabled:opacity-50"
+                >
+                  Try again
+                </button>
+              </div>
+            )}
             {dayBookingsRaw === undefined ? (
               <p className="text-sm text-gray-500 dark:text-gray-400 py-4">Checking lane availability…</p>
             ) : options.length === 0 ? (
@@ -334,7 +391,7 @@ export default function ExtendBookingModal({ booking, creditBalance, onClose }: 
                   </p>
                 )}
 
-                {error && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{error}</p>}
+                {/* UI-1: error now rendered above, outside the options branch. */}
 
                 <button
                   onClick={handleConfirm}

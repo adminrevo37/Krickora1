@@ -275,7 +275,17 @@ export function useBookingActions() {
 // a row owned by the coach, whose athleteSlots are already stripped server-side for
 // non-owners (stripBookingPII) — so that row never carried allocations through the
 // shared array either. No regression.
-export function useMyBookings(opts: { email?: string; userId?: string; impersonating: boolean }) {
+// SYNC-2 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13) — `identityReady` distinguishes
+// "the server has told us this account has no bookings" from "the Convex socket is
+// not authenticated YET". On a cold PWA launch §3e paints the logged-in shell from
+// the cached user snapshot, so these owner-scoped queries fire while the WS is still
+// unauthenticated; listBookingsByEmail (and its siblings) return [] rather than
+// throwing for an unauthenticated caller, which is indistinguishable from a genuine
+// empty result. The old `myBookingsLoading` went false on that [], so My Bookings
+// rendered its "no sessions" empty state for the 0.5–2s until auth landed — the
+// "where did my bookings go" flash on every launch. Callers pass the resolved
+// identity so we keep reporting "loading" until it exists.
+export function useMyBookings(opts: { email?: string; userId?: string; impersonating: boolean; identityReady?: boolean }) {
   const byEmailRes = useQuery(
     api.queries.listBookingsByEmail,
     opts.email ? { email: opts.email } : 'skip'
@@ -284,7 +294,11 @@ export function useMyBookings(opts: { email?: string; userId?: string; impersona
     api.queries.listBookingsByUserId,
     (!opts.impersonating && opts.userId) ? { userId: opts.userId } : 'skip'
   )
-  const myBookingsLoading = opts.email != null && byEmailRes === undefined
+  const myBookingsLoading =
+    (opts.email != null && byEmailRes === undefined) ||
+    // SYNC-2: identity not resolved yet → any [] we hold is the unauthenticated
+    // placeholder, not a real answer.
+    (opts.email != null && opts.identityReady === false)
   const myBookings: Booking[] = useMemo(() => {
     const map = new Map<string, Booking>()
     for (const d of (byEmailRes ?? [])) map.set(String((d as any)._id), toBooking(d))

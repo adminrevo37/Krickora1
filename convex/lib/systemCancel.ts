@@ -67,9 +67,22 @@ export async function systemCancelBooking(
   if (
     !booking.isCoachBooking &&
     booking.status === "confirmed" &&
-    booking.customerEmail
+    booking.customerEmail &&
+    // MON-2 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): a booking whose charge was
+    // already voided/refunded by voidBookingCharge has had its value returned —
+    // re-issuing creditApplied here would hand it back a second time.
+    (booking as any).refunded !== true
   ) {
-    const cashPaid = booking.priceInCents != null ? booking.priceInCents / 100 : 0;
+    // MON-1 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): only return CASH as credit
+    // when the booking was ACTUALLY paid. This gate exists in cancelBooking,
+    // deleteBooking and voidBookingCharge but was missing here, so the closure /
+    // lane-block auto-cancel sweep credited gross price + credit for a booking
+    // that never took cash. Worst case: a credit-only booking (credit covers the
+    // whole price, so createBooking leaves it `confirmed` with NO paymentStatus
+    // while priceInCents still holds the GROSS) refunded double — $35 paid in
+    // credit came back as $70.
+    const wasPaid = (booking as any).paymentStatus === "paid";
+    const cashPaid = wasPaid && booking.priceInCents != null ? booking.priceInCents / 100 : 0;
     const creditToIssue = cashPaid + (booking.creditApplied ?? 0);
     if (creditToIssue > 0) {
       creditIssued = await issueCredit(ctx, {

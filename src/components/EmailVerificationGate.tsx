@@ -27,12 +27,23 @@ export default function EmailVerificationGate({ email }: { email: string }) {
   const [newEmail, setNewEmail] = useState(email)
   const [saving, setSaving] = useState(false)
 
-  // Poll the session every 4s so verification (clicked in the email) auto-clears
-  // the gate. refreshSession re-fetches the Better Auth session; the reactive
-  // getCurrentUser query then re-runs with emailVerified=true and __root unmounts us.
+  // Poll the session so verification (clicked in the email) auto-clears the gate.
+  // refreshSession re-fetches the Better Auth session; the reactive getCurrentUser
+  // query then re-runs with emailVerified=true and __root unmounts us.
+  //
+  // SYNC-8 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): was every 4s unconditionally
+  // = 15 get-session round-trips per minute per unverified user, continuing while
+  // the tab sat idle in the background. Beyond the chatter, every extra round-trip
+  // is another chance for a glitchy response to enter the clean-null machinery and
+  // add `auth_null_verify` noise to the telemetry. 15s is still well inside the
+  // "click the link, come back" window, we pause while hidden, and we poll
+  // immediately on resume — which is exactly when the user has just verified.
   useEffect(() => {
-    const id = setInterval(() => { void refreshSession() }, 4000)
-    return () => clearInterval(id)
+    const tick = () => { if (!document.hidden) void refreshSession() }
+    const id = setInterval(tick, 15000)
+    const onVisible = () => { if (!document.hidden) void refreshSession() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible) }
   }, [])
 
   const resend = async () => {

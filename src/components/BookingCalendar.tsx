@@ -941,7 +941,13 @@ function ReleaseBanner({ role, tier, settings, nextWeekOpen, lastDay }: {
       id = setTimeout(() => { setTick((t) => t + 1); schedule() }, showsSeconds ? 1000 : 30000)
     }
     schedule()
-    return () => clearTimeout(id)
+    // SYNC-8 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): timers are throttled in
+    // background tabs and frozen in a backgrounded PWA, so on resume the countdown
+    // could show a stale value (including sitting at "0m 0s" without flipping to
+    // the open state until the next tick fired). Re-tick immediately on resume.
+    const onVisible = () => { if (!document.hidden) setTick((t) => t + 1) }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { clearTimeout(id); document.removeEventListener('visibilitychange', onVisible) }
   }, [role, tier, settings, nextWeekOpen])
 
   if (nextWeekOpen) {

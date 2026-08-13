@@ -347,7 +347,29 @@ export async function refreshSession() {
   }
 }
 
+/**
+ * SYNC-1 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13) — explicit-sign-out marker.
+ *
+ * `signOutUser` clears the bearer BEFORE the session atom nulls, so by the time
+ * useAuth's logged-out transition runs, hasStoredToken() is already false and the
+ * `auth_definitive_logout` telemetry would record every deliberate sign-out as
+ * {hadToken:false} — i.e. as a storage EVICTION, the exact class the flag exists
+ * to isolate. A user tapping Sign out is not a logout class worth measuring, so we
+ * mark it here and suppress the event once.
+ */
+let _explicitSignOut = false;
+export function markExplicitSignOut() {
+  _explicitSignOut = true;
+}
+/** Reads AND clears the marker (one sign-out suppresses exactly one event). */
+export function consumeExplicitSignOut(): boolean {
+  const was = _explicitSignOut;
+  _explicitSignOut = false;
+  return was;
+}
+
 export async function signOutUser() {
+  markExplicitSignOut();
   try {
     await authClient.signOut({
       fetchOptions: fetchOpts(),

@@ -485,6 +485,21 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave, ope
             </div>
           )}
 
+          {/* UI-2 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13) — extension awareness.
+              Split bookings got a banner; extensions had none, so an extension row
+              looked like an ordinary duplicate booking. An admin could cancel it,
+              move it (breaking chain contiguity), or re-issue its door code —
+              divorcing it from the parent's code while the customer is mid-session
+              in the building. */}
+          {(booking as any).extensionOfId && (
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 rounded-lg p-3 text-xs text-amber-800 dark:text-amber-300">
+              <span className="font-semibold">⏱ In-session extension.</span>{' '}
+              This is the paid tail of an earlier booking and <span className="font-semibold">shares the parent's door code</span>.
+              The customer may be in the building right now — changing the code, lane or time here affects a live session, and cancelling
+              removes only this extension (the parent booking stays).
+            </div>
+          )}
+
           {!editing ? (
             <>
               {/* UX-1: View mode reads from local state so it reflects the last saved values */}

@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
-import { useSession, readHadSession, writeHadSession, readUserCache, writeUserCache, clearUserCache, clearStoredToken, hasStoredToken } from '../lib/auth-client'
+import { useSession, readHadSession, writeHadSession, readUserCache, writeUserCache, clearUserCache, clearStoredToken, hasStoredToken, consumeExplicitSignOut } from '../lib/auth-client'
 import { trackEvent } from '../lib/tracker'
 import { useImpersonation } from './useImpersonation'
 
@@ -49,6 +49,20 @@ const _nullVerify = {
 }
 const NULL_VERIFY_REFETCH_MS = 1200
 const NULL_VERIFY_WINDOW_MS = 8000
+
+/**
+ * SYNC-1 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13) — module-level guard for the
+ * authenticated → logged-out TRANSITION.
+ *
+ * The transition's side effects (drop the dead bearer, telemetry, clear the
+ * session hint + user cache) must fire EXACTLY ONCE per app load. They used to be
+ * guarded only by `wasAuthenticatedRef`, which is a per-INSTANCE useRef while
+ * useAuth mounts in ~20 components at once — so a single expiry ran them N times:
+ * the first instance read hadToken:true and cleared the token, and every later
+ * instance then read hadToken:false. That made the {hadToken} split (server expiry
+ * vs storage eviction) unusable. Module state fixes it, exactly like _nullVerify.
+ */
+const _loggedOut = { handled: false }
 
 /**
  * useAuth — Fully Convex-native hook using Better Auth session.
@@ -170,10 +184,20 @@ export function useAuth() {
   // to null when unauthenticated, so this can never stick — once betterAuthUser is no
   // longer undefined the term is false and we fall through to the definitive decision.
   const isHintedReauth = wasAuthenticatedRef.current && betterAuthUser === undefined
+  // SYNC-10 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13) — transport-error recovery
+  // window. If a session refetch errors while the Convex identity has resolved to
+  // null AND there is no cached user snapshot (privacy mode / storage eviction),
+  // none of the terms above covered it: isLoading went false, isAuthenticated fell
+  // through to the `true` fallback, but `user` was null — so the signed-out header
+  // rendered while the hook still claimed authenticated. Holding "loading" through
+  // the error window matches the F1 stance (keep the authenticated stance, let the
+  // retry effect recover) and shows the skeleton instead of a mismatched shell.
+  const isInErrorRecovery = wasAuthenticatedRef.current && !!sessionError
   const isLoading = sessionPending
     || (!!session?.user && betterAuthUser === undefined)
     || isInTransientError
     || isHintedReauth
+    || isInErrorRecovery
 
   // ── Authentication: only false when we're SURE there's no session ────
   // If we were previously authenticated and now see undefined from Convex,
@@ -213,36 +237,58 @@ export function useAuth() {
         // Window elapsed and the session is still cleanly null → genuine.
       }
       _nullVerify.phase = 'idle'
-      // Clear the stabilization flag + persisted hint — user genuinely signed out
-      // (or the token expired). Clearing the hint here stops the next refresh from
-      // spinning on a session that no longer exists. Also drop the optimistic user
-      // cache (§3e) so the next launch doesn't paint a logged-in shell for a session
-      // that is gone — it will correctly show the landing page instead.
-      if (wasAuthenticatedRef.current) {
-        // Authenticated → logged-out TRANSITION only: drop the dead bearer token
-        // (F3 — the server just cleanly rejected/expired it) + telemetry (F5).
-        // Guarded so a fresh sign-in's just-captured token is never destroyed in
-        // the pre-refetch window, and so the event can't fire on every render
-        // while logged out.
-        // 2026-08-13: hadToken distinguishes server-side expiry (true — the
-        // rolling session window lapsed / session revoked) from a MISSING
-        // bearer (false — iOS storage eviction or never stored). Watch the
-        // split in the admin Activity feed to confirm which logout class
-        // users are actually hitting.
-        const hadToken = hasStoredToken()
-        clearStoredToken()
-        trackEvent('auth_definitive_logout', { hadToken })
-      }
-      wasAuthenticatedRef.current = false
-      writeHadSession(false)
-      clearUserCache()
-      cachedUserRef.current = null
+      // SYNC-1 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): the logout is definitive
+      // here, but its SIDE EFFECTS (drop the dead bearer, telemetry, clear the
+      // session hint + user cache) deliberately do NOT run in render. Render must
+      // stay pure — StrictMode double-invokes it and concurrent React may discard
+      // it — and `wasAuthenticatedRef` is a per-INSTANCE ref, so it could never
+      // dedupe across the ~20 mounted useAuth instances. The effect below owns
+      // them, exactly once, guarded by module state.
       return false
     }
     // Fallback: keep previous state (covers the transport-error window — cached
     // shell stays up, retry effect recovers the session)
     return wasAuthenticatedRef.current
   })()
+
+  // ── SYNC-1: authenticated → logged-out transition side effects ────────
+  // Runs AFTER commit (not during render) and the global half runs exactly ONCE
+  // per logout thanks to the module guard, so the `auth_definitive_logout`
+  // {hadToken} split stays meaningful: previously the first of ~20 useAuth
+  // instances cleared the token and logged {hadToken:true}, then every remaining
+  // instance logged {hadToken:false} for the SAME logout.
+  useEffect(() => {
+    if (isAuthenticated) {
+      // Re-arm so a later logout in the same page life is still recorded
+      // (sign-out → sign-in → expiry).
+      _loggedOut.handled = false
+      return
+    }
+    if (isLoading || !wasAuthenticatedRef.current) return
+    const alreadyHandled = _loggedOut.handled
+    _loggedOut.handled = true
+    // Per-instance stance always drops, so no instance is left believing it is
+    // authenticated (which would otherwise resurface via the transport-error
+    // fallback above).
+    wasAuthenticatedRef.current = false
+    cachedUserRef.current = null
+    if (alreadyHandled) return
+    // Global, once: drop the dead bearer (F3 — the server cleanly rejected it),
+    // clear the hint so the next refresh doesn't spin on a dead session, and drop
+    // the optimistic user cache (§3e) so the next launch paints the landing page.
+    const explicit = consumeExplicitSignOut()
+    const hadToken = hasStoredToken()
+    clearStoredToken()
+    writeHadSession(false)
+    clearUserCache()
+    // A deliberate Sign out is not a logout CLASS worth measuring — and because
+    // signOutUser clears the bearer BEFORE the atom nulls it would always record
+    // {hadToken:false} (i.e. look like storage eviction), swamping the real
+    // signal. Only UNEXPECTED logouts are logged: hadToken true = server-side
+    // expiry/revocation, false = the bearer was already gone (iOS storage
+    // eviction or never stored).
+    if (!explicit) trackEvent('auth_definitive_logout', { hadToken })
+  }, [isAuthenticated, isLoading])
 
   // ── Customer record (SPEC_AUTH_LOADING_SMOOTHING §3c) ────────────────
   // Sourced from the merged getCurrentUser query (which now returns the caller's

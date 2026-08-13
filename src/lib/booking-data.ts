@@ -1037,6 +1037,11 @@ export function generateGoogleCalendarUrl(booking: {
   customerName: string
   additionalLanes?: string[]
   accessCode?: string
+  // UI-5/UI-6 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13) — appended to the event
+  // description. Used when part of the exported window happens on a DIFFERENT lane
+  // (a fallback-lane extension, or a split-lane changeover), which the single
+  // laneName cannot express — without it the customer walks to the wrong lane.
+  extraNote?: string
 }): string {
   const [year, month, day] = booking.date.split('-').map(Number)
   const whole = Math.floor(booking.startHour)
@@ -1054,7 +1059,7 @@ export function generateGoogleCalendarUrl(booking: {
     ? `${Math.floor(booking.duration / 60)}hr${booking.duration % 60 > 0 ? ` ${booking.duration % 60}min` : ''}`
     : `${booking.duration}min`
   const accessCodeLine = booking.accessCode ? `\n\n🔑 Door Access Code: ${booking.accessCode.length === 6 ? booking.accessCode.slice(0, 3) + '-' + booking.accessCode.slice(3) : booking.accessCode.length === 4 ? booking.accessCode.slice(0, 2) + '-' + booking.accessCode.slice(2) : booking.accessCode}\nEnter this code at the facility door keypad.` : ''
-  const details = encodeURIComponent(`Booking for ${booking.customerName}\n${laneStr}${booking.variantName ? ` - ${booking.variantName}` : ''}\nDuration: ${durationLabel}${accessCodeLine}\n\nBooked via Krickora`)
+  const details = encodeURIComponent(`Booking for ${booking.customerName}\n${laneStr}${booking.variantName ? ` - ${booking.variantName}` : ''}\nDuration: ${durationLabel}${accessCodeLine}${booking.extraNote ? `\n\n${booking.extraNote}` : ''}\n\nBooked via Krickora`)
   const location = encodeURIComponent('Krickora')
   const dates = `${formatGCalDate(startDate)}/${formatGCalDate(endDate)}`
   return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${dates}&details=${details}&location=${location}&sf=true&output=xml`
@@ -1069,6 +1074,11 @@ export function generateOutlookCalendarUrl(booking: {
   customerName: string
   additionalLanes?: string[]
   accessCode?: string
+  // UI-5/UI-6 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13) — appended to the event
+  // description. Used when part of the exported window happens on a DIFFERENT lane
+  // (a fallback-lane extension, or a split-lane changeover), which the single
+  // laneName cannot express — without it the customer walks to the wrong lane.
+  extraNote?: string
 }): string {
   const [year, month, day] = booking.date.split('-').map(Number)
   const whole = Math.floor(booking.startHour)
@@ -1084,7 +1094,7 @@ export function generateOutlookCalendarUrl(booking: {
     ? `${Math.floor(booking.duration / 60)}hr${booking.duration % 60 > 0 ? ` ${booking.duration % 60}min` : ''}`
     : `${booking.duration}min`
   const accessCodeLine = booking.accessCode ? `\n\n🔑 Door Access Code: ${booking.accessCode.length === 6 ? booking.accessCode.slice(0, 3) + '-' + booking.accessCode.slice(3) : booking.accessCode.length === 4 ? booking.accessCode.slice(0, 2) + '-' + booking.accessCode.slice(2) : booking.accessCode}\nEnter this code at the facility door keypad.` : ''
-  const body = encodeURIComponent(`Booking for ${booking.customerName}\n${laneStr}${booking.variantName ? ` - ${booking.variantName}` : ''}\nDuration: ${durationLabel}${accessCodeLine}\n\nBooked via Krickora`)
+  const body = encodeURIComponent(`Booking for ${booking.customerName}\n${laneStr}${booking.variantName ? ` - ${booking.variantName}` : ''}\nDuration: ${durationLabel}${accessCodeLine}${booking.extraNote ? `\n\n${booking.extraNote}` : ''}\n\nBooked via Krickora`)
   const location = encodeURIComponent('Krickora')
   const startISO = encodeURIComponent(formatOutlookDate(startDate))
   const endISO = encodeURIComponent(formatOutlookDate(endDate))

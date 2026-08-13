@@ -234,9 +234,31 @@ export const listMyAthleteSessions = query({
     const myAthleteNames = new Set<string>(
       myAthletes.map((a: any) => String(a.name ?? "").toLowerCase().trim()).filter(Boolean)
     );
-    const slotIsMine = (s: any) =>
-      (s.athleteId && myAthleteIds.has(String(s.athleteId))) ||
-      (s.athleteName && myAthleteNames.has(String(s.athleteName).toLowerCase().trim()));
+    // SEC-1 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13) — the name fallback below
+    // used to be scoped only to THIS account's own athlete names, with the comment
+    // claiming that "never surfaces another family's". That reasoning was wrong:
+    // scoping to your own names does not stop an IDENTICAL full name in another
+    // family from matching, and this query returns the session's DOOR CODE — i.e.
+    // building access during someone else's booking. Scope the fallback to coaches
+    // this account's athletes are actually linked to (an allocation can only come
+    // from a coach whose roster the athlete is on), which removes the cross-family
+    // case entirely. Exact-id matches are unaffected.
+    const linkedCoachIds = new Set<string>();
+    for (const a of myAthletes as any[]) {
+      for (const cid of (a.assignedCoachIds ?? [])) linkedCoachIds.add(String(cid));
+    }
+    // Coach-owned bookings carry the coach's address in customerEmail, so resolve
+    // the linked coach ids to emails once.
+    const linkedCoachEmails = new Set<string>();
+    for (const cid of linkedCoachIds) {
+      const coach = await ctx.db.get(cid as any).catch(() => null);
+      const em = (coach as any)?.email;
+      if (em) linkedCoachEmails.add(String(em).toLowerCase().trim());
+    }
+    const slotMatchesById = (s: any) =>
+      !!(s.athleteId && myAthleteIds.has(String(s.athleteId)));
+    const slotMatchesByName = (s: any) =>
+      !!(s.athleteName && myAthleteNames.has(String(s.athleteName).toLowerCase().trim()));
 
     // Bounded read via by_date — never a full scan. A coach's athleteSlots are
     // embedded in the COACH-owned row, so (unlike the owner's own history, which is
@@ -259,8 +281,15 @@ export const listMyAthleteSessions = query({
       if (b.isCoachBooking !== true) continue;
       if (b.status === "cancelled") continue;
       // ONLY the target account's own athletes' slots — never return another
-      // client's child's name/time/code.
-      const mySlots = (b.athleteSlots ?? []).filter(slotIsMine);
+      // client's child's name/time/code. SEC-1: an exact athleteId match is always
+      // trusted; the stale-id NAME fallback is allowed only on bookings owned by a
+      // coach one of this account's athletes is actually linked to.
+      const bookingCoachEmail = String(b.customerEmail ?? "").toLowerCase().trim();
+      const nameFallbackAllowed =
+        !!bookingCoachEmail && linkedCoachEmails.has(bookingCoachEmail);
+      const mySlots = (b.athleteSlots ?? []).filter(
+        (s: any) => slotMatchesById(s) || (nameFallbackAllowed && slotMatchesByName(s))
+      );
       if (mySlots.length === 0) continue;
       out.push({
         _id: b._id,
@@ -506,6 +535,12 @@ export const listCustomersByRole = query({
   handler: async (ctx, args) => {
     const caller = await getCallerContext(ctx);
     if (!caller.identity) return [];
+    // SEC-2 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): a non-admin could pass
+    // role:"customer" and enumerate the ENTIRE customer directory (every name +
+    // _id). Contact PII was already stripped from the projection below, but the
+    // name list itself is not theirs to have. The only legitimate non-admin use of
+    // this query is the coach picker, so non-admins get coaches only.
+    if (!caller.isAdmin && args.role !== "coach") return [];
     const rows = await ctx.db
       .query("customers")
       .withIndex("by_role", (q: any) => q.eq("role", args.role))

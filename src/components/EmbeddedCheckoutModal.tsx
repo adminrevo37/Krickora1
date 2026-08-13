@@ -8,7 +8,7 @@
 //    the UX hand-off back to the app.
 //  - onClose: the customer backed out (× or backdrop). The caller should release
 //    the unpaid booking (cancelUnpaidCheckout) and return to its confirm step.
-import { useCallback } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { EmbeddedCheckoutProvider, EmbeddedCheckout } from '@stripe/react-stripe-js'
 import { getStripePromise } from '../lib/stripe'
 
@@ -20,8 +20,20 @@ interface EmbeddedCheckoutModalProps {
 
 export default function EmbeddedCheckoutModal({ clientSecret, onComplete, onClose }: EmbeddedCheckoutModalProps) {
   const stripePromise = getStripePromise()
-  // options identity must be stable enough not to remount the iframe each render.
-  const options = { clientSecret, onComplete: useCallback(() => onComplete(), [onComplete]) }
+  // SYNC-7 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): every caller passes an INLINE
+  // onComplete, so its identity changed on each parent re-render (MyBookings alone
+  // re-renders every 30s via its tick). react-stripe-js refuses to change onComplete
+  // after init — it logs "Unsupported prop change" and keeps the FIRST render's
+  // closure — so the options object was rebuilt endlessly for nothing, and any
+  // future onComplete that read component state would silently act on first-render
+  // values. Build options ONCE per clientSecret and route the callback through a ref
+  // so Stripe always invokes the latest one.
+  const onCompleteRef = useRef(onComplete)
+  useEffect(() => { onCompleteRef.current = onComplete }, [onComplete])
+  const options = useMemo(
+    () => ({ clientSecret, onComplete: () => onCompleteRef.current() }),
+    [clientSecret]
+  )
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">

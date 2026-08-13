@@ -19,9 +19,21 @@ export default defineConfig({
     VitePWA({
       // 'prompt' + a reload toast (PwaUpdater): when a new deploy is detected the
       // user gets a non-blocking "New version — Reload" toast instead of a
-      // surprise mid-session reload. Never strands on a stale build — a cold
-      // start always serves the newest shell (SW installs + NetworkFirst
-      // navigation), and the toast lets an open session update on demand.
+      // surprise mid-session reload.
+      //
+      // ⚠️ SYNC-4 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13) — the comment that used
+      // to sit here claimed "a cold start always serves the newest shell (SW
+      // installs + NetworkFirst navigation)". That was WRONG and led to a false
+      // sense of safety: `navigateFallback` below serves the PRECACHED index.html
+      // for navigations and there is no NetworkFirst navigation route anywhere in
+      // this config (the navigateFallbackDenylist exists precisely because
+      // navigations do NOT hit the network). With registerType 'prompt', an install
+      // whose user never taps Reload can therefore hold a stale bundle
+      // INDEFINITELY. Consequences: (1) Convex deploy discipline is permanent —
+      // deploy backend first, keep args additive, never remove/rename a function or
+      // tighten a validator a shipped client might still call, keep legacy response
+      // shapes; (2) a stale shell requests chunk names that no longer exist, which
+      // PwaUpdater now recovers from (SYNC-3).
       // We register the SW ourselves via PwaUpdater, so injectRegister:null.
       registerType: "prompt",
       injectRegister: null,
@@ -68,8 +80,8 @@ export default defineConfig({
         // analytics *Tab-*, MapTab/leaflet, rev-ops-7k2p*, AdminBookingCalendar) are
         // lazy-loaded at runtime; keep them OUT of every customer's PWA precache.
         globIgnores: ["**/charts-*.js", "**/pdflib-*.js", "**/*Tab-*.js", "**/MapTab-*.css", "**/rev-ops-7k2p*.js", "**/AdminBookingCalendar-*.js", "**/facility-instructions/**", "**/access/**", "**/58f7d9/**", "**/d058cb/**", "**/3fff00/**"],
-        // App-shell navigations → NetworkFirst (a new deploy is picked up; falls
-        // back to the cached shell offline). NEVER fall back for /api/*.
+        // App-shell navigations are served the PRECACHED shell (NOT NetworkFirst —
+        // see the SYNC-4 note above). NEVER fall back for /api/*.
         navigateFallback: "/index.html",
         // /api/* never gets the SPA fallback. /reset-password and /rev-ops-7k2p are
         // also denylisted so a fresh navigation to them always hits the NETWORK for

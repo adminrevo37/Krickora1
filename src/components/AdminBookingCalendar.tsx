@@ -712,8 +712,18 @@ export default function AdminBookingCalendar() {
                         <div className="break-words font-semibold">
                           {booked.isCoachBooking ? '🏅 Coach: ' : '🔒 '}{booked.customerName}
                           {isFirstBooking && (
-                            <span className="ml-1 inline-block align-middle text-[8px] px-1 py-0.5 rounded-full bg-teal-600 text-white font-bold uppercase tracking-wide" title="This customer's first-ever booking">
+                            // UI-7: was text-[8px] inside an already-10px cell, and the
+                            // chip is the only TEXT cue (the teal ring is colour-only).
+                            <span className="ml-1 inline-block align-middle text-[10px] px-1 py-0.5 rounded-full bg-teal-600 text-white font-bold" title="This customer's first-ever booking">
                               ✨ 1st
+                            </span>
+                          )}
+                          {/* UI-2: extensions are otherwise indistinguishable from a
+                              duplicate booking, but they share the parent's door code
+                              and may be live right now. */}
+                          {(booked as any).extensionOfId && (
+                            <span className="ml-1 inline-block align-middle text-[10px] px-1 py-0.5 rounded-full bg-amber-600 text-white font-bold" title="In-session extension — shares the parent booking's door code">
+                              ⏱ EXT
                             </span>
                           )}
                         </div>

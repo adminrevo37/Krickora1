@@ -39,9 +39,13 @@ interface ModifyBookingModalProps {
   // Coach bookings only: jump to the athlete allocation editor (closes this modal
   // and opens AthleteAllocationEditor for the same booking).
   onEditAllocation?: () => void
+  // UI-3 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13) — optional context note shown at
+  // the top. Used when the card the user tapped shows a MERGED window (parent +
+  // paid extensions) but this modal edits only the parent booking.
+  noticeBanner?: string
 }
 
-export default function ModifyBookingModal({ booking, creditBalance, onClose, onModify, isCoach, onEditAllocation }: ModifyBookingModalProps) {
+export default function ModifyBookingModal({ booking, creditBalance, onClose, onModify, isCoach, onEditAllocation, noticeBanner }: ModifyBookingModalProps) {
   const originalLane = LANES.find(l => l.id === booking.laneId)
   const settings = getSettingsStore().get()
 
@@ -270,6 +274,15 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
             )}
           </div>
         </div>
+
+        {/* UI-3: the card that opened this modal may show a merged parent+extension
+            window, while this modal edits the PARENT booking only. Say so, rather
+            than silently showing a shorter session than the card did. */}
+        {noticeBanner && step !== 'processing' && step !== 'success' && (
+          <div className="mx-4 mt-4 rounded-lg border border-amber-200 dark:border-amber-800/50 bg-amber-50 dark:bg-amber-900/20 p-3 text-xs text-amber-800 dark:text-amber-300">
+            {noticeBanner}
+          </div>
+        )}
 
         {/* Processing */}
         {step === 'processing' && (

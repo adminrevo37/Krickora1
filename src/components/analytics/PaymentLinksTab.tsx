@@ -73,6 +73,8 @@ export default function PaymentLinksTab() {
   const [status, setStatus] = useState<string | undefined>(undefined)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  // UI-8: surfaces a failed clipboard write instead of falsely reporting success.
+  const [copyFailedId, setCopyFailedId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const rows = useQuery((api as any).paymentLinks.listPaymentLinks, { status, limit: 200 }) as
@@ -156,11 +158,25 @@ export default function PaymentLinksTab() {
               <div className="flex items-center gap-1.5">
                 {r.status === 'pending' && (
                   <>
+                    {/* UI-8 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): the write
+                        promise was ignored and "Copied ✓" shown unconditionally, so
+                        a denied-permission / insecure-context failure left the admin
+                        believing the customer had a link that was never sent. */}
                     <button
-                      onClick={() => { navigator.clipboard?.writeText(r.url); setCopiedId(r.id); setTimeout(() => setCopiedId(null), 1500) }}
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(r.url)
+                          setCopiedId(r.id)
+                          setTimeout(() => setCopiedId(null), 1500)
+                        } catch {
+                          setCopyFailedId(r.id)
+                          window.prompt('Copy the payment link:', r.url)
+                          setTimeout(() => setCopyFailedId(null), 4000)
+                        }
+                      }}
                       className="px-2 py-1 rounded-lg text-xs font-semibold bg-gray-100 text-gray-700 hover:bg-gray-200"
                     >
-                      {copiedId === r.id ? 'Copied ✓' : 'Copy link'}
+                      {copiedId === r.id ? 'Copied ✓' : copyFailedId === r.id ? 'Copy failed' : 'Copy link'}
                     </button>
                     <button
                       onClick={() => doMarkPaid(r)}
