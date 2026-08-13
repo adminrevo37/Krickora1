@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useEffect, useRef } from 'react'
+import { useCallback, useMemo, useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { useSession, readHadSession, writeHadSession, readUserCache, writeUserCache, clearUserCache, clearStoredToken, hasStoredToken } from '../lib/auth-client'
@@ -29,6 +29,26 @@ const _sessionRetry = {
   attempt: 0,
 }
 const SESSION_RETRY_DELAYS_MS = [2000, 5000, 15000, 30000]
+
+/**
+ * 2026-08-13 (daily-logout regression) — clean-null VERIFICATION.
+ * A single clean "no session" response used to be accepted instantly AND
+ * destroy the stored bearer (F3) — so one glitchy get-session round-trip
+ * (cold-launch race, half-woken radio, server hiccup returning 200 null)
+ * permanently signed the user out even though their token was still valid.
+ * When a bearer is still present locally, we now hold the authenticated
+ * stance and fire ONE deliberate verification refetch; only a second clean
+ * null (or the verification window lapsing) accepts the logout. A genuine
+ * expiry still logs out — just one round-trip later. Module-deduped across
+ * useAuth instances like _sessionRetry.
+ */
+const _nullVerify = {
+  phase: 'idle' as 'idle' | 'scheduled',
+  ts: 0,
+  timer: null as ReturnType<typeof setTimeout> | null,
+}
+const NULL_VERIFY_REFETCH_MS = 1200
+const NULL_VERIFY_WINDOW_MS = 8000
 
 /**
  * useAuth — Fully Convex-native hook using Better Auth session.
@@ -91,6 +111,23 @@ export function useAuth() {
   // ── Better Auth user from Convex (server-side, real-time) ────────────
   const betterAuthUser = useQuery(api.auth.getCurrentUser)
 
+  // 2026-08-13 clean-null verification — reset on recovery, and force a
+  // re-evaluation once the verification window lapses (a null→null refetch may
+  // not emit a new atom value, so no render would otherwise occur and the
+  // instance could sit in the held stance with no data).
+  const [, setNullVerifyTick] = useState(0)
+  useEffect(() => {
+    if (session?.user || betterAuthUser) {
+      _nullVerify.phase = 'idle'
+      if (_nullVerify.timer) { clearTimeout(_nullVerify.timer); _nullVerify.timer = null }
+      return
+    }
+    if (_nullVerify.phase !== 'scheduled') return
+    const remaining = Math.max(0, _nullVerify.ts + NULL_VERIFY_WINDOW_MS - Date.now()) + 250
+    const t = setTimeout(() => setNullVerifyTick(x => x + 1), remaining)
+    return () => clearTimeout(t)
+  }, [session, sessionPending, betterAuthUser])
+
   // ── Stabilization: track if we were ever authenticated ───────────────
   // This prevents a transient 401/403 (from blocked tracker CORS) from
   // immediately flipping isAuthenticated to false and triggering a redirect.
@@ -152,6 +189,30 @@ export function useAuth() {
     // a transport-error null falls through to the fallback below and keeps the
     // authenticated stance while the retry effect re-fetches).
     if (!sessionPending && !session?.user && !sessionError) {
+      // 2026-08-13 clean-null verification (see _nullVerify above): while a
+      // bearer is still stored, the FIRST clean null only schedules a
+      // verification refetch and keeps the authenticated stance. Explicit
+      // sign-out is unaffected (signOutUser clears the token first, so
+      // hasStoredToken() is already false and logout is accepted instantly).
+      if (wasAuthenticatedRef.current && hasStoredToken()) {
+        if (_nullVerify.phase === 'idle') {
+          _nullVerify.phase = 'scheduled'
+          _nullVerify.ts = Date.now()
+          trackEvent('auth_null_verify', {})
+          if (!_nullVerify.timer) {
+            _nullVerify.timer = setTimeout(() => {
+              _nullVerify.timer = null
+              void refetchSession()
+            }, NULL_VERIFY_REFETCH_MS)
+          }
+          return true
+        }
+        if (Date.now() - _nullVerify.ts < NULL_VERIFY_WINDOW_MS) {
+          return true // verification refetch still in flight — hold the stance
+        }
+        // Window elapsed and the session is still cleanly null → genuine.
+      }
+      _nullVerify.phase = 'idle'
       // Clear the stabilization flag + persisted hint — user genuinely signed out
       // (or the token expired). Clearing the hint here stops the next refresh from
       // spinning on a session that no longer exists. Also drop the optimistic user
