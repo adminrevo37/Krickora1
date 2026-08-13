@@ -172,6 +172,17 @@ export default function ExtendBookingModal({ booking, creditBalance, onClose }: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dayBookings, blocks, ownLanes, extStart, booking.date])
 
+  // U21 — when there are no options, say WHY. `laneFreeFor` fails for closing
+  // time and segment limits just as readily as for a booked lane, so the old
+  // blanket "the lanes are booked after your session" was often simply untrue:
+  // at closing time every lane is free, there is just no night left.
+  const closesBeforeShortestExtend = useMemo(() => {
+    const { close } = getHoursForDate(settings, booking.date)
+    return extStart + 0.5 > close + 1e-9
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings, booking.date, extStart])
+  const closingTimeLabel = formatTime(getHoursForDate(settings, booking.date).close)
+
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const [applyCredit, setApplyCredit] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -327,7 +338,9 @@ export default function ExtendBookingModal({ booking, creditBalance, onClose }: 
               <p className="text-sm text-gray-500 dark:text-gray-400 py-4">Checking lane availability…</p>
             ) : options.length === 0 ? (
               <p className="text-sm text-gray-600 dark:text-gray-300 py-4">
-                Extension not available — the lanes are booked after your session.
+                {closesBeforeShortestExtend
+                  ? `The facility closes at ${closingTimeLabel} — there's no time left to extend tonight.`
+                  : 'Extension not available — the lanes are booked after your session.'}
               </p>
             ) : (
               <>

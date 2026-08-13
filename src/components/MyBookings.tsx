@@ -20,6 +20,7 @@ import { resolveLaneAt } from '../lib/lanes'
 import { formatAccessCode } from '../lib/access-code'
 import { trackCodeView } from '../lib/tracker'
 import { getErrorMessage } from '../lib/errors'
+import { fmtMoney } from '../lib/money'
 // SPEC_CHECKOUT_ABANDONMENT — resume payment / cancel an unpaid booking.
 import { createCheckoutSession, cancelUnpaidCheckout } from '../lib/stripe'
 // SPEC_EMBEDDED_CHECKOUT — in-app Stripe payment (Pay-now / resume).
@@ -669,8 +670,8 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     const perLane = lane ? getLanePrice(lane, booking.variantId ?? null, booking.duration) : 40
     return perLane * laneCount
   }
-  // "$157.50" / "$60" — 2dp only when needed.
-  const fmtMoney = (n: number) => (Number.isInteger(n) ? `${n}` : n.toFixed(2))
+  // U28 — the local copy of this now lives in ../lib/money so the booking modal
+  // and modify modal format prices identically ("$67.50", not "$67.5").
   // All lane names for a booking (primary + additional), e.g. ["BM 3","RU 1","RU 2"].
   const bookingLaneNames = (b: Booking) =>
     [bookingLaneName(b), ...(b.additionalLaneIds ?? []).map((id) => laneNameById(id, b.date, b.startHour))]
@@ -686,6 +687,16 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const userWaitlistEntries = myWaitlistRows
     .filter((w) => { const s = w.status ?? 'waiting'; return s === 'waiting' || s === 'offered' })
     .map((w) => ({ id: w._id, laneId: w.laneId, date: w.date, hour: w.hour, status: w.status ?? 'waiting' }))
+  // U3 — SPEC_WAITLIST_SPLIT_BM_RU stores pool entries against the sentinel
+  // laneId '*bm' / '*ru'. getLane() can't resolve those, so the tab was printing
+  // the raw sentinel as the lane name. Render the pool the customer actually
+  // joined instead; a real laneId (legacy per-lane entry) still resolves normally.
+  const waitlistEntryLabel = (laneId: string): { icon: string; name: string } => {
+    if (laneId === '*bm') return { icon: '🏏', name: 'Any BM lane' }
+    if (laneId === '*ru') return { icon: '🏃‍♂️', name: 'Any RU lane' }
+    const lane = getLane(laneId)
+    return { icon: lane?.icon ?? '🏏', name: lane?.name ?? laneId }
+  }
   const coaches = getAllCoaches()
   const assignedCoachIds: string[] = customerRecord?.assignedCoachIds ?? []
 
@@ -1621,17 +1632,40 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           ) : (
             <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 divide-y divide-gray-100 dark:divide-gray-800">
               {userWaitlistEntries.map(entry => {
-                const lane = getLane(entry.laneId)
+                const label = waitlistEntryLabel(entry.laneId)
+                const offered = entry.status === 'offered'
                 return (
                   <div key={entry.id} className="flex items-center justify-between px-4 py-3">
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-base shrink-0">{lane?.icon ?? '🏏'}</span>
+                      <span className="text-base shrink-0">{label.icon}</span>
                       <div className="min-w-0">
-                        <div className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate">{lane?.name ?? entry.laneId}</div>
+                        <div className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate">
+                          {label.name}
+                          {/* U20 — an offered entry looked identical to a waiting one. */}
+                          {offered && (
+                            <span className="ml-2 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 align-middle">
+                              SLOT OFFERED
+                            </span>
+                          )}
+                        </div>
                         <div className="text-xs text-gray-400">{formatDate(entry.date)} at {formatTime(entry.hour)}</div>
+                        {offered && (
+                          <div className="text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">
+                            It&apos;s yours to claim — check your notification or email to book before the hold expires.
+                          </div>
+                        )}
                       </div>
                     </div>
-                    <button onClick={async () => { try { await removeWaitlistMut({ id: entry.id as any }) } catch (err) { console.error('Failed to leave waitlist:', err) } }} className="text-xs text-gray-400 hover:text-red-500 transition-colors ml-3 shrink-0">Remove</button>
+                    <button
+                      onClick={async () => {
+                        // U20 — a failed Remove used to go to console only, so the row
+                        // stayed put with no explanation.
+                        setCancelError(null)
+                        try { await removeWaitlistMut({ id: entry.id as any }) }
+                        catch (err) { setCancelError(getErrorMessage(err) ?? 'Could not leave the waitlist — please try again.') }
+                      }}
+                      className="text-xs text-gray-400 hover:text-red-500 transition-colors ml-3 shrink-0 min-h-[40px] px-3"
+                    >Remove</button>
                   </div>
                 )
               })}

@@ -37,6 +37,7 @@ import { api } from '../../convex/_generated/api'
 import { useBookings } from '../hooks/useBookingStore'
 import { useLaneBlocks } from '../hooks/useLaneBlocks'
 import { useAuth } from '../hooks/useAuth'
+import { getErrorMessage } from '../lib/errors'
 import { useSettings } from '../hooks/useSettings'
 import BookingModal from './BookingModal'
 import AuthModal from './AuthModal'
@@ -452,6 +453,9 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   //   ?wlDecline=<lane>&date=<d>&hour=<h>   → pass the offer to the next person
   const declineWaitlistOffer = useMutation(api.waitlist.declineWaitlistOffer)
   const [deepLinkHandled, setDeepLinkHandled] = useState(false)
+  // U4 — result of a ?wlDecline deep-link, shown as a banner. Previously the
+  // decline ran fire-and-forget with `.catch(() => {})` and no UI at all.
+  const [declineNotice, setDeclineNotice] = useState<{ ok: boolean; text: string } | null>(null)
   useEffect(() => {
     if (deepLinkHandled || typeof window === 'undefined') return
     const p = new URLSearchParams(window.location.search)
@@ -461,8 +465,19 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     const dateP = p.get('date')
     const hourP = p.get('hour')
     if (declineLane && dateP && hourP) {
+      // U4 — this used to fire before auth resolved (cold PWA start from a push),
+      // so the mutation was rejected unauthenticated while `deepLinkHandled` was
+      // already latched: never retried, silently swallowed, and the user believed
+      // they had passed while the offer held the slot until it expired. Gate on
+      // `user` exactly like the ?book branch below, and report the outcome.
+      if (!user) return
       setDeepLinkHandled(true)
-      declineWaitlistOffer({ laneId: declineLane, date: dateP, hour: Number(hourP) }).catch(() => {})
+      declineWaitlistOffer({ laneId: declineLane, date: dateP, hour: Number(hourP) })
+        .then(() => setDeclineNotice({ ok: true, text: 'Offer passed — it has gone to the next person in the queue.' }))
+        .catch((err) => setDeclineNotice({
+          ok: false,
+          text: getErrorMessage(err) ?? 'Could not pass that offer — it may have already expired.',
+        }))
       cleanUrl()
       return
     }
@@ -491,6 +506,22 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
 
   return (
     <div className="space-y-6">
+      {/* U4 — outcome of a waitlist "Pass" push deep-link. */}
+      {declineNotice && (
+        <div className={`flex items-center gap-2 rounded-xl p-3 border ${declineNotice.ok
+          ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800/50'
+          : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800/50'}`}>
+          <span>{declineNotice.ok ? '✅' : '⚠️'}</span>
+          <p className={`text-sm flex-1 ${declineNotice.ok ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400'}`}>
+            {declineNotice.text}
+          </p>
+          <button
+            onClick={() => setDeclineNotice(null)}
+            aria-label="Dismiss"
+            className={`text-xs ${declineNotice.ok ? 'text-emerald-400 hover:text-emerald-600' : 'text-red-400 hover:text-red-600'}`}
+          >✕</button>
+        </div>
+      )}
       {/* Weekly-release banner (customers + L2 coaches only) */}
       {!isL1Coach && (
         <ReleaseBanner role={releaseRole} tier={coachTierNorm} settings={settings} nextWeekOpen={nextWeekOpen} lastDay={weekDays[weekDays.length - 1]} />

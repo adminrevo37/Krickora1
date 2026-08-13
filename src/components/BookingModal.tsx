@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useConvex } from 'convex/react'
 import { trackFunnelStep, clearBookingFlow } from '../lib/tracker'
 import { getErrorMessage } from '../lib/errors'
+import { fmtMoney } from '../lib/money'
 import {
   LANES, canBookSlot, formatDateKey, formatTime, getCustomerPrice, getCoachPrice, getCoachPerHourRate,
   getCoachDurations, getCustomerDurations, getValidCoachStartTimes, isLaneCustomStart, isCoachEdgeStart,
@@ -754,7 +755,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               )}
               {additionalLanes.length > 0 && <div className="flex justify-between"><span className="text-gray-500">+ Lanes</span><span className="font-medium text-gray-800 dark:text-gray-200">{additionalLanes.map(lid => laneNm(lid)).join(', ')}</span></div>}
               <div className="flex justify-between"><span className="text-gray-500">Time</span><span className="font-medium text-gray-800 dark:text-gray-200">{formatTime(startHour)} - {formatTime(startHour + (confirmedBooking?.duration ?? duration) / 60)}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Total</span><span className="font-bold text-emerald-600 dark:text-emerald-400">{confirmedBooking?.isCoachBooking ? `$${confirmedBooking.coachPrice ?? (getCoachPrice(confirmedBooking.duration) + additionalLanePrice)}` : totalPrice === 0 ? 'FREE' : `$${totalPrice}`}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">Total</span><span className="font-bold text-emerald-600 dark:text-emerald-400">{confirmedBooking?.isCoachBooking ? `$${fmtMoney(confirmedBooking.coachPrice ?? (getCoachPrice(confirmedBooking.duration) + additionalLanePrice))}` : totalPrice === 0 ? 'FREE' : `$${fmtMoney(totalPrice)}`}</span></div>
             </div>
             {googleCalUrl && (
               <a href={googleCalUrl} target="_blank" rel="noopener noreferrer" className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-white dark:bg-gray-800 border-2 border-gray-200 dark:border-gray-700 rounded-xl hover:border-blue-400 hover:shadow-md transition-all">
@@ -783,12 +784,16 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
             {isCoach && (
               <div className="flex items-center gap-3 bg-orange-50 dark:bg-orange-900/20 rounded-xl p-3 border border-orange-200 dark:border-orange-800/50">
                 <div className="w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center text-white text-sm font-bold">🏅</div>
-                <div><div className="text-sm font-semibold text-orange-800 dark:text-orange-300">Coach Booking</div><div className="text-xs text-orange-600 dark:text-orange-400">${getCoachPerHourRate()}/hr &middot; 1 hour minimum &middot; No payment required</div></div>
+                <div><div className="text-sm font-semibold text-orange-800 dark:text-orange-300">Coach Booking</div><div className="text-xs text-orange-600 dark:text-orange-400">${fmtMoney(getCoachPerHourRate())}/hr &middot; 1 hour minimum &middot; No payment required</div></div>
               </div>
             )}
+            {/* U27 — copy predated the 2026-08 half-hour / segment-edge / custom-start
+                rules (isValidCoachStart now also accepts isLaneCustomStart and
+                isCoachEdgeStart), so it named a "3:30pm on weekdays" rule that no
+                longer describes what the code allows. */}
             {!isValidCoachStart && isCoach && (
               <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-200 dark:border-red-800/50">
-                <p className="text-xs text-red-700 dark:text-red-400">⚠️ Coach bookings must start on the hour (or 3:30pm on weekdays).</p>
+                <p className="text-xs text-red-700 dark:text-red-400">⚠️ Coach bookings start on the hour, or on a half hour that opens a lane period or sits flush against an existing booking. Pick one of the highlighted start times on the grid.</p>
               </div>
             )}
 
@@ -815,7 +820,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               <div className={`flex items-center gap-3 rounded-xl p-3 border ${isCoach ? 'bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-800/50' : 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800/50'}`}>
                 <div className={`w-8 h-8 ${isCoach ? 'bg-orange-500' : 'bg-emerald-500'} rounded-full flex items-center justify-center text-white text-sm font-bold`}>{user.name.charAt(0).toUpperCase()}</div>
                 <div><div className="text-sm font-semibold text-gray-800 dark:text-gray-200">{user.name}</div><div className="text-xs text-gray-500">{user.email}</div></div>
-                {creditBalance > 0 && !isCoach && <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full font-medium bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400">💰 ${creditBalance} credit</span>}
+                {creditBalance > 0 && !isCoach && <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full font-medium bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400">💰 ${fmtMoney(creditBalance)} credit</span>}
               </div>
             )}
 
@@ -828,7 +833,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                     <button key={variant.id} onClick={() => { setSelectedVariant(variant); trackFunnelStep('variant_chosen', { variant: variant.id }) }}
                       className={`p-3 rounded-xl border-2 transition-all text-left ${selectedVariant?.id === variant.id ? variant.id.includes('truman') ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20 shadow-md' : 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 shadow-md' : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'}`}>
                       <div className="text-base font-bold text-gray-800 dark:text-gray-200">{variant.name}</div>
-                      <div className="text-xs text-gray-500 mt-0.5">${getCustomerPrice(lane, variant.id, 60)}/hr</div>
+                      <div className="text-xs text-gray-500 mt-0.5">${fmtMoney(getCustomerPrice(lane, variant.id, 60))}/hr</div>
                     </button>
                   ))}
                 </div>
@@ -847,11 +852,11 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                           const hrs = Math.floor(d / 60); const mins = d % 60
                           const label = hrs > 0 ? `${hrs}hr${mins > 0 ? ` ${mins}min` : ''}` : `${mins}min`
                           const halfHours = d / 30
-                          return <option key={d} value={d}>{label} — ${getCoachPrice(d)} (${getCoachPerHourRate()}/hr)</option>
+                          return <option key={d} value={d}>{label} — ${fmtMoney(getCoachPrice(d))} (${fmtMoney(getCoachPerHourRate())}/hr)</option>
                         })}
                       </select>
                       <div className="mt-2 text-[11px] text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-900/20 rounded-lg px-3 py-2 border border-orange-200 dark:border-orange-800/30">
-                        <span className="font-semibold">Coach rate:</span> ${getCoachPerHourRate()} per hour &middot; Selected: <span className="font-bold">${getCoachPrice(duration)}</span> for {duration >= 60 ? `${Math.floor(duration/60)}hr${duration%60>0?` ${duration%60}min`:''}` : `${duration}min`}
+                        <span className="font-semibold">Coach rate:</span> ${fmtMoney(getCoachPerHourRate())} per hour &middot; Selected: <span className="font-bold">${fmtMoney(getCoachPrice(duration))}</span> for {duration >= 60 ? `${Math.floor(duration/60)}hr${duration%60>0?` ${duration%60}min`:''}` : `${duration}min`}
                       </div>
                     </>
                   )}
@@ -900,7 +905,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                           </div>
                         </div>
                         <div className="text-[11px] text-gray-700 dark:text-gray-300 font-medium">
-                          {formatTime(startHour)}–{formatTime(splitChangeover!)} {resolvedLaneName} → {formatTime(splitChangeover!)}–{formatTime(splitEnd!)} {laneNm(splitLaneId!)} · <span className="font-bold">${getCoachPrice(splitTotalMins)}</span> total
+                          {formatTime(startHour)}–{formatTime(splitChangeover!)} {resolvedLaneName} → {formatTime(splitChangeover!)}–{formatTime(splitEnd!)} {laneNm(splitLaneId!)} · <span className="font-bold">${fmtMoney(getCoachPrice(splitTotalMins))}</span> total
                         </div>
                         <div className="text-[10px] text-gray-500 dark:text-gray-400">
                           One booking, one door code, one statement line. Add athletes after booking via "Edit athletes" — allocations can span both lanes. Options exclude combinations that would strand a short unbookable gap.
@@ -914,7 +919,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                   {availableDurations.map(d => (
                     <button key={d} onClick={() => { setDuration(d); trackFunnelStep('duration_chosen', { duration: d }) }}
                       className={`p-3 rounded-xl border-2 transition-all text-left ${duration === d ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 shadow-md' : 'border-gray-200 dark:border-gray-700'}`}>
-                      <div className="text-lg font-bold text-gray-800 dark:text-gray-200">${getCustomerPrice(lane, selectedVariant?.id ?? null, d)}</div>
+                      <div className="text-lg font-bold text-gray-800 dark:text-gray-200">${fmtMoney(getCustomerPrice(lane, selectedVariant?.id ?? null, d))}</div>
                       <div className="text-sm text-gray-600 dark:text-gray-400">{d === 30 ? '30 min' : d === 60 ? '1 Hour' : d === 90 ? '1.5 Hours' : d === 120 ? '2 Hours' : d === 180 ? '3 Hours' : `${Math.floor(d / 60)}hr${d % 60 > 0 ? ` ${d % 60}min` : ''}`}</div>
                       <div className="text-xs text-gray-500 mt-1">{formatTime(startHour)} - {formatTime(startHour + d / 60)}</div>
                     </button>
@@ -1111,30 +1116,30 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
             {!isCoach && creditBalance > 0 && user && (
               <label className="flex items-center gap-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl p-3 border border-blue-200 dark:border-blue-800/50 cursor-pointer">
                 <input type="checkbox" checked={applyCredit} onChange={e => setApplyCredit(e.target.checked)} className="rounded" />
-                <div><div className="text-sm font-medium text-blue-800 dark:text-blue-300">Apply account credit</div><div className="text-xs text-blue-600 dark:text-blue-400">Available: ${creditBalance} &middot; Saves ${creditToApply}</div></div>
+                <div><div className="text-sm font-medium text-blue-800 dark:text-blue-300">Apply account credit</div><div className="text-xs text-blue-600 dark:text-blue-400">Available: ${fmtMoney(creditBalance)} &middot; Saves ${fmtMoney(creditToApply)}</div></div>
               </label>
             )}
 
             {/* Total */}
             {(additionalLanes.length > 0 || creditToApply > 0 || appliedDiscount) && (
               <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 space-y-1 text-sm">
-                <div className="flex justify-between"><span className="text-gray-500">Primary lane</span><span className="font-medium">${price}</span></div>
+                <div className="flex justify-between"><span className="text-gray-500">Primary lane</span><span className="font-medium">${fmtMoney(price)}</span></div>
                 {additionalLanes.map(lid => {
                   const l = LANES.find(la => la.id === lid)
                   const lp = isCoach ? getCoachPrice(duration) : getCustomerPrice(l!, null, duration)
-                  return <div key={lid} className="flex justify-between"><span className="text-gray-500">+ {laneNm(lid)}</span><span className="font-medium">${lp}</span></div>
+                  return <div key={lid} className="flex justify-between"><span className="text-gray-500">+ {laneNm(lid)}</span><span className="font-medium">${fmtMoney(lp)}</span></div>
                 })}
-                {creditToApply > 0 && <div className="flex justify-between"><span className="text-blue-500">Credit</span><span className="font-medium text-blue-600">-${creditToApply}</span></div>}
+                {creditToApply > 0 && <div className="flex justify-between"><span className="text-blue-500">Credit</span><span className="font-medium text-blue-600">-${fmtMoney(creditToApply)}</span></div>}
                 {appliedDiscount && discountAmount > 0 && (
-                  <div className="flex justify-between"><span className="text-purple-500">🎟️ Discount ({appliedDiscount.code})</span><span className="font-medium text-purple-600">-${discountAmount}</span></div>
+                  <div className="flex justify-between"><span className="text-purple-500">🎟️ Discount ({appliedDiscount.code})</span><span className="font-medium text-purple-600">-${fmtMoney(discountAmount)}</span></div>
                 )}
-                <div className="border-t border-gray-200 dark:border-gray-700 pt-1 flex justify-between"><span className="font-semibold">Total</span><span className="font-bold text-emerald-600">{totalPrice === 0 ? 'FREE' : `$${totalPrice}`}</span></div>
+                <div className="border-t border-gray-200 dark:border-gray-700 pt-1 flex justify-between"><span className="font-semibold">Total</span><span className="font-bold text-emerald-600">{totalPrice === 0 ? 'FREE' : `$${fmtMoney(totalPrice)}`}</span></div>
               </div>
             )}
 
             <button onClick={handleContinueToPayment} disabled={(splitOn ? !splitReady : availableDurations.length === 0) || (isCoach && !isValidCoachStart)}
               className={`w-full py-3 font-semibold rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600' : totalPrice === 0 ? 'bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600' : 'bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600'}`}>
-              {!user ? 'Sign In to Book →' : isCoach ? `Confirm — $${totalPrice} →` : totalPrice === 0 ? 'Confirm Free Booking →' : `Continue to Payment — $${totalPrice} →`}
+              {!user ? 'Sign In to Book →' : isCoach ? `Confirm — $${fmtMoney(totalPrice)} →` : totalPrice === 0 ? 'Confirm Free Booking →' : `Continue to Payment — $${fmtMoney(totalPrice)} →`}
             </button>
           </div>
         )}
@@ -1149,11 +1154,11 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               {additionalLanes.length > 0 && <div className="flex justify-between"><span className="text-gray-500">+ Lanes</span><span className="font-medium">{additionalLanes.map(lid => laneNm(lid)).join(', ')}</span></div>}
               <div className="flex justify-between"><span className="text-gray-500">Time</span><span className="font-medium">{formatTime(startHour)} - {formatTime(endHour)}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">Duration</span><span className="font-medium">{duration >= 60 ? `${Math.floor(duration / 60)}hr${duration % 60 > 0 ? ` ${duration % 60}min` : ''}` : `${duration}min`}</span></div>
-              {creditToApply > 0 && <div className="flex justify-between"><span className="text-blue-500">Credit Applied</span><span className="font-medium text-blue-600">-${creditToApply}</span></div>}
+              {creditToApply > 0 && <div className="flex justify-between"><span className="text-blue-500">Credit Applied</span><span className="font-medium text-blue-600">-${fmtMoney(creditToApply)}</span></div>}
               {appliedDiscount && discountAmount > 0 && (
-                <div className="flex justify-between"><span className="text-purple-500">🎟️ Discount ({appliedDiscount.code})</span><span className="font-medium text-purple-600">-${discountAmount}</span></div>
+                <div className="flex justify-between"><span className="text-purple-500">🎟️ Discount ({appliedDiscount.code})</span><span className="font-medium text-purple-600">-${fmtMoney(discountAmount)}</span></div>
               )}
-              <div className="border-t border-gray-200 dark:border-gray-700 pt-2"><div className="flex justify-between items-center"><span className="font-semibold">Total</span><span className="text-xl font-bold text-emerald-600">{totalPrice === 0 ? 'FREE' : `$${totalPrice}`}</span></div></div>
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-2"><div className="flex justify-between items-center"><span className="font-semibold">Total</span><span className="text-xl font-bold text-emerald-600">{totalPrice === 0 ? 'FREE' : `$${fmtMoney(totalPrice)}`}</span></div></div>
             </div>
             <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-3 border border-blue-200 dark:border-blue-800/50">
               <p className="text-xs text-blue-700 dark:text-blue-400"><strong>Cancellation Policy:</strong> Cancel {getSettingsStore().get().customerCancellationHours ?? getSettingsStore().get().cancellationHoursBefore ?? 2}+ hours before for account credit.</p>
@@ -1162,7 +1167,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               <button onClick={() => { setStep('details'); setError(null) }} className="flex-1 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all">← Back</button>
               <button onClick={handleStripeCheckout} disabled={isSubmitting}
                 className="flex-[2] py-3 bg-[#635BFF] hover:bg-[#5851e0] text-white font-semibold rounded-xl shadow-lg transition-all disabled:opacity-70 flex items-center justify-center gap-2">
-                {isSubmitting ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Loading payment...</> : <>Pay ${totalPrice} with Stripe</>}
+                {isSubmitting ? <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Loading payment...</> : <>Pay ${fmtMoney(totalPrice)} with Stripe</>}
               </button>
             </div>
           </div>

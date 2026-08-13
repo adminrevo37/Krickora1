@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
+import { getErrorMessage } from '../lib/errors'
 // SPEC_WAITLIST_SPLIT_BM_RU — time-slot based waitlist, split into BM / RU pools.
 // Entries are keyed by pool sentinel laneId: '*bm' (bowling machines) / '*ru'
 // (run-ups). The pool prop drives labels + the sentinel written to the server.
@@ -25,6 +26,10 @@ export default function WaitlistModal({ pool, selectedSlots, availableHours, dat
   const addToWaitlistServer = useMutation(api.mutations.addToWaitlist)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [done, setDone] = useState(false)
+  // U1: the join used to report success unconditionally — the mutation error was
+  // swallowed into console.error and setDone(true) ran regardless, so a rejected
+  // join showed "Added to Waitlist! ✅" and the offer simply never came.
+  const [error, setError] = useState<string | null>(null)
   // The hours the user has ticked to join (seeded from the tapped slot).
   const seedHours = selectedSlots.map(s => s.hour)
   const seedDate = date ?? selectedSlots[0]?.date ?? ''
@@ -53,7 +58,7 @@ export default function WaitlistModal({ pool, selectedSlots, availableHours, dat
   const handleSubmit = async () => {
     if (chosenHours.length === 0) return
     setIsSubmitting(true)
-    await new Promise(r => setTimeout(r, 600))
+    setError(null)
 
     // One entry per (date, hour) — any lane OF THIS POOL opening at that time
     // notifies. laneId is the pool sentinel ('*bm' / '*ru').
@@ -69,7 +74,11 @@ export default function WaitlistModal({ pool, selectedSlots, availableHours, dat
     try {
       await addToWaitlistServer({ entries })
     } catch (err) {
-      console.error('Failed to add to waitlist on server:', err)
+      // U1: stay on the form, show what happened, let them retry. Never claim a
+      // join that the server refused.
+      setError(getErrorMessage(err) ?? 'Could not join the waitlist — please try again.')
+      setIsSubmitting(false)
+      return
     }
 
     setDone(true)
@@ -123,6 +132,12 @@ export default function WaitlistModal({ pool, selectedSlots, availableHours, dat
         </div>
 
         <div className="p-5 space-y-4 overflow-y-auto flex-1">
+          {/* U1 — a failed join is stated plainly; the button below stays live to retry. */}
+          {error && (
+            <div className="rounded-xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-3">
+              <p className="text-sm text-red-700 dark:text-red-300">⚠️ {error}</p>
+            </div>
+          )}
           <p className="text-sm text-gray-600 dark:text-gray-400">
             Pick the times you'd like a {poolNoun} for on <strong>{formatDate(seedDate)}</strong>. We'll
             notify you when any {poolTag} lane opens — first in the queue gets first refusal.
@@ -160,6 +175,8 @@ export default function WaitlistModal({ pool, selectedSlots, availableHours, dat
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 Adding...
               </>
+            ) : error ? (
+              <>🔔 Try again</>
             ) : (
               <>🔔 Join {poolTag} Waitlist for {chosenHours.length} Slot{chosenHours.length === 1 ? '' : 's'}</>
             )}
