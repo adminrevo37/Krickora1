@@ -280,9 +280,18 @@ export default function ExtendBookingModal({ booking, creditBalance, onClose }: 
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={onClose}>
+    // U16 — closing mid-confirm was possible via BOTH the backdrop and the ✕
+    // (ModifyBookingModal already gates its equivalents). If the customer closed
+    // after extendBookingLive had created the pending extension row but before
+    // checkout mounted, nothing ran cancelUnpaidCheckout and they were left with
+    // an unexplained amber "Awaiting payment" 30-min card until the ~30-min
+    // backstop expired it.
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+      onClick={busy || embeddedPay ? undefined : onClose}
+    >
       <div
-        className="w-full max-w-md rounded-2xl bg-white dark:bg-gray-900 shadow-xl p-5 max-h-[90vh] overflow-y-auto"
+        className="w-full max-w-md rounded-2xl bg-white dark:bg-gray-900 shadow-xl p-5 max-h-[90dvh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between mb-3">
@@ -292,7 +301,12 @@ export default function ExtendBookingModal({ booking, creditBalance, onClose }: 
               Current session ends {formatTime(extStart)} — same door code carries over.
             </p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl leading-none" aria-label="Close">×</button>
+          <button
+            onClick={onClose}
+            disabled={busy || !!embeddedPay}
+            className="w-10 h-10 shrink-0 rounded-full flex items-center justify-center text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 text-xl leading-none transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            aria-label="Close"
+          >×</button>
         </div>
 
         {step === 'success' ? (

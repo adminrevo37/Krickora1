@@ -83,6 +83,9 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
   const [step, setStep] = useState<'select' | 'confirm' | 'processing' | 'success'>('select')
   const [error, setError] = useState<string | null>(null)
   const [resultNote, setResultNote] = useState<string | null>(null)
+  // U19 — set when the server's authoritative top-up disagrees with the estimate
+  // shown on the pay button; the customer re-confirms the real figure first.
+  const [restatedTopUpCents, setRestatedTopUpCents] = useState<number | null>(null)
   // SPEC_EMBEDDED_CHECKOUT — in-app payment overlay for the price-increase top-up.
   const [embeddedTopUp, setEmbeddedTopUp] = useState<{ clientSecret: string; bookingId: string } | null>(null)
 
@@ -140,9 +143,12 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
     ? (booking.coachPrice ?? getCoachPrice(booking.duration))
     : (originalLane ? getCustomerPrice(originalLane, booking.variantId ?? null, booking.duration) : 0)
       + addlCount * getCustomerPrice(originalLane!, null, booking.duration)
-  const priceDiff = newPrice - originalPrice
+  // U19 — round to whole cents. Both sides are dollar floats, so a half-hour rate
+  // ($67.5) could leave dust like 22.500000000000004 in the diff and render it on
+  // the pay button. The server works in integer cents throughout.
+  const priceDiff = Math.round((newPrice - originalPrice) * 100) / 100
   const creditToApply = !isCoach && priceDiff > 0 ? Math.min(creditBalance, priceDiff) : 0
-  const estimatedTopUp = Math.max(0, priceDiff - creditToApply)
+  const estimatedTopUp = Math.round(Math.max(0, priceDiff - creditToApply) * 100) / 100
   // NI-3: on a decrease, credit only what was actually PAID (post-discount price),
   // pro-rata to the value removed — mirrors the server. Falls back to gross only if
   // the booking has no stored paid amount (legacy rows).
@@ -176,7 +182,46 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
     return `Within ${cutoff}h of your start time you can only move the start up to ${maxEarlier}h earlier, or extend the session (paying the difference). Other changes are locked.`
   }, [booking.date, booking.startHour, isCoach, settings])
 
+  // U19 — opening the Stripe sheet for an already-staged pending edit. Split out
+  // of handleConfirm so the restatement path can proceed WITHOUT calling onModify
+  // a second time (the edit is already applied server-side pending the top-up;
+  // re-running it would re-stage the pendingEdit).
+  const openTopUpCheckout = async (topUpAmountCents: number) => {
+    setStep('processing')
+    try {
+      const { createTopUpCheckoutSession } = await import('../lib/stripe')
+      const laneObj = LANES.find(l => l.id === selectedLaneId)
+      const session = await createTopUpCheckoutSession({
+        bookingId: booking.id,
+        laneId: selectedLaneId,
+        laneName: laneObj?.name ?? selectedLaneId,
+        date: selectedDate,
+        startHour: selectedStartHour,
+        newDuration: effectiveDuration,
+        customerName: booking.customerName,
+        customerEmail: booking.customerEmail,
+        topUpAmountCents,
+      })
+      // SPEC_EMBEDDED_CHECKOUT — pay the difference in-app when available; else
+      // hosted redirect (unchanged fallback). The modification is already applied
+      // server-side (pending the top-up); the webhook confirms on payment.
+      if (session?.clientSecret) { setEmbeddedTopUp({ clientSecret: session.clientSecret, bookingId: booking.id }); return }
+      if (session?.url) { window.location.href = session.url; return }
+      setError('Could not start checkout. Please try again.')
+      setStep('confirm')
+    } catch (err: any) {
+      setError(getErrorMessage(err) ?? 'Could not start checkout. Please try again.')
+      setStep('confirm')
+    }
+  }
+
   const handleConfirm = async () => {
+    // U19 — second press on the restatement screen: the edit is already staged,
+    // so go straight to checkout for the server's figure.
+    if (restatedTopUpCents != null) {
+      await openTopUpCheckout(restatedTopUpCents)
+      return
+    }
     setError(null)
     setStep('processing')
 
@@ -197,31 +242,18 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
 
     // Customer price increase needs an online top-up → redirect to Stripe.
     if (res.requiresPayment && (res.topUpAmountCents ?? 0) > 0) {
-      try {
-        const { createTopUpCheckoutSession } = await import('../lib/stripe')
-        const laneObj = LANES.find(l => l.id === selectedLaneId)
-        const session = await createTopUpCheckoutSession({
-          bookingId: booking.id,
-          laneId: selectedLaneId,
-          laneName: laneObj?.name ?? selectedLaneId,
-          date: selectedDate,
-          startHour: selectedStartHour,
-          newDuration: effectiveDuration,
-          customerName: booking.customerName,
-          customerEmail: booking.customerEmail,
-          topUpAmountCents: res.topUpAmountCents as number,
-        })
-        // SPEC_EMBEDDED_CHECKOUT — pay the difference in-app when available; else
-        // hosted redirect (unchanged fallback). The modification is already applied
-        // server-side (pending the top-up); the webhook confirms on payment.
-        if (session?.clientSecret) { setEmbeddedTopUp({ clientSecret: session.clientSecret, bookingId: booking.id }); return }
-        if (session?.url) { window.location.href = session.url; return }
-        setError('Could not start checkout. Please try again.')
+      // U19 — the button showed a CLIENT estimate; the amount actually charged is
+      // res.topUpAmountCents, computed server-side. They normally agree (both diff
+      // the recomputed gross — mutations.ts SEC-6), but if the server disagrees,
+      // state the real figure and re-confirm rather than opening a Stripe sheet
+      // for an amount the customer never agreed to.
+      const serverCents = res.topUpAmountCents as number
+      if (Math.abs(serverCents - Math.round(estimatedTopUp * 100)) >= 1) {
+        setRestatedTopUpCents(serverCents)
         setStep('confirm')
-      } catch (err: any) {
-        setError(getErrorMessage(err) ?? 'Could not start checkout. Please try again.')
-        setStep('confirm')
+        return
       }
+      await openTopUpCheckout(serverCents)
       return
     }
 
@@ -232,7 +264,8 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
     if ((res.droppedAthletes ?? []).length > 0) notes.push(`Removed (no longer fit): ${(res.droppedAthletes as string[]).join(', ')}.`)
     setResultNote(notes.join(' ') || null)
     setStep('success')
-    setTimeout(() => onClose(), 3500)
+    // U5 (same defect class) — no auto-dismiss: this screen carries the credit
+    // notes ("$X credit added to your account") and the new-door-code warning.
   }
 
   const formatDate = (dateStr: string) => {
@@ -309,6 +342,12 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
             </div>
             {resultNote && <p className="text-xs text-gray-500 text-center">{resultNote}</p>}
             <p className="text-xs text-gray-400 text-center">If your date, time, or lane changed, a new door access code has been issued.</p>
+            <button
+              onClick={onClose}
+              className="w-full py-3 bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-600 text-white font-semibold rounded-xl shadow-lg transition-all min-h-[44px]"
+            >
+              Done
+            </button>
           </div>
         )}
 
@@ -547,11 +586,27 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
               </div>
             )}
 
+            {/* U19 — the server priced this differently from the estimate on the
+                button. State the real amount and make them agree to it before any
+                Stripe sheet opens. */}
+            {restatedTopUpCents != null && (
+              <div className="bg-amber-50 dark:bg-amber-900/20 rounded-xl p-3 border border-amber-300 dark:border-amber-800/60">
+                <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">
+                  Amount due is ${(restatedTopUpCents / 100).toFixed(2)}
+                </p>
+                <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">
+                  That differs from the ${estimatedTopUp.toFixed(2)} estimate shown a moment ago. Confirm to pay the amount above.
+                </p>
+              </div>
+            )}
+
             <div className="flex gap-3">
-              <button onClick={() => { setStep('select'); setError(null) }} className="flex-1 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all">← Back</button>
+              <button onClick={() => { setStep('select'); setError(null); setRestatedTopUpCents(null) }} className="flex-1 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all">← Back</button>
               <button onClick={handleConfirm}
                 className="flex-[2] py-3 bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-600 hover:to-purple-600 text-white font-semibold rounded-xl shadow-lg transition-all">
-                {!isCoach && estimatedTopUp > 0 ? `Pay $${estimatedTopUp.toFixed(2)} & Confirm` : 'Confirm Changes'}
+                {restatedTopUpCents != null
+                  ? `Pay $${(restatedTopUpCents / 100).toFixed(2)} & Confirm`
+                  : !isCoach && estimatedTopUp > 0 ? `Pay $${estimatedTopUp.toFixed(2)} & Confirm` : 'Confirm Changes'}
               </button>
             </div>
           </div>

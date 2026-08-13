@@ -483,7 +483,6 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
       funnelConfirmedRef.current = true
       trackFunnelStep('booking_confirmed', { kind: totalPrice === 0 ? 'free' : 'instant' })
       setConfirmedBooking(booking); setStep('success')
-      setTimeout(() => onConfirm(booking), 4000)
       // Email is sent by createBooking mutation — no client-side duplicate
     } catch (err: any) {
       setError(getErrorMessage(err) ?? 'Could not confirm your booking. Please try again.')
@@ -520,8 +519,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
           accessCode: serverCode,
         }
         setConfirmedBooking(booking); setStep('success')
-        setTimeout(() => onConfirm(booking), 4000)
-      } catch (err: any) {
+        } catch (err: any) {
         setError(getErrorMessage(err) ?? 'Could not confirm your booking. Please try again.')
         setStep('details')
       } finally {
@@ -570,7 +568,6 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
         accessCode: serverCode,
       }
       setConfirmedBooking(booking); setStep('success')
-      setTimeout(() => onConfirm(booking), 4000)
       // Email is sent by createBooking mutation — no client-side duplicate
     } catch (err: any) {
       setError(getErrorMessage(err) ?? 'Could not confirm your booking. Please try again.')
@@ -651,7 +648,6 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     try { trackFunnelStep('booking_confirmed', { kind: 'paid' }); clearBookingFlow() } catch { /* ignore */ }
     setConfirmedBooking(null)
     setStep('success')
-    setTimeout(() => onConfirm({} as Booking), 3500)
   }
 
   // Customer backed out of the embedded payment → release the unpaid slot
@@ -680,6 +676,14 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     extraNote: splitSummary ? `Lane change: ${splitSummary}.` : undefined,
   }) : null
 
+  // U5 — the success screen used to self-dismiss after 3.5–4s with the ✕ hidden
+  // and the backdrop disabled, so the customer could neither hold it open to read
+  // the door code nor reach the Add-to-Calendar button in time. It now waits for
+  // an explicit Done. The paid path has no confirmedBooking (the webhook assigns
+  // the code), and onConfirm's callers only use it to refresh — so the previous
+  // `{} as Booking` placeholder is preserved for that case.
+  const finishSuccess = () => onConfirm(confirmedBooking ?? ({} as Booking))
+
   if (showAuth) return <AuthModal onClose={() => setShowAuth(false)} onSuccess={() => { setShowAuth(false); setStep('confirm') }} />
 
   return (
@@ -695,8 +699,10 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               <p className="text-white/80 text-sm mt-0.5">{step === 'success' ? 'Your session is booked' : step === 'processing' ? 'Please wait...' : date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
               {isCoach && step === 'details' && <span className="inline-block mt-1 text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-semibold">🏅 Coach Rate &middot; Rolling 8-Day Window</span>}
             </div>
-            {step !== 'processing' && step !== 'success' && (
-              <button onClick={onClose} aria-label="Close" className="w-10 h-10 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors">✕</button>
+            {/* U5 — ✕ is available on success too now that nothing auto-dismisses;
+                it finishes the flow exactly like Done. Still hidden mid-processing. */}
+            {step !== 'processing' && (
+              <button onClick={step === 'success' ? finishSuccess : onClose} aria-label="Close" className="w-10 h-10 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors">✕</button>
             )}
           </div>
         </div>
@@ -732,6 +738,23 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                 <p className="text-[10px] text-blue-500 dark:text-blue-400 mt-2">Enter this code at the facility door keypad. Valid for your session time only.</p>
               </div>
             )}
+            {/* U6 — on the paid (embedded-checkout) path the webhook assigns the
+                door code, so handleEmbeddedComplete sets confirmedBooking to null
+                and the code box above never renders. Previously nothing replaced
+                it: a first-time payer saw "Session Booked!" with no code and no
+                clue how they'd get in. Say where the code will be. */}
+            {!confirmedBooking && (
+              <div className="w-full bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/30 dark:to-indigo-900/30 rounded-xl p-4 border-2 border-blue-200 dark:border-blue-700 text-center">
+                <div className="flex items-center justify-center gap-2 mb-1">
+                  <span className="text-lg">🔑</span>
+                  <span className="text-xs font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">Door Access Code</span>
+                </div>
+                <p className="text-sm font-medium text-blue-800 dark:text-blue-200">Being generated now</p>
+                <p className="text-[11px] text-blue-500 dark:text-blue-400 mt-2">
+                  It&apos;s in your confirmation email, and on this booking under <strong>My Bookings</strong>. Enter it at the facility door keypad.
+                </p>
+              </div>
+            )}
             {confirmedBooking?.athleteSlots && confirmedBooking.athleteSlots.length > 0 && (
               <div className="w-full bg-gradient-to-br from-orange-50 to-amber-50 dark:from-orange-900/20 dark:to-amber-900/20 rounded-xl p-4 border border-orange-200 dark:border-orange-700 space-y-2">
                 <div className="text-xs font-semibold uppercase tracking-wider text-orange-600 dark:text-orange-400 text-center mb-2">🏏 Assigned Athletes</div>
@@ -762,6 +785,13 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
                 📅 <span className="text-sm font-semibold text-gray-700 dark:text-gray-200">Add to Google Calendar</span>
               </a>
             )}
+            {/* U5 — explicit dismissal, replacing the 3.5–4s auto-close. */}
+            <button
+              onClick={finishSuccess}
+              className="w-full py-3 bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600 text-white font-semibold rounded-xl shadow-lg transition-all min-h-[44px]"
+            >
+              Done
+            </button>
           </div>
         )}
 

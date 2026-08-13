@@ -8,7 +8,7 @@
 //    the UX hand-off back to the app.
 //  - onClose: the customer backed out (× or backdrop). The caller should release
 //    the unpaid booking (cancelUnpaidCheckout) and return to its confirm step.
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { EmbeddedCheckoutProvider, EmbeddedCheckout } from '@stripe/react-stripe-js'
 import { getStripePromise } from '../lib/stripe'
 
@@ -35,23 +35,51 @@ export default function EmbeddedCheckoutModal({ clientSecret, onComplete, onClos
     [clientSecret]
   )
 
+  // U2 (SPEC_UI_IMPROVEMENTS_2026-08) — closing this modal is DESTRUCTIVE: every
+  // caller's onClose runs cancelUnpaidCheckout, which expires the Stripe session
+  // and releases the held slot / pending extension. The backdrop used to close it
+  // outright, so one stray tap beside the narrow sheet while typing card details
+  // silently threw the booking away mid-payment. Backdrop taps are now inert and
+  // the labelled ✕ asks first.
+  const [confirmingCancel, setConfirmingCancel] = useState(false)
+
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-md overflow-hidden max-h-[92vh] flex flex-col">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+      <div className="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-md overflow-hidden max-h-[92dvh] flex flex-col">
         <div className="flex items-center justify-between p-4 border-b border-gray-100 dark:border-gray-800">
           <div>
             <h3 className="text-base font-bold text-gray-900 dark:text-gray-100">Secure Payment</h3>
             <p className="text-xs text-gray-500 dark:text-gray-400">Powered by Stripe</p>
           </div>
           <button
-            onClick={onClose}
+            onClick={() => setConfirmingCancel(true)}
             aria-label="Cancel payment"
-            className="w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300 transition-colors"
+            className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 flex items-center justify-center text-gray-600 dark:text-gray-300 transition-colors shrink-0"
           >
             ✕
           </button>
         </div>
+        {confirmingCancel && (
+          <div className="p-4 border-b border-amber-200 dark:border-amber-800/50 bg-amber-50 dark:bg-amber-900/20">
+            <p className="text-sm font-medium text-amber-900 dark:text-amber-200">Cancel this payment?</p>
+            <p className="text-xs text-amber-700 dark:text-amber-300 mt-0.5">Your slot will be released and someone else can take it.</p>
+            <div className="flex gap-2 mt-3">
+              <button
+                onClick={() => setConfirmingCancel(false)}
+                className="flex-1 min-h-[40px] rounded-lg bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 text-sm font-semibold text-gray-800 dark:text-gray-200"
+              >
+                Keep paying
+              </button>
+              <button
+                onClick={onClose}
+                className="flex-1 min-h-[40px] rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold"
+              >
+                Cancel payment
+              </button>
+            </div>
+          </div>
+        )}
         <div className="overflow-y-auto p-3">
           {stripePromise ? (
             <EmbeddedCheckoutProvider stripe={stripePromise} options={options}>
