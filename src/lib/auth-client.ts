@@ -47,6 +47,13 @@ function setStoredToken(token: string | null) {
 // called on the authenticated→logged-out TRANSITION — never while a sign-in
 // is in flight (the just-captured token would be destroyed before the session
 // atom refetches, breaking login on cookie-less iOS).
+// 2026-08-13 logout-regression telemetry: lets the definitive-logout event
+// distinguish "token present but server-rejected/expired" (session lifetime)
+// from "token missing" (iOS storage eviction / never stored).
+export function hasStoredToken(): boolean {
+  return getStoredToken() != null;
+}
+
 export function clearStoredToken() {
   setStoredToken(null);
 }

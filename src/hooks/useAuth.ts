@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '../../convex/_generated/api'
-import { useSession, readHadSession, writeHadSession, readUserCache, writeUserCache, clearUserCache, clearStoredToken } from '../lib/auth-client'
+import { useSession, readHadSession, writeHadSession, readUserCache, writeUserCache, clearUserCache, clearStoredToken, hasStoredToken } from '../lib/auth-client'
 import { trackEvent } from '../lib/tracker'
 import { useImpersonation } from './useImpersonation'
 
@@ -163,8 +163,14 @@ export function useAuth() {
         // Guarded so a fresh sign-in's just-captured token is never destroyed in
         // the pre-refetch window, and so the event can't fire on every render
         // while logged out.
+        // 2026-08-13: hadToken distinguishes server-side expiry (true — the
+        // rolling session window lapsed / session revoked) from a MISSING
+        // bearer (false — iOS storage eviction or never stored). Watch the
+        // split in the admin Activity feed to confirm which logout class
+        // users are actually hitting.
+        const hadToken = hasStoredToken()
         clearStoredToken()
-        trackEvent('auth_definitive_logout', {})
+        trackEvent('auth_definitive_logout', { hadToken })
       }
       wasAuthenticatedRef.current = false
       writeHadSession(false)

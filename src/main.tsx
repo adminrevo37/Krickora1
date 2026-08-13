@@ -32,6 +32,12 @@ type AppSingletons = {
 }
 const g = globalThis as unknown as AppSingletons
 
+// 2026-08-13 (PWA logout regression): ask the browser to mark our storage
+// persistent — localStorage holds the bearer token (the WHOLE session on iOS
+// PWA, where cross-site cookies are blocked), so storage eviction = logout.
+// Best-effort; browsers may ignore it. Installed PWAs are usually granted.
+try { void navigator.storage?.persist?.() } catch { /* unsupported */ }
+
 function getRouter() {
   if (!g.__KRICKORA_ROUTER__) {
     g.__KRICKORA_ROUTER__ = createRouter({ routeTree })
