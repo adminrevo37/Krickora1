@@ -11,6 +11,7 @@
 // This wraps the overlay + panel only; each caller keeps its own panel markup
 // and classes, so adopting it is a drop-in swap of the two wrapper divs.
 import { useEffect, useRef, type ReactNode } from 'react'
+import { beginBusy } from '../lib/appBusy'
 
 // Body scroll lock is REFERENCE-COUNTED: modals nest here (BookingModal opens
 // EmbeddedCheckoutModal on top of itself), and a naive lock would be released by
@@ -93,11 +94,17 @@ export default function ModalShell({
   useEffect(() => {
     restoreFocusRef.current = document.activeElement
     pushScrollLock()
+    // SYNC-4 — while ANY modal is open the app is "busy", so the service-worker
+    // auto-apply in PwaUpdater will not reload the page out from under it. This is
+    // what protects a Stripe checkout mid-entry, since EmbeddedCheckoutModal is one
+    // of these surfaces.
+    const releaseBusy = beginBusy()
     // Move focus into the dialog so a screen reader lands inside it and Tab
     // starts from here rather than the top of the page behind.
     const first = panelRef.current?.querySelector<HTMLElement>(FOCUSABLE)
     ;(first ?? panelRef.current)?.focus()
     return () => {
+      releaseBusy()
       popScrollLock()
       const prev = restoreFocusRef.current as HTMLElement | null
       if (prev && typeof prev.focus === 'function') prev.focus()

@@ -17,9 +17,15 @@ export default defineConfig({
     tailwindcss(),
     // SPEC_PWA_PUSH_NOTIFICATIONS — installable PWA + web push.
     VitePWA({
-      // 'prompt' + a reload toast (PwaUpdater): when a new deploy is detected the
-      // user gets a non-blocking "New version — Reload" toast instead of a
-      // surprise mid-session reload.
+      // 'prompt' + PwaUpdater. SYNC-4 structural (2026-08-14): PwaUpdater no longer
+      // waits for a human to tap Reload — it applies the waiting worker itself at
+      // moments that cost the user nothing (cold start, and backgrounding), gated on
+      // an app-busy signal so an open modal or a live Stripe checkout is never
+      // interrupted. The toast remains for the visible, in-use case.
+      //
+      // NOTE: workbox `skipWaiting` stays OMITTED on purpose. It would activate the
+      // new worker under a running page with no reload, swapping assets beneath live
+      // code. Activation is driven explicitly by updateServiceWorker(true) instead.
       //
       // ⚠️ SYNC-4 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13) — the comment that used
       // to sit here claimed "a cold start always serves the newest shell (SW
@@ -27,9 +33,10 @@ export default defineConfig({
       // sense of safety: `navigateFallback` below serves the PRECACHED index.html
       // for navigations and there is no NetworkFirst navigation route anywhere in
       // this config (the navigateFallbackDenylist exists precisely because
-      // navigations do NOT hit the network). With registerType 'prompt', an install
-      // whose user never taps Reload can therefore hold a stale bundle
-      // INDEFINITELY. Consequences: (1) Convex deploy discipline is permanent —
+      // navigations do NOT hit the network). That used to mean an install whose user
+      // never tapped Reload held a stale bundle INDEFINITELY; the SYNC-4 auto-apply
+      // above now closes that in practice, but it cannot guarantee every client has
+      // updated. Consequences: (1) Convex deploy discipline is STILL permanent —
       // deploy backend first, keep args additive, never remove/rename a function or
       // tighten a validator a shipped client might still call, keep legacy response
       // shapes; (2) a stale shell requests chunk names that no longer exist, which
@@ -68,8 +75,9 @@ export default defineConfig({
         importScripts: ["/push-sw.js"],
         cleanupOutdatedCaches: true,
         clientsClaim: true,
-        // skipWaiting omitted: in 'prompt' mode the waiting SW holds until the
-        // user taps Reload (PwaUpdater calls updateServiceWorker(true)).
+        // skipWaiting omitted BY DESIGN (see the SYNC-4 note above): the waiting SW
+        // is activated explicitly by PwaUpdater via updateServiceWorker(true), which
+        // reloads in the same step, so assets are never swapped under a live page.
         globPatterns: ["**/*.{js,css,html,svg,png,ico,woff,woff2}"],
         // E7: keep admin-only code OUT of the customer PWA install precache (still
         // fetched on demand at runtime when an admin opens the dashboard). The
