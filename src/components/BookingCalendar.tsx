@@ -423,7 +423,30 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     setPendingAction(null)
   }
 
-  const handleBookingConfirm = async (_booking: Booking) => {
+  const handleBookingConfirm = async (booking: Booking) => {
+    // SPEC_WAITLIST_ALT_TIME_OFFER_2026-08 — the booking landed, so close the offer
+    // to the other recipients and honour their choice about the original queue
+    // entry. Best-effort: the booking itself is already made and the server
+    // validated availability, so a failure here only leaves a stale-looking offer
+    // that the liveness check will kill anyway.
+    if (acceptingOffer) {
+      const a = acceptingOffer
+      setAcceptingOffer(null)
+      acceptWaitlistOffer({
+        offerId: a.offerId as any,
+        bookingId: String(booking?.id ?? ''),
+        dropOriginalEntry: a.dropOriginalEntry,
+      })
+        .then((r: any) => {
+          setDeclineNotice({
+            ok: true,
+            text: r?.droppedEntry
+              ? 'Booked — and your original waitlist request has been removed.'
+              : 'Booked. You’re still on the waitlist for your original time.',
+          })
+        })
+        .catch(() => { /* the offer's liveness check will close it out */ })
+    }
     // Bug N-8: BookingModal now persists the booking itself (awaited, with errors
     // surfaced) before showing its success screen — so this no longer writes.
     // It just closes the modal; the reactive listBookings query refreshes the
@@ -464,6 +487,22 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     user?.id ? { userId: user.id } : 'skip',
   ) ?? []) as Array<{ _id: string; laneId: string; date: string; hour: number; status?: string }>
 
+  // SPEC_WAITLIST_ALT_TIME_OFFER_2026-08 — an alternative-time offer opened from a
+  // push/email link. The server owns ownership + liveness (a public customer
+  // booking the slot silently kills it), so this is a query, not a stored flag.
+  const [pendingOfferToken, setPendingOfferToken] = useState<string | null>(null)
+  const offer = useQuery(
+    api.waitlistOffers.getOfferByToken,
+    pendingOfferToken && user ? { token: pendingOfferToken } : 'skip',
+  )
+  const [offerSheetDismissed, setOfferSheetDismissed] = useState(false)
+  // Default UNCHECKED: never withdraw a preference the customer didn't withdraw.
+  const [dropOriginalEntry, setDropOriginalEntry] = useState(false)
+  // Carried through the normal BookingModal flow so the offer can be closed out
+  // once the booking actually succeeds.
+  const [acceptingOffer, setAcceptingOffer] = useState<{ offerId: string; dropOriginalEntry: boolean } | null>(null)
+  const acceptWaitlistOffer = useMutation(api.waitlistOffers.acceptWaitlistOffer)
+
   const declineWaitlistOffer = useMutation(api.waitlist.declineWaitlistOffer)
   const [deepLinkHandled, setDeepLinkHandled] = useState(false)
   // U4 — result of a ?wlDecline deep-link, shown as a banner. Previously the
@@ -477,6 +516,18 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     const bookLane = p.get('book')
     const dateP = p.get('date')
     const hourP = p.get('hour')
+    // SPEC_WAITLIST_ALT_TIME_OFFER_2026-08 — ?offer=<token> is an admin offer of a
+    // DIFFERENT time to someone on the waitlist. Resolution is a server query
+    // (ownership + liveness), so just stash the token here and let the effect below
+    // act on it once it resolves.
+    const offerToken = p.get('offer')
+    if (offerToken) {
+      if (!user) return // wait for auth, exactly like ?book
+      setDeepLinkHandled(true)
+      setPendingOfferToken(offerToken)
+      cleanUrl()
+      return
+    }
     if (declineLane && dateP && hourP) {
       // U4 — this used to fire before auth resolved (cold PWA start from a push),
       // so the mutation was rejected unauthenticated while `deepLinkHandled` was
@@ -994,6 +1045,101 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
           onClose={() => setWaitlistModalOpen(false)}
           onSuccess={() => { setWaitlistModalOpen(false); setWaitlistSelections([]) }} />
       )}
+      {/* SPEC_WAITLIST_ALT_TIME_OFFER_2026-08 — an admin has offered this customer a
+          DIFFERENT time from the one they queued for. The sheet states the terms
+          (held for them vs an open race) and asks about their original request
+          BEFORE handing off to the normal booking modal, so nothing is dropped
+          silently and nothing about the payment path changes. */}
+      {offer && !offerSheetDismissed && (
+        <ModalShell
+          onClose={() => setOfferSheetDismissed(true)}
+          labelledBy="alt-offer-cust-title"
+          overlayClassName="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          panelClassName="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm p-5"
+        >
+          {offer.state === 'live' ? (
+            <>
+              <h3 id="alt-offer-cust-title" className="text-base font-bold text-gray-900 dark:text-white">
+                A different time has opened up
+              </h3>
+              <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">
+                You&apos;re on the waitlist for <strong>{formatTime(offer.sourceHour)}</strong>, which isn&apos;t free yet — but this has come up:
+              </p>
+              <div className="mt-3 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/50 p-3">
+                <div className="text-lg font-bold text-emerald-800 dark:text-emerald-300">
+                  {formatTime(offer.hour)} – {formatTime(offer.hour + 1)}
+                </div>
+                <div className="text-xs text-emerald-700 dark:text-emerald-400">
+                  {formatDayLabel(new Date(offer.date + 'T00:00:00'))} · {offer.pool === 'bm' ? 'Bowling machine' : 'Run-up'} lane
+                </div>
+              </div>
+              <p className={`mt-3 text-xs rounded-lg p-2.5 border ${offer.exclusive
+                ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800/50 text-blue-800 dark:text-blue-300'
+                : 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800/50 text-amber-800 dark:text-amber-300'}`}>
+                {offer.exclusive
+                  ? 'This slot is reserved for you until the session starts.'
+                  : `This has been offered to ${offer.recipientCount} people on the waitlist — it stays open until someone books it.`}
+              </p>
+              {offer.waitlistEntryId && (
+                <label className="mt-3 flex items-start gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={dropOriginalEntry}
+                    onChange={e => setDropOriginalEntry(e.target.checked)}
+                    className="mt-0.5 rounded"
+                  />
+                  <span>Also remove my {formatTime(offer.sourceHour)} waitlist request (leave it ticked off to stay in that queue too).</span>
+                </label>
+              )}
+              <div className="flex gap-3 mt-4">
+                <button
+                  onClick={() => setOfferSheetDismissed(true)}
+                  className="flex-1 py-2.5 min-h-[40px] bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl text-sm"
+                >Not now</button>
+                <button
+                  onClick={() => {
+                    const lane = LANES.find(l => l.id === offer.laneId)
+                    const day = weekDays.find(d => formatDateKey(d) === offer.date)
+                    if (!lane || !day) {
+                      setDeclineNotice({ ok: false, text: 'That time is outside your current booking window — please contact us.' })
+                      setOfferSheetDismissed(true)
+                      return
+                    }
+                    setAcceptingOffer({ offerId: offer.offerId, dropOriginalEntry })
+                    setSelectedDay(day)
+                    setSelectedSlot({ lane, date: day, startHour: offer.hour })
+                    setModalOpen(true)
+                    setOfferSheetDismissed(true)
+                  }}
+                  className="flex-[2] py-2.5 min-h-[40px] bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-xl text-sm"
+                >Book this time →</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <h3 id="alt-offer-cust-title" className="text-base font-bold text-gray-900 dark:text-white">
+                {offer.state === 'booked_by_you' ? 'You already booked this' : 'This offer has closed'}
+              </h3>
+              <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">
+                {offer.state === 'taken'
+                  ? 'Someone else booked it first — sorry. You’re still on the waitlist for your original time.'
+                  : offer.state === 'passed'
+                    ? 'That session has already started.'
+                    : offer.state === 'cancelled'
+                      ? 'We withdrew this offer. You’re still on the waitlist for your original time.'
+                      : offer.state === 'booked_by_you'
+                        ? 'It’s in My Bookings.'
+                        : 'This link isn’t valid for your account.'}
+              </p>
+              <button
+                onClick={() => setOfferSheetDismissed(true)}
+                className="mt-4 w-full py-2.5 min-h-[40px] bg-gray-900 dark:bg-white text-white dark:text-gray-900 font-semibold rounded-xl text-sm"
+              >Close</button>
+            </>
+          )}
+        </ModalShell>
+      )}
+
       {/* U15 — manage your place in a pool queue, from the green band. */}
       {manageQueue && (() => {
         const poolTag = manageQueue.pool.toUpperCase()

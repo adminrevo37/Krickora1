@@ -595,6 +595,44 @@ export default defineSchema({
     .index("by_slot", ["laneId", "date", "hour"])
     .index("by_laneId_date", ["laneId", "date"]),
 
+  // SPEC_WAITLIST_ALT_TIME_OFFER_2026-08 — an admin offering a queue a DIFFERENT
+  // time from the one they're waiting on (e.g. a 9am cancellation offered to the
+  // 8am queue). This is deliberately NOT the exclusive first-refusal engine in
+  // `waitlist`: with several recipients it is an open RACE — first to book wins,
+  // no hold — which is why the notification says so. A SINGLE recipient does get
+  // the usual exclusive slotHold (Inspector's call, 2026-08-14).
+  //
+  // Offers are pool-level ("a BM lane at 9am"), never a pinned lane, so the link
+  // survives the originally-freed lane being taken while another in the pool is
+  // still free. Liveness is computed, not stored: an offer is live while
+  // status==='live' AND the session start has not passed AND a lane in the pool is
+  // still actually free — so a public customer booking the slot kills it with no
+  // write-path coupling.
+  waitlistOffers: defineTable({
+    pool: v.string(), // 'bm' | 'ru'
+    date: v.string(), // YYYY-MM-DD of the OFFERED slot
+    hour: v.number(), // offered start hour
+    sourceHour: v.number(), // the hour the queue was waiting on (for the copy)
+    recipients: v.array(
+      v.object({
+        userId: v.string(),
+        userEmail: v.string(),
+        userName: v.string(),
+        waitlistEntryId: v.optional(v.string()), // their original queue row
+      })
+    ),
+    exclusive: v.boolean(), // true = single recipient, slot held for them
+    status: v.string(), // 'live' | 'booked' | 'cancelled'
+    token: v.string(), // random; the deep link is /?offer=<token>
+    bookedByEmail: v.optional(v.string()),
+    bookedBookingId: v.optional(v.string()),
+    createdAt: v.number(),
+    createdByEmail: v.string(),
+  })
+    .index("by_token", ["token"])
+    .index("by_slot", ["date", "hour"])
+    .index("by_status", ["status"]),
+
   // SPEC_ANALYTICS_BUILD_2026-06 — waitlist offer lifecycle log (one row per offer
   // outcome). 'offered' is written when the exclusive offer is made; 'accepted'
   // (the offeree booked the held slot), 'declined' (pressed Pass/Deny) and

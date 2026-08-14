@@ -524,6 +524,48 @@ export const sendWaitlistVacancy = internalAction({
   },
 });
 
+// SPEC_WAITLIST_ALT_TIME_OFFER_2026-08 — offer of a DIFFERENT time to a waitlist
+// queue. Sent alongside a push to the same person (both channels, always).
+export const sendWaitlistAltTimeOffer = internalAction({
+  args: {
+    to: v.string(),
+    customerName: v.string(),
+    poolLabel: v.string(), // "bowling machine" | "run-up"
+    date: v.string(),
+    timeSlot: v.string(), // the OFFERED window
+    requestedSlot: v.string(), // what they originally queued for
+    note: v.string(), // "reserved for you" OR the multi-recipient race disclosure
+    customNote: v.optional(v.string()), // free text from the admin
+    bookingUrl: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // Same preference key as the standard vacancy offer — a customer who has
+    // turned waitlist emails off should not be mailed by this route either.
+    if (!(await emailEnabledForUser(ctx, args.to, "waitlist-vacancy"))) {
+      console.log(`[waitlist-alt-time-offer] Skipped — user disabled this email: ${args.to}`);
+      return { success: false, skipped: true, reason: "User disabled this email" };
+    }
+    console.log(
+      `[waitlist-alt-time-offer] Sending to ${args.to} for ${args.date} ${args.timeSlot} (asked for ${args.requestedSlot})`
+    );
+    const result = await sendEmail("waitlist-alt-time-offer", args.to, {
+      customerName: args.customerName,
+      firstName: await resolveFirstName(ctx, args.to),
+      poolLabel: args.poolLabel,
+      date: args.date,
+      timeSlot: args.timeSlot,
+      requestedSlot: args.requestedSlot,
+      note: args.note,
+      customNote: args.customNote ?? "",
+      bookingUrl: args.bookingUrl,
+    });
+    if (!result.success) {
+      console.error(`[waitlist-alt-time-offer] Failed to ${args.to}: ${result.reason}`);
+    }
+    return result;
+  },
+});
+
 export const sendAthleteAllocation = internalAction({
   args: {
     to: v.string(),

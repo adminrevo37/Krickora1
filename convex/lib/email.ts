@@ -383,6 +383,31 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
         }),
       };
 
+    // SPEC_WAITLIST_ALT_TIME_OFFER_2026-08 — an admin offering a queue a DIFFERENT
+    // time from the one they asked for. `note` carries either "reserved for you"
+    // (single recipient, real hold) or the race disclosure (several recipients,
+    // no hold) — it must never be dropped, it is what makes the race fair.
+    case "waitlist-alt-time-offer":
+      return {
+        subject: `A ${esc(d.timeSlot)} slot has opened up — ${esc(d.date)}`,
+        html: layout({
+          title: "A different time has opened up",
+          preheader: `${esc(d.timeSlot)} on ${esc(d.date)} — you asked for ${esc(d.requestedSlot)}.`,
+          bodyHtml:
+            p(`Hi ${greetFirst(d, "customerName")}, you're on the waitlist for <strong>${esc(d.requestedSlot)}</strong>, which isn't free yet — but a different time has just opened up on a ${esc(d.poolLabel)} lane.`) +
+            detailRows([
+              ["Date", d.date],
+              ["Time", d.timeSlot],
+              ["Lane", `Any ${esc(d.poolLabel)} lane`],
+              ["You asked for", d.requestedSlot],
+            ]) +
+            (d.customNote ? p(esc(d.customNote)) : "") +
+            p(`<strong>${esc(d.note)}</strong>`) +
+            linkLine("Book this time:", d.bookingUrl || SITE) +
+            muted(`Your original ${esc(d.requestedSlot)} request stays on the waitlist — when you book, you'll be asked whether to keep it.`),
+        }),
+      };
+
     // ── Athlete / parent (mandatory) ─────────────────────────────────────────
     case "athlete-allocation":
       return {
