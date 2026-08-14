@@ -23,7 +23,8 @@ import { mutation, query } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import { requireAdmin, getCallerContext } from "./lib/adminGuard";
-import { resolveLanesAtHour } from "./lanes";
+import { resolveDayLanes } from "./lanes";
+import { resolveSegment, segmentIsClosed, segmentStartHours } from "./lib/lanes";
 
 type Pool = "bm" | "ru";
 
@@ -54,11 +55,77 @@ function slotStartMs(date: string, hour: number): number {
 
 const POOL_SENTINEL: Record<Pool, string> = { bm: "*bm", ru: "*ru" };
 
+/** The day's bookings / service blocks / live holds, read ONCE. */
+async function loadDayAvailability(ctx: any, date: string) {
+  const now = Date.now();
+  return {
+    bookings: (
+      await ctx.db.query("bookings").withIndex("by_date", (q: any) => q.eq("date", date)).collect()
+    ).filter((b: any) => b.status !== "cancelled"),
+    blocks: await ctx.db
+      .query("laneBlocks")
+      .withIndex("by_date", (q: any) => q.eq("date", date))
+      .collect(),
+    holds: (
+      await ctx.db.query("slotHolds").withIndex("by_date", (q: any) => q.eq("date", date)).collect()
+    ).filter((h: any) => h.expiresAt > now),
+  };
+}
+
+type DayAvailability = Awaited<ReturnType<typeof loadDayAvailability>>;
+type DayLane = { laneId: string; bayNumber: number; segments: any[] };
+
 /**
- * Lanes of `pool` that are genuinely bookable for the whole hour at (date,hour):
- * open segment, no overlapping non-cancelled booking, no service block, and no
- * live slotHold belonging to someone else. Shared by the create-time validation
- * and the customer-side liveness check so they can never disagree.
+ * Lane ids of `pool` that can host a full hour starting at `hour`:
+ *   · the segment covering that hour runs this pool's mode and is open
+ *   · the hour does not cross the segment's end (bookings may not cross a boundary)
+ *   · no overlapping booking, service block, or someone else's live hold
+ * Pure/in-memory so a whole day can be evaluated from one set of reads.
+ */
+function freeLaneIdsAt(
+  day: DayAvailability,
+  dayLanes: DayLane[],
+  hour: number,
+  pool: Pool,
+  ignoreHoldUserId?: string
+): string[] {
+  const slotEnd = hour + 1;
+  const overlaps = (startHour: number, durationMinutes: number) =>
+    hour < startHour + durationMinutes / 60 && slotEnd > startHour;
+  const occupies = (row: any, laneId: string) =>
+    row.laneId === laneId ||
+    (Array.isArray(row.additionalLaneIds) && row.additionalLaneIds.includes(laneId));
+
+  const out: string[] = [];
+  for (const lane of dayLanes) {
+    const seg = resolveSegment(lane.segments as any, hour);
+    if (!seg) continue;
+    if (segmentIsClosed(seg)) continue;
+    // Mode is a property of the SEGMENT — this is what makes "RU 4 running as a
+    // bowling machine from 9:30am" land in the BM pool for exactly those hours.
+    const segPool: Pool = seg.mode === "RU" ? "ru" : "bm";
+    if (segPool !== pool) continue;
+    if (slotEnd > seg.endHour + 1e-9) continue; // would cross the boundary
+    if (day.bookings.some((b: any) => overlaps(b.startHour, b.duration) && occupies(b, lane.laneId))) continue;
+    if (day.blocks.some((b: any) => overlaps(b.startHour, b.duration) && (b.laneId === lane.laneId || b.laneId === "all"))) continue;
+    if (
+      day.holds.some(
+        (h: any) =>
+          overlaps(h.startHour, h.duration) &&
+          occupies(h, lane.laneId) &&
+          (!ignoreHoldUserId || h.userId !== ignoreHoldUserId)
+      )
+    )
+      continue;
+    out.push(lane.laneId);
+  }
+  return out;
+}
+
+/**
+ * Same question for a single hour, loading what it needs. Used by the create-time
+ * validation and the customer-side liveness check so they can never disagree with
+ * the dropdown the admin picked from.
  */
 async function freeLanesInPool(
   ctx: any,
@@ -67,44 +134,65 @@ async function freeLanesInPool(
   pool: Pool,
   ignoreHoldUserId?: string
 ): Promise<string[]> {
-  const lanesAt = await resolveLanesAtHour(ctx, date, hour);
-  const candidates = lanesAt.filter((l: any) => l.pool === pool && !l.closed).map((l: any) => l.laneId);
-  if (candidates.length === 0) return [];
-
-  const slotEnd = hour + 1;
-  const overlaps = (startHour: number, durationMinutes: number) => {
-    const end = startHour + durationMinutes / 60;
-    return hour < end && slotEnd > startHour;
-  };
-  const occupies = (row: any, laneId: string) =>
-    row.laneId === laneId ||
-    (Array.isArray(row.additionalLaneIds) && row.additionalLaneIds.includes(laneId));
-
-  const dayBookings = (
-    await ctx.db.query("bookings").withIndex("by_date", (q: any) => q.eq("date", date)).collect()
-  ).filter((b: any) => b.status !== "cancelled" && overlaps(b.startHour, b.duration));
-
-  const blocks = (
-    await ctx.db.query("laneBlocks").withIndex("by_date", (q: any) => q.eq("date", date)).collect()
-  ).filter((b: any) => overlaps(b.startHour, b.duration));
-
-  const now = Date.now();
-  const holds = (
-    await ctx.db.query("slotHolds").withIndex("by_date", (q: any) => q.eq("date", date)).collect()
-  ).filter(
-    (h: any) =>
-      h.expiresAt > now &&
-      overlaps(h.startHour, h.duration) &&
-      (!ignoreHoldUserId || h.userId !== ignoreHoldUserId)
-  );
-
-  return candidates.filter(
-    (laneId: string) =>
-      !dayBookings.some((b: any) => occupies(b, laneId)) &&
-      !blocks.some((b: any) => b.laneId === laneId || b.laneId === "all") &&
-      !holds.some((h: any) => occupies(h, laneId))
-  );
+  const [day, dayLanes] = await Promise.all([
+    loadDayAvailability(ctx, date),
+    resolveDayLanes(ctx, date),
+  ]);
+  return freeLaneIdsAt(day, dayLanes as DayLane[], hour, pool, ignoreHoldUserId);
 }
+
+// ---------------------------------------------------------------------------
+// ADMIN — which times can actually be offered for this pool on this date
+// ---------------------------------------------------------------------------
+/**
+ * The admin dropdown used to be a naive 6am–9pm whole-hour loop, which offered
+ * times with no free lane and was blind to per-date layouts. This enumerates the
+ * day's REAL start times from the segment config — explicit start lists, cadences
+ * and half-hour segment openings all included — and returns only those where a
+ * lane of this pool is genuinely free for the full hour.
+ */
+export const listOfferableTimes = query({
+  args: { date: v.string(), pool: v.string() },
+  handler: async (ctx, args) => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.isAdmin) return [];
+    const pool = args.pool === "ru" ? "ru" : ("bm" as Pool);
+
+    const [day, dayLanesRaw] = await Promise.all([
+      loadDayAvailability(ctx, args.date),
+      resolveDayLanes(ctx, args.date),
+    ]);
+    const dayLanes = dayLanesRaw as DayLane[];
+
+    // Candidate starts = every start time any THIS-POOL segment actually offers.
+    const candidates = new Set<number>();
+    for (const lane of dayLanes) {
+      for (const seg of lane.segments as any[]) {
+        if (segmentIsClosed(seg)) continue;
+        const segPool: Pool = seg.mode === "RU" ? "ru" : "bm";
+        if (segPool !== pool) continue;
+        for (const h of segmentStartHours(seg)) candidates.add(h);
+      }
+    }
+
+    const nowMs = Date.now();
+    return [...candidates]
+      .sort((a, b) => a - b)
+      .filter((h) => slotStartMs(args.date, h) > nowMs) // never offer a time that has passed
+      .map((hour) => ({ hour, freeLaneIds: freeLaneIdsAt(day, dayLanes, hour, pool) }))
+      .filter((r) => r.freeLaneIds.length > 0)
+      .map((r) => ({
+        hour: r.hour,
+        label: `${fmtHour12(r.hour)} – ${fmtHour12(r.hour + 1)}`,
+        // Name resolved at THIS hour, so a run-up lane running BM shows as "BM 4".
+        laneNames: r.freeLaneIds.map((id) => {
+          const lane = dayLanes.find((l) => l.laneId === id)!;
+          const seg = resolveSegment(lane.segments as any, r.hour);
+          return `${seg.mode} ${lane.bayNumber}`;
+        }),
+      }));
+  },
+});
 
 // ---------------------------------------------------------------------------
 // ADMIN — create an offer

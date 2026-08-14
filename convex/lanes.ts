@@ -133,6 +133,29 @@ export async function resolveLaneSnapshot(
  * is the F3 fix: the engine derives the lane set from live config, never a
  * hardcoded list. `closed` = the governing segment is closed (never offerable).
  */
+/**
+ * Every lane's segments for a whole DATE, override-aware — the day-level sibling of
+ * resolveLanesAtHour. Added for SPEC_WAITLIST_ALT_TIME_OFFER_2026-08, which has to
+ * enumerate a day's real start times rather than probe hour by hour (that would
+ * re-read the lanes + overrides tables once per candidate hour).
+ *
+ * Pool/mode is a property of the SEGMENT, not the lane, so a lane running BM for
+ * part of the day (e.g. RU 4 as a bowling machine from 9:30am) is correctly BM for
+ * exactly those hours.
+ */
+export async function resolveDayLanes(
+  ctx: any,
+  date: string
+): Promise<Array<{ laneId: string; bayNumber: number; segments: Segment[] }>> {
+  const rows = await loadLaneRows(ctx);
+  const overrides = await loadOverridesForDate(ctx, date);
+  return rows.map((row) => ({
+    laneId: row.laneId,
+    bayNumber: row.bayNumber,
+    segments: resolveDaySegments(row, overrides, date).segments,
+  }));
+}
+
 export async function resolveLanesAtHour(
   ctx: any,
   date: string,

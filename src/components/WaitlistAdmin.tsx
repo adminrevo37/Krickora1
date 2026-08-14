@@ -84,7 +84,13 @@ function AltTimeOfferSheet({
   onClose: () => void
 }) {
   const create = useMutation(api.waitlistOffers.createWaitlistOffer)
-  const [hour, setHour] = useState<number>(sourceHour + 1)
+  // Real bookable start times for THIS pool on THIS date — driven by the segment
+  // config, so per-date layouts and half-hour starts are included and anything
+  // with no free lane is excluded. (Was a naive 6am-9pm whole-hour loop.)
+  const times = useQuery(api.waitlistOffers.listOfferableTimes, { date, pool }) as
+    | Array<{ hour: number; label: string; laneNames: string[] }>
+    | undefined
+  const [hour, setHour] = useState<number | null>(null)
   const [selected, setSelected] = useState<string[]>(entries.map(e => e._id))
   const [customNote, setCustomNote] = useState('')
   const [busy, setBusy] = useState(false)
@@ -95,9 +101,13 @@ function AltTimeOfferSheet({
     setSelected(p => (p.includes(id) ? p.filter(x => x !== id) : [...p, id]))
 
   const exclusive = selected.length === 1
-  // Whole-hour options across a generous operating span; the server refuses any
-  // hour with no free lane in the pool, so this list can stay simple.
-  const hourOptions = Array.from({ length: 16 }, (_, i) => i + 6).filter(h => h !== sourceHour)
+  // Exclude the hour they're already waiting on — that's what "Offer now" is for.
+  const options = (times ?? []).filter(t => t.hour !== sourceHour)
+  // Default to the first genuinely available time once they load.
+  useEffect(() => {
+    if (hour === null && options.length > 0) setHour(options[0].hour)
+  }, [hour, options])
+  const chosen = options.find(t => t.hour === hour) ?? null
 
   return (
     <ModalShell
@@ -119,15 +129,30 @@ function AltTimeOfferSheet({
       ) : (
         <>
           <label className="block mt-4 text-xs font-semibold text-gray-600 uppercase tracking-wider">Offer this time instead</label>
-          <select
-            value={hour}
-            onChange={e => setHour(Number(e.target.value))}
-            className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 bg-white text-sm"
-          >
-            {hourOptions.map(h => (
-              <option key={h} value={h}>{fmtHour12(h)} – {fmtHour12(h + 1)}</option>
-            ))}
-          </select>
+          {times === undefined ? (
+            <p className="mt-1 text-sm text-gray-400">Checking availability…</p>
+          ) : options.length === 0 ? (
+            <p className="mt-1 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
+              No other {pool.toUpperCase()} time is free on {fmtDate(date)} — there's nothing to offer.
+            </p>
+          ) : (
+            <>
+              <select
+                value={hour ?? ''}
+                onChange={e => setHour(Number(e.target.value))}
+                className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-200 bg-white text-sm"
+              >
+                {options.map(t => (
+                  <option key={t.hour} value={t.hour}>{t.label}</option>
+                ))}
+              </select>
+              {chosen && (
+                <p className="mt-1 text-[11px] text-gray-500">
+                  Free now on {chosen.laneNames.join(', ')}. Only times with a free {pool.toUpperCase()} lane are listed, including any custom layout for this date.
+                </p>
+              )}
+            </>
+          )}
 
           <label className="block mt-4 text-xs font-semibold text-gray-600 uppercase tracking-wider">
             Who gets it ({selected.length} of {entries.length})
@@ -174,17 +199,17 @@ function AltTimeOfferSheet({
           <div className="flex gap-3 mt-4">
             <button onClick={onClose} disabled={busy} className="flex-1 py-2.5 rounded-xl bg-gray-100 text-gray-700 text-sm font-semibold disabled:opacity-50">Cancel</button>
             <button
-              disabled={busy || selected.length === 0}
+              disabled={busy || selected.length === 0 || hour === null}
               onClick={async () => {
                 setBusy(true); setError(null)
                 try {
                   const res: any = await create({
-                    pool, date, hour, sourceHour,
+                    pool, date, hour: hour as number, sourceHour,
                     waitlistEntryIds: selected as any,
                     customNote: customNote.trim() || undefined,
                   })
                   setDone(
-                    `Offered ${fmtHour12(hour)} to ${res.recipients} ${res.recipients === 1 ? 'customer' : 'customers'} by push and email.` +
+                    `Offered ${fmtHour12(hour as number)} to ${res.recipients} ${res.recipients === 1 ? 'customer' : 'customers'} by push and email.` +
                     (res.exclusive ? ' The slot is held for them.' : ' First to book wins.')
                   )
                 } catch (err: any) {
