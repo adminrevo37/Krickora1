@@ -78,6 +78,28 @@ export default function UsageTab({ range }: { range: AnalyticsRange }) {
 
   return (
     <div className="space-y-5">
+      {/* Read-cap notice (2026-08-18). getUsageAnalytics hard-caps how many raw
+          analytics rows it reads, so a wide range reports on the most RECENT
+          slice rather than the whole window. Say so plainly — silently showing
+          a capped subset as if it were the period total is worse than the
+          server error this replaced. */}
+      {(data as any).truncated && (
+        <div className="rounded-xl border border-amber-300 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 text-sm text-amber-900 dark:text-amber-200">
+          <span className="font-bold">⚠️ Partial range.</span>{' '}
+          This period holds more activity than can be read in one query, so the figures below cover only
+          the most recent{' '}
+          <span className="font-semibold">{(data as any).analysedEvents?.toLocaleString?.() ?? ''}</span>{' '}
+          events — from{' '}
+          <span className="font-semibold">
+            {new Date((data as any).analysedFrom).toLocaleString('en-AU', { timeZone: 'Australia/Perth' })}
+          </span>{' '}
+          onward, not the whole window. Totals are therefore <em>under</em>-counted; rates and splits
+          (per-session, device/OS/browser, top pages) remain representative.
+          {(data as any).mauTruncated && ' WAU/MAU are also capped and read low.'}
+          {' '}Narrow the date range for exact totals.
+        </div>
+      )}
+
       {/* A) Live active-user snapshot */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <KpiCard icon="🟢" label="Active — last hour"

@@ -79,10 +79,40 @@ export const getUsageAnalytics = query({
     // all-time despite the 90d analytics retention prune (COST-5 caveat).
     const loBound = Number.isFinite(fromMs) ? fromMs : 0;
     const hiBound = Number.isFinite(toMs) ? toMs : Number.MAX_SAFE_INTEGER;
-    const events = (await ctx.db
+    // 2026-08-18 FIX — this tab was Server-Erroring at EVERY realistic range.
+    // `.collect()` here is unbounded: the analytics table grows ~3,000 rows per
+    // 46h, so 7d ~= 11k rows and 90d ~= 140k rows, blowing Convex's per-query
+    // read limit. (The 2026-08-13 hotfix only stopped the SECOND read for the
+    // 3m preset; the primary read has since outgrown the limit on its own.)
+    //
+    // Both reads are now hard-capped and take the MOST RECENT rows (order desc),
+    // not the oldest — an oldest-first cap would silently report stale data for
+    // any wide window. We re-sort ascending afterwards because the windowFirst
+    // pass below relies on ascending order to pick each identity's first hit.
+    //
+    // Budget: EVENT_CAP + MAU_CAP + one point read per distinct identity must
+    // stay under Convex's 16,384-doc / 8 MiB per-query ceiling. Analytics rows
+    // carry userAgent + url + metadata (~300-600 B), so the byte ceiling binds
+    // first — hence the conservative caps.
+    //
+    // NOTE: this makes wide windows APPROXIMATE, flagged via `truncated` /
+    // `analysedFrom` in the return value. The durable fix is a daily
+    // per-identity activity rollup (same shape as firstSeenByIdentity) so this
+    // query never reads raw events at all — see VERIFY_BACKLOG_2026-08.md.
+    const EVENT_CAP = 6000;
+    const MAU_CAP = 3000;
+    const rawSlice = (await ctx.db
       .query("analytics")
       .withIndex("by_timestamp", (q: any) => q.gte("timestamp", loBound).lte("timestamp", hiBound))
-      .collect()) as any[];
+      .order("desc")
+      .take(EVENT_CAP + 1)) as any[];
+    const truncated = rawSlice.length > EVENT_CAP;
+    const events = (truncated ? rawSlice.slice(0, EVENT_CAP) : rawSlice)
+      .slice()
+      .sort((a: any, b: any) => a.timestamp - b.timestamp);
+    // The effective start of the data actually analysed (differs from the
+    // requested `from` whenever the cap bit).
+    const analysedFrom = events.length ? events[0].timestamp : loBound;
 
     const idOf = (e: any) => e.userId ?? e.sessionId ?? "";
     // C3 hotfix (2026-08-13 #2): per-identity POINT READS instead of collecting
@@ -164,15 +194,25 @@ export const getUsageAnalytics = query({
     const wau = new Set<string>();
     const mau = new Set<string>();
     const mauFloor = anchor - 30 * DAY_MS;
-    const recentEvents: any[] =
-      loBound <= mauFloor && hiBound >= anchor
-        ? events.filter((e) => e.timestamp >= mauFloor && e.timestamp <= anchor)
-        : ((await ctx.db
-            .query("analytics")
-            .withIndex("by_timestamp", (q: any) =>
-              q.gte("timestamp", mauFloor).lte("timestamp", anchor)
-            )
-            .collect()) as any[]);
+    // Reuse the primary slice ONLY if it genuinely spans the MAU window. A
+    // truncated slice does not (it is just the most recent EVENT_CAP rows), so
+    // reusing it there would silently under-report WAU/MAU.
+    const sliceCoversMau = !truncated && loBound <= mauFloor && hiBound >= anchor;
+    let mauTruncated = false;
+    let recentEvents: any[];
+    if (sliceCoversMau) {
+      recentEvents = events.filter((e) => e.timestamp >= mauFloor && e.timestamp <= anchor);
+    } else {
+      const rawRecent = (await ctx.db
+        .query("analytics")
+        .withIndex("by_timestamp", (q: any) =>
+          q.gte("timestamp", mauFloor).lte("timestamp", anchor)
+        )
+        .order("desc")
+        .take(MAU_CAP + 1)) as any[];
+      mauTruncated = rawRecent.length > MAU_CAP;
+      recentEvents = mauTruncated ? rawRecent.slice(0, MAU_CAP) : rawRecent;
+    }
     for (const e of recentEvents) {
       const id = idOf(e);
       if (!id) continue;
@@ -217,6 +257,14 @@ export const getUsageAnalytics = query({
       browser,
       dailyActive,
       topPages,
+      // Truthfulness flags (added 2026-08-18 with the read cap). When
+      // `truncated` is true the figures describe only the most recent
+      // `analysedEvents` events, starting at `analysedFrom` — NOT the whole
+      // requested range. The UI must say so rather than present them as totals.
+      truncated,
+      mauTruncated,
+      analysedFrom,
+      analysedEvents: events.length,
     };
   },
 });
