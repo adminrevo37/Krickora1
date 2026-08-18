@@ -260,8 +260,27 @@ export function useAuth() {
   useEffect(() => {
     if (isAuthenticated) {
       // Re-arm so a later logout in the same page life is still recorded
-      // (sign-out → sign-in → expiry).
-      _loggedOut.handled = false
+      // (sign-out → sign-in → expiry) — but ONLY on a genuine re-authentication.
+      //
+      // A bare `_loggedOut.handled = false` here still corrupted the {hadToken}
+      // split. Observed on prod 2026-08-18: EVERY logout produced hadToken:true
+      // followed 1-2s later by hadToken:false, from the same session. useAuth
+      // mounts in ~20 components and they do not transition together, so an
+      // instance still rendering isAuthenticated=true fires this branch AFTER
+      // another instance has already handled the logout and cleared the bearer.
+      // That re-armed the guard, letting the next instance log the SAME logout a
+      // second time — with the token now gone, i.e. as {hadToken:false}, which is
+      // exactly the storage-eviction signal the flag exists to isolate. SYNC-1
+      // cut the noise from ~20 events to 2 but did not fix the metric.
+      //
+      // A real sign-in always has a stored bearer by the time isAuthenticated
+      // flips; a stale instance mid-logout never does (clearStoredToken() ran
+      // first). Gating on the token re-arms for genuine re-auth only.
+      //
+      // Deliberately NOT gated on wasAuthenticatedRef: that ref is set true
+      // during RENDER (see the betterAuthUser check above), so it is already true
+      // by the time this effect runs and would block the legitimate re-arm too.
+      if (hasStoredToken()) _loggedOut.handled = false
       return
     }
     if (isLoading || !wasAuthenticatedRef.current) return
