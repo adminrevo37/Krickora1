@@ -1249,10 +1249,27 @@ export const getWeeklyReport = query({
         paymentsThisWeek: round2(paidThisWeek),
         closingBalance: round2(openingBalance + chargesThisWeek - paidThisWeek),
       });
-      // Include a coach with weekly financial activity (charge or payment) even if
-      // Section A's confirmed-session filter didn't already list them (e.g. a coach
-      // whose only week activity is a late-cancel charge or an adjustment).
-      if ((chargesThisWeek !== 0 || paidThisWeek !== 0) && !coachMap.has(email)) {
+      // EVERY coach appears on the report, EVERY week, whether or not they booked
+      // (Inspector, 2026-08-18), so outstanding fees and zero balances are both
+      // visible at a glance.
+      //
+      // Previously a coach was listed only if Section A's confirmed-session filter
+      // caught them, OR they had a charge/payment that week. A coach carrying a
+      // debt but dormant that week therefore vanished from the report entirely.
+      // Two consequences, both bad:
+      //   1. It broke the week-to-week roll-forward — week 1's closing total did
+      //      not equal week 2's opening total, off by exactly the missing
+      //      balances. (Observed 3-9 Aug vs 10-16 Aug: $720 vs $1,170, the $450
+      //      gap being Jack Doyle, who owed $450 but had no session that week.)
+      //   2. Worse, it hid the coaches most likely to need chasing — a dormant
+      //      debtor appeared nowhere at all.
+      // Listing every coach also makes a zero balance explicit, rather than an
+      // absence you have to infer.
+      //
+      // Note this deliberately ignores `hideFromPublicCoachList`: that flag hides
+      // a coach from the public signup picker, and has no bearing on who owes
+      // money. Financial reporting must show everyone.
+      if (!coachMap.has(email)) {
         coachMap.set(email, { name: c.name || email, email: c.email || "", sessions: 0, hours: 0, amount: 0 });
       }
     }
