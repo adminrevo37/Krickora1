@@ -38,7 +38,47 @@ export default defineSchema({
   firstSeenByIdentity: defineTable({
     identity: v.string(),
     firstTimestamp: v.number(), // Unix ms of the identity's first event
-  }).index("by_identity", ["identity"]),
+    // 2026-08-18 — last activity, maintained by trackEvent but THROTTLED to at
+    // most one write per identity per hour so the hot path stays cheap. Lets
+    // WAU/MAU be counted from this tiny table via by_lastTimestamp instead of
+    // scanning raw analytics (which broke the Usage tab entirely). Optional so
+    // the field is additive — rows predating it simply read as undefined until
+    // that identity is next active, and the backfill seeds them.
+    lastTimestamp: v.optional(v.number()),
+  })
+    .index("by_identity", ["identity"])
+    .index("by_lastTimestamp", ["lastTimestamp"]),
+
+  // ============================================================================
+  // 2026-08-18 — daily usage roll-up (the durable fix for the Usage tab).
+  // ============================================================================
+  // One row per AWST calendar date, written by the nightly usage-rollup cron
+  // (and a one-off backfill). getUsageAnalytics reads <=90 of these rows instead
+  // of up to ~140,000 raw analytics rows, which is what made the tab Server
+  // Error at every range.
+  //
+  // Built by a CRON, deliberately not incrementally in trackEvent: a per-day
+  // counter row updated on every pageview would serialise writes on one hot
+  // document. The cron reads a single day at a time, which is safely bounded.
+  //
+  // Map-shaped fields are stored as JSON strings (same convention as
+  // analytics.metadata) so the schema stays simple and additive.
+  usageDaily: defineTable({
+    date: v.string(), // YYYY-MM-DD (AWST calendar day covered)
+    events: v.number(), // total analytics rows that day (diagnostic)
+    pageviews: v.number(),
+    sessions: v.number(), // distinct sessionIds seen that day
+    activeIdentities: v.number(), // distinct identities active that day
+    newIdentities: v.number(), // identities whose FIRST-EVER event was that day
+    sessionSecondsTotal: v.number(), // summed span of sessions with >=2 events
+    sessionsMeasured: v.number(), // how many sessions that covers
+    sessionMedianSec: v.number(), // median span that day (medians can't be summed)
+    device: v.string(), // JSON: { mobile: n, desktop: n, ... }
+    os: v.string(), // JSON
+    browser: v.string(), // JSON
+    topPages: v.string(), // JSON: { "/path": n } — capped to the top 40 paths
+    createdAt: v.number(),
+  }).index("by_date", ["date"]),
 
   // ============================================================================
   // SPEC_ANALYTICS_BUILD_2026-06 C2.2 — persisted end-of-day revenue/usage roll-up.

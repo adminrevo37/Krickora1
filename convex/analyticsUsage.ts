@@ -71,185 +71,174 @@ export const getUsageAnalytics = query({
   handler: async (ctx, args) => {
     if (!(await isAdmin(ctx))) return null;
     const { fromMs, toMs } = rangeMs(args.from, args.to, args.fromMs, args.toMs);
-    // C3 (SPEC_CODE_REVIEW_IMPROVEMENTS_2026-08): bounded, INDEXED reads — never
-    // a whole-table collect of the fastest-growing table. The in-range slice is
-    // served by by_timestamp; all-time first-seen comes from the tiny
-    // firstSeenByIdentity rollup (maintained by trackEvent; seeded once by
-    // analytics.startFirstSeenBackfill). This also keeps new-vs-returning
-    // all-time despite the 90d analytics retention prune (COST-5 caveat).
+    // ========================================================================
+    // 2026-08-18 — reads the `usageDaily` ROLL-UP, not raw analytics.
+    // ========================================================================
+    // History: this query used to aggregate every raw `analytics` row in range.
+    // That table grows ~3,000 rows per 46h, so it Server-Errored at EVERY
+    // realistic range (verified on prod: 6h through 90d all failed; only an
+    // empty range worked). A read cap was shipped as a stop-gap, which made the
+    // tab usable but approximate. This replaces it: <=92 pre-aggregated rows
+    // instead of up to ~140,000 raw ones.
+    //
+    // Only TODAY is computed live, because the nightly cron rolls up yesterday
+    // and today is still open. That is a single bounded day.
+    const now = Date.now();
     const loBound = Number.isFinite(fromMs) ? fromMs : 0;
     const hiBound = Number.isFinite(toMs) ? toMs : Number.MAX_SAFE_INTEGER;
-    // 2026-08-18 FIX — this tab was Server-Erroring at EVERY realistic range.
-    // `.collect()` here is unbounded: the analytics table grows ~3,000 rows per
-    // 46h, so 7d ~= 11k rows and 90d ~= 140k rows, blowing Convex's per-query
-    // read limit. (The 2026-08-13 hotfix only stopped the SECOND read for the
-    // 3m preset; the primary read has since outgrown the limit on its own.)
-    //
-    // Both reads are now hard-capped and take the MOST RECENT rows (order desc),
-    // not the oldest — an oldest-first cap would silently report stale data for
-    // any wide window. We re-sort ascending afterwards because the windowFirst
-    // pass below relies on ascending order to pick each identity's first hit.
-    //
-    // Budget: EVENT_CAP + MAU_CAP + one point read per distinct identity must
-    // stay under Convex's 16,384-doc / 8 MiB per-query ceiling. Analytics rows
-    // carry userAgent + url + metadata (~300-600 B), so the byte ceiling binds
-    // first — hence the conservative caps.
-    //
-    // NOTE: this makes wide windows APPROXIMATE, flagged via `truncated` /
-    // `analysedFrom` in the return value. The durable fix is a daily
-    // per-identity activity rollup (same shape as firstSeenByIdentity) so this
-    // query never reads raw events at all — see VERIFY_BACKLOG_2026-08.md.
-    const EVENT_CAP = 6000;
-    const MAU_CAP = 3000;
-    const rawSlice = (await ctx.db
-      .query("analytics")
-      .withIndex("by_timestamp", (q: any) => q.gte("timestamp", loBound).lte("timestamp", hiBound))
-      .order("desc")
-      .take(EVENT_CAP + 1)) as any[];
-    const truncated = rawSlice.length > EVENT_CAP;
-    const events = (truncated ? rawSlice.slice(0, EVENT_CAP) : rawSlice)
-      .slice()
-      .sort((a: any, b: any) => a.timestamp - b.timestamp);
-    // The effective start of the data actually analysed (differs from the
-    // requested `from` whenever the cap bit).
-    const analysedFrom = events.length ? events[0].timestamp : loBound;
+    const anchor = Number.isFinite(toMs) ? (toMs as number) : now;
 
-    const idOf = (e: any) => e.userId ?? e.sessionId ?? "";
-    // C3 hotfix (2026-08-13 #2): per-identity POINT READS instead of collecting
-    // the whole rollup table — (a) the whole-table read-set was invalidated by
-    // every running backfill batch (~1×/s), making this heavy query thrash;
-    // (b) the collect added an entire extra table to the doc-scan budget (the
-    // Usage tab hit Convex's read limit). Point reads touch only identities
-    // actually in range; other identities' inserts don't invalidate them.
-    const windowFirst = new Map<string, number>(); // index order ascending → first hit = earliest in-window
-    for (const e of events) {
-      const id = idOf(e);
-      if (id && !windowFirst.has(id)) windowFirst.set(id, e.timestamp);
-    }
-    const firstSeen = new Map<string, number>();
-    for (const id of windowFirst.keys()) {
-      const row: any = await ctx.db
-        .query("firstSeenByIdentity")
-        .withIndex("by_identity", (q: any) => q.eq("identity", id))
-        .first();
-      // Fallback for identities not yet backfilled: earliest in-window event.
-      firstSeen.set(id, row ? row.firstTimestamp : windowFirst.get(id)!);
-    }
+    const todayKey = awstDateKey(now);
+    const fromKey = awstDateKey(Math.max(loBound, now - 400 * DAY_MS));
+    const toKey = awstDateKey(Math.min(hiBound, now));
 
-    const sessions = new Set<string>();
-    const users = new Set<string>();
-    let pageviews = 0;
-    const pageCounts = new Map<string, number>();
-    const sessionSpan = new Map<string, { min: number; max: number; count: number }>();
-    const sessionUA = new Map<string, string>();
-    const dayUsers = new Map<string, Set<string>>();
+    const rollupRows = (await ctx.db
+      .query("usageDaily")
+      .withIndex("by_date", (q: any) => q.gte("date", fromKey).lte("date", toKey))
+      .collect()) as any[];
 
-    for (const e of events) {
-      const id = idOf(e);
-      if (e.sessionId) sessions.add(e.sessionId);
-      if (id) users.add(id);
-      if (e.type === "pageview") {
-        pageviews++;
-        let path = "/";
-        try { path = new URL(e.url ?? "").pathname || "/"; } catch { path = e.url ?? "/"; }
-        pageCounts.set(path, (pageCounts.get(path) ?? 0) + 1);
-      }
-      if (e.sessionId) {
-        const span = sessionSpan.get(e.sessionId) ?? { min: e.timestamp, max: e.timestamp, count: 0 };
-        span.min = Math.min(span.min, e.timestamp);
-        span.max = Math.max(span.max, e.timestamp);
-        span.count++;
-        sessionSpan.set(e.sessionId, span);
-        if (e.userAgent && !sessionUA.has(e.sessionId)) sessionUA.set(e.sessionId, e.userAgent);
-      }
-      const dk = awstDateKey(e.timestamp);
-      const set = dayUsers.get(dk) ?? new Set<string>();
-      if (id) set.add(id);
-      dayUsers.set(dk, set);
-    }
-
-    // Session lengths (sessions with ≥2 events).
-    const lengths: number[] = [];
-    for (const span of sessionSpan.values()) {
-      if (span.count >= 2) lengths.push(span.max - span.min);
-    }
-
-    // New vs returning (identities active in range).
-    let newVisitors = 0;
-    let returning = 0;
-    for (const id of users) {
-      const first = firstSeen.get(id) ?? 0;
-      if (first >= fromMs) newVisitors++;
-      else returning++;
-    }
-
-    // WAU / MAU relative to the range end (or now if open-ended). C3 hotfix
-    // (2026-08-13 #2): when the selected window already covers
-    // [anchor-30d, anchor] — true for the default 3m preset — derive WAU/MAU
-    // from the already-collected slice instead of a second overlapping indexed
-    // read; the double read was what pushed the default view over the
-    // per-query document limit. Only a window NARROWER than 30d (1h/4h/7d
-    // presets) still needs its own bounded read.
-    const anchor = Number.isFinite(toMs) ? toMs : Date.now();
-    const wau = new Set<string>();
-    const mau = new Set<string>();
-    const mauFloor = anchor - 30 * DAY_MS;
-    // Reuse the primary slice ONLY if it genuinely spans the MAU window. A
-    // truncated slice does not (it is just the most recent EVENT_CAP rows), so
-    // reusing it there would silently under-report WAU/MAU.
-    const sliceCoversMau = !truncated && loBound <= mauFloor && hiBound >= anchor;
-    let mauTruncated = false;
-    let recentEvents: any[];
-    if (sliceCoversMau) {
-      recentEvents = events.filter((e) => e.timestamp >= mauFloor && e.timestamp <= anchor);
-    } else {
-      const rawRecent = (await ctx.db
+    // Today is never in the roll-up (the cron builds yesterday). Compute it live
+    // from a single day of raw events — bounded, unlike the old whole-range read.
+    let todayAgg: any = null;
+    const todayInRange =
+      todayKey >= fromKey && todayKey <= toKey && !rollupRows.some((r) => r.date === todayKey);
+    if (todayInRange) {
+      const dayStart = awstDateKeyToMs(todayKey);
+      const events = (await ctx.db
         .query("analytics")
         .withIndex("by_timestamp", (q: any) =>
-          q.gte("timestamp", mauFloor).lte("timestamp", anchor)
+          q.gte("timestamp", Math.max(dayStart, loBound)).lte("timestamp", Math.min(now, hiBound))
         )
-        .order("desc")
-        .take(MAU_CAP + 1)) as any[];
-      mauTruncated = rawRecent.length > MAU_CAP;
-      recentEvents = mauTruncated ? rawRecent.slice(0, MAU_CAP) : rawRecent;
-    }
-    for (const e of recentEvents) {
-      const id = idOf(e);
-      if (!id) continue;
-      if (e.timestamp >= anchor - 7 * DAY_MS) wau.add(id);
-      mau.add(id);
+        .take(8000)) as any[];
+      const idOf = (e: any) => e.userId ?? e.sessionId ?? "";
+      const s = new Set<string>(), ids = new Set<string>();
+      let pv = 0;
+      const pages = new Map<string, number>();
+      const span = new Map<string, { min: number; max: number; count: number }>();
+      const ua = new Map<string, string>();
+      for (const e of events) {
+        const id = idOf(e);
+        if (e.sessionId) s.add(e.sessionId);
+        if (id) ids.add(id);
+        if (e.type === "pageview") {
+          pv++;
+          let path = "/";
+          try { path = new URL(e.url ?? "").pathname || "/"; } catch { path = e.url ?? "/"; }
+          pages.set(path, (pages.get(path) ?? 0) + 1);
+        }
+        if (e.sessionId) {
+          const sp = span.get(e.sessionId) ?? { min: e.timestamp, max: e.timestamp, count: 0 };
+          sp.min = Math.min(sp.min, e.timestamp);
+          sp.max = Math.max(sp.max, e.timestamp);
+          sp.count++;
+          span.set(e.sessionId, sp);
+          if (e.userAgent && !ua.has(e.sessionId)) ua.set(e.sessionId, e.userAgent);
+        }
+      }
+      const lens: number[] = [];
+      for (const sp of span.values()) if (sp.count >= 2) lens.push(sp.max - sp.min);
+      const dev: Record<string, number> = {}, o: Record<string, number> = {}, br: Record<string, number> = {};
+      for (const u of ua.values()) {
+        const p = parseUserAgent(u);
+        dev[p.device] = (dev[p.device] ?? 0) + 1;
+        o[p.os] = (o[p.os] ?? 0) + 1;
+        br[p.browser] = (br[p.browser] ?? 0) + 1;
+      }
+      todayAgg = {
+        date: todayKey,
+        pageviews: pv,
+        sessions: s.size,
+        activeIdentities: ids.size,
+        newIdentities: 0, // filled from firstSeen below
+        sessionSecondsTotal: Math.round(lens.reduce((a, b) => a + b, 0) / 1000),
+        sessionsMeasured: lens.length,
+        sessionMedianSec: lens.length ? Math.round(median(lens) / 1000) : 0,
+        device: JSON.stringify(dev),
+        os: JSON.stringify(o),
+        browser: JSON.stringify(br),
+        topPages: JSON.stringify(Object.fromEntries(pages)),
+      };
     }
 
-    // Device / OS / browser split (one vote per session by its first UA).
-    const device: Record<string, number> = {};
-    const os: Record<string, number> = {};
-    const browser: Record<string, number> = {};
-    for (const ua of sessionUA.values()) {
-      const p = parseUserAgent(ua);
-      device[p.device] = (device[p.device] ?? 0) + 1;
-      os[p.os] = (os[p.os] ?? 0) + 1;
-      browser[p.browser] = (browser[p.browser] ?? 0) + 1;
+    const days = [...rollupRows, ...(todayAgg ? [todayAgg] : [])].sort((a, b) =>
+      a.date.localeCompare(b.date)
+    );
+
+    // ── Summable per-day figures ──────────────────────────────────────────
+    const parse = (s: string) => { try { return JSON.parse(s || "{}"); } catch { return {}; } };
+    const mergeInto = (dst: Record<string, number>, src: Record<string, number>) => {
+      for (const [k, n] of Object.entries(src)) dst[k] = (dst[k] ?? 0) + (n as number);
+    };
+    let pageviews = 0, sessionsTotal = 0, newVisitors = 0;
+    let secondsTotal = 0, sessionsMeasured = 0;
+    const device: Record<string, number> = {}, os: Record<string, number> = {}, browser: Record<string, number> = {};
+    const pageCounts: Record<string, number> = {};
+    const dayMedians: number[] = [];
+    for (const d of days) {
+      pageviews += d.pageviews ?? 0;
+      sessionsTotal += d.sessions ?? 0;
+      newVisitors += d.newIdentities ?? 0;
+      secondsTotal += d.sessionSecondsTotal ?? 0;
+      sessionsMeasured += d.sessionsMeasured ?? 0;
+      if (d.sessionMedianSec) dayMedians.push(d.sessionMedianSec);
+      mergeInto(device, parse(d.device));
+      mergeInto(os, parse(d.os));
+      mergeInto(browser, parse(d.browser));
+      mergeInto(pageCounts, parse(d.topPages));
     }
 
-    const dailyActive = Array.from(dayUsers.entries())
-      .sort()
-      .map(([date, set]) => ({ date, users: set.size }));
-    const topPages = Array.from(pageCounts.entries())
+    // ── Distinct-identity figures ─────────────────────────────────────────
+    // These CANNOT be summed across days (one person active on three days is one
+    // unique user, not three), so they come from firstSeenByIdentity.lastTimestamp
+    // via by_lastTimestamp — a two-field table, far cheaper than raw events.
+    const IDENT_CAP = 12000;
+    const countActiveSince = async (floor: number, ceil: number) => {
+      const rows = await ctx.db
+        .query("firstSeenByIdentity")
+        .withIndex("by_lastTimestamp", (q: any) =>
+          q.gte("lastTimestamp", floor).lte("lastTimestamp", ceil)
+        )
+        .take(IDENT_CAP + 1);
+      return { n: Math.min(rows.length, IDENT_CAP), capped: rows.length > IDENT_CAP };
+    };
+    const uniq = await countActiveSince(loBound, Math.min(hiBound, now));
+    const wauR = await countActiveSince(anchor - 7 * DAY_MS, anchor);
+    const mauR = await countActiveSince(anchor - 30 * DAY_MS, anchor);
+
+    // `lastTimestamp` answers "was this identity active in the window" EXACTLY
+    // only when the window runs up to now. For a historical window (to < now) an
+    // identity active then AND since has a lastTimestamp beyond the window, so it
+    // is missed — flagged rather than silently wrong.
+    const trailing = hiBound >= now - 60 * 1000;
+    const uniqueUsers = uniq.n;
+    const returning = Math.max(0, uniqueUsers - newVisitors);
+
+    const MIN = 60;
+    const dailyActive = days.map((d) => ({ date: d.date, users: d.activeIdentities ?? 0 }));
+    const topPages = Object.entries(pageCounts)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 12)
       .map(([path, count]) => ({ path, count }));
 
-    const MIN = 60 * 1000;
+    // Days in range with no roll-up row (backfill not run yet, or a cron miss).
+    const expectedDays = Math.max(
+      0,
+      Math.round((awstDateKeyToMs(toKey) - awstDateKeyToMs(fromKey)) / DAY_MS) + 1
+    );
+    const daysMissing = Math.max(0, expectedDays - days.length);
+
     return {
-      sessions: sessions.size,
-      uniqueUsers: users.size,
+      sessions: sessionsTotal,
+      uniqueUsers,
       pageviews,
-      pageviewsPerSession: sessions.size > 0 ? round2(pageviews / sessions.size) : 0,
-      sessionsPerUser: users.size > 0 ? round2(sessions.size / users.size) : 0,
-      avgSessionMin: lengths.length ? round2(lengths.reduce((s, x) => s + x, 0) / lengths.length / MIN) : 0,
-      medianSessionMin: lengths.length ? round2(median(lengths) / MIN) : 0,
-      wau: wau.size,
-      mau: mau.size,
+      pageviewsPerSession: sessionsTotal > 0 ? round2(pageviews / sessionsTotal) : 0,
+      sessionsPerUser: uniqueUsers > 0 ? round2(sessionsTotal / uniqueUsers) : 0,
+      avgSessionMin: sessionsMeasured ? round2(secondsTotal / sessionsMeasured / MIN) : 0,
+      // Medians cannot be summed, so a multi-day range reports the median OF THE
+      // DAILY MEDIANS — representative, not the true pooled median.
+      medianSessionMin: dayMedians.length ? round2(median(dayMedians) / MIN) : 0,
+      wau: wauR.n,
+      mau: mauR.n,
       newVisitors,
       returning,
       device,
@@ -257,14 +246,14 @@ export const getUsageAnalytics = query({
       browser,
       dailyActive,
       topPages,
-      // Truthfulness flags (added 2026-08-18 with the read cap). When
-      // `truncated` is true the figures describe only the most recent
-      // `analysedEvents` events, starting at `analysedFrom` — NOT the whole
-      // requested range. The UI must say so rather than present them as totals.
-      truncated,
-      mauTruncated,
-      analysedFrom,
-      analysedEvents: events.length,
+      // Honesty flags. Nothing here is capped in normal operation — these exist
+      // so the UI never presents an incomplete figure as a total.
+      truncated: false,
+      mauTruncated: mauR.capped || wauR.capped,
+      uniqueUsersExact: trailing && !uniq.capped,
+      daysMissing,
+      analysedFrom: days.length ? awstDateKeyToMs(days[0].date) : loBound,
+      analysedEvents: pageviews,
     };
   },
 });

@@ -5,6 +5,11 @@ import { getCallerContext } from "./lib/adminGuard";
 import { defaultLaneName } from "./lib/lanes";
 import { awstDateKey, isoWeekKey, monthKey, dayLabel } from "./lib/analyticsHelpers";
 
+// How stale `firstSeenByIdentity.lastTimestamp` may get before trackEvent
+// refreshes it. WAU/MAU are day-grained, so an hour costs nothing and keeps the
+// hot path to at most one extra write per identity per hour.
+const LAST_SEEN_THROTTLE_MS = 60 * 60 * 1000;
+
 // ============================================================================
 // TRACK EVENT — public mutation for client-side tracker
 // ============================================================================
@@ -43,7 +48,16 @@ export const trackEvent = mutation({
         await ctx.db.insert("firstSeenByIdentity", {
           identity: rollupId,
           firstTimestamp: args.timestamp,
+          lastTimestamp: args.timestamp,
         });
+      } else if ((seen.lastTimestamp ?? 0) < args.timestamp - LAST_SEEN_THROTTLE_MS) {
+        // 2026-08-18 — `lastTimestamp` powers WAU/MAU from this tiny table
+        // instead of scanning raw analytics. THROTTLED: patched at most once per
+        // identity per hour, so a busy visitor costs one extra write an hour
+        // rather than one per pageview. WAU/MAU only need day granularity, so an
+        // hour of staleness is immaterial. Guarded by the read we already do for
+        // firstSeen, so this adds no extra read to the hot path.
+        await ctx.db.patch(seen._id, { lastTimestamp: args.timestamp });
       }
     }
     return await ctx.db.insert("analytics", {

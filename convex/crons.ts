@@ -46,6 +46,17 @@ crons.daily(
   internal.analyticsSnapshot.runDailyRevenueSnapshot
 );
 
+// 2026-08-18 — nightly usage roll-up. Aggregates YESTERDAY (AWST) into one
+// `usageDaily` row so getUsageAnalytics reads <=90 rows instead of up to
+// ~140,000 raw analytics rows (which made the Usage tab Server Error at every
+// range). 16:40 UTC = 00:40 AWST, i.e. after the day has closed and staggered
+// clear of the revenue snapshot above.
+crons.daily(
+  "daily-usage-rollup",
+  { hourUTC: 16, minuteUTC: 40 },
+  internal.usageRollup.runDailyUsageRollup
+);
+
 // Audit 2026-06 (COST-4 / LEAK-3 / LEAK-6) — daily retention sweep of unbounded
 // append-only tables (analytics >90d, event/log tables >180d, past laneOverrides).
 // Batched indexed deletes that reschedule until drained. 01:00 AWST = 17:00 UTC,

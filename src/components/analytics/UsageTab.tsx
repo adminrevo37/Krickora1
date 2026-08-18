@@ -78,25 +78,25 @@ export default function UsageTab({ range }: { range: AnalyticsRange }) {
 
   return (
     <div className="space-y-5">
-      {/* Read-cap notice (2026-08-18). getUsageAnalytics hard-caps how many raw
-          analytics rows it reads, so a wide range reports on the most RECENT
-          slice rather than the whole window. Say so plainly — silently showing
-          a capped subset as if it were the period total is worse than the
-          server error this replaced. */}
-      {(data as any).truncated && (
+      {/* Data-quality notices (2026-08-18). Since the daily roll-up landed, the
+          per-day figures (pageviews, sessions, device/OS/browser, top pages) are
+          exact. Only two things can still be inexact, and each says so rather
+          than presenting a number as if it were a total. */}
+      {(data as any).daysMissing > 0 && (
         <div className="rounded-xl border border-amber-300 dark:border-amber-800/60 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 text-sm text-amber-900 dark:text-amber-200">
-          <span className="font-bold">⚠️ Partial range.</span>{' '}
-          This period holds more activity than can be read in one query, so the figures below cover only
-          the most recent{' '}
-          <span className="font-semibold">{(data as any).analysedEvents?.toLocaleString?.() ?? ''}</span>{' '}
-          events — from{' '}
-          <span className="font-semibold">
-            {new Date((data as any).analysedFrom).toLocaleString('en-AU', { timeZone: 'Australia/Perth' })}
-          </span>{' '}
-          onward, not the whole window. Totals are therefore <em>under</em>-counted; rates and splits
-          (per-session, device/OS/browser, top pages) remain representative.
-          {(data as any).mauTruncated && ' WAU/MAU are shown as “—” because the 30-day read is capped well short of 30 days at this volume, which would make them indistinguishable from each other.'}
-          {' '}Narrow the date range for exact totals.
+          <span className="font-bold">⚠️ Incomplete history.</span>{' '}
+          <span className="font-semibold">{(data as any).daysMissing}</span>{' '}
+          day{(data as any).daysMissing === 1 ? '' : 's'} in this range have no roll-up yet, so totals are
+          under-counted. This clears once the nightly usage roll-up has run for those dates (or the
+          one-off backfill is re-run).
+        </div>
+      )}
+      {(data as any).uniqueUsersExact === false && (
+        <div className="rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40 px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
+          <span className="font-bold">ℹ️ Unique visitors is approximate for this range.</span>{' '}
+          Distinct-visitor counts can't be summed across days, so they're derived from last-seen
+          activity — exact for a range ending today, and a lower bound for a very wide range or a
+          historical window. Pageviews, sessions and the daily series are exact either way.
         </div>
       )}
 
@@ -113,7 +113,9 @@ export default function UsageTab({ range }: { range: AnalyticsRange }) {
         {comparing ? (
           <DeltaKpi icon="👥" label="Unique visitors" value={data.uniqueUsers} prev={prev?.uniqueUsers} format={(n) => String(n)} tone="blue" />
         ) : (
-          <KpiCard icon="👥" label="Unique visitors" value={String(data.uniqueUsers)} sub={`${data.sessions} sessions`} tone="blue" />
+          <KpiCard icon="👥" label="Unique visitors"
+            value={`${(data as any).uniqueUsersExact === false ? '≥' : ''}${data.uniqueUsers.toLocaleString()}`}
+            sub={`${data.sessions.toLocaleString()} sessions`} tone="blue" />
         )}
         {/* WAU/MAU are only meaningful if the 30-day read wasn't capped. At
             current event volume the cap covers well under 7 days, so both

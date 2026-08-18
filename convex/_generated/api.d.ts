@@ -75,6 +75,7 @@ import type * as statements from "../statements.js";
 import type * as stripe from "../stripe.js";
 import type * as stripeWebhook from "../stripeWebhook.js";
 import type * as testEmails from "../testEmails.js";
+import type * as usageRollup from "../usageRollup.js";
 import type * as users from "../users.js";
 import type * as waitlist from "../waitlist.js";
 import type * as waitlistOffers from "../waitlistOffers.js";
@@ -156,6 +157,7 @@ declare const fullApi: ApiFromModules<{
   stripe: typeof stripe;
   stripeWebhook: typeof stripeWebhook;
   testEmails: typeof testEmails;
+  usageRollup: typeof usageRollup;
   users: typeof users;
   waitlist: typeof waitlist;
   waitlistOffers: typeof waitlistOffers;
