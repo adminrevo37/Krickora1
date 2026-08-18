@@ -95,7 +95,7 @@ export default function UsageTab({ range }: { range: AnalyticsRange }) {
           </span>{' '}
           onward, not the whole window. Totals are therefore <em>under</em>-counted; rates and splits
           (per-session, device/OS/browser, top pages) remain representative.
-          {(data as any).mauTruncated && ' WAU/MAU are also capped and read low.'}
+          {(data as any).mauTruncated && ' WAU/MAU are shown as “—” because the 30-day read is capped well short of 30 days at this volume, which would make them indistinguishable from each other.'}
           {' '}Narrow the date range for exact totals.
         </div>
       )}
@@ -115,7 +115,18 @@ export default function UsageTab({ range }: { range: AnalyticsRange }) {
         ) : (
           <KpiCard icon="👥" label="Unique visitors" value={String(data.uniqueUsers)} sub={`${data.sessions} sessions`} tone="blue" />
         )}
-        <KpiCard icon="📈" label="WAU / MAU" value={`${data.wau} / ${data.mau}`} sub="last 7 / 30 days" tone="emerald" />
+        {/* WAU/MAU are only meaningful if the 30-day read wasn't capped. At
+            current event volume the cap covers well under 7 days, so both
+            windows would be computed from the SAME slice and come back equal —
+            a number that looks like WAU/MAU but is really "distinct users in
+            the last ~2 days". Show a dash instead of a confidently wrong stat. */}
+        {(data as any).mauTruncated ? (
+          <KpiCard icon="📈" label="WAU / MAU" value="—"
+            sub="too much activity to measure exactly" tone="emerald" />
+        ) : (
+          <KpiCard icon="📈" label="WAU / MAU" value={`${data.wau} / ${data.mau}`}
+            sub="last 7 / 30 days" tone="emerald" />
+        )}
         {comparing ? (
           <DeltaKpi icon="⏱️" label="Avg session (min)" value={data.avgSessionMin} prev={prev?.avgSessionMin} format={fmtMins} />
         ) : (
