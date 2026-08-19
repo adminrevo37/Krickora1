@@ -7,7 +7,7 @@
 // derived server-side from the authenticated admin (never trusted from the client).
 import { mutation, query } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
-import { requireAdmin, getCallerContext } from "./lib/adminGuard";
+import { requireAdminUnlocked, getCallerContext } from "./lib/adminGuard";
 
 const SUBJECT_TYPES = ["coach", "customer"];
 
@@ -59,7 +59,7 @@ export const addStatementAdjustment = mutation({
     date: v.string(),
   },
   handler: async (ctx, args) => {
-    const admin = await requireAdmin(ctx);
+    const admin = await requireAdminUnlocked(ctx);
     if (!SUBJECT_TYPES.includes(args.subjectType)) {
       throw new ConvexError("Invalid subject type");
     }
@@ -90,7 +90,7 @@ export const updateStatementAdjustment = mutation({
     date: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     const existing = await ctx.db.get(args.id);
     if (!existing) throw new ConvexError("Adjustment not found");
     const patch: Record<string, any> = { updatedAt: new Date().toISOString() };
@@ -109,7 +109,7 @@ export const updateStatementAdjustment = mutation({
 export const deleteStatementAdjustment = mutation({
   args: { id: v.id("statementAdjustments") },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     const existing = await ctx.db.get(args.id);
     if (!existing) throw new ConvexError("Adjustment not found");
     await ctx.db.delete(args.id);

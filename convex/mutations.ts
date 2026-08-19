@@ -3132,7 +3132,18 @@ async function cancelBookingCore(
     // return. Admins may still issue a manual Stripe refund as an exception.
     if (
       !booking.isCoachBooking &&
-      booking.status === "confirmed" &&
+      // MON-5 (SECURITY/MONEY review 2026-08-19): a booking mid-modify sits in
+      // `pending_edit_payment` for up to 30 min while the customer pays the top-up
+      // (modifyBooking), and the ORIGINAL money is still fully paid — priceInCents /
+      // creditApplied still hold the original settled amounts (only pendingEdit holds
+      // the new ones, and pendingEdit.creditApplied is not redeemed until confirm).
+      // The frontend has no concept of this status, so My Bookings renders such a
+      // booking as a NORMAL upcoming card with a live Cancel button. Gating the refund
+      // on "confirmed" alone therefore cancelled a fully-paid booking and returned
+      // NOTHING — the customer lost 100% of what they paid. deleteBooking already
+      // gets this right (it gates on `!== "cancelled"`); this path and
+      // systemCancelBooking did not.
+      (booking.status === "confirmed" || booking.status === "pending_edit_payment") &&
       booking.customerEmail &&
       // MON-2 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): voidBookingCharge already
       // returned this booking's value (as credit, via Stripe, or waived) and marks
@@ -3257,7 +3268,7 @@ async function cancelBookingCore(
 export const deleteBooking = mutation({
   args: { id: v.id("bookings") },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     const firstBooking = await ctx.db.get(args.id);
     // SPEC_COACH_SPLIT_LANE_BOOKING: deleting one leg removes the WHOLE split
     // (either direction). The sibling gets the same credit/calendar cleanup but
@@ -4231,7 +4242,7 @@ export const adminBackfillClubBookingGroups = mutation({
 export const adminSetBookingPaymentStatus = mutation({
   args: { bookingId: v.id("bookings"), paid: v.boolean() },
   handler: async (ctx, args) => {
-    const adminUser = await requireAdmin(ctx);
+    const adminUser = await requireAdminUnlocked(ctx);
     const b: any = await ctx.db.get(args.bookingId);
     if (!b) throw new ConvexError("Booking not found.");
     const next = args.paid ? "paid" : "unpaid";
@@ -5938,7 +5949,7 @@ export const recordStripePaymentInternal = internalMutation({
 export const seedTestStripePayments = mutation({
   args: { email: v.string(), customerName: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     const email = args.email.toLowerCase().trim();
     const name = args.customerName ?? "Test Customer";
     const existing = await ctx.db
@@ -6037,7 +6048,7 @@ export const updateStripePayment = mutation({
     description: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     const { id, ...updates } = args;
     const cleanUpdates = Object.fromEntries(
       Object.entries(updates).filter(([_, v]) => v !== undefined)
@@ -6051,7 +6062,7 @@ export const updateStripePayment = mutation({
 export const deleteStripePayment = mutation({
   args: { id: v.id("stripePayments") },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     await ctx.db.delete(args.id);
     return args.id;
   },
@@ -6417,7 +6428,7 @@ export const createPayment = mutation({
     createdBy: v.string(),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     const id = await ctx.db.insert("payments", {
       coachId: args.coachId,
       amount: args.amount,
@@ -6435,7 +6446,7 @@ export const createPayment = mutation({
 export const deletePayment = mutation({
   args: { id: v.id("payments") },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     await ctx.db.delete(args.id);
     return args.id;
   },
@@ -6454,7 +6465,7 @@ export const updatePayment = mutation({
     description: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     const existing = await ctx.db.get(args.id);
     if (!existing) throw new ConvexError("Payment not found");
     const patch: Record<string, any> = {};
@@ -6481,7 +6492,7 @@ export const updatePayment = mutation({
 export const adminSetCoachPrice = mutation({
   args: { bookingId: v.id("bookings"), coachPrice: v.number() },
   handler: async (ctx, args) => {
-    const admin = await requireAdmin(ctx);
+    const admin = await requireAdminUnlocked(ctx);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) throw new ConvexError("Booking not found.");
     if (args.coachPrice < 0) throw new ConvexError("Charge can't be negative.");
@@ -6508,7 +6519,7 @@ export const adminSetCoachPrice = mutation({
 export const adminSetBookingStatementExcluded = mutation({
   args: { bookingId: v.id("bookings"), excluded: v.boolean() },
   handler: async (ctx, args) => {
-    const admin = await requireAdmin(ctx);
+    const admin = await requireAdminUnlocked(ctx);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) throw new ConvexError("Booking not found.");
     const identity = await ctx.auth.getUserIdentity();
@@ -6651,7 +6662,7 @@ export const backfillMissingCoachCalendarEvents = mutation({
 export const addCustomerCredit = mutation({
   args: { email: v.string(), amount: v.number(), note: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     const normalizedEmail = args.email.toLowerCase().trim();
     let customer = await ctx.db
       .query("customers")
@@ -6689,7 +6700,7 @@ export const addCustomerCredit = mutation({
 export const adminSetBookingPrice = mutation({
   args: { bookingId: v.id("bookings"), priceInCents: v.number() },
   handler: async (ctx, args) => {
-    const adminUser = await requireAdmin(ctx);
+    const adminUser = await requireAdminUnlocked(ctx);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) throw new ConvexError("Booking not found.");
     if (!Number.isFinite(args.priceInCents) || args.priceInCents < 0) {
@@ -6800,7 +6811,7 @@ export const voidBookingCharge = mutation({
     note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const admin = await requireAdmin(ctx);
+    const admin = await requireAdminUnlocked(ctx);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) throw new ConvexError("Booking not found.");
     if (booking.refunded) {
@@ -6900,7 +6911,7 @@ export const resetLaneWear = mutation({
 export const resetSiteSettings = mutation({
   args: {},
   handler: async (ctx) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     const existing = await ctx.db
       .query("siteSettings")
       .withIndex("by_key", (q: any) => q.eq("key", "global"))
@@ -6954,7 +6965,7 @@ export const createDiscountCode = mutation({
     perCustomerLimit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     const normalised = args.code.trim().toLowerCase();
     if (!normalised) throw new ConvexError("Code cannot be empty.");
     const existing = await ctx.db
@@ -6995,7 +7006,7 @@ export const updateDiscountCode = mutation({
     perCustomerLimit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     const { id, ...updates } = args;
     const clean: Record<string, any> = Object.fromEntries(
       Object.entries(updates).filter(([, val]) => val !== undefined)
@@ -7013,7 +7024,7 @@ export const updateDiscountCode = mutation({
 export const deleteDiscountCode = mutation({
   args: { id: v.id("discountCodes") },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     await ctx.db.delete(args.id);
     return args.id;
   },
@@ -7026,7 +7037,7 @@ export const deleteDiscountCode = mutation({
 export const upgradeToAdmin = mutation({
   args: { email: v.string() },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
     const normalizedEmail = args.email.toLowerCase().trim();
     // M-1/S-2: keep the Better-Auth user.role in step with customers.role so the
     // two stores don't drift (mirrors users.ts makeAdmin). customers.role is the
@@ -7073,7 +7084,7 @@ export const upgradeToAdmin = mutation({
 export const mergeConsecutiveCoachBookings = mutation({
   args: {},
   handler: async (ctx) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
 
     // Fetch all non-cancelled coach bookings
     const allBookings = await ctx.db

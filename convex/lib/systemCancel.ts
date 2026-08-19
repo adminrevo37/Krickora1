@@ -66,7 +66,13 @@ export async function systemCancelBooking(
   let creditIssued = 0;
   if (
     !booking.isCoachBooking &&
-    booking.status === "confirmed" &&
+    // MON-5 (SECURITY/MONEY review 2026-08-19): include a booking that is mid-modify.
+    // modifyBooking parks a fully-PAID booking in `pending_edit_payment` for up to
+    // 30 min while the top-up is paid, leaving priceInCents / creditApplied at their
+    // original settled values. A closure or lane block landing inside that window
+    // cancelled a paid session and refunded NOTHING. This path needs no user error at
+    // all to hit — the admin closes the facility, the sweep does the rest.
+    (booking.status === "confirmed" || booking.status === "pending_edit_payment") &&
     booking.customerEmail &&
     // MON-2 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): a booking whose charge was
     // already voided/refunded by voidBookingCharge has had its value returned —
@@ -99,9 +105,18 @@ export async function systemCancelBooking(
   await releaseHoldForBooking(ctx, booking._id.toString());
 
   // Remove the Google Calendar event(s).
-  if (booking.googleCalendarEventId) {
+  // CAL-3 (SECURITY review 2026-08-19): gate on PRIMARY *or* per-lane ids. This fix
+  // was applied to cancelBookingCore on 2026-06-23 but never mirrored here, so a
+  // closure/lane-block cancelling a partially-synced multi-lane booking (per-lane
+  // events, no primary id) left those lane events LIVE on the calendar — HA keeps
+  // loading the door code and powering the machine for a session that is cancelled.
+  // That is building access after cancellation, the same class as the A1 HIGH.
+  if (booking.googleCalendarEventId || (booking.googleCalendarEventIds?.length ?? 0) > 0) {
     await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-      googleCalendarEventId: booking.googleCalendarEventId,
+      // `googleCalendarEventId` is a REQUIRED v.string() on the action — the widened
+      // condition above now admits the per-lane-only case, so it must be coerced (a
+      // raw undefined would fail the validator and abort the whole teardown).
+      googleCalendarEventId: booking.googleCalendarEventId ?? "",
       laneCalendarEventIds: booking.googleCalendarEventIds,
     });
   }

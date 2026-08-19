@@ -72,7 +72,18 @@ export function buildCoachLedger(input: {
   const coachBookings = allCoachBookings.filter((b: any) => (b.date || '') <= todayStr)
   const futureBookings = allCoachBookings.filter((b: any) => (b.date || '') > todayStr)
 
-  const payments = [...(input.payments ?? [])]
+  // AUDIT_COACH_BALANCES §5/§7 (built 2026-08-19): payments were the ONLY stream not
+  // split past/future — bookings and adjustments both are. A payment dated ahead of
+  // today therefore reduced the balance immediately while the sessions it pays for did
+  // not yet add to it, so a coach who pre-pays reads as being in credit. It also
+  // disagreed internally: `monthPaid` below already filtered `<= todayStr`, so the
+  // month figure and the balance were computed on different rules.
+  // Split rather than simply dropping future payments (the audit's one-liner), so a
+  // pre-payment still SHOWS on the statement as a greyed future row instead of
+  // silently vanishing from the coach's history.
+  const allPayments = [...(input.payments ?? [])]
+  const payments = allPayments.filter((p: any) => (p.dateReceived || '') <= todayStr)
+  const futurePayments = allPayments.filter((p: any) => (p.dateReceived || '') > todayStr)
   const allAdjust = [...(input.adjustments ?? [])]
   // Past/today adjustments count in totals + running balance; future ones are
   // shown greyed (like future bookings) and excluded from totals.
@@ -155,6 +166,19 @@ export function buildCoachLedger(input: {
       future: true,
       excluded: b.statementExcluded === true,
       raw: b,
+    })),
+    ...futurePayments.map((p: any) => ({
+      kind: 'payment' as const,
+      date: p.dateReceived,
+      sortKey: `${p.dateReceived}T99990`,
+      label: p.description || p.note || 'Payment received',
+      method: p.method || '—',
+      charge: 0,
+      payment: p.amount || 0,
+      isNote: false,
+      balance: 0,
+      future: true,
+      raw: p,
     })),
     ...futureAdjust.map((a: any) => {
       const delta = a.delta || 0

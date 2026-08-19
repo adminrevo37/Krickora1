@@ -37,9 +37,14 @@ export async function validateDiscount(
     .withIndex("by_code", (q: any) => q.eq("code", normalised))
     .first();
   if (!doc || !doc.active) return null;
-  // Expiry (YYYY-MM-DD string comparison is safe)
+  // Expiry (YYYY-MM-DD string comparison is safe).
+  // MONEY review 2026-08-19: this used `new Date().toISOString()` = the UTC date.
+  // Perth is UTC+8 with no DST, so between midnight and 8am AWST the UTC date is
+  // still YESTERDAY — an expired code kept working for the first 8 hours of the day
+  // after it lapsed. Every other date comparison in the system (bookings, statements,
+  // closures) is AWST, so this one was the odd one out. `+08:00` is exact for AWST.
   if (doc.expiresAt) {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
     if (doc.expiresAt < today) return null;
   }
   // Total usage cap (usedCount defaults to 0 for old docs missing the field)
