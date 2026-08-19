@@ -1076,9 +1076,14 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
               <p className={`mt-3 text-xs rounded-lg p-2.5 border ${offer.exclusive
                 ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800/50 text-blue-800 dark:text-blue-300'
                 : 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800/50 text-amber-800 dark:text-amber-300'}`}>
+                {/* `exclusive` is only ever true for offers made before
+                    2026-08-18; alt-time offers no longer hold the slot. Keep the
+                    branch so any of those still reads correctly. */}
                 {offer.exclusive
                   ? 'This slot is reserved for you until the session starts.'
-                  : `This has been offered to ${offer.recipientCount} people on the waitlist — it stays open until someone books it.`}
+                  : offer.recipientCount > 1
+                    ? `This has been offered to ${offer.recipientCount} people on the waitlist, and it stays on sale to everyone else too — first to book gets it.`
+                    : 'This slot is not reserved — it stays available to everyone until someone books it, so book now to secure it.'}
               </p>
               {offer.waitlistEntryId && (
                 <label className="mt-3 flex items-start gap-2 text-xs text-gray-600 dark:text-gray-400 cursor-pointer">

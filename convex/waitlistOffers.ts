@@ -256,7 +256,19 @@ export const createWaitlistOffer = mutation({
     }
     if (recipients.length === 0) throw new ConvexError("Those waitlist entries no longer exist.");
 
-    const exclusive = recipients.length === 1;
+    // 2026-08-18 (Inspector) — an alt-time offer NEVER holds the slot, whatever
+    // the recipient count. It is a heads-up that a slot is free, not a
+    // reservation: the general public must still be able to book it.
+    //
+    // This reverses the original 2026-08-14 decision (single recipient => a real
+    // exclusive slotHold until the session started). In practice that took a
+    // sellable slot off the market for hours on the chance one person acted on a
+    // notification, which is the wrong trade for a facility trying to fill lanes.
+    //
+    // The field is KEPT on the schema, and every release path below still honours
+    // it, so any offer created before today that still holds a lane is cleaned up
+    // correctly when it is cancelled or accepted. Nothing new sets it true.
+    const exclusive = false;
 
     const tokenBytes = new Uint8Array(16);
     crypto.getRandomValues(tokenBytes);
@@ -275,22 +287,8 @@ export const createWaitlistOffer = mutation({
       createdByEmail: admin.email ?? "admin",
     });
 
-    // SINGLE recipient → hold the lane exclusively, like the first-refusal engine.
-    // Held until the session starts: there is no timer on this offer, so a shorter
-    // hold would silently expose the slot again with the link still live.
-    if (exclusive) {
-      await ctx.db.insert("slotHolds", {
-        laneId: free[0],
-        date: args.date,
-        startHour: args.hour,
-        duration: 60,
-        holdType: "waitlist",
-        userId: recipients[0].userId,
-        userEmail: recipients[0].userEmail,
-        expiresAt: slotStartMs(args.date, args.hour),
-        createdAt: new Date().toISOString(),
-      });
-    }
+    // No slotHold is written. An alt-time offer is a notification, not a
+    // reservation — the slot stays on sale to the public the whole time.
 
     // Notify every recipient on BOTH channels — push AND email, every time
     // (Inspector 2026-08-14). Push alone would silently miss anyone who hasn't
@@ -299,11 +297,12 @@ export const createWaitlistOffer = mutation({
     const dateLabel = fmtAwstDateLabel(args.date);
     const poolLabel = pool === "bm" ? "bowling machine" : "run-up";
     const offerUrl = `/?offer=${token}`;
-    // The race note is what makes a multi-recipient offer fair — it says plainly
-    // that the slot is not reserved for them.
-    const sharedNote = exclusive
-      ? "This slot is reserved for you until the session starts."
-      : `This has been offered to ${recipients.length} people on the waitlist — the booking link stays active until someone books it.`;
+    // The recipient must never think the slot is being held for them — it isn't.
+    // Say so plainly, and scale the wording to how many people were told.
+    const sharedNote =
+      recipients.length === 1
+        ? "This slot is not reserved — it stays available to everyone until someone books it, so book now to secure it."
+        : `This has been offered to ${recipients.length} people on the waitlist, and the slot also stays on sale to everyone else — first to book gets it.`;
     const customNote = (args.customNote ?? "").trim();
 
     for (const r of recipients) {

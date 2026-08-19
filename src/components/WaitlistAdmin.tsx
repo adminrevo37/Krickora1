@@ -71,9 +71,12 @@ type Hold = {
 // queue is waiting on, so a cancellation at a DIFFERENT hour was unreachable. This
 // sends a pool-level offer for another hour to some or all of the queue.
 //
-// Recipient count changes the semantics, and the sheet says so plainly:
-//   one   → the slot is HELD for them (exclusive, like normal first-refusal)
-//   many  → an open race, no hold, with the disclosure in the notification
+// 2026-08-18 (Inspector): an alt-time offer NEVER holds the slot, whatever the
+// recipient count. It is a heads-up that a lane is free, not a reservation — the
+// general public must still be able to book it. (This reverses the original
+// 2026-08-14 single-recipient exclusive hold, which took a sellable slot off the
+// market for hours on the chance one person acted on a notification.) The sheet
+// and both notification channels state plainly that it is not held.
 function AltTimeOfferSheet({
   pool, date, sourceHour, entries, onClose,
 }: {
@@ -186,12 +189,12 @@ function AltTimeOfferSheet({
           />
           <p className="mt-1 text-[11px] text-gray-400">Included in both the push notification and the email.</p>
 
-          <div className={`mt-4 rounded-xl p-3 border text-xs ${exclusive ? 'bg-blue-50 border-blue-200 text-blue-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+          <div className="mt-4 rounded-xl p-3 border text-xs bg-amber-50 border-amber-200 text-amber-800">
             {selected.length === 0
               ? 'Pick at least one customer.'
-              : exclusive
-                ? 'One recipient — the slot will be HELD for them until the session starts. Nobody else can book it.'
-                : `${selected.length} recipients — first to book wins. The slot is NOT held, and everyone is told it has been offered to several people and stays open until someone books it.`}
+              : selected.length === 1
+                ? 'The slot is NOT held. It stays on sale to the general public — this just tells them it is free, and whoever books first gets it. They are told that plainly.'
+                : `${selected.length} recipients — the slot is NOT held. It stays on sale to the general public as well, and everyone is told it has been offered to several people. First to book gets it.`}
           </div>
 
           {error && <p className="mt-3 text-xs text-red-600">{error}</p>}
@@ -210,7 +213,7 @@ function AltTimeOfferSheet({
                   })
                   setDone(
                     `Offered ${fmtHour12(hour as number)} to ${res.recipients} ${res.recipients === 1 ? 'customer' : 'customers'} by push and email.` +
-                    (res.exclusive ? ' The slot is held for them.' : ' First to book wins.')
+                    ' The slot is NOT held — it stays on sale to everyone, first to book gets it.'
                   )
                 } catch (err: any) {
                   setError(err?.data ?? err?.message ?? 'Could not send the offer.')
@@ -304,9 +307,10 @@ export default function WaitlistAdmin() {
                   </p>
                   <p className="text-xs text-gray-500 truncate">
                     to {o.recipientNames.join(', ')} · asked for {fmtHour12(o.sourceHour)} ·{' '}
+                    {/* Only offers made before 2026-08-18 can be `exclusive`. */}
                     {o.exclusive
-                      ? <span className="text-blue-700 font-medium">held for them</span>
-                      : <span className="text-amber-700 font-medium">race — first to book wins</span>}
+                      ? <span className="text-blue-700 font-medium">held for them (legacy offer)</span>
+                      : <span className="text-amber-700 font-medium">not held — first to book wins</span>}
                   </p>
                 </div>
                 <button
