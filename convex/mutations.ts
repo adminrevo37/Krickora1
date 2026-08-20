@@ -5943,51 +5943,6 @@ export const recordStripePaymentInternal = internalMutation({
   },
 });
 
-// Seed sample Stripe payment records for a customer (ADMIN ONLY) — used to demo
-// the Payments "Tax Invoices & Receipts" list. Re-running replaces the prior seed
-// set (rows tagged with a 'seed-' bookingId prefix), so it's safe to call again.
-export const seedTestStripePayments = mutation({
-  args: { email: v.string(), customerName: v.optional(v.string()) },
-  handler: async (ctx, args) => {
-    await requireAdminUnlocked(ctx);
-    const email = args.email.toLowerCase().trim();
-    const name = args.customerName ?? "Test Customer";
-    const existing = await ctx.db
-      .query("stripePayments")
-      .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", email))
-      .collect();
-    for (const r of existing) {
-      if (typeof r.bookingId === "string" && r.bookingId.startsWith("seed-")) {
-        await ctx.db.delete(r._id);
-      }
-    }
-    const samples = [
-      { lane: "Bowling Machine 1", desc: "1 hour net — Bowling Machine 1", amount: 35, date: "2026-06-01", receipt: true },
-      { lane: "9m Run Up 1", desc: "1.5 hour net — 9m Run Up 1", amount: 50, date: "2026-05-24", receipt: true },
-      { lane: "Bowling Machine 3 (Truman)", desc: "1 hour net — Truman lane", amount: 45, date: "2026-05-18", receipt: false },
-    ];
-    let i = 0;
-    for (const s of samples) {
-      const session = `cs_test_seed_${email.replace(/[^a-z0-9]/g, "").slice(0, 10)}_${i}`;
-      await ctx.db.insert("stripePayments", {
-        bookingId: `seed-${email}-${i}`,
-        stripeSessionId: session,
-        customerEmail: email,
-        customerName: name,
-        amount: s.amount,
-        currency: "aud",
-        status: "paid",
-        laneName: s.lane,
-        date: s.date,
-        description: s.desc,
-        receiptUrl: s.receipt ? `https://pay.stripe.com/receipts/payment/${session}` : undefined,
-      });
-      i++;
-    }
-    return { inserted: samples.length, email };
-  },
-});
-
 // Send booking confirmation email (callable from client for non-Stripe bookings)
 export const sendBookingEmail = mutation({
   args: {
