@@ -5890,15 +5890,33 @@ export const recordStripePaymentInternal = internalMutation({
     timeSlot: v.optional(v.string()),
     duration: v.optional(v.string()),
     receiptUrl: v.optional(v.string()),
+    // BATCH 15.1 (2026-08-20): switch the idempotency key from bookingId to the
+    // Stripe SESSION. Needed only by the cancelled-booking backstop in
+    // confirmBookingPayment: a booking cancelled while mid-modify is ALREADY paid,
+    // so it always has a payment row from the original charge, and the default
+    // by-bookingId dedupe would silently discard the orphan top-up — the exact
+    // failure the backstop exists to catch. A second, genuinely distinct charge on
+    // one booking must produce a second row. Defaults to the original behaviour;
+    // every other caller is unaffected.
+    dedupeBySession: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     // Idempotency: don't double-record the same booking on webhook retry.
     // MON-2 (audit 2026-06): use the by_bookingId index instead of a full-table
     // .filter() scan (ran on every payment confirm; cost grew with the table).
-    const existing = await ctx.db
-      .query("stripePayments")
-      .withIndex("by_bookingId", (q: any) => q.eq("bookingId", args.bookingId))
-      .first();
+    // Keep the hot path a single .first() read; only the rare session-scoped
+    // backstop call pays for collecting the (always tiny) per-booking row set.
+    const existing = args.dedupeBySession
+      ? (
+          await ctx.db
+            .query("stripePayments")
+            .withIndex("by_bookingId", (q: any) => q.eq("bookingId", args.bookingId))
+            .collect()
+        ).find((r: any) => r.stripeSessionId === args.stripeSessionId)
+      : await ctx.db
+          .query("stripePayments")
+          .withIndex("by_bookingId", (q: any) => q.eq("bookingId", args.bookingId))
+          .first();
     if (existing) {
       // Backfill the receipt URL if it arrived on a retry and wasn't stored yet.
       if (args.receiptUrl && !(existing as any).receiptUrl) {

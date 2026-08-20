@@ -167,8 +167,26 @@ export const confirmBookingPayment = internalMutation({
       return { success: true, isBookingEdit: true };
     }
 
-    // Idempotency: already paid → no-op
-    if (b.paymentStatus === "paid") {
+    // Idempotency: a retry of THE SAME session → no-op.
+    //
+    // BATCH 15.1 (SECURITY/MONEY review 2026-08-20): this guard used to be
+    // `paymentStatus === "paid"` alone, and it sits ABOVE the cancelled-booking
+    // backstop below. A booking cancelled while MID-MODIFY keeps
+    // paymentStatus:"paid" (the ORIGINAL money is still settled — only pendingEdit
+    // holds the new amounts), while its top-up Stripe session stays payable for up
+    // to 30 min: nothing expires it, because BOTH expireUnpaidCheckout and
+    // cancelUnpaidCheckout deliberately refuse a paid booking. Paying that session
+    // therefore hit this guard and returned, so the backstop NEVER ran — no
+    // stripePayments row, no needsRefund, no admin alert. The money sat in Stripe,
+    // invisible in Krickora, with nothing to prompt anyone to refund it. The
+    // facility-closure variant needs no user error at all: an admin closes the
+    // facility while the customer is on the Stripe page.
+    //
+    // Scoping the no-op to the SAME session keeps full retry-safety — crucially
+    // including a normally-paid-then-cancelled booking, whose original payment must
+    // NOT be re-flagged as needing a refund (it was already returned as credit) —
+    // while letting a genuinely DIFFERENT session fall through to the backstop.
+    if (b.paymentStatus === "paid" && b.stripeSessionId === args.stripeSessionId) {
       return { success: true, alreadyPaid: true };
     }
 
@@ -207,6 +225,12 @@ export const confirmBookingPayment = internalMutation({
           date: b.date,
           description: `REFUND DUE — payment received after booking cancelled (${b.date})`,
           receiptUrl: args.receiptUrl,
+          // BATCH 15.1: recordStripePaymentInternal normally dedupes by bookingId,
+          // and a booking that reaches here ALREADY-paid (cancelled mid-modify)
+          // always has a row from its original payment — so the default dedupe
+          // would silently swallow this orphan a second time, defeating the whole
+          // backstop. Dedupe on the session instead: this is a DISTINCT charge.
+          dedupeBySession: true,
         });
       }
       await ctx.scheduler.runAfter(0, internal.push.sendAdminPush, {
@@ -219,6 +243,16 @@ export const confirmBookingPayment = internalMutation({
         `[webhook] PAYMENT FOR CANCELLED BOOKING ${booking._id.toString()} — flagged needsRefund, admin alerted`
       );
       return { success: true, orphanedPayment: true };
+    }
+
+    // BATCH 15.1: already paid, by a DIFFERENT session, on a booking that is still
+    // live. Not the orphan case (the booking was never cancelled) and not something
+    // this path can safely re-confirm, so no-op exactly as before — this preserves
+    // the original guard's behaviour for every non-cancelled booking. NB a genuine
+    // double-payment would land here; payment links are deactivated on payment
+    // (SPEC_PAYMENT_LINK_TRACKING) specifically to stop that happening.
+    if (b.paymentStatus === "paid") {
+      return { success: true, alreadyPaid: true };
     }
 
     // (The pending_edit_payment branch used to live HERE — moved above the
