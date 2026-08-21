@@ -3,6 +3,7 @@ import { useMutation, useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
 import { buildCoachLedger, todayAndMonthStart, type LedgerRow } from '../lib/statementLedger'
+import CoachBalancePanel from './CoachBalancePanel'
 
 type Props = {
   coachId: string
@@ -107,7 +108,7 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName, ed
         <p className="text-sm text-gray-500">{coachEmail}</p>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 items-start">
         <div className="bg-white border border-gray-200 rounded-xl p-5">
           <div className="text-xs uppercase font-semibold text-gray-500 mb-1">Booked (Month)</div>
           <div className="text-2xl font-bold text-gray-900">${ledger.monthBooked.toFixed(2)}</div>
@@ -120,19 +121,7 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName, ed
           <div className="text-xs uppercase font-semibold text-gray-500 mb-1">Lifetime Booked</div>
           <div className="text-2xl font-bold text-gray-900">${ledger.totalBooked.toFixed(2)}</div>
         </div>
-        <div className={`border rounded-xl p-5 ${ledger.balance > 0 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
-          <div className="text-xs uppercase font-semibold text-gray-600 mb-1">Outstanding</div>
-          <div className={`text-2xl font-bold ${ledger.balance > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
-            ${ledger.balance.toFixed(2)}
-          </div>
-          <div className="text-xs text-gray-500 mt-1">
-            ${ledger.totalBooked.toFixed(2)}
-            {ledger.totalAdjust !== 0 && (
-              <> {ledger.totalAdjust >= 0 ? '+' : '−'} ${Math.abs(ledger.totalAdjust).toFixed(2)} adj</>
-            )}
-            {' '}− ${ledger.totalPaid.toFixed(2)}
-          </div>
-        </div>
+        <CoachBalancePanel ledger={ledger} />
       </div>
 
       {editable && <WeeklyCapEditor coachId={coachId} />}

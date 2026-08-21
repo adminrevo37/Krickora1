@@ -20,26 +20,16 @@ import {
   coachBookingCost,
   awstTodayKey,
   round2,
+  addDaysStr,
+  mondayOfWeek,
 } from "./lib/coachLedger";
 
 const WEEKLY_CAP_CREATED_BY = "system:weekly-cap";
 
-// Add N days to a YYYY-MM-DD (UTC arithmetic, calendar-safe, no TZ drift).
-function addDaysStr(date: string, n: number): string {
-  const [y, m, d] = date.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + n);
-  const pad = (x: number) => String(x).padStart(2, "0");
-  return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`;
-}
-
-// Monday (YYYY-MM-DD) of the week containing dateStr.
-export function mondayOfWeek(dateStr: string): string {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Sun..6=Sat
-  const diff = dow === 0 ? -6 : 1 - dow;
-  return addDaysStr(dateStr, diff);
-}
+// Phase 5: the Mon–Sun week is defined ONCE, in the shared module, so the billing cap,
+// the weekly report and the coach-facing "end of week" balance cannot disagree about
+// which days a week contains. Re-exported here because call sites already import it.
+export { mondayOfWeek };
 
 // Sum a coach's booked charges for a Mon–Sun week.
 //

@@ -3,6 +3,7 @@ import { useQuery } from 'convex/react'
 import { useAuth } from '../hooks/useAuth'
 import { api } from '../../convex/_generated/api'
 import { buildCoachLedger, todayAndMonthStart } from '../lib/statementLedger'
+import CoachBalancePanel from '../components/CoachBalancePanel'
 
 export const Route = createFileRoute('/statements')({
   component: StatementsPage,
@@ -60,7 +61,7 @@ function StatementsPage() {
       <h1 className="text-3xl font-bold text-gray-900 mb-2">Statements</h1>
       <p className="text-gray-500 mb-6">Bookings and payments reconciliation.</p>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 items-start mb-8">
         <div className="bg-white border border-gray-200 rounded-xl p-5">
           <div className="text-xs uppercase font-semibold text-gray-500 mb-1">Booked (Month)</div>
           <div className="text-2xl font-bold text-gray-900">${ledger.monthBooked.toFixed(2)}</div>
@@ -73,19 +74,7 @@ function StatementsPage() {
           <div className="text-xs uppercase font-semibold text-gray-500 mb-1">Lifetime Booked</div>
           <div className="text-2xl font-bold text-gray-900">${ledger.totalBooked.toFixed(2)}</div>
         </div>
-        <div className={`border rounded-xl p-5 ${ledger.balance > 0 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
-          <div className="text-xs uppercase font-semibold text-gray-600 mb-1">Outstanding Balance</div>
-          <div className={`text-2xl font-bold ${ledger.balance > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
-            ${ledger.balance.toFixed(2)}
-          </div>
-          <div className="text-xs text-gray-500 mt-1">
-            ${ledger.totalBooked.toFixed(2)}
-            {ledger.totalAdjust !== 0 && (
-              <> {ledger.totalAdjust >= 0 ? '+' : '−'} ${Math.abs(ledger.totalAdjust).toFixed(2)} adj</>
-            )}
-            {' '}booked − ${ledger.totalPaid.toFixed(2)} paid
-          </div>
-        </div>
+        <CoachBalancePanel ledger={ledger} />
       </div>
 
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">

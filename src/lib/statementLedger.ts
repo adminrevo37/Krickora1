@@ -18,6 +18,7 @@ import {
   coachBookingCost,
   filterCoachChargeBookings,
   computeCoachLedger,
+  computeCoachBalancePair,
   awstTodayKey,
   monthStartKey,
 } from '../../convex/lib/coachLedger'
@@ -50,7 +51,17 @@ export type CoachLedger = {
   totalBooked: number
   totalPaid: number
   totalAdjust: number // net of all past adjustment deltas
+  /** Phase 5 "Balance today" — everything dated on or before today (AWST). */
   balance: number
+  /** Phase 5 "Balance end of week" — everything dated on or before Sunday of this week. */
+  balanceEndOfWeek: number
+  /** endOfWeek − today: the rest of this week's booked sessions. */
+  balanceDelta: number
+  weekEndKey: string
+  /** True on Sunday, when the two balances are necessarily equal. */
+  isWeekEnd: boolean
+  /** What the delta is made of: charges/credits/payments dated after today, up to Sunday. */
+  restOfWeek: { booked: number; adjust: number; paid: number }
   monthBooked: number
   monthPaid: number
   pastCount: number
@@ -110,6 +121,16 @@ export function buildCoachLedger(input: {
     asAt: todayStr,
   })
   const { booked: totalBooked, paid: totalPaid, adjust: totalAdjust, balance } = totals
+
+  // Phase 5 — the second, named balance. Two calls to the same arithmetic, so
+  // "Balance today" and "Balance end of week" cannot disagree with each other or with
+  // the admin badge.
+  const pair = computeCoachBalancePair({
+    bookings: input.bookings,
+    payments: input.payments,
+    adjustments: input.adjustments,
+    todayKey: todayStr,
+  })
 
   const month = computeCoachLedger({
     bookings: input.bookings,
@@ -224,6 +245,11 @@ export function buildCoachLedger(input: {
     totalPaid,
     totalAdjust,
     balance,
+    balanceEndOfWeek: pair.endOfWeek,
+    balanceDelta: pair.delta,
+    weekEndKey: pair.weekEndKey,
+    isWeekEnd: pair.isWeekEnd,
+    restOfWeek: { booked: pair.rest.booked, adjust: pair.rest.adjust, paid: pair.rest.paid },
     monthBooked,
     monthPaid,
     pastCount: rowsWithBalance.length,

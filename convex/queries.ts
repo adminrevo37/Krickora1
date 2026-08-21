@@ -13,6 +13,8 @@ import { mondayOfWeek } from "./billingCaps";
 import {
   isCoachChargeBooking,
   computeCoachLedger,
+  computeCoachBalancePair,
+  sundayOfWeek,
   awstTodayKey,
   monthStartKey,
   round2,
@@ -1020,7 +1022,14 @@ export type CoachBadgeBalance = {
   coachId: string;
   totalCharged: number;
   totalPaid: number;
+  /** Phase 5 "Balance today" — everything dated on or before `asAt`. */
   balance: number;
+  /** Phase 5 "Balance end of week" — everything dated on or before Sunday of asAt's week. */
+  balanceEndOfWeek: number;
+  /** endOfWeek − today: the rest of this week's booked sessions. */
+  balanceDelta: number;
+  weekEndKey: string;
+  isWeekEnd: boolean;
   lastPaidDate: string | null;
 };
 
@@ -1032,10 +1041,15 @@ export async function computeCoachBadgeBalances(
   // bucketed by the coach's lowercased email. Phase 2: rows are bucketed rather than
   // summed here, because the summing now happens in exactly one place —
   // computeCoachLedger — for this engine, the statement and the weekly report alike.
+  // Phase 5 needs the balance at TODAY and at the END OF THIS WEEK, so the read runs to
+  // whichever is later. On any day but Sunday that pulls in the rest of the week's
+  // sessions — a handful of rows, and the only extra cost of showing both figures.
+  const weekEndKey = sundayOfWeek(asAt);
+  const readTo = weekEndKey > asAt ? weekEndKey : asAt;
   const bookingsByEmail = new Map<string, any[]>();
   const bookings = await ctx.db
     .query("bookings")
-    .withIndex("by_date", (q: any) => q.lte("date", asAt))
+    .withIndex("by_date", (q: any) => q.lte("date", readTo))
     .collect();
   for (const b of bookings) {
     if (!isCoachChargeBooking(b)) continue;
@@ -1066,7 +1080,7 @@ export async function computeCoachBadgeBalances(
   const paymentsByCustomer = new Map<string, any[]>();
   for (const p of (await ctx.db
     .query("payments")
-    .withIndex("by_dateReceived", (q: any) => q.lte("dateReceived", asAt))
+    .withIndex("by_dateReceived", (q: any) => q.lte("dateReceived", readTo))
     .collect()) as any[]) {
     const cid = String(p.coachId ?? "");
     if (!cid) continue;
@@ -1095,12 +1109,13 @@ export async function computeCoachBadgeBalances(
       if (a) adjustments.push(...a);
     }
 
-    const totals = computeCoachLedger({
+    const streams = {
       bookings: bookingsByEmail.get(email) ?? [],
       payments,
       adjustments,
-      asAt,
-    });
+    };
+    const totals = computeCoachLedger({ ...streams, asAt });
+    const pair = computeCoachBalancePair({ ...streams, todayKey: asAt });
 
     let lastPaidDate: string | null = null;
     for (const p of payments) {
@@ -1115,7 +1130,11 @@ export async function computeCoachBadgeBalances(
       // recomputes it, and matches the statement's booked + adjust - paid.
       totalCharged: round2(totals.booked + totals.adjust),
       totalPaid: totals.paid,
-      balance: totals.balance,
+      balance: pair.today,
+      balanceEndOfWeek: pair.endOfWeek,
+      balanceDelta: pair.delta,
+      weekEndKey: pair.weekEndKey,
+      isWeekEnd: pair.isWeekEnd,
       lastPaidDate,
     });
   }

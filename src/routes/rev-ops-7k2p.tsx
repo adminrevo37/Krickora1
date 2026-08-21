@@ -1287,6 +1287,17 @@ class BalanceBoundary extends React.Component<
 
 type BalVal = { label: string; cls: string }
 
+// Phase 5 (SPEC_COACH_LEDGER_UNIFICATION_2026-08): a coach row now carries BOTH named
+// balances. The badge shows "Balance today"; the rest of the week is secondary text, so
+// an admin can see what is owed now without losing sight of what is still to come.
+type BalRow = {
+  balance: number
+  balanceEndOfWeek: number
+  balanceDelta: number
+  isWeekEnd: boolean
+  lastPaidDate: string | null
+}
+
 // Renders the Balance + Last Paid cells for a single coach from a PRECOMPUTED value
 // (FEA-8). The whole roster's balances now arrive in one admin query (listCoachBalances)
 // instead of 2 reactive queries per row. Still its own component so BalanceBoundary can
@@ -1294,7 +1305,7 @@ type BalVal = { label: string; cls: string }
 function CoachBalanceCells({
   bal, balLoading, fmtBalance, fmtLastPaid,
 }: {
-  bal?: { balance: number; lastPaidDate: string | null }
+  bal?: BalRow
   balLoading: boolean
   fmtBalance: (n: number) => BalVal
   fmtLastPaid: (d: string | null) => string
@@ -1312,6 +1323,8 @@ function CoachBalanceCells({
   // (identical to the old per-row computation, which summed empty arrays to 0).
   const balCell = fmtBalance(bal?.balance ?? 0)
   const lastPaid = fmtLastPaid(bal?.lastPaidDate ?? null)
+  const delta = bal?.balanceDelta ?? 0
+  const showWeek = bal !== undefined && !bal.isWeekEnd && Math.abs(delta) > 0.005
 
   return (
     <>
@@ -1319,6 +1332,15 @@ function CoachBalanceCells({
         <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${balCell.cls}`}>
           {balCell.label}
         </span>
+        {showWeek && (
+          <div
+            className="text-[11px] text-gray-400 mt-1"
+            title="Balance at the end of this Mon–Sun week, including sessions still to come. Not owed yet."
+          >
+            ${Math.abs(bal!.balanceEndOfWeek).toFixed(2)}
+            {bal!.balanceEndOfWeek < 0 ? ' cr' : ''} end of week
+          </div>
+        )}
       </td>
       <td className="px-5 py-3 text-sm text-gray-500 whitespace-nowrap">{lastPaid}</td>
     </>
@@ -1434,7 +1456,7 @@ function CoachRow({
   setEditingCoach: (c: any) => void
   fmtBalance: (n: number) => BalVal
   fmtLastPaid: (d: string | null) => string
-  bal?: { balance: number; lastPaidDate: string | null }
+  bal?: BalRow
   balLoading: boolean
 }) {
   const { impersonate } = useImpersonation()
@@ -1573,9 +1595,16 @@ function CoachesTab() {
   // reactive queries per coach row. Build a coachId→balance map for the rows below.
   const coachBalancesRaw = useQuery((api.queries as any).listCoachBalances)
   const balancesLoading = coachBalancesRaw === undefined
-  const balByCoach = new Map<string, { balance: number; lastPaidDate: string | null }>()
+  const balByCoach = new Map<string, BalRow>()
   for (const r of ((coachBalancesRaw ?? []) as any[])) {
-    balByCoach.set(String(r.coachId), { balance: Number(r.balance) || 0, lastPaidDate: r.lastPaidDate ?? null })
+    balByCoach.set(String(r.coachId), {
+      balance: Number(r.balance) || 0,
+      // Phase 5: the badge is "Balance today"; end-of-week rides along as secondary text.
+      balanceEndOfWeek: Number(r.balanceEndOfWeek) || 0,
+      balanceDelta: Number(r.balanceDelta) || 0,
+      isWeekEnd: r.isWeekEnd === true,
+      lastPaidDate: r.lastPaidDate ?? null,
+    })
   }
 
   // Merge consecutive bookings

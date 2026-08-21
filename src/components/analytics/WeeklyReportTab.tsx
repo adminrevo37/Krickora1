@@ -140,7 +140,7 @@ export default function WeeklyReportTab() {
               <thead>
                 <tr className="text-left border-b border-gray-300">
                   <Th>Coach</Th><Th right>Sessions</Th><Th right>Hours</Th>
-                  <Th right>Opening bal</Th><Th right>Charges (wk)</Th><Th right>Payments (wk)</Th><Th right>Closing bal</Th>
+                  <Th right>Opening bal</Th><Th right>Charges (wk)</Th><Th right>Payments (wk)</Th><Th right>Balance end of week</Th>
                 </tr>
               </thead>
               <tbody>
@@ -188,7 +188,11 @@ export default function WeeklyReportTab() {
               </tfoot>
             </table>
             <div className="text-[11px] text-gray-500 mt-1">
-              Each row reads as a mini-statement: <strong>Opening bal + Charges (wk) − Payments (wk) = Closing bal</strong>. Opening bal = carried-forward balance as at Monday (a credit shows green, e.g. “$12.50 cr”). Charges (wk) = the coach's sessions dated in THIS Mon–Sun week — including any late-cancellation charges (a late-cancelled coach session is still billed) and any statement adjustment dated this week. A session (incl. a multi-lane block) shows in the week it falls on, so earlier sessions sit in the opening balance and future ones aren't charged until they occur. Owing shown in amber.
+              Each row reads as a mini-statement: <strong>Opening bal + Charges (wk) − Payments (wk) = Balance end of week</strong>.{' '}
+              <strong>Balance end of week</strong> is the same figure the coach sees named that way on
+              their statement, and it is deliberately NOT the same as the “Balance today” badge on the
+              Coaches tab: this one includes the rest of the week's booked sessions, and (for a capped
+              coach) the weekly cap credit, which is dated the last day of the week. Opening bal = carried-forward balance as at Monday (a credit shows green, e.g. “$12.50 cr”). Charges (wk) = the coach's sessions dated in THIS Mon–Sun week — including any late-cancellation charges (a late-cancelled coach session is still billed) and any statement adjustment dated this week. A session (incl. a multi-lane block) shows in the week it falls on, so earlier sessions sit in the opening balance and future ones aren't charged until they occur. Owing shown in amber.
             </div>
           </Section>
 
