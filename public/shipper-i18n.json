@@ -1312,7 +1312,7 @@
     "Clear ALL data: bookings, users, settings, discount codes, payments. Complete reset.": "Clear ALL data: bookings, users, settings, discount codes, payments. Complete reset.",
     "Bookings can only be cancelled or changed at least 2 hours before the session starts.": "Bookings can only be cancelled or changed at least 2 hours before the session starts.",
     "Create a new coach account with login credentials. The coach can sign in immediately.": "Create a new coach account with login credentials. The coach can sign in immediately.",
-    "Please arrive 5 minutes before your session. Equipment is available on-site for hire.": "Please arrive 5 minutes before your session. Equipment is available on-site for hire.",
+    "Please arrive 5 minutes before your session.": "Please arrive 5 minutes before your session.",
     "Price difference will be handled at the facility. No additional online payment required.": "Price difference will be handled at the facility. No additional online payment required.",
     "Use the \"Join Waitlist\" button on the calendar to get notified when booked slots open up.": "Use the \"Join Waitlist\" button on the calendar to get notified when booked slots open up.",
     "Redirect URI mismatch. Make sure the redirect URI in Google Cloud Console exactly matches:": "Redirect URI mismatch. Make sure the redirect URI in Google Cloud Console exactly matches:",
