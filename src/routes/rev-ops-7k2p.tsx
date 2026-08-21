@@ -1325,6 +1325,108 @@ function CoachBalanceCells({
   )
 }
 
+// SPEC_COACH_LEDGER_UNIFICATION_2026-08 Phase 3 — the ledger guard, on screen.
+//
+// Every coach's balance recomputed through each engine (this badge, the coach's own
+// statement, the weekly report) and compared. Green means they agree; red names the
+// coaches who don't and shows all three figures side by side, which is the comparison
+// that previously only happened when someone opened two screens at once and noticed.
+function CoachLedgerCheck() {
+  const check = useQuery((api as any).coachLedgerCheck.reconcileCoachLedgers)
+  const [showDetail, setShowDetail] = useState(false)
+
+  if (check === undefined) {
+    return (
+      <div className="px-6 py-2.5 border-b border-gray-100 bg-gray-50 text-xs text-gray-400">
+        Ledger check…
+      </div>
+    )
+  }
+  if (check === null) return null
+
+  const c = check as any
+  const money = (n: number) =>
+    `${n < 0 ? '−' : ''}$${Math.abs(Number(n) || 0).toFixed(2)}`
+
+  if (c.ok) {
+    return (
+      <div
+        className="px-6 py-2.5 border-b border-gray-100 bg-emerald-50 text-xs text-emerald-700 font-medium"
+        title={(c.caveats ?? []).join('\n')}
+      >
+        ✅ Ledger check — all {c.coachCount} coach balance{c.coachCount === 1 ? '' : 's'} agree
+        across the badge, the coach statement and the weekly report (as at {c.asAt}).
+      </div>
+    )
+  }
+
+  return (
+    <div className="px-6 py-3 border-b border-gray-100 bg-red-50 text-xs text-red-800">
+      <div className="flex items-center justify-between gap-3">
+        <span className="font-semibold">
+          ⚠️ Ledger check — {c.mismatches.length > 0
+            ? `${c.mismatches.length} coach${c.mismatches.length === 1 ? '' : 'es'} disagree`
+            : 'charges with no coach account'}{' '}
+          (as at {c.asAt})
+        </span>
+        <button
+          onClick={() => setShowDetail((s: boolean) => !s)}
+          className="px-2 py-1 rounded-lg bg-white border border-red-200 text-red-700 font-semibold hover:bg-red-100"
+        >
+          {showDetail ? 'Hide' : 'Show'} detail
+        </button>
+      </div>
+
+      {c.orphanCharges?.count > 0 && (
+        <div className="mt-2">
+          {money(c.orphanCharges.total)} of coach charges are booked against{' '}
+          {c.orphanCharges.count} email{c.orphanCharges.count === 1 ? '' : 's'} with no coach
+          account — nobody is billed for them and they appear on no statement:{' '}
+          <span className="font-mono">{(c.orphanCharges.emails ?? []).join(', ')}</span>
+        </div>
+      )}
+
+      {showDetail && c.mismatches.length > 0 && (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-red-600">
+                <th className="py-1 pr-4 font-semibold">Coach</th>
+                <th className="py-1 pr-4 font-semibold">Badge</th>
+                <th className="py-1 pr-4 font-semibold">Statement</th>
+                <th className="py-1 pr-4 font-semibold">Weekly report</th>
+                <th className="py-1 pr-4 font-semibold">Worst gap</th>
+              </tr>
+            </thead>
+            <tbody>
+              {c.mismatches.map((m: any) => (
+                <tr key={m.coachId} className="border-t border-red-200 align-top">
+                  <td className="py-1.5 pr-4">
+                    <div className="font-semibold">{m.name}</div>
+                    <div className="text-red-500">{m.email}</div>
+                    {(m.notes ?? []).map((n: string, i: number) => (
+                      <div key={i} className="text-red-500 mt-0.5">{n}</div>
+                    ))}
+                  </td>
+                  <td className="py-1.5 pr-4 whitespace-nowrap">{money(m.badge)}</td>
+                  <td className="py-1.5 pr-4 whitespace-nowrap">{money(m.statement)}</td>
+                  <td className="py-1.5 pr-4 whitespace-nowrap">{money(m.weekly)}</td>
+                  <td className="py-1.5 pr-4 whitespace-nowrap font-semibold">{money(m.maxDelta)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {(c.caveats ?? []).length > 0 && (
+            <ul className="mt-2 text-red-500 list-disc pl-4 space-y-0.5">
+              {(c.caveats as string[]).map((n, i) => <li key={i}>{n}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function CoachRow({
   c, setEditingCoach, fmtBalance, fmtLastPaid, bal, balLoading,
 }: {
@@ -1677,6 +1779,7 @@ function CoachesTab() {
             {showAddForm ? 'Cancel' : '+ Add Coach'}
           </button>
         </div>
+        <CoachLedgerCheck />
         {coaches.length === 0 ? (
           <div className="p-6 text-sm text-gray-400 italic">No coaches yet.</div>
         ) : (

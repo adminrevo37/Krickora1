@@ -25,6 +25,7 @@ import type * as billingCaps from "../billingCaps.js";
 import type * as bookingEvents from "../bookingEvents.js";
 import type * as broadcast from "../broadcast.js";
 import type * as closures from "../closures.js";
+import type * as coachLedgerCheck from "../coachLedgerCheck.js";
 import type * as crons from "../crons.js";
 import type * as digestAction from "../digestAction.js";
 import type * as display from "../display.js";
@@ -105,6 +106,7 @@ declare const fullApi: ApiFromModules<{
   bookingEvents: typeof bookingEvents;
   broadcast: typeof broadcast;
   closures: typeof closures;
+  coachLedgerCheck: typeof coachLedgerCheck;
   crons: typeof crons;
   digestAction: typeof digestAction;
   display: typeof display;

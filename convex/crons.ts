@@ -97,4 +97,17 @@ crons.daily(
   internal.googleCalendar.reconcileCalendarInternal
 );
 
+// SPEC_COACH_LEDGER_UNIFICATION_2026-08 Phase 3 — daily coach-ledger reconciliation.
+// Recomputes every coach's balance through each engine (Coaches-tab badge, coach
+// statement, weekly report) and pushes the admins if any two disagree by more than a
+// cent, or if coach charges exist against no coach account. SILENT when all agree.
+// Both prior ledger incidents were found by accident; this is what finds the next one.
+// 03:00 AWST = 19:00 UTC — after the weekly billing caps reconcile at 18:30 UTC, so a
+// cap credit written overnight can never be read mid-write and reported as a mismatch.
+crons.daily(
+  "coach-ledger-check",
+  { hourUTC: 19, minuteUTC: 0 },
+  internal.coachLedgerCheck.runDailyLedgerCheck
+);
+
 export default crons;

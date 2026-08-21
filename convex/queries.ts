@@ -997,81 +997,108 @@ export const listPaymentsByCoach = query({
 //   ADJUST   = Σ statementAdjustments.delta for that coach, dated today or earlier;
 //   PAYMENTS = Σ payments.amount by coachId, RECEIVED today or earlier;
 //              last-paid = newest dateReceived on or before today.
+// SPEC_COACH_LEDGER_UNIFICATION_2026-08 Phase 3 — the balance computation is
+// extracted so the ledger guard (convex/coachLedgerCheck.ts) can run THE BADGE'S OWN
+// CODE instead of carrying a fourth copy of these rules. `listCoachBalances` below is
+// now a thin wrapper; behaviour is unchanged.
+//   asAt           — the AWST date the balance is bounded to (the badge passes today).
+//   chargedByEmail — returned too, so the guard can spot charge-bearing coach bookings
+//                    whose email matches no coach `customers` row: the live exposure
+//                    meter for disagreement #2 (identity key).
+export type CoachBadgeBalance = {
+  coachId: string;
+  totalCharged: number;
+  totalPaid: number;
+  balance: number;
+  lastPaidDate: string | null;
+};
+
+export async function computeCoachBadgeBalances(
+  ctx: any,
+  asAt: string
+): Promise<{ rows: CoachBadgeBalance[]; chargedByEmail: Map<string, number> }> {
+  const todayKey = asAt;
+
+  // Coach charges grouped by the coach's lowercased email. Read only bookings dated
+  // up to today via the by_date index (future bookings aren't billed yet), matching
+  // the old client filter ((b.date || '') > todayStr → excluded).
+  const chargedByEmail = new Map<string, number>();
+  const bookings = await ctx.db
+    .query("bookings")
+    .withIndex("by_date", (q: any) => q.lte("date", todayKey))
+    .collect();
+  for (const b of bookings) {
+    if (!isCoachChargeBooking(b)) continue;
+    const email = (b.customerEmail ?? "").toLowerCase().trim();
+    if (!email) continue;
+    chargedByEmail.set(email, (chargedByEmail.get(email) ?? 0) + coachBookingCost(b));
+  }
+
+  // Statement adjustments (BATCH 15.2) — previously omitted entirely, which is why
+  // a coach with any adjustment showed a badge that disagreed with their statement.
+  // Past/today only, matching the statement's own past/future split.
+  const adjustByCoach = new Map<string, number>();
+  const adjustments = await ctx.db
+    .query("statementAdjustments")
+    .withIndex("by_subject", (q: any) => q.eq("subjectType", "coach"))
+    .collect();
+  for (const a of adjustments as any[]) {
+    const cid = String(a.subjectId ?? "");
+    if (!cid) continue;
+    if ((a.date ?? "") > todayKey) continue;
+    adjustByCoach.set(cid, (adjustByCoach.get(cid) ?? 0) + (Number(a.delta) || 0));
+  }
+
+  // Payments + last-paid grouped by coachId. BATCH 15.2: bound to payments actually
+  // RECEIVED by today — this both fixes the drift (a future-dated payment used to cut
+  // the badge while the sessions it pays for had not yet been charged, so a pre-paying
+  // coach read as in credit) and replaces a full-table scan with an indexed range read.
+  const payments = await ctx.db
+    .query("payments")
+    .withIndex("by_dateReceived", (q: any) => q.lte("dateReceived", todayKey))
+    .collect();
+  const paidByCoach = new Map<string, number>();
+  const lastPaidByCoach = new Map<string, string>();
+  for (const p of payments as any[]) {
+    const cid = String(p.coachId ?? "");
+    if (!cid) continue;
+    paidByCoach.set(cid, (paidByCoach.get(cid) ?? 0) + (Number(p.amount) || 0));
+    const dr = p.dateReceived ?? "";
+    if (dr > (lastPaidByCoach.get(cid) ?? "")) lastPaidByCoach.set(cid, dr);
+  }
+
+  const coaches = await ctx.db
+    .query("customers")
+    .withIndex("by_role", (q: any) => q.eq("role", "coach"))
+    .collect();
+  const rows = coaches.map((c: any) => {
+    const cid = String(c._id);
+    const bookedCharged = chargedByEmail.get((c.email ?? "").toLowerCase().trim()) ?? 0;
+    const totalAdjust = adjustByCoach.get(cid) ?? 0;
+    // Adjustments are part of what the coach owes, so they belong in totalCharged —
+    // that keeps `balance === totalCharged - totalPaid` true for any consumer that
+    // recomputes it, and matches the statement's booked + adjust - paid.
+    const totalCharged = bookedCharged + totalAdjust;
+    const totalPaid = paidByCoach.get(cid) ?? 0;
+    return {
+      coachId: cid,
+      totalCharged,
+      totalPaid,
+      balance: totalCharged - totalPaid,
+      lastPaidDate: lastPaidByCoach.get(cid) ?? null,
+    };
+  });
+
+  return { rows, chargedByEmail };
+}
+
 export const listCoachBalances = query({
   args: {},
   handler: async (ctx) => {
     await requireAdmin(ctx);
     const todayKey = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
-
-    // Coach charges grouped by the coach's lowercased email. Read only bookings dated
-    // up to today via the by_date index (future bookings aren't billed yet), matching
-    // the old client filter ((b.date || '') > todayStr → excluded).
-    const chargedByEmail = new Map<string, number>();
-    const bookings = await ctx.db
-      .query("bookings")
-      .withIndex("by_date", (q: any) => q.lte("date", todayKey))
-      .collect();
-    for (const b of bookings) {
-      if (!isCoachChargeBooking(b)) continue;
-      const email = (b.customerEmail ?? "").toLowerCase().trim();
-      if (!email) continue;
-      chargedByEmail.set(email, (chargedByEmail.get(email) ?? 0) + coachBookingCost(b));
-    }
-
-    // Statement adjustments (BATCH 15.2) — previously omitted entirely, which is why
-    // a coach with any adjustment showed a badge that disagreed with their statement.
-    // Past/today only, matching the statement's own past/future split.
-    const adjustByCoach = new Map<string, number>();
-    const adjustments = await ctx.db
-      .query("statementAdjustments")
-      .withIndex("by_subject", (q: any) => q.eq("subjectType", "coach"))
-      .collect();
-    for (const a of adjustments as any[]) {
-      const cid = String(a.subjectId ?? "");
-      if (!cid) continue;
-      if ((a.date ?? "") > todayKey) continue;
-      adjustByCoach.set(cid, (adjustByCoach.get(cid) ?? 0) + (Number(a.delta) || 0));
-    }
-
-    // Payments + last-paid grouped by coachId. BATCH 15.2: bound to payments actually
-    // RECEIVED by today — this both fixes the drift (a future-dated payment used to cut
-    // the badge while the sessions it pays for had not yet been charged, so a pre-paying
-    // coach read as in credit) and replaces a full-table scan with an indexed range read.
-    const payments = await ctx.db
-      .query("payments")
-      .withIndex("by_dateReceived", (q: any) => q.lte("dateReceived", todayKey))
-      .collect();
-    const paidByCoach = new Map<string, number>();
-    const lastPaidByCoach = new Map<string, string>();
-    for (const p of payments as any[]) {
-      const cid = String(p.coachId ?? "");
-      if (!cid) continue;
-      paidByCoach.set(cid, (paidByCoach.get(cid) ?? 0) + (Number(p.amount) || 0));
-      const dr = p.dateReceived ?? "";
-      if (dr > (lastPaidByCoach.get(cid) ?? "")) lastPaidByCoach.set(cid, dr);
-    }
-
-    const coaches = await ctx.db
-      .query("customers")
-      .withIndex("by_role", (q: any) => q.eq("role", "coach"))
-      .collect();
-    return coaches.map((c: any) => {
-      const cid = String(c._id);
-      const bookedCharged = chargedByEmail.get((c.email ?? "").toLowerCase().trim()) ?? 0;
-      const totalAdjust = adjustByCoach.get(cid) ?? 0;
-      // Adjustments are part of what the coach owes, so they belong in totalCharged —
-      // that keeps `balance === totalCharged - totalPaid` true for any consumer that
-      // recomputes it, and matches the statement's booked + adjust - paid.
-      const totalCharged = bookedCharged + totalAdjust;
-      const totalPaid = paidByCoach.get(cid) ?? 0;
-      return {
-        coachId: cid,
-        totalCharged,
-        totalPaid,
-        balance: totalCharged - totalPaid,
-        lastPaidDate: lastPaidByCoach.get(cid) ?? null,
-      };
-    });
+    const { rows } = await computeCoachBadgeBalances(ctx, todayKey);
+    return rows;
   },
 });
 
