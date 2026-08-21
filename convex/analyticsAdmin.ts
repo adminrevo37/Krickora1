@@ -11,6 +11,7 @@ import { getCallerContext } from "./lib/adminGuard";
 import { defaultLaneName } from "./lib/lanes";
 import { computeCustomerPriceCents } from "./lib/pricing";
 import { discountAmountCents } from "./lib/discounts";
+import { isCoachChargeBooking, coachBookingCost } from "./lib/coachLedger";
 import {
   DOW_LABELS,
   HOUR_MS,
@@ -1179,12 +1180,11 @@ export const getWeeklyReport = query({
       .withIndex("by_date", (q: any) => q.lte("date", weekEnd))
       .collect()) as any[];
     for (const b of bookingsToWeekEnd) {
-      const isCoachCharge =
-        b.isCoachBooking === true || (typeof b.coachPrice === "number" && b.coachPrice > 0);
-      if (!isCoachCharge) continue;
-      // filterCoachBookings: late-cancelled-charged stay; other cancelled excluded.
-      if (b.status === "cancelled" && b.coachLateCancelCharged !== true) continue;
-      const cost = b.statementExcluded === true ? 0 : Number(b.coachPrice) || 0;
+      // BATCH 15.2: these rules now come from the shared lib/coachLedger helpers, so
+      // this report and the Coaches-tab badge (listCoachBalances) cannot drift apart
+      // again. Behaviour is unchanged — the helpers are this logic, extracted.
+      if (!isCoachChargeBooking(b)) continue;
+      const cost = coachBookingCost(b);
       if (cost === 0) continue;
       const email = (b.customerEmail ?? "").toLowerCase().trim();
       if (!email) continue;
