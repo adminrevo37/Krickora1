@@ -356,7 +356,7 @@ function LandingPage({ onSignIn, onSignUp }: { onSignIn: () => void; onSignUp: (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 max-w-3xl mx-auto">
             {[
               { icon: '👟', title: 'Cricket Shoes', desc: 'Trainers or cricket shoes with grip' },
-              { icon: '🏏', title: 'Your Gear', desc: 'Bat, pads, gloves — or hire on-site' },
+              { icon: '🏏', title: 'Your Gear', desc: 'Bat, pads and gloves — please bring your own' },
               { icon: '💧', title: 'Water', desc: 'Stay hydrated during your session' },
               { icon: '👕', title: 'Comfy Clothes', desc: 'Anything you can move freely in' },
             ].map((item) => (
