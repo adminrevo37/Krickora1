@@ -65,3 +65,60 @@ export function monthStartKey(dateKey: string): string {
 export function round2(n: number): number {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
+
+/** What a coach owes, and the three streams it is made of. */
+export type CoachLedgerTotals = {
+  booked: number;
+  adjust: number;
+  paid: number;
+  /** booked + adjust − paid. */
+  balance: number;
+};
+
+/**
+ * THE balance arithmetic. Phase 2 of SPEC_COACH_LEDGER_UNIFICATION_2026-08: this is the
+ * only place `booked + adjust − paid` is computed, so the admin badge, the coach's
+ * statement and the weekly report cannot arrive at different answers from the same rows.
+ *
+ * Each stream bounds on its OWN date field — bookings `date`, payments `dateReceived`,
+ * adjustments `date` — inclusive of `asAt` and, when given, of `from`.
+ *
+ * ⭐ `asAt` is a parameter rather than "today" because the two legitimate questions
+ * differ only by that date: "what does this coach owe right now?" (asAt = today) and
+ * "what will they owe when the week closes?" (asAt = Sunday). Phase 5 names both; they
+ * are two calls to this function, which is why they cannot drift apart.
+ */
+export function computeCoachLedger(input: {
+  bookings?: any[];
+  payments?: any[];
+  adjustments?: any[];
+  /** Inclusive upper bound (YYYY-MM-DD). */
+  asAt: string;
+  /** Optional inclusive lower bound, for a windowed figure like "this week". */
+  from?: string;
+}): CoachLedgerTotals {
+  const { asAt, from } = input;
+  const inWindow = (d: string) => d <= asAt && (from === undefined || d >= from);
+
+  let booked = 0;
+  for (const b of input.bookings ?? []) {
+    if (!isCoachChargeBooking(b)) continue;
+    if (!inWindow(b.date ?? "")) continue;
+    booked += coachBookingCost(b);
+  }
+  let paid = 0;
+  for (const p of input.payments ?? []) {
+    if (!inWindow(p.dateReceived ?? "")) continue;
+    paid += Number(p.amount) || 0;
+  }
+  let adjust = 0;
+  for (const a of input.adjustments ?? []) {
+    if (!inWindow(a.date ?? "")) continue;
+    adjust += Number(a.delta) || 0;
+  }
+
+  booked = round2(booked);
+  paid = round2(paid);
+  adjust = round2(adjust);
+  return { booked, adjust, paid, balance: round2(booked + adjust - paid) };
+}

@@ -17,9 +17,9 @@
 import {
   coachBookingCost,
   filterCoachChargeBookings,
+  computeCoachLedger,
   awstTodayKey,
   monthStartKey,
-  round2,
 } from '../../convex/lib/coachLedger'
 
 export function formatHour(h: number): string {
@@ -98,24 +98,28 @@ export function buildCoachLedger(input: {
   const pastAdjust = allAdjust.filter((a: any) => (a.date || '') <= todayStr)
   const futureAdjust = allAdjust.filter((a: any) => (a.date || '') > todayStr)
 
-  // Totals are rounded to cents (Phase 1, disagreement #11): the weekly report and the
-  // billing caps already did, the statement and badge did not, so the same balance could
-  // render with a trailing float difference depending which screen you were on.
-  const totalBooked = round2(coachBookings.reduce((s, b) => s + bookingCost(b), 0))
-  const totalPaid = round2(payments.reduce((s, p) => s + (p.amount || 0), 0))
-  const totalAdjust = round2(pastAdjust.reduce((s, a) => s + (a.delta || 0), 0))
-  const balance = round2(totalBooked + totalAdjust - totalPaid)
+  // Phase 2 (SPEC_COACH_LEDGER_UNIFICATION_2026-08): the statement no longer does its own
+  // balance arithmetic. `computeCoachLedger` is the single implementation of
+  // booked + adjust − paid, shared with the admin badge and the weekly report, so the
+  // three cannot arrive at different answers from the same rows. It is handed the RAW
+  // lists and does its own date bounding — everything below is presentation.
+  const totals = computeCoachLedger({
+    bookings: input.bookings,
+    payments: input.payments,
+    adjustments: input.adjustments,
+    asAt: todayStr,
+  })
+  const { booked: totalBooked, paid: totalPaid, adjust: totalAdjust, balance } = totals
 
-  const monthBooked = round2(
-    coachBookings
-      .filter((b: any) => (b.date || '') >= monthStart)
-      .reduce((s, b) => s + bookingCost(b), 0)
-  )
-  const monthPaid = round2(
-    payments
-      .filter((p: any) => (p.dateReceived || '') >= monthStart && (p.dateReceived || '') <= todayStr)
-      .reduce((s, p) => s + (p.amount || 0), 0)
-  )
+  const month = computeCoachLedger({
+    bookings: input.bookings,
+    payments: input.payments,
+    adjustments: input.adjustments,
+    from: monthStart,
+    asAt: todayStr,
+  })
+  const monthBooked = month.booked
+  const monthPaid = month.paid
 
   // Build past rows, sort ascending for running balance.
   const rows: Omit<LedgerRow, 'balance'>[] = []

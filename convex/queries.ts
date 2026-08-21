@@ -4,11 +4,15 @@ import type { Id } from "./_generated/dataModel";
 import { requireAdmin, getCallerContext, stripBookingPII } from "./lib/adminGuard";
 import { defaultLaneName } from "./lib/lanes";
 import { validateDiscount } from "./lib/discounts";
-import { resolveCanonicalCustomerByEmail, customerIdsForEmail } from "./lib/identity";
+import {
+  resolveCanonicalCustomerByEmail,
+  customerIdsForEmail,
+  resolveCoachLedgerIdentity,
+} from "./lib/identity";
 import { mondayOfWeek } from "./billingCaps";
 import {
   isCoachChargeBooking,
-  coachBookingCost,
+  computeCoachLedger,
   awstTodayKey,
   monthStartKey,
   round2,
@@ -1023,80 +1027,100 @@ export type CoachBadgeBalance = {
 export async function computeCoachBadgeBalances(
   ctx: any,
   asAt: string
-): Promise<{ rows: CoachBadgeBalance[]; chargedByEmail: Map<string, number> }> {
-  const todayKey = asAt;
-
-  // Coach charges grouped by the coach's lowercased email. Read only bookings dated
-  // up to today via the by_date index (future bookings aren't billed yet), matching
-  // the old client filter ((b.date || '') > todayStr → excluded).
-  const chargedByEmail = new Map<string, number>();
+): Promise<{ rows: CoachBadgeBalance[]; bookingsByEmail: Map<string, any[]> }> {
+  // Bookings up to `asAt` via the by_date index (future sessions aren't billed yet),
+  // bucketed by the coach's lowercased email. Phase 2: rows are bucketed rather than
+  // summed here, because the summing now happens in exactly one place —
+  // computeCoachLedger — for this engine, the statement and the weekly report alike.
+  const bookingsByEmail = new Map<string, any[]>();
   const bookings = await ctx.db
     .query("bookings")
-    .withIndex("by_date", (q: any) => q.lte("date", todayKey))
+    .withIndex("by_date", (q: any) => q.lte("date", asAt))
     .collect();
   for (const b of bookings) {
     if (!isCoachChargeBooking(b)) continue;
     const email = (b.customerEmail ?? "").toLowerCase().trim();
     if (!email) continue;
-    chargedByEmail.set(email, (chargedByEmail.get(email) ?? 0) + coachBookingCost(b));
+    const list = bookingsByEmail.get(email);
+    if (list) list.push(b);
+    else bookingsByEmail.set(email, [b]);
   }
 
-  // Statement adjustments (BATCH 15.2) — previously omitted entirely, which is why
-  // a coach with any adjustment showed a badge that disagreed with their statement.
-  // Past/today only, matching the statement's own past/future split.
-  const adjustByCoach = new Map<string, number>();
-  const adjustments = await ctx.db
+  // Statement adjustments, bucketed by the customers row they belong to.
+  const adjustmentsByCustomer = new Map<string, any[]>();
+  for (const a of (await ctx.db
     .query("statementAdjustments")
     .withIndex("by_subject", (q: any) => q.eq("subjectType", "coach"))
-    .collect();
-  for (const a of adjustments as any[]) {
+    .collect()) as any[]) {
     const cid = String(a.subjectId ?? "");
     if (!cid) continue;
-    if ((a.date ?? "") > todayKey) continue;
-    adjustByCoach.set(cid, (adjustByCoach.get(cid) ?? 0) + (Number(a.delta) || 0));
+    const list = adjustmentsByCustomer.get(cid);
+    if (list) list.push(a);
+    else adjustmentsByCustomer.set(cid, [a]);
   }
 
-  // Payments + last-paid grouped by coachId. BATCH 15.2: bound to payments actually
-  // RECEIVED by today — this both fixes the drift (a future-dated payment used to cut
-  // the badge while the sessions it pays for had not yet been charged, so a pre-paying
-  // coach read as in credit) and replaces a full-table scan with an indexed range read.
-  const payments = await ctx.db
+  // Payments, bucketed by coachId. BATCH 15.2: read through by_dateReceived rather than
+  // scanning the whole table — a future-dated payment used to cut the badge while the
+  // sessions it pays for had not yet been charged, so a pre-paying coach read as being
+  // in credit.
+  const paymentsByCustomer = new Map<string, any[]>();
+  for (const p of (await ctx.db
     .query("payments")
-    .withIndex("by_dateReceived", (q: any) => q.lte("dateReceived", todayKey))
-    .collect();
-  const paidByCoach = new Map<string, number>();
-  const lastPaidByCoach = new Map<string, string>();
-  for (const p of payments as any[]) {
+    .withIndex("by_dateReceived", (q: any) => q.lte("dateReceived", asAt))
+    .collect()) as any[]) {
     const cid = String(p.coachId ?? "");
     if (!cid) continue;
-    paidByCoach.set(cid, (paidByCoach.get(cid) ?? 0) + (Number(p.amount) || 0));
-    const dr = p.dateReceived ?? "";
-    if (dr > (lastPaidByCoach.get(cid) ?? "")) lastPaidByCoach.set(cid, dr);
+    const list = paymentsByCustomer.get(cid);
+    if (list) list.push(p);
+    else paymentsByCustomer.set(cid, [p]);
   }
 
   const coaches = await ctx.db
     .query("customers")
     .withIndex("by_role", (q: any) => q.eq("role", "coach"))
     .collect();
-  const rows = coaches.map((c: any) => {
-    const cid = String(c._id);
-    const bookedCharged = chargedByEmail.get((c.email ?? "").toLowerCase().trim()) ?? 0;
-    const totalAdjust = adjustByCoach.get(cid) ?? 0;
-    // Adjustments are part of what the coach owes, so they belong in totalCharged —
-    // that keeps `balance === totalCharged - totalPaid` true for any consumer that
-    // recomputes it, and matches the statement's booked + adjust - paid.
-    const totalCharged = round2(bookedCharged + totalAdjust);
-    const totalPaid = round2(paidByCoach.get(cid) ?? 0);
-    return {
-      coachId: cid,
-      totalCharged,
-      totalPaid,
-      balance: round2(totalCharged - totalPaid),
-      lastPaidDate: lastPaidByCoach.get(cid) ?? null,
-    };
-  });
 
-  return { rows, chargedByEmail };
+  const rows: CoachBadgeBalance[] = [];
+  for (const c of coaches as any[]) {
+    // Phase 2 (#2): ONE resolved identity drives all three streams, so a coach with a
+    // duplicate customers row can no longer keep their charges while losing their
+    // payments.
+    const { email, ids } = await resolveCoachLedgerIdentity(ctx, c);
+    const payments: any[] = [];
+    const adjustments: any[] = [];
+    for (const id of ids) {
+      const p = paymentsByCustomer.get(id);
+      if (p) payments.push(...p);
+      const a = adjustmentsByCustomer.get(id);
+      if (a) adjustments.push(...a);
+    }
+
+    const totals = computeCoachLedger({
+      bookings: bookingsByEmail.get(email) ?? [],
+      payments,
+      adjustments,
+      asAt,
+    });
+
+    let lastPaidDate: string | null = null;
+    for (const p of payments) {
+      const dr = p.dateReceived ?? "";
+      if (dr && dr <= asAt && (lastPaidDate === null || dr > lastPaidDate)) lastPaidDate = dr;
+    }
+
+    rows.push({
+      coachId: String(c._id),
+      // Adjustments are part of what the coach owes, so they belong in totalCharged —
+      // that keeps `balance === totalCharged - totalPaid` true for any consumer that
+      // recomputes it, and matches the statement's booked + adjust - paid.
+      totalCharged: round2(totals.booked + totals.adjust),
+      totalPaid: totals.paid,
+      balance: totals.balance,
+      lastPaidDate,
+    });
+  }
+
+  return { rows, bookingsByEmail };
 }
 
 export const listCoachBalances = query({

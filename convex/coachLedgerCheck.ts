@@ -27,7 +27,7 @@ import { internal } from "./_generated/api";
 import { requireAdmin } from "./lib/adminGuard";
 import {
   isCoachChargeBooking,
-  coachBookingCost,
+  computeCoachLedger,
   awstTodayKey,
   round2,
 } from "./lib/coachLedger";
@@ -94,49 +94,37 @@ async function statementBalance(
   const email = (coach.email ?? "").toLowerCase().trim();
   const cid = String(coach._id);
 
-  let booked = 0;
-  if (email) {
-    const bookings = await ctx.db
-      .query("bookings")
-      .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", email))
-      .collect();
-    for (const b of bookings as any[]) {
-      if (!isCoachChargeBooking(b)) continue;
-      if ((b.date ?? "") > asAt) continue;
-      booked += coachBookingCost(b);
-    }
-  } else {
+  const bookings = email
+    ? ((await ctx.db
+        .query("bookings")
+        .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", email))
+        .collect()) as any[])
+    : [];
+  if (!email) {
     notes.push("Coach has no email on file — their statement can load no bookings at all.");
   }
 
-  let paid = 0;
-  for (const p of (await ctx.db
+  const payments = (await ctx.db
     .query("payments")
     .withIndex("by_coachId", (q: any) => q.eq("coachId", cid))
-    .collect()) as any[]) {
-    if ((p.dateReceived ?? "") > asAt) continue;
-    paid += Number(p.amount) || 0;
-  }
+    .collect()) as any[];
 
-  let adjust = 0;
-  for (const a of (await ctx.db
+  const adjustments = (await ctx.db
     .query("statementAdjustments")
     .withIndex("by_subject", (q: any) =>
       q.eq("subjectType", "coach").eq("subjectId", coach._id)
     )
-    .collect()) as any[]) {
-    if ((a.date ?? "") > asAt) continue;
-    adjust += Number(a.delta) || 0;
-  }
+    .collect()) as any[];
 
-  return { balance: booked + adjust - paid, notes };
+  const { balance } = computeCoachLedger({ bookings, payments, adjustments, asAt });
+  return { balance, notes };
 }
 
 async function computeLedgerCheck(ctx: any): Promise<LedgerCheckResult> {
   const asAt = awstTodayKey();
 
   // Engine A — the admin badge, via its own function.
-  const { rows: badgeRows, chargedByEmail } = await computeCoachBadgeBalances(ctx, asAt);
+  const { rows: badgeRows, bookingsByEmail } = await computeCoachBadgeBalances(ctx, asAt);
   const badgeByCoach = new Map<string, number>(
     badgeRows.map((r) => [r.coachId, Number(r.balance) || 0])
   );
@@ -196,14 +184,17 @@ async function computeLedgerCheck(ctx: any): Promise<LedgerCheckResult> {
     }
   }
 
-  // Coach charges that belong to nobody.
+  // Coach charges that belong to nobody. Totalled through the same arithmetic as
+  // everything else — there is no second summation path.
   let orphanCount = 0;
   let orphanTotal = 0;
   const orphanEmails: string[] = [];
-  for (const [email, total] of chargedByEmail) {
+  for (const [email, rows] of bookingsByEmail) {
     if (coachEmails.has(email)) continue;
+    const { booked } = computeCoachLedger({ bookings: rows, asAt });
+    if (booked === 0) continue;
     orphanCount += 1;
-    orphanTotal += total;
+    orphanTotal += booked;
     if (orphanEmails.length < 10) orphanEmails.push(email);
   }
 

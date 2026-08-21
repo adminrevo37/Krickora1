@@ -54,3 +54,33 @@ export async function customerIdsForEmail(
     .collect();
   return rows.map((r: any) => r._id as string);
 }
+
+/**
+ * The identity a coach's ledger is keyed on — resolved ONCE, then used for all three
+ * streams (SPEC_COACH_LEDGER_UNIFICATION_2026-08 Phase 2, disagreement #2).
+ *
+ * The bug this closes: charges are keyed by `booking.customerEmail` while payments and
+ * statement adjustments are keyed by `customers._id`. Three streams, two different keys
+ * — so a coach with more than one `customers` row (a duplicate, or a merge tombstone)
+ * keeps the charges recorded against their email while losing the payments recorded
+ * against the other row's id. The failure is silent and total.
+ *
+ * ⚠️ What this CANNOT close: a booking carrying an email that no coach account has any
+ * more. `customers` has no `userId`, so email is the only link from a booking to a coach
+ * — there is nothing else to resolve through. That case is prevented at the write path
+ * (`adminChangeEmail` repoints every email-keyed row) and DETECTED by the ledger guard's
+ * orphan-charge meter, which reports charges belonging to no coach account.
+ *
+ * Measured on prod 2026-08-21: 0 coach emails carry a duplicate `customers` row, so this
+ * is currently a structural no-op — which is exactly why it is safe to land now.
+ */
+export async function resolveCoachLedgerIdentity(
+  ctx: any,
+  coach: any,
+): Promise<{ email: string; ids: string[] }> {
+  const email = (coach?.email ?? "").toLowerCase().trim();
+  const ids = new Set<string>([String(coach?._id ?? "")]);
+  for (const id of await customerIdsForEmail(ctx, email)) ids.add(String(id));
+  ids.delete("");
+  return { email, ids: Array.from(ids) };
+}

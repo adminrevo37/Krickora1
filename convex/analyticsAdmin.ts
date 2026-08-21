@@ -11,7 +11,12 @@ import { getCallerContext } from "./lib/adminGuard";
 import { defaultLaneName } from "./lib/lanes";
 import { computeCustomerPriceCents } from "./lib/pricing";
 import { discountAmountCents } from "./lib/discounts";
-import { isCoachChargeBooking, coachBookingCost } from "./lib/coachLedger";
+import {
+  isCoachChargeBooking,
+  coachBookingCost,
+  computeCoachLedger,
+} from "./lib/coachLedger";
+import { resolveCoachLedgerIdentity } from "./lib/identity";
 import {
   DOW_LABELS,
   HOUR_MS,
@@ -1050,93 +1055,93 @@ export async function computeCoachWeekFinance(
   weekStart: string,
   weekEnd: string
 ): Promise<{ coachDocs: any[]; financeByEmail: Map<string, CoachWeekFinance> }> {
-  // ── Coach account balances (opening / paid this week / current) ──────────
-  // Mirrors buildCoachLedger (src/lib/statementLedger.ts) so "Balance" equals
-  // the coach's statement page: balance = booked + adjustments − paid, with
-  // statement-excluded charges counted as $0 and late-cancelled coach bookings
-  // still charged.
   const coachDocs = (await ctx.db
     .query("customers")
     .withIndex("by_role", (q: any) => q.eq("role", "coach"))
     .collect()) as any[];
 
-  // Booked charges up to the END of the displayed week (indexed), split
-  // before-week vs to-week-end, by email.
-  const bookedBeforeByEmail = new Map<string, number>();
-  const bookedToWeekEndByEmail = new Map<string, number>();
-  const bookingsToWeekEnd = (await ctx.db
+  // Booked charges up to the END of the displayed week (indexed), bucketed by email.
+  const bookingsByEmail = new Map<string, any[]>();
+  for (const b of (await ctx.db
     .query("bookings")
     .withIndex("by_date", (q: any) => q.lte("date", weekEnd))
-    .collect()) as any[];
-  for (const b of bookingsToWeekEnd) {
-    // BATCH 15.2: these rules now come from the shared lib/coachLedger helpers, so
-    // this report and the Coaches-tab badge (listCoachBalances) cannot drift apart
-    // again. Behaviour is unchanged — the helpers are this logic, extracted.
+    .collect()) as any[]) {
     if (!isCoachChargeBooking(b)) continue;
-    const cost = coachBookingCost(b);
-    if (cost === 0) continue;
     const email = (b.customerEmail ?? "").toLowerCase().trim();
     if (!email) continue;
-    bookedToWeekEndByEmail.set(email, (bookedToWeekEndByEmail.get(email) ?? 0) + cost);
-    if (b.date < weekStart)
-      bookedBeforeByEmail.set(email, (bookedBeforeByEmail.get(email) ?? 0) + cost);
+    const list = bookingsByEmail.get(email);
+    if (list) list.push(b);
+    else bookingsByEmail.set(email, [b]);
   }
 
-  // Payments, split before-week / this-week / total, by coachId.
-  const paidBeforeByCoach = new Map<string, number>();
-  const paidThisWeekByCoach = new Map<string, number>();
-  for (const p of (await ctx.db.query("payments").collect()) as any[]) {
+  // Payments, bucketed by the customers row they were recorded against.
+  // COST (audit §7): read through by_dateReceived rather than scanning the whole
+  // payments table — nothing after weekEnd can affect this week's figures.
+  const paymentsByCustomer = new Map<string, any[]>();
+  for (const p of (await ctx.db
+    .query("payments")
+    .withIndex("by_dateReceived", (q: any) => q.lte("dateReceived", weekEnd))
+    .collect()) as any[]) {
     const cid = String(p.coachId ?? "");
     if (!cid) continue;
-    const amt = Number(p.amount) || 0;
-    const dr = p.dateReceived ?? "";
-    if (dr && dr < weekStart) paidBeforeByCoach.set(cid, (paidBeforeByCoach.get(cid) ?? 0) + amt);
-    if (dr >= weekStart && dr <= weekEnd)
-      paidThisWeekByCoach.set(cid, (paidThisWeekByCoach.get(cid) ?? 0) + amt);
+    const list = paymentsByCustomer.get(cid);
+    if (list) list.push(p);
+    else paymentsByCustomer.set(cid, [p]);
   }
 
-  // Coach statement adjustments, split before-week / to-week-end, by coachId.
-  const adjBeforeByCoach = new Map<string, number>();
-  const adjToWeekEndByCoach = new Map<string, number>();
+  // Coach statement adjustments, bucketed the same way.
+  const adjustmentsByCustomer = new Map<string, any[]>();
   for (const a of (await ctx.db
     .query("statementAdjustments")
     .withIndex("by_subject", (q: any) => q.eq("subjectType", "coach"))
     .collect()) as any[]) {
     const cid = String(a.subjectId ?? "");
     if (!cid) continue;
-    const d = a.date ?? "";
-    const delta = Number(a.delta) || 0;
-    if (d && d <= weekEnd) adjToWeekEndByCoach.set(cid, (adjToWeekEndByCoach.get(cid) ?? 0) + delta);
-    if (d && d < weekStart) adjBeforeByCoach.set(cid, (adjBeforeByCoach.get(cid) ?? 0) + delta);
+    const list = adjustmentsByCustomer.get(cid);
+    if (list) list.push(a);
+    else adjustmentsByCustomer.set(cid, [a]);
   }
 
-  // Per-coach finance keyed by email (charges key by email; pay/adj by coachId).
-  // chargesThisWeek is the AUTHORITATIVE weekly charge for the balance: session
-  // charges dated this week by the statement charge rule (INCLUDING late-cancel
-  // charges, which the confirmed-only Section A "amount" omitted) PLUS any
-  // statement adjustments dated this week. Closing is DERIVED from it, so every
-  // row reconciles exactly: Opening + Charges − Payments = Closing.
-  const financeByEmail = new Map<
-    string,
-    { openingBalance: number; chargesThisWeek: number; paymentsThisWeek: number; closingBalance: number }
-  >();
+  // Opening balance is everything dated BEFORE weekStart, i.e. as at the day before.
+  const dayBeforeWeek = addDaysStr(weekStart, -1);
+
+  const financeByEmail = new Map<string, CoachWeekFinance>();
   for (const c of coachDocs) {
-    const email = (c.email ?? "").toLowerCase().trim();
+    // Phase 2 (#2): one resolved identity for all three streams.
+    const { email, ids } = await resolveCoachLedgerIdentity(ctx, c);
     if (!email) continue;
-    const cid = String(c._id);
-    const bookedBefore = bookedBeforeByEmail.get(email) ?? 0;
-    const bookedToWeekEnd = bookedToWeekEndByEmail.get(email) ?? 0;
-    const paidBefore = paidBeforeByCoach.get(cid) ?? 0;
-    const paidThisWeek = paidThisWeekByCoach.get(cid) ?? 0;
-    const adjBefore = adjBeforeByCoach.get(cid) ?? 0;
-    const adjToWeekEnd = adjToWeekEndByCoach.get(cid) ?? 0;
-    const openingBalance = round2(bookedBefore + adjBefore - paidBefore);
-    const chargesThisWeek = round2((bookedToWeekEnd - bookedBefore) + (adjToWeekEnd - adjBefore));
+    const payments: any[] = [];
+    const adjustments: any[] = [];
+    for (const id of ids) {
+      const p = paymentsByCustomer.get(id);
+      if (p) payments.push(...p);
+      const a = adjustmentsByCustomer.get(id);
+      if (a) adjustments.push(...a);
+    }
+    const bookings = bookingsByEmail.get(email) ?? [];
+
+    const opening = computeCoachLedger({ bookings, payments, adjustments, asAt: dayBeforeWeek });
+    const week = computeCoachLedger({
+      bookings,
+      payments,
+      adjustments,
+      from: weekStart,
+      asAt: weekEnd,
+    });
+
+    // chargesThisWeek is the AUTHORITATIVE weekly charge for the balance: session
+    // charges dated this week by the statement charge rule (INCLUDING late-cancel
+    // charges, which the confirmed-only Section A "amount" omits) PLUS any statement
+    // adjustments dated this week. Closing stays DERIVED from it, so every row
+    // reconciles exactly: Opening + Charges − Payments = Closing.
+    const openingBalance = opening.balance;
+    const chargesThisWeek = round2(week.booked + week.adjust);
+    const paymentsThisWeek = week.paid;
     financeByEmail.set(email, {
       openingBalance,
       chargesThisWeek,
-      paymentsThisWeek: round2(paidThisWeek),
-      closingBalance: round2(openingBalance + chargesThisWeek - paidThisWeek),
+      paymentsThisWeek,
+      closingBalance: round2(openingBalance + chargesThisWeek - paymentsThisWeek),
     });
   }
 
