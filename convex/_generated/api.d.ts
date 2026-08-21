@@ -38,6 +38,7 @@ import type * as lanes from "../lanes.js";
 import type * as lib_adminGuard from "../lib/adminGuard.js";
 import type * as lib_analyticsHelpers from "../lib/analyticsHelpers.js";
 import type * as lib_bookingWindow from "../lib/bookingWindow.js";
+import type * as lib_coachLedger from "../lib/coachLedger.js";
 import type * as lib_credit from "../lib/credit.js";
 import type * as lib_discounts from "../lib/discounts.js";
 import type * as lib_email from "../lib/email.js";
@@ -117,6 +118,7 @@ declare const fullApi: ApiFromModules<{
   "lib/adminGuard": typeof lib_adminGuard;
   "lib/analyticsHelpers": typeof lib_analyticsHelpers;
   "lib/bookingWindow": typeof lib_bookingWindow;
+  "lib/coachLedger": typeof lib_coachLedger;
   "lib/credit": typeof lib_credit;
   "lib/discounts": typeof lib_discounts;
   "lib/email": typeof lib_email;
