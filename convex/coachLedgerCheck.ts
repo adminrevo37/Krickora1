@@ -15,20 +15,22 @@
 // `computeCoachWeekFinance`), not copies of them. A guard built from copied rules
 // would drift in exactly the way it exists to detect.
 //
-// ⚠️ What it CANNOT see (be honest about the coverage):
-//   • The coach statement's day boundary is the BROWSER's local date
-//     (`todayAndMonthStart()` in src/lib/statementLedger.ts), not AWST. No
-//     server-side check can observe a viewer's clock. This guard therefore verifies
-//     the statement's DATA SELECTION — which is where the identity-key risk lives —
-//     but disagreement #1 (timezone) stays invisible until Phase 1 makes the
-//     statement use AWST.
-//   • It compares balances, not the individual rows behind them; two offsetting
-//     errors of equal size would net out.
+// Phase 1 (2026-08-21) closed the one gap this guard could never have covered: the
+// statement's day boundary was the VIEWER'S BROWSER date, which no server-side check
+// can observe. It is now `awstTodayKey()` from the shared module, same as every other
+// engine, so the balance no longer depends on who is looking or from where.
+//
+// ⚠️ What it still cannot see: it compares BALANCES, not the individual rows behind
+// them — two offsetting errors of equal size would net out.
 import { query, internalQuery, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireAdmin } from "./lib/adminGuard";
-import { awstDateKey } from "./lib/analyticsHelpers";
-import { isCoachChargeBooking, coachBookingCost } from "./lib/coachLedger";
+import {
+  isCoachChargeBooking,
+  coachBookingCost,
+  awstTodayKey,
+  round2,
+} from "./lib/coachLedger";
 import { computeCoachBadgeBalances } from "./queries";
 import { computeCoachWeekFinance } from "./analyticsAdmin";
 import { mondayOfWeek } from "./billingCaps";
@@ -70,7 +72,6 @@ export type LedgerCheckResult = {
 };
 
 const CAVEATS = [
-  "The statement's day boundary is the viewer's browser clock, not AWST — a timezone divergence cannot be detected server-side until Phase 1 lands.",
   "Balances are compared, not the rows behind them: two offsetting errors of equal size would net to zero.",
 ];
 
@@ -132,7 +133,7 @@ async function statementBalance(
 }
 
 async function computeLedgerCheck(ctx: any): Promise<LedgerCheckResult> {
-  const asAt = awstDateKey(Date.now());
+  const asAt = awstTodayKey();
 
   // Engine A — the admin badge, via its own function.
   const { rows: badgeRows, chargedByEmail } = await computeCoachBadgeBalances(ctx, asAt);
@@ -158,10 +159,13 @@ async function computeLedgerCheck(ctx: any): Promise<LedgerCheckResult> {
     const email = (c.email ?? "").toLowerCase().trim();
     if (email) coachEmails.add(email);
 
-    const badge = badgeByCoach.get(coachId) ?? 0;
-    const weekly = Number(financeByEmail.get(email)?.closingBalance ?? 0);
+    // Every engine rounded to cents before comparing, so "agree" means agree on the
+    // money — not on float residue left by whichever engine happened to round first.
+    const badge = round2(badgeByCoach.get(coachId) ?? 0);
+    const weekly = round2(financeByEmail.get(email)?.closingBalance ?? 0);
     // Engine C — the statement.
-    const { balance: statement, notes } = await statementBalance(ctx, c, asAt);
+    const { balance: rawStatement, notes } = await statementBalance(ctx, c, asAt);
+    const statement = round2(rawStatement);
 
     const maxDelta = Math.max(
       Math.abs(badge - statement),
@@ -183,10 +187,10 @@ async function computeLedgerCheck(ctx: any): Promise<LedgerCheckResult> {
         coachId,
         name: c.name || email || coachId,
         email: c.email || "",
-        badge: Math.round(badge * 100) / 100,
-        statement: Math.round(statement * 100) / 100,
-        weekly: Math.round(weekly * 100) / 100,
-        maxDelta: Math.round(maxDelta * 100) / 100,
+        badge,
+        statement,
+        weekly,
+        maxDelta: round2(maxDelta),
         notes,
       });
     }
@@ -213,7 +217,7 @@ async function computeLedgerCheck(ctx: any): Promise<LedgerCheckResult> {
     mismatches,
     orphanCharges: {
       count: orphanCount,
-      total: Math.round(orphanTotal * 100) / 100,
+      total: round2(orphanTotal),
       emails: orphanEmails,
     },
     caveats: CAVEATS,

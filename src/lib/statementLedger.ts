@@ -1,5 +1,11 @@
 // SPEC_STATEMENTS_EDITING — shared coach-statement ledger builder.
 //
+// ⭐ SPEC_COACH_LEDGER_UNIFICATION_2026-08 Phase 1: the CHARGE RULES and the DAY
+// BOUNDARY no longer live here. They come from `convex/lib/coachLedger.ts`, which the
+// server-side readers import too, so the statement and the admin badge now run the
+// same functions instead of mirrored copies that drifted twice. `filterCoachBookings`
+// and `bookingCost` are re-exported below purely so existing call sites keep working.
+//
 // Both the admin CoachStatementTable and the coach's own /statements route render
 // the same reconciliation (coach bookings = charges, payments + adjustment lines).
 // This factors the merge/running-balance into one place so the two can't drift.
@@ -7,6 +13,14 @@
 // A statement adjustment has a signed delta: + = a charge/amount owed on the
 // statement, − = a credit/discount, 0 = a pure note. Positive deltas add to the
 // running balance like a booking charge; negative deltas reduce it like a payment.
+
+import {
+  coachBookingCost,
+  filterCoachChargeBookings,
+  awstTodayKey,
+  monthStartKey,
+  round2,
+} from '../../convex/lib/coachLedger'
 
 export function formatHour(h: number): string {
   const hh = Math.floor(h)
@@ -45,19 +59,13 @@ export type CoachLedger = {
 }
 
 // A booking the admin "removed" from the statement contributes $0 (SPEC_STATEMENTS_EDITING).
-const bookingCost = (b: any) => (b.statementExcluded === true ? 0 : Number(b.coachPrice || 0))
+// Both of these are now the SHARED definitions, re-exported under their existing names
+// so no call site had to change.
+export const bookingCost = coachBookingCost
 
 // Filter a raw bookings list (from listBookingsByEmail) down to this coach's
-// charged sessions. Matches the long-standing inline filter in both views.
-export function filterCoachBookings(bookings: any[]): any[] {
-  return (bookings ?? []).filter(
-    (b: any) =>
-      // Late-cancelled coach bookings are charged in full and stay on the
-      // statement (SPEC_PAYMENTS_AND_CREDIT #4).
-      (b.status !== 'cancelled' || b.coachLateCancelCharged === true) &&
-      (b.isCoachBooking === true || (typeof b.coachPrice === 'number' && b.coachPrice > 0))
-  )
-}
+// charged sessions.
+export const filterCoachBookings = filterCoachChargeBookings
 
 export function buildCoachLedger(input: {
   bookings: any[]
@@ -90,17 +98,24 @@ export function buildCoachLedger(input: {
   const pastAdjust = allAdjust.filter((a: any) => (a.date || '') <= todayStr)
   const futureAdjust = allAdjust.filter((a: any) => (a.date || '') > todayStr)
 
-  const totalBooked = coachBookings.reduce((s, b) => s + bookingCost(b), 0)
-  const totalPaid = payments.reduce((s, p) => s + (p.amount || 0), 0)
-  const totalAdjust = pastAdjust.reduce((s, a) => s + (a.delta || 0), 0)
-  const balance = totalBooked + totalAdjust - totalPaid
+  // Totals are rounded to cents (Phase 1, disagreement #11): the weekly report and the
+  // billing caps already did, the statement and badge did not, so the same balance could
+  // render with a trailing float difference depending which screen you were on.
+  const totalBooked = round2(coachBookings.reduce((s, b) => s + bookingCost(b), 0))
+  const totalPaid = round2(payments.reduce((s, p) => s + (p.amount || 0), 0))
+  const totalAdjust = round2(pastAdjust.reduce((s, a) => s + (a.delta || 0), 0))
+  const balance = round2(totalBooked + totalAdjust - totalPaid)
 
-  const monthBooked = coachBookings
-    .filter((b: any) => (b.date || '') >= monthStart)
-    .reduce((s, b) => s + bookingCost(b), 0)
-  const monthPaid = payments
-    .filter((p: any) => (p.dateReceived || '') >= monthStart && (p.dateReceived || '') <= todayStr)
-    .reduce((s, p) => s + (p.amount || 0), 0)
+  const monthBooked = round2(
+    coachBookings
+      .filter((b: any) => (b.date || '') >= monthStart)
+      .reduce((s, b) => s + bookingCost(b), 0)
+  )
+  const monthPaid = round2(
+    payments
+      .filter((p: any) => (p.dateReceived || '') >= monthStart && (p.dateReceived || '') <= todayStr)
+      .reduce((s, p) => s + (p.amount || 0), 0)
+  )
 
   // Build past rows, sort ascending for running balance.
   const rows: Omit<LedgerRow, 'balance'>[] = []
@@ -214,10 +229,15 @@ export function buildCoachLedger(input: {
 }
 
 // Helpers for the current-day / month-start strings the views need.
+//
+// ⚠️ BEHAVIOUR CHANGE (Phase 1, disagreement #1): this used to read the VIEWER'S
+// BROWSER date. It now reads AWST — the venue's day — so the statement cuts its
+// past/future split on the same boundary as the admin badge, the weekly report and
+// the billing caps. A coach viewing from a non-AWST timezone will see the split move
+// by up to a day around midnight; that is the fix, not a side effect. Two people
+// looking at identical data previously saw different balances, and neither number
+// looked wrong, which is exactly why it went unnoticed.
 export function todayAndMonthStart(): { todayStr: string; monthStart: string } {
-  const now = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
-  const monthStart = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`
-  return { todayStr, monthStart }
+  const todayStr = awstTodayKey()
+  return { todayStr, monthStart: monthStartKey(todayStr) }
 }

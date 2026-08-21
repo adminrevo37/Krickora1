@@ -5,7 +5,14 @@ import { requireAdmin, getCallerContext, stripBookingPII } from "./lib/adminGuar
 import { defaultLaneName } from "./lib/lanes";
 import { validateDiscount } from "./lib/discounts";
 import { resolveCanonicalCustomerByEmail, customerIdsForEmail } from "./lib/identity";
-import { isCoachChargeBooking, coachBookingCost } from "./lib/coachLedger";
+import { mondayOfWeek } from "./billingCaps";
+import {
+  isCoachChargeBooking,
+  coachBookingCost,
+  awstTodayKey,
+  monthStartKey,
+  round2,
+} from "./lib/coachLedger";
 
 // Scope a list of bookings to the caller: full PII for own bookings (or admin),
 // sanitised "Booked"/stripped for everyone else (SEC-1, decision #1).
@@ -1078,13 +1085,13 @@ export async function computeCoachBadgeBalances(
     // Adjustments are part of what the coach owes, so they belong in totalCharged —
     // that keeps `balance === totalCharged - totalPaid` true for any consumer that
     // recomputes it, and matches the statement's booked + adjust - paid.
-    const totalCharged = bookedCharged + totalAdjust;
-    const totalPaid = paidByCoach.get(cid) ?? 0;
+    const totalCharged = round2(bookedCharged + totalAdjust);
+    const totalPaid = round2(paidByCoach.get(cid) ?? 0);
     return {
       coachId: cid,
       totalCharged,
       totalPaid,
-      balance: totalCharged - totalPaid,
+      balance: round2(totalCharged - totalPaid),
       lastPaidDate: lastPaidByCoach.get(cid) ?? null,
     };
   });
@@ -1096,8 +1103,7 @@ export const listCoachBalances = query({
   args: {},
   handler: async (ctx) => {
     await requireAdmin(ctx);
-    const todayKey = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
-    const { rows } = await computeCoachBadgeBalances(ctx, todayKey);
+    const { rows } = await computeCoachBadgeBalances(ctx, awstTodayKey());
     return rows;
   },
 });
@@ -1172,19 +1178,13 @@ export const getRevenueBreakdown = query({
   args: {},
   handler: async (ctx) => {
     await requireAdmin(ctx);
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = now.getMonth();
-    const d = now.getDate();
-    const pad = (n: number) => String(n).padStart(2, "0");
-    const todayStr = `${y}-${pad(m + 1)}-${pad(d)}`;
-
-    // Week start = Monday
-    const day = now.getDay(); // 0=Sun
-    const diffToMon = day === 0 ? -6 : 1 - day;
-    const weekStart = new Date(y, m, d + diffToMon);
-    const weekStartStr = `${weekStart.getFullYear()}-${pad(weekStart.getMonth() + 1)}-${pad(weekStart.getDate())}`;
-    const monthStartStr = `${y}-${pad(m + 1)}-01`;
+    // Phase 1 (disagreement #1): today/week/month used to come from `new Date()` on
+    // the SERVER's clock, i.e. UTC — so for the first 8 hours of every AWST day this
+    // reported yesterday's figures, and at a month boundary the wrong month. Every
+    // date in this system is an AWST calendar key; this now is too.
+    const todayStr = awstTodayKey();
+    const weekStartStr = mondayOfWeek(todayStr);
+    const monthStartStr = monthStartKey(todayStr);
 
     const inRange = (dateStr: string, start: string) =>
       dateStr >= start && dateStr <= todayStr;

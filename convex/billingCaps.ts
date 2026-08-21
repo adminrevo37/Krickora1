@@ -15,6 +15,12 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
 import { requireAdmin } from "./lib/adminGuard";
+import {
+  isCoachChargeBooking,
+  coachBookingCost,
+  awstTodayKey,
+  round2,
+} from "./lib/coachLedger";
 
 const WEEKLY_CAP_CREATED_BY = "system:weekly-cap";
 
@@ -35,13 +41,14 @@ export function mondayOfWeek(dateStr: string): string {
   return addDaysStr(dateStr, diff);
 }
 
-function awstTodayKey(): string {
-  return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
-}
-
-// Sum a coach's booked charges for a Mon–Sun week. Matches buildCoachLedger's
-// charge definition (statementLedger.ts): coachPrice on the coach's non-cancelled
-// (or late-cancel-charged) coach bookings; statement-excluded charges count as $0.
+// Sum a coach's booked charges for a Mon–Sun week.
+//
+// SPEC_COACH_LEDGER_UNIFICATION_2026-08 Phase 1: this used to carry its OWN inline
+// copy of the charge rules — the third hand-maintained copy — with a comment claiming
+// a parity it did not enforce. It now uses the shared definitions, so a rule change
+// can no longer land in the statement and miss the cap.
+// (Behaviour is unchanged: the old code `continue`d on statementExcluded, the shared
+// helper costs it at $0, and a sum treats those identically.)
 async function weekChargesForCoach(
   ctx: any,
   coachEmail: string,
@@ -55,15 +62,11 @@ async function weekChargesForCoach(
     .collect();
   let total = 0;
   for (const b of bookings) {
-    const isCoachCharge =
-      b.isCoachBooking === true || (typeof b.coachPrice === "number" && b.coachPrice > 0);
-    if (!isCoachCharge) continue;
+    if (!isCoachChargeBooking(b)) continue;
     if ((b.customerEmail ?? "").toLowerCase().trim() !== email) continue;
-    if (b.status === "cancelled" && b.coachLateCancelCharged !== true) continue;
-    if (b.statementExcluded === true) continue;
-    total += Number(b.coachPrice) || 0;
+    total += coachBookingCost(b);
   }
-  return Math.round(total * 100) / 100;
+  return round2(total);
 }
 
 async function findCapLine(ctx: any, coachId: any, weekEnd: string): Promise<any | null> {
@@ -88,7 +91,7 @@ export const reconcileCoachWeeklyCapInternal = internalMutation({
       return;
     }
     const charges = await weekChargesForCoach(ctx, coach.email ?? "", weekStart, weekEnd);
-    const overage = Math.round((charges - cap) * 100) / 100;
+    const overage = round2(charges - cap);
     const nowIso = new Date().toISOString();
     if (overage > 0) {
       const delta = -overage; // negative = a credit that reduces the balance
@@ -182,13 +185,13 @@ export const setCoachWeeklyCap = mutation({
     if (!coach || coach.role !== "coach") throw new ConvexError("Not a coach.");
     if (cap != null && (!(cap >= 0) || cap > 100000)) throw new ConvexError("Enter a cap between 0 and 100000.");
     await ctx.db.patch(coachId, {
-      weeklyBillingCap: cap == null ? undefined : Math.round(cap * 100) / 100,
+      weeklyBillingCap: cap == null ? undefined : round2(cap),
     });
     let wk = mondayOfWeek(awstTodayKey());
     for (let i = 0; i < 13; i++) {
       await ctx.scheduler.runAfter(0, internal.billingCaps.reconcileCoachWeeklyCapInternal, { coachId, weekStart: wk });
       wk = addDaysStr(wk, -7);
     }
-    return { ok: true, cap: cap == null ? null : Math.round(cap * 100) / 100 };
+    return { ok: true, cap: cap == null ? null : round2(cap) };
   },
 });
