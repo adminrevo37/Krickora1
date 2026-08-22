@@ -287,32 +287,17 @@ export const getBookingDateBounds = query({
   },
 });
 
-// ============================================================================
-// C2.2 — REVENUE SNAPSHOTS read (persisted end-of-day trend history)
-// ============================================================================
-export const getRevenueSnapshots = query({
-  args: { from: v.optional(v.string()), to: v.optional(v.string()) },
-  handler: async (ctx, args) => {
-    if (!(await isAdmin(ctx))) return null;
-    const rows = await ctx.db
-      .query("revenueSnapshots")
-      .withIndex("by_date")
-      .collect();
-    return rows
-      .filter((r: any) => inRange(r.date, args.from, args.to))
-      .sort((a: any, b: any) => (a.date < b.date ? -1 : 1))
-      .map((r: any) => ({
-        date: r.date,
-        custRevenue: r.custRevenue,
-        coachCharges: r.coachCharges,
-        bookings: r.bookings,
-        customerBookings: r.customerBookings,
-        coachBookings: r.coachBookings,
-        hours: r.hours,
-        occupancyPct: r.occupancyPct,
-      }));
-  },
-});
+// C2.2 — REVENUE SNAPSHOTS
+// The daily cron still WRITES `revenueSnapshots` (analyticsSnapshot.ts) and that table is
+// kept forever on purpose: it is the backing store for the deferred FEA-5 (snapshot-backed
+// revenue series, SPEC_AUDIT_REMEDIATION_2026-06). Only the unused reader was deleted
+// (2026-08-22, Inspector approved) — restore it from git history when FEA-5 is built.
+//
+// ⚠️ WHEN FEA-5 IS BUILT, READ THIS FIRST: Phase 4 of SPEC_COACH_LEDGER_UNIFICATION
+// deliberately left the snapshot on the OLD rule (confirmed booked activity at booked
+// price) while aligning `getBookingRevenueSeries` to the coach-statement rules. Feeding
+// historical snapshot buckets into that series as-is would mix two different measures in
+// one chart — the exact class of disagreement that spec exists to remove.
 
 // ============================================================================
 // C2.6 — OCCUPANCY (booked hours ÷ open lane-hours capacity)
