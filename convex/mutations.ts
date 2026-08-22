@@ -24,6 +24,7 @@ import {
   type WindowTier,
 } from "./lib/bookingWindow";
 import { computeCustomerPriceCents, decreaseCreditCents } from "./lib/pricing";
+import { mondayOfWeek } from "./lib/coachLedger";
 import { validateAndSnapshotLane, resolveLaneSnapshot } from "./lanes";
 import { defaultLaneName, variantRatePerHour, DEFAULT_LANE_META } from "./lib/lanes";
 import { PRICE_DEFAULTS } from "./lib/priceDefaults";
@@ -6462,6 +6463,25 @@ export const updatePayment = mutation({
 // SPEC_STATEMENTS_EDITING — admin edits a coach BOOKING-charge line item directly
 // on the statement (the booking's coach charge = coachPrice, which the ledger reads).
 // Admin only; audited to modificationHistory; no GCal/email side-effects.
+// SPEC_COACH_LEDGER_UNIFICATION_2026-08 Phase 4 (#12) — a coach's weekly billing cap
+// credit is derived from that week's charges, so ANY edit to a charge must re-derive it.
+// Booking create/cancel already did; editing a price or removing a charge from the
+// statement did NOT, and the nightly backstop only re-caps this week and last week — so
+// editing a charge older than a fortnight left the cap credit permanently wrong, with
+// nothing to correct it. Scheduling the reconcile from the edit itself fixes it whatever
+// the date.
+async function reconcileCapForBooking(ctx: any, booking: any): Promise<void> {
+  const email = (booking?.customerEmail ?? "").toLowerCase().trim();
+  const date = booking?.date ?? "";
+  if (!email || !date) return;
+  const coach = await resolveCanonicalCustomerByEmail(ctx, email);
+  if (!coach || coach.role !== "coach" || coach.weeklyBillingCap == null) return;
+  await ctx.scheduler.runAfter(0, internal.billingCaps.reconcileCoachWeeklyCapInternal, {
+    coachId: coach._id,
+    weekStart: mondayOfWeek(date),
+  });
+}
+
 export const adminSetCoachPrice = mutation({
   args: { bookingId: v.id("bookings"), coachPrice: v.number() },
   handler: async (ctx, args) => {
@@ -6482,6 +6502,7 @@ export const adminSetCoachPrice = mutation({
       modifiedByUserId: identity?.subject ?? "",
     });
     await ctx.db.patch(args.bookingId, { coachPrice: args.coachPrice, modificationHistory: history } as any);
+    await reconcileCapForBooking(ctx, booking);
     return args.bookingId;
   },
 });
@@ -6507,6 +6528,7 @@ export const adminSetBookingStatementExcluded = mutation({
       modifiedByUserId: identity?.subject ?? "",
     });
     await ctx.db.patch(args.bookingId, { statementExcluded: args.excluded, modificationHistory: history } as any);
+    await reconcileCapForBooking(ctx, booking);
     return args.bookingId;
   },
 });

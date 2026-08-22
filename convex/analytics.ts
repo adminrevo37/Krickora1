@@ -4,6 +4,7 @@ import { v } from "convex/values";
 import { getCallerContext } from "./lib/adminGuard";
 import { defaultLaneName } from "./lib/lanes";
 import { awstDateKey, isoWeekKey, monthKey, dayLabel } from "./lib/analyticsHelpers";
+import { isCoachChargeBooking, coachBookingCost } from "./lib/coachLedger";
 
 // How stale `firstSeenByIdentity.lastTimestamp` may get before trackEvent
 // refreshes it. WAU/MAU are day-grained, so an hour costs nothing and keeps the
@@ -355,7 +356,10 @@ export const getAdminAnalytics = query({
       const calMonthKey = b.date.slice(0, 7); // calendar month, for MoM KPIs
       const hours = (b.duration ?? 0) / 60;
       const revenue = b.priceInCents != null ? b.priceInCents / 100 : 0;
-      const coachCharge = b.isCoachBooking ? (b.coachPrice ?? 0) : 0;
+      // Phase 4 (SPEC_COACH_LEDGER_UNIFICATION_2026-08): the amount a coach is actually
+      // billed. C-3 already kept late-cancel charges here; this adds the other half —
+      // a statement-EXCLUDED session costs $0, because the admin removed the charge.
+      const coachCharge = isCoachChargeBooking(b) ? coachBookingCost(b) : 0;
 
       if (b.status === "cancelled") {
         cancelledCount++;

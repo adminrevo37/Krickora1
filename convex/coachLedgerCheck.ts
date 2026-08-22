@@ -26,7 +26,6 @@ import { query, internalQuery, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireAdmin } from "./lib/adminGuard";
 import {
-  isCoachChargeBooking,
   computeCoachLedger,
   awstTodayKey,
   round2,

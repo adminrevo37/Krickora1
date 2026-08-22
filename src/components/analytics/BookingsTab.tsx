@@ -46,10 +46,11 @@ export default function BookingsTab({ range }: { range: DateRange }) {
 
   const exportCsv = () => {
     if (!data) return
-    const header = ['Date', 'Time', 'Lane', 'Variant', 'Customer', 'Email', 'Suburb', 'Type', 'Status', 'Price', 'Discount']
+    const header = ['Date', 'Time', 'Lane', 'Variant', 'Customer', 'Email', 'Suburb', 'Type', 'Status', 'Price', 'Charge removed', 'Discount']
     const rows = data.rows.map((r: any) => [
       r.date, fmtHour(r.startHour), r.laneName, r.variant, r.customerName, r.customerEmail,
-      r.suburb, r.isCoachBooking ? 'coach' : 'customer', r.status, r.price, r.discountCode,
+      r.suburb, r.isCoachBooking ? 'coach' : 'customer', r.status, r.price,
+      r.statementExcluded ? 'yes' : '', r.discountCode,
     ])
     downloadCsv(`bookings_${range.from || 'all'}_${range.to || 'all'}.csv`, [header, ...rows])
   }
@@ -142,7 +143,15 @@ export default function BookingsTab({ range }: { range: DateRange }) {
                         {r.status}
                       </span>
                     </td>
-                    <td className="px-3 py-2 text-right font-medium text-gray-800">{r.price ? `$${r.price}` : '—'}</td>
+                    {/* Phase 4: a coach session whose charge the admin removed shows $0,
+                        which is what the coach is billed — say WHY, or it reads as a bug. */}
+                    <td className="px-3 py-2 text-right font-medium text-gray-800">
+                      {r.statementExcluded ? (
+                        <span title="Charge removed from the coach's statement — the coach is not billed for this session.">
+                          $0 <span className="text-gray-400 font-normal">(removed)</span>
+                        </span>
+                      ) : r.price ? `$${r.price}` : '—'}
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -31,6 +31,21 @@ import {
 } from "./lib/analyticsHelpers";
 
 const LANE_IDS = ["bm1", "bm2", "bm3", "ru1", "ru2"];
+
+// SPEC_COACH_LEDGER_UNIFICATION_2026-08 Phase 4 — the live-computed analytics now use the
+// SAME charge rules as the coach statement (`isCoachChargeBooking` / `coachBookingCost`),
+// so admin reporting agrees with what coaches are actually billed. Two consequences that
+// are deliberate, and measured on prod at the time of the change:
+//   • A late-cancelled coach session is CHARGED in full, so its money counts (39 rows,
+//     $1,777.50 all-time, previously invisible here while appearing on the statement and
+//     in the weekly report's own finance block — disagreement #6, self-contradictory
+//     inside a single report row).
+//   • A statement-EXCLUDED session costs $0, because the admin removed the charge and the
+//     coach is not billed (18 rows, $587.50 all-time previously counted as coach revenue).
+//     The session itself still happened, so it keeps its booking count and its hours.
+// ⚠️ Hours are a measure of LANE TIME, so a late-cancelled session contributes money but
+// NOT hours — it was billed and used no lane. Counts follow the money (a billable line).
+const lateCancelUsedNoLane = (b: any) => b.status === "cancelled";
 const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
 function inRange(date: string, from?: string, to?: string): boolean {
@@ -153,7 +168,13 @@ export const queryBookings = query({
       postcode: b.bookingPostcode ?? "",
       status: b.status,
       isCoachBooking: !!b.isCoachBooking,
-      price: b.isCoachBooking ? (b.coachPrice ?? 0) : (b.priceInCents != null ? b.priceInCents / 100 : 0),
+      // Phase 4: a statement-excluded coach session shows $0 — the price the coach is
+      // actually billed — rather than the old figure it is no longer charged. The flag
+      // rides along so the table/CSV can say WHY it reads $0.
+      statementExcluded: b.statementExcluded === true,
+      price: isCoachChargeBooking(b)
+        ? coachBookingCost(b)
+        : (b.priceInCents != null ? b.priceInCents / 100 : 0),
       discountCode: b.discountCode ?? "",
       createdAt: b.createdAt ?? b._creationTime,
     }));
@@ -191,15 +212,13 @@ export const getBookingRevenueSeries = query({
 
     for (const b of all as any[]) {
       if (!inRange(b.date, args.from, args.to)) continue;
-      if (b.status === "cancelled") continue;
-      if (b.status !== "confirmed" && b.status !== "pending" && b.status !== "pending_payment") {
-        // Only count realised/active bookings; skip unknown statuses.
-      }
-      const isConfirmed = b.status === "confirmed";
-      if (!isConfirmed) continue;
-      const hours = (b.duration ?? 0) / 60;
+      // Phase 4: coach rows follow the statement rules (so a charged late-cancel counts
+      // and a statement-excluded session costs $0); customer rows stay confirmed-only.
+      const isCoachCharge = isCoachChargeBooking(b);
+      if (!isCoachCharge && b.status !== "confirmed") continue;
+      const hours = lateCancelUsedNoLane(b) ? 0 : (b.duration ?? 0) / 60;
       const rev = b.priceInCents != null ? b.priceInCents / 100 : 0;
-      const coach = b.isCoachBooking ? (b.coachPrice ?? 0) : 0;
+      const coach = isCoachCharge ? coachBookingCost(b) : 0;
 
       let key: string, label: string;
       if (g === "hour") {
@@ -219,7 +238,7 @@ export const getBookingRevenueSeries = query({
       const bucket = ensure(key, label);
       bucket.bookings++;
       bucket.hours += hours;
-      if (b.isCoachBooking) { bucket.coachBookings++; bucket.coachCharges += coach; }
+      if (isCoachCharge) { bucket.coachBookings++; bucket.coachCharges += coach; }
       else { bucket.customerBookings++; bucket.custRevenue += rev; }
     }
 
@@ -742,13 +761,15 @@ export const getPeriodSummary = query({
     let createdTodayRevenue = 0;
 
     for (const b of dateWindow) {
-      if (b.status !== "confirmed") continue;
-      const h = (b.duration ?? 0) / 60;
+      // Phase 4 — statement rules for coach rows (see the note at the top of this file).
+      const isCoachCharge = isCoachChargeBooking(b);
+      if (!isCoachCharge && b.status !== "confirmed") continue;
+      const h = lateCancelUsedNoLane(b) ? 0 : (b.duration ?? 0) / 60;
       const rev = b.priceInCents != null ? b.priceInCents / 100 : 0;
-      const coach = b.isCoachBooking ? (b.coachPrice ?? 0) : 0;
+      const coach = isCoachCharge ? coachBookingCost(b) : 0;
       const add = (bk: PeriodBucket) => {
         bk.bookings++; bk.hours += h;
-        if (b.isCoachBooking) { bk.coachBookings++; bk.coachCharges += coach; }
+        if (isCoachCharge) { bk.coachBookings++; bk.coachCharges += coach; }
         else { bk.customerBookings++; bk.custRevenue += rev; }
       };
       if (b.date === today) add(todayB);
@@ -1205,17 +1226,21 @@ export const getWeeklyReport = query({
     const discountItems: Array<{ date: string; customerName: string; code: string; amount: number; lane: string; startHour: number }> = [];
 
     for (const b of bookings) {
-      if (b.status !== "confirmed") continue; // exclude pending/cancelled
+      // Phase 4 (#6): this row used to contradict ITSELF — `chargesThisWeek` in the finance
+      // block included a coach's late-cancellation charge while the sessions/hours/amount
+      // beside it did not, and a statement-excluded session vanished from the counts
+      // entirely instead of showing as a $0 line. Both now follow the statement.
+      const isCoachCharge = isCoachChargeBooking(b);
+      if (!isCoachCharge && b.status !== "confirmed") continue; // customer: confirmed only
 
-      if (b.isCoachBooking) {
-        if (b.statementExcluded) continue; // removed from the coach statement
+      if (isCoachCharge) {
         const key = (b.customerEmail || "").toLowerCase().trim() || (b.customerName || "unknown");
         const e =
           coachMap.get(key) ??
           { name: b.customerName || "Unknown", email: b.customerEmail || "", sessions: 0, hours: 0, amount: 0 };
         e.sessions += 1;
-        e.hours += (b.duration || 0) / 60;
-        e.amount += b.coachPrice || 0;
+        e.hours += lateCancelUsedNoLane(b) ? 0 : (b.duration || 0) / 60;
+        e.amount += coachBookingCost(b);
         coachMap.set(key, e);
         continue;
       }

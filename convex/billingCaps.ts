@@ -26,6 +26,9 @@ import {
 
 const WEEKLY_CAP_CREATED_BY = "system:weekly-cap";
 
+// How far back the nightly backstop re-derives cap credits (weeks, including this one).
+const BACKSTOP_WEEKS = 13;
+
 // Phase 5: the Mon–Sun week is defined ONCE, in the shared module, so the billing cap,
 // the weekly report and the coach-facing "end of week" balance cannot disagree about
 // which days a week contains. Re-exported here because call sites already import it.
@@ -143,12 +146,19 @@ export const reconcileAllWeeklyCapsInternal = internalMutation({
       .query("customers")
       .withIndex("by_role", (q: any) => q.eq("role", "coach"))
       .collect();
+    // Phase 4 (#12): the backstop used to cover only this week and last week, so an edit
+    // to a charge older than a fortnight left the cap credit wrong forever. The edit
+    // itself now schedules its own reconcile (adminSetCoachPrice /
+    // adminSetBookingStatementExcluded), and this widens the sweep to a rolling quarter
+    // so anything that still slips through is corrected within a day.
+    // Cheap: only CAPPED coaches are swept, and each week is one indexed read.
     const thisWk = mondayOfWeek(awstTodayKey());
-    const lastWk = addDaysStr(thisWk, -7);
+    const weeks = Array.from({ length: BACKSTOP_WEEKS }, (_, i) => addDaysStr(thisWk, -7 * i));
     for (const c of coaches as any[]) {
       if (c.weeklyBillingCap == null) continue;
-      await ctx.scheduler.runAfter(0, internal.billingCaps.reconcileCoachWeeklyCapInternal, { coachId: c._id, weekStart: thisWk });
-      await ctx.scheduler.runAfter(0, internal.billingCaps.reconcileCoachWeeklyCapInternal, { coachId: c._id, weekStart: lastWk });
+      for (const weekStart of weeks) {
+        await ctx.scheduler.runAfter(0, internal.billingCaps.reconcileCoachWeeklyCapInternal, { coachId: c._id, weekStart });
+      }
     }
   },
 });

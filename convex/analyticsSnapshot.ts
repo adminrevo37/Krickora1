@@ -46,6 +46,18 @@ async function snapshotDate(
     laneCount = lanesRows.length > 0 ? lanesRows.length : 5;
   }
 
+  // ⚠️ SPEC_COACH_LEDGER_UNIFICATION_2026-08 Phase 4 — DELIBERATELY NOT ALIGNED to the
+  // coach-statement rules, unlike every live-computed analytics query.
+  //
+  // These rows are PERSISTED daily history. Changing the rule would change what past
+  // rows mean without being able to recompute them (the raw bookings behind an old day
+  // can move: a charge gets removed, a late-cancel gets flagged), so a mixed series
+  // would be worse than a consistent one. The measure this table records is therefore
+  // "confirmed booked activity at booked price" — NOT "what coaches were billed":
+  //   • a charged late-cancellation is absent (it is billed, but was never confirmed);
+  //   • a statement-excluded session still counts at its original price.
+  // Anywhere this is surfaced must say so, and it must never be reconciled against a
+  // coach statement or the weekly report. The live queries answer the billed question.
   const dayBookings = (
     await ctx.db.query("bookings").withIndex("by_date", (q: any) => q.eq("date", date)).collect()
   ).filter((b: any) => b.status === "confirmed");
