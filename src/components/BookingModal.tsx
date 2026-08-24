@@ -80,10 +80,10 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   }, [existingBookings, lane.id, dkForSeg, startHour, isCoach, seg.endHour])
 
   const [duration, setDuration] = useState<number>(() => availableDurations.length > 0 ? availableDurations[0] : 60)
-  // Pass the coach's tier so validation matches the calendar (weekday half-hours
-  // for all coaches; the 6:30am pre-open slot for L1 only).
-  const coachTierNorm: 'L1' | 'L2' = ((customerRecord as any)?.coachTier === 'L2' || (customerRecord as any)?.coachTier === 'BowlingL2') ? 'L2' : 'L1'
-  const validCoachStarts = useMemo(() => getValidCoachStartTimes(date, coachTierNorm), [date, coachTierNorm])
+  // SPEC_EARLY_ACCESS_2026-08 — matches the calendar's weekday half-hours (every
+  // coach) + the admin-granted 6:30am slot (this account only, if flagged).
+  const hasEarlyAccess = (customerRecord as any)?.earlyAccess630 === true
+  const validCoachStarts = useMemo(() => getValidCoachStartTimes(date, hasEarlyAccess), [date, hasEarlyAccess])
   // A per-lane segment CUSTOM start (e.g. a Saturday split offering 9:30/10:30/…)
   // is bookable by coaches too — SPEC_LANE_SEGMENT_BOOKING_TIMES coach fix — as is
   // a booking-created / segment-opening half-hour edge (coach adjacency, every day).

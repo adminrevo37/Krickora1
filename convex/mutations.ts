@@ -972,16 +972,17 @@ export const createBooking = mutation({
     if (dayHours?.closed) {
       throw new ConvexError("The facility is closed on this day.");
     }
-    // SPEC_MOBILE_BOOKING_UPDATES §7.2 — L1 coaches may book a pre-open 6:30am slot
-    // (an explicit early coaching slot allowed below the public opening hour).
-    // Batch 2A: an L1 coach's booking is always a coach booking — gate the early
-    // 6:30am slot on the resolved role/tier, not the (now-untrusted) client flag.
-    const callerIsL1Coach =
-      callerCustomer?.role === "coach" &&
-      !(callerCustomer?.coachTier === "L2" || callerCustomer?.coachTier === "BowlingL2");
-    // L1 coaches may book the 6:30am slot; admins may book ANY pre-open slot
-    // (manual / early bookings, e.g. 6:30am) as an explicit override.
-    const allowPreOpen = (callerIsL1Coach && args.startHour === 6.5) || isAdminCaller;
+    // SPEC_EARLY_ACCESS_2026-08 — the 6:30am pre-open slot is bookable ONLY with an
+    // explicit admin-granted flag on the CALLER's own account (coach or customer),
+    // resolved server-side so a crafted request can't set it. Superseded the old
+    // "any tier-L1 coach automatically gets it" rule (SPEC_MOBILE_BOOKING_UPDATES
+    // §7.2) — that made 6:30am an implicit perk of coach tier rather than a
+    // deliberate per-account grant; existing L1 coaches who used it (Dean Holder)
+    // were migrated onto this flag so nothing changed for them in practice.
+    const callerHasEarlyAccess = callerCustomer?.earlyAccess630 === true;
+    // Admins may book ANY pre-open slot (manual / early bookings, e.g. 6:30am) as
+    // an explicit override, regardless of the flag.
+    const allowPreOpen = (callerHasEarlyAccess && args.startHour === 6.5) || isAdminCaller;
     if (args.startHour < OPENING_HOUR && !allowPreOpen) {
       throw new ConvexError("Booking starts before opening time.");
     }
@@ -1833,10 +1834,9 @@ export const createSplitBooking = mutation({
     const OPENING_HOUR = dayHours ? dayHours.open : ((siteSettings as any)?.openingHour ?? 7);
     const CLOSING_HOUR = dayHours ? dayHours.close : ((siteSettings as any)?.closingHour ?? 21);
     if (dayHours?.closed) throw new ConvexError("The facility is closed on this day.");
-    const callerIsL1Coach =
-      callerCustomer?.role === "coach" &&
-      !(callerCustomer?.coachTier === "L2" || callerCustomer?.coachTier === "BowlingL2");
-    const allowPreOpen = (callerIsL1Coach && args.startHour === 6.5) || isAdminCaller;
+    // SPEC_EARLY_ACCESS_2026-08 — see the matching block in createBooking.
+    const callerHasEarlyAccess = callerCustomer?.earlyAccess630 === true;
+    const allowPreOpen = (callerHasEarlyAccess && args.startHour === 6.5) || isAdminCaller;
     if (args.startHour < OPENING_HOUR && !allowPreOpen) {
       throw new ConvexError("Booking starts before opening time.");
     }

@@ -523,12 +523,19 @@ export function getAvailableStartTimes(bookings: Booking[], laneId: string, date
 // Coach start times. Whole hours within the day's opening hours, every day.
 // WEEKDAYS (Mon–Fri): ALSO every half hour from 7:00am–3:30pm (daytime/after-school
 // coaching, ALL coaches → 7:30, 8:30 … 3:30pm); from 4:00pm onwards whole hours
-// ONLY. PLUS a 6:30am pre-open slot for L1 coaches ONLY (weekdays).
-// WEEKENDS (Sat/Sun): whole hours only, on the hour.
+// ONLY. WEEKENDS (Sat/Sun): whole hours only, on the hour.
 // (2026-06-17: extended the old weekday-3:30pm-only rule to the full 7am–3:30pm
-// half-hour range; 6:30am restricted to weekdays. tier optional — legacy callers
-// without a tier get the non-6:30 set.)
-export function getValidCoachStartTimes(date: Date, tier?: 'L1' | 'L2'): number[] {
+// half-hour range.)
+//
+// SPEC_EARLY_ACCESS_2026-08 — `hasEarlyAccess` is a per-account admin grant
+// (customers.earlyAccess630), NOT the coach tier. It used to be "tier L1 coaches
+// automatically get 6:30am, every weekday" — that made an access grant an implicit
+// side effect of a formal coaching level, so bumping someone's tier for pricing/
+// session-length reasons silently changed their facility access too, and every new
+// L1 coach got the slot whether or not that was intended. Decoupled: any day, any
+// role (coach or customer), purely on the flag — matches what the server actually
+// enforces (which never checked weekday either).
+export function getValidCoachStartTimes(date: Date, hasEarlyAccess?: boolean): number[] {
   const { open, close } = getHoursForDate(getSettingsStore().get(), date)
   const times: number[] = []
   for (let h = Math.ceil(open); h < close; h++) times.push(h)
@@ -540,10 +547,9 @@ export function getValidCoachStartTimes(date: Date, tier?: 'L1' | 'L2'): number[
       const half = h + 0.5
       if (half >= open && half < close && !times.includes(half)) times.push(half)
     }
-    // 6:30am pre-open slot — L1 coaches only; allowed even if before opening.
-    if (tier === 'L1' && 6.5 < close && !times.includes(6.5)) {
-      times.push(6.5)
-    }
+  }
+  if (hasEarlyAccess && 6.5 < close && !times.includes(6.5)) {
+    times.push(6.5)
   }
   times.sort((a, b) => a - b)
   return times

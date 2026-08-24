@@ -227,6 +227,13 @@ export default defineSchema({
     // of the standard coach window (coachRescheduleFreezeHours / coachLateCancellationHours,
     // default 24h). Per-coach opt-in; absent/false = the standard window. Additive.
     flexibleBookingWindow: v.optional(v.boolean()),
+    // SPEC_EARLY_ACCESS_2026-08: admin-only, unadvertised special access to the
+    // 6:30am pre-open slot — a manual per-account grant, independent of role or
+    // coach tier (works for a coach OR a customer). Previously this slot was an
+    // automatic perk of coach tier L1; that implicit grant is gone and every
+    // account (including tier-L1 coaches) now needs this flag explicitly.
+    // Absent/false = no early access, same as the pre-open floor for everyone else.
+    earlyAccess630: v.optional(v.boolean()),
     bookingEmailsEnabled: v.optional(v.boolean()),
     // Bug 7: master email switch. Strict === false silences ALL preference-gated
     // emails (regular notifications + the weekly summary); legacy/absent = ON. Does

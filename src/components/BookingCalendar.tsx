@@ -70,6 +70,15 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   // Only L1 coaches get the rolling window. L2 coaches see the weekly view like customers.
   // If the record hasn't loaded yet, default to NON-L1 (weekly view) to avoid an L1 flash for L2 coaches.
   const isL1Coach = userIsCoach && coachTierLoaded && coachTierNorm !== 'L2'
+  // SPEC_EARLY_ACCESS_2026-08 — admin-only, unadvertised 6:30am grant. Independent
+  // of userIsCoach/tier: reads the SAME flag off the logged-in account whether it's
+  // a coach or a customer row, so a flagged customer sees the slot exactly like a
+  // flagged coach does. Not impersonation-aware on purpose — while impersonating,
+  // customerRecord is already the VIEWED account (useAuth), so this naturally
+  // reflects what that account itself can book, consistent with the rest of this
+  // component's "don't flip into coach-view mode, only reflect the viewed account"
+  // impersonation stance.
+  const hasEarlyAccess = (customerRecord as any)?.earlyAccess630 === true
   const releaseRole: 'coach' | 'customer' = userIsCoach ? 'coach' : 'customer'
   const coachWindowDays = settings.coachBookingWindowDays ?? 8
   // SPEC_COACH_CALENDAR §1E — coach back-navigation. 0 = live view; -1/-2 = past
@@ -216,8 +225,8 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   // half-hours 7:30am–3:30pm + L1 6:30am). Defined here (before visibleTimeSlots)
   // so the row filter can show empty coach half-hour rows as bookable.
   const validCoachStartsForDay = useMemo(
-    () => (userIsCoach ? getValidCoachStartTimes(selectedDay, coachTierNorm) : []),
-    [userIsCoach, selectedDay, coachTierNorm]
+    () => (userIsCoach ? getValidCoachStartTimes(selectedDay, hasEarlyAccess) : []),
+    [userIsCoach, selectedDay, hasEarlyAccess]
   )
 
   // SPEC_LANE_SEGMENT_BOOKING_TIMES — half-hour rows introduced by the lane layout
@@ -261,9 +270,12 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       }
       return false
     })
-    // §7.2 — inject a 6:30am row for L1 coaches ONLY (it's below opening, so it's
-    // not in allTimeSlots). Hidden for customers and L2 coaches.
-    if (isL1Coach && !base.some(s => s.hour === 6.5)) {
+    // SPEC_EARLY_ACCESS_2026-08 — inject a 6:30am row for whoever the LOGGED-IN
+    // ACCOUNT is, when that account has been granted early access, coach or
+    // customer alike (it's below opening, so it's not in allTimeSlots). Hidden
+    // for everyone else, regardless of tier. (Was tier-gated to L1 coaches only
+    // — see the note on getValidCoachStartTimes.)
+    if (hasEarlyAccess && !base.some(s => s.hour === 6.5)) {
       base.push({ hour: 6.5, label: formatTime(6.5) })
     }
     base.sort((a, b) => a.hour - b.hour)
@@ -275,7 +287,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       return base.filter(s => (s.hour + 1) > nowHour)
     }
     return base
-  }, [allTimeSlots, laneActiveHalfHours, userIsCoach, isL1Coach, selectedDay, validCoachStartsForDay, segmentHalfHours])
+  }, [allTimeSlots, laneActiveHalfHours, userIsCoach, hasEarlyAccess, selectedDay, validCoachStartsForDay, segmentHalfHours])
 
   const laneStartTimes = useMemo(() => {
     const map = new Map<string, number[]>()

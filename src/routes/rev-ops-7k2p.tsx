@@ -583,6 +583,9 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
   const [athleteCapacity, setAthleteCapacity] = useState<number>(user.athleteCapacity || 1)
   const [hideFromPublicCoachList, setHideFromPublicCoachList] = useState<boolean>(!!user.hideFromPublicCoachList)
   const [flexibleBookingWindow, setFlexibleBookingWindow] = useState<boolean>(!!user.flexibleBookingWindow)
+  // SPEC_EARLY_ACCESS_2026-08 — role-agnostic (coach OR customer); NOT scoped inside
+  // the isCoach-only block below.
+  const [earlyAccess630, setEarlyAccess630] = useState<boolean>(!!user.earlyAccess630)
   const [busy, setBusy] = useState(false)
   // SPEC_ADMIN_MANUAL_POWERS — manual support actions
   const [creditAmount, setCreditAmount] = useState('')
@@ -659,7 +662,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
     e.preventDefault()
     setBusy(true)
     try {
-      const args: any = { email: user.email, phone, role }
+      const args: any = { email: user.email, phone, role, earlyAccess630 }
       if (isCoach) { args.name = name } else { args.firstName = firstName.trim(); args.lastName = lastName.trim() }
       if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color; args.defaultSessionDuration = defaultSessionDuration; args.athleteCapacity = athleteCapacity; args.hideFromPublicCoachList = hideFromPublicCoachList; args.flexibleBookingWindow = flexibleBookingWindow }
       // SPEC_PROFILE_POSTCODE_SUBURB: only send when both present (avoids clobbering to blank).
@@ -781,6 +784,17 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
             </label>
           </>
         )}
+        {/* SPEC_EARLY_ACCESS_2026-08 — deliberately OUTSIDE the coach-only block:
+            this grant works for a customer account too. Purely an admin back-channel
+            (not advertised anywhere in the app or the guides) — set it for someone
+            who needs the pre-open 6:30am slot as a special case. */}
+        <label className="flex items-start gap-2 text-sm bg-amber-50 rounded-lg p-3 cursor-pointer select-none">
+          <input type="checkbox" checked={earlyAccess630} onChange={e => setEarlyAccess630(e.target.checked)} className="mt-0.5 w-4 h-4 accent-amber-500 shrink-0" />
+          <span className="text-gray-600">
+            <span className="font-medium text-gray-800">Early 6:30am access (unadvertised)</span>
+            {' '}— lets this account book the 6:30am pre-open slot. Admin-only special access, not tied to coach tier — works for a coach or a customer.
+          </span>
+        </label>
         {/* SPEC_ADMIN_MANUAL_POWERS — manual support actions */}
         <div className="border-t border-gray-100 pt-4 space-y-3">
           <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide">Account actions</h4>
