@@ -43,7 +43,16 @@ function relativeTime(isoStr: string): string {
 function generateHoursForDate(dateKey: string): number[] {
   const { open, close } = getHoursForDate(getSettingsStore().get(), dateKey)
   const hours: number[] = []
-  for (let h = open; h < close; h += 0.5) hours.push(h)
+  // SPEC_EARLY_ACCESS_2026-08 — admin is unconditionally exempt from the pre-open
+  // floor server-side (updateBooking has no opening-hour check at all for admins,
+  // same as createBooking's isAdminCaller bypass), but this dropdown only ever
+  // enumerated open..close, so the option to move a booking TO 6:30 didn't exist
+  // even though the server would have accepted it. Mirrors AdminBookingCalendar's
+  // `Math.min(open, 6.5)` grid start — always offered here, not gated on the
+  // booking owner's own earlyAccess630 flag (that flag governs SELF-service
+  // booking, not what an admin may set on someone's behalf).
+  const gridStart = Math.min(open, 6.5)
+  for (let h = gridStart; h < close; h += 0.5) hours.push(h)
   return hours
 }
 
