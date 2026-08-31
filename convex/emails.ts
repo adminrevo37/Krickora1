@@ -355,6 +355,41 @@ export const sendBookingCancellation = internalAction({
 // BOOKING RESCHEDULED EMAIL
 // ============================================================================
 
+// Admin lane-reassignment/swap notice — triggered explicitly from the admin
+// lane-reassign tool's review-then-send step (convex/laneReassign.ts), never
+// automatically. introText/closingText are admin-editable free text; the
+// Session Details block is always server-filled from the current booking.
+export const sendLaneChangeEmail = internalAction({
+  args: {
+    to: v.string(),
+    customerName: v.string(),
+    introText: v.string(),
+    closingText: v.optional(v.string()),
+    date: v.string(),
+    timeSlot: v.string(),
+    duration: v.string(),
+    newLaneName: v.string(),
+    laneType: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (!(await emailEnabledForUser(ctx, args.to, "admin-lane-change"))) {
+      console.log(`[admin-lane-change] Skipped — user disabled this email: ${args.to}`);
+      return { success: false, skipped: true, reason: "User disabled this email" };
+    }
+    return await sendEmail("admin-lane-change", args.to, {
+      customerName: args.customerName,
+      firstName: await resolveFirstName(ctx, args.to),
+      introText: args.introText,
+      closingText: args.closingText ?? "",
+      date: args.date,
+      timeSlot: args.timeSlot,
+      duration: args.duration,
+      newLaneName: args.newLaneName,
+      laneType: args.laneType,
+    });
+  },
+});
+
 export const sendBookingRescheduled = internalAction({
   args: {
     to: v.string(),

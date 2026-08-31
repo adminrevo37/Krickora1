@@ -326,6 +326,28 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
             linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),
       };
+    // Admin-triggered lane reassignment/swap notice (custom intro text, editable
+    // per-send in the admin tool; Session Details block is always server-filled).
+    case "admin-lane-change":
+      return {
+        subject: `Lane update for your upcoming session — ${esc(d.date)}`,
+        html: layout({
+          title: "Lane update",
+          preheader: `Your session on ${esc(d.date)} at ${esc(d.timeSlot)} is now on ${esc(d.newLaneName)}.`,
+          bodyHtml:
+            p(`Hi ${greetFirst(d, "customerName")},`) +
+            paragraphs(d.introText) +
+            heading("Session Details") +
+            detailRows([
+              ["Date", d.date],
+              ["Time", d.timeSlot],
+              ["Duration", d.duration],
+              ["New Lane", d.newLaneName],
+              ["Lane Type", d.laneType],
+            ]) +
+            paragraphs(d.closingText || "Thank you for your understanding and flexibility."),
+        }),
+      };
     case "booking-reminder":
       return {
         subject: `Reminder — your session ${esc(d.timeSlot)}`,
