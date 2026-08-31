@@ -33,7 +33,7 @@ import { resolveCanonicalCustomerByEmail } from "./lib/identity";
 import { assertValidLocation, validateLocationIfProvided, normalizePostcode, normalizeSuburb } from "./lib/locations";
 import { notifyMatesOnCancel, notifyMatesOnModify } from "./mates";
 import { fmtAwstDateLabel, fmtAwstDateShort } from "./lib/dates";
-import { scheduleCapReconcileForBooking } from "./billingCaps";
+import { scheduleCapReconcileForBooking, scheduleCapReconcileForPayment } from "./billingCaps";
 
 // ============================================================================
 // SHARED HELPERS
@@ -6409,6 +6409,7 @@ export const createPayment = mutation({
       createdAt: new Date().toISOString(),
       createdBy: args.createdBy,
     } as any);
+    await scheduleCapReconcileForPayment(ctx, args.coachId, args.dateReceived);
     return id;
   },
 });
@@ -6417,7 +6418,9 @@ export const deletePayment = mutation({
   args: { id: v.id("payments") },
   handler: async (ctx, args) => {
     await requireAdminUnlocked(ctx);
+    const existing = await ctx.db.get(args.id);
     await ctx.db.delete(args.id);
+    if (existing) await scheduleCapReconcileForPayment(ctx, (existing as any).coachId, (existing as any).dateReceived);
     return args.id;
   },
 });
@@ -6452,6 +6455,12 @@ export const updatePayment = mutation({
     }
     if (args.note !== undefined) patch.note = args.note;
     await ctx.db.patch(args.id, patch);
+    // Reconcile the OLD week (in case the amount/date changed what that week nets to)
+    // and, if the date moved, the NEW week too — both left correct either way.
+    await scheduleCapReconcileForPayment(ctx, (existing as any).coachId, (existing as any).dateReceived);
+    if (args.dateReceived !== undefined && args.dateReceived !== (existing as any).dateReceived) {
+      await scheduleCapReconcileForPayment(ctx, (existing as any).coachId, args.dateReceived);
+    }
     return args.id;
   },
 });
