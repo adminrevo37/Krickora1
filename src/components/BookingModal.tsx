@@ -3,6 +3,7 @@ import { useQuery, useConvex } from 'convex/react'
 import { trackFunnelStep, clearBookingFlow } from '../lib/tracker'
 import { getErrorMessage } from '../lib/errors'
 import { fmtMoney } from '../lib/money'
+import { formatDateLong } from '../lib/dateFormat'
 import {
   LANES, canBookSlot, formatDateKey, formatTime, getCustomerPrice, getCoachPrice, getCoachPerHourRate,
   getCoachDurations, getCustomerDurations, getValidCoachStartTimes, isLaneCustomStart, isCoachEdgeStart,
@@ -738,7 +739,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
           <div className="flex items-center justify-between">
             <div>
               <h3 id="booking-modal-title" className="text-lg font-bold">{step === 'success' ? 'Booking Confirmed!' : step === 'processing' ? (totalPrice === 0 ? 'Confirming Booking...' : 'Opening Payment...') : 'Book a Session'}</h3>
-              <p className="text-white/80 text-sm mt-0.5">{step === 'success' ? 'Your session is booked' : step === 'processing' ? 'Please wait...' : date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
+              <p className="text-white/80 text-sm mt-0.5">{step === 'success' ? 'Your session is booked' : step === 'processing' ? 'Please wait...' : formatDateLong(date)}</p>
               {isCoach && step === 'details' && <span className="inline-block mt-1 text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-semibold">🏅 Coach Rate &middot; Rolling 8-Day Window</span>}
             </div>
             {/* U5 — ✕ is available on success too now that nothing auto-dismisses;

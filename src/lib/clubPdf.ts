@@ -3,6 +3,7 @@
 // prices + paid status) then APPENDS the hosted 3-page facility-access guide into one
 // downloadable PDF. Pure browser (pdf-lib) — no server round-trip, no external hosts.
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib'
+import { formatDateLong } from './dateFormat'
 
 export interface ClubSession {
   date: string // YYYY-MM-DD
@@ -34,11 +35,7 @@ function fmtRange(startHour: number, duration: number): string {
   // Keep the period on the end only when both share it, else show both.
   return `${fmtTime(startHour).replace(/ (AM|PM)$/, (m, p) => (Math.floor(startHour) < 12) === (Math.floor(end) < 12) ? '' : ` ${p}`)}–${fmtTime(end)}`
 }
-function fmtDate(ymd: string): string {
-  const [y, m, d] = ymd.split('-').map(Number)
-  const dt = new Date(y, m - 1, d)
-  return dt.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
-}
+const fmtDate = formatDateLong
 function money(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`
 }

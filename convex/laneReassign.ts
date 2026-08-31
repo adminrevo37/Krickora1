@@ -31,6 +31,7 @@ import { hasActiveHoldConflict } from "./lib/slotHolds";
 import { recordBookingEvent } from "./bookingEvents";
 import { validateAndSnapshotLane } from "./lanes";
 import { defaultLaneName } from "./lib/lanes";
+import { fmtAwstDateLabel, fmtAwstDateShort } from "./lib/dates";
 
 const LANE_TYPE_LABEL: Record<string, string> = { BM: "Bowling Machine", RU: "Run Up" };
 
@@ -327,7 +328,8 @@ export const adminSendLaneChangeEmails = mutation({
         customerName: booking.customerName,
         introText: item.introText,
         closingText: item.closingText,
-        date: booking.date,
+        date: fmtAwstDateLabel(booking.date),
+        dateShort: fmtAwstDateShort(booking.date),
         timeSlot: fmtTimeSlot(booking.startHour),
         duration: fmtDuration(booking.duration),
         newLaneName: booking.laneNameSnapshot || defaultLaneName(booking.laneId),

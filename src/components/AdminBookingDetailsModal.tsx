@@ -16,6 +16,7 @@ import { createPaymentLink } from '../lib/stripe'
 // existing booking — options resolved per date/segment like the booking modals.
 import { resolveLaneAt, variantLabel } from '../lib/lanes'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
+import { formatDateLong } from '../lib/dateFormat'
 
 interface Props {
   booking: Booking
@@ -522,7 +523,7 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave, ope
                     'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400'
                   }`}>{status}</span>
                 } />
-                <Field label="Date" value={new Date(date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })} />
+                <Field label="Date" value={formatDateLong(date)} />
                 <Field label="Time" value={`${formatTime(startHour)} – ${formatTime(startHour + duration / 60)}`} />
                 <Field label="Duration" value={`${duration} min`} />
                 <Field label="Type" value={booking.isCoachBooking ? '🏅 Coach' : '👤 Customer'} />

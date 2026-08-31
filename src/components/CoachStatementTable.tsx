@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
+import { formatDateLong } from '../lib/dateFormat'
 import { buildCoachLedger, todayAndMonthStart, type LedgerRow } from '../lib/statementLedger'
 import CoachBalancePanel from './CoachBalancePanel'
 
@@ -369,7 +370,7 @@ function LedgerTableRow({
   const origCharge = Number(r.raw?.coachPrice || 0)
   return (
     <tr className={`border-t border-gray-100 ${isFuture ? 'opacity-50' : ''} ${isExcluded ? 'bg-gray-50' : ''}`}>
-      <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{r.date || '—'}</td>
+      <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{r.date ? formatDateLong(r.date) : '—'}</td>
       <td className="px-5 py-3">
         {typeBadge}
         {isExcluded && <span className="ml-2 inline-flex px-2 py-0.5 rounded-full bg-red-100 text-red-600 text-xs font-medium">Removed</span>}
@@ -505,7 +506,7 @@ function BookingChargeEditRow({
   const [amount, setAmount] = useState(String(Number(r.raw?.coachPrice ?? 0) || ''))
   return (
     <tr className="border-t border-gray-100 bg-blue-50/40">
-      <td className="px-5 py-2 text-gray-700 whitespace-nowrap text-xs">{r.date || '—'}</td>
+      <td className="px-5 py-2 text-gray-700 whitespace-nowrap text-xs">{r.date ? formatDateLong(r.date) : '—'}</td>
       <td className="px-5 py-2"><span className="inline-flex px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">Booking</span></td>
       <td className="px-5 py-2 text-gray-600 text-xs">{r.lane} • {r.label}</td>
       <td className="px-5 py-2 text-right"><input type="number" step="0.01" min="0" value={amount} onChange={e => setAmount(e.target.value)} className="px-2 py-1 border border-gray-200 rounded text-xs w-24 text-right" /></td>

@@ -3,6 +3,7 @@ import { useQuery } from 'convex/react'
 import { useAuth } from '../hooks/useAuth'
 import { useImpersonation } from '../hooks/useImpersonation'
 import { api } from '../../convex/_generated/api'
+import { formatDateLong } from '../lib/dateFormat'
 
 export const Route = createFileRoute('/payments')({
   component: PaymentsPage,
@@ -153,7 +154,7 @@ function PaymentsPage() {
               <tbody>
                 {sortedPayments.map((p: any) => (
                   <tr key={p.bookingId} className="border-t border-gray-100">
-                    <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{p.date}</td>
+                    <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{formatDateLong(p.date)}</td>
                     <td className="px-5 py-3 text-gray-700">
                       {(LANE_NAMES[p.laneId] ?? p.laneId)} • {formatHour(p.startHour)}
                       {p.discountCode ? <span className="ml-2 text-xs text-purple-600">({p.discountCode})</span> : null}
@@ -207,7 +208,7 @@ function PaymentsPage() {
               <tbody>
                 {invoices.map((inv: any) => (
                   <tr key={inv._id} className="border-t border-gray-100">
-                    <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{inv.date}</td>
+                    <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{formatDateLong(inv.date)}</td>
                     <td className="px-5 py-3 text-gray-700">{inv.description || inv.laneName}</td>
                     <td className="px-5 py-3 text-right text-gray-900 whitespace-nowrap">
                       ${(inv.amount || 0).toFixed(2)} {String(inv.currency || 'aud').toUpperCase()}
@@ -296,7 +297,7 @@ function PaymentsPage() {
                   const delta = a.delta ?? 0
                   return (
                     <tr key={a._id} className="border-t border-gray-100">
-                      <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{a.date}</td>
+                      <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{formatDateLong(a.date)}</td>
                       <td className="px-5 py-3 text-gray-700">
                         {a.label}
                         {a.note ? <span className="text-gray-400"> — {a.note}</span> : null}

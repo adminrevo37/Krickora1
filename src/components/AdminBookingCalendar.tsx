@@ -18,6 +18,7 @@ import { useLaneConfigState } from '../hooks/useLaneConfig'
 import { LaneHeaderInner, LaneLegend, bandClassForSlot, bandStart, bandTagText } from './laneDisplay'
 import { CoverageBlockBg } from './CoverageTimeline'
 import { getContrastText } from '../lib/colour'
+import { formatDateLong } from '../lib/dateFormat'
 
 // Generate days from N months back to N months ahead (AWST aware)
 function generateAdminDays(monthsBack: number = 12, monthsAhead: number = 12): Date[] {
@@ -491,7 +492,7 @@ export default function AdminBookingCalendar() {
       <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm overflow-x-auto">
         <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
-            {selectedDay.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+            {formatDateLong(selectedDay)}
           </h3>
           <div className="flex items-center gap-2 flex-wrap">
             {/* Customer selector — inline dropdown */}

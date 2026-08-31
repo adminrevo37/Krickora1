@@ -9,15 +9,13 @@
 // Sunday" — and presenting them as if they were the same number. They are two
 // legitimate questions. Naming them is the fix.
 import type { CoachLedger } from '../lib/statementLedger'
+import { formatDateLong } from '../lib/dateFormat'
 
 const money = (n: number) => `${n < 0 ? '−' : ''}$${Math.abs(n).toFixed(2)}`
 
-/** "Sun 24 Aug" from a YYYY-MM-DD key. */
 function shortDate(key: string): string {
   if (!key) return ''
-  const d = new Date(`${key}T00:00:00`)
-  if (Number.isNaN(d.getTime())) return key
-  return d.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })
+  return formatDateLong(key)
 }
 
 export default function CoachBalancePanel({ ledger }: { ledger: CoachLedger }) {

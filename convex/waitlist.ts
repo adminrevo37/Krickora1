@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import { requireAdmin, getCallerContext } from "./lib/adminGuard";
 import { resolveLanesAtHour } from "./lanes";
 import { segmentHasCustomStarts, segmentStartHours } from "./lib/lanes";
+import { fmtAwstDateLabel } from "./lib/dates";
 
 /**
  * Waitlist — sequential first-refusal engine (SPEC_WAITLIST_OFFER_REDESIGN).
@@ -41,17 +42,6 @@ function fmtHour12(h: number): string {
   const period = hr >= 12 ? "PM" : "AM";
   const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
   return `${display}:${min.toString().padStart(2, "0")} ${period}`;
-}
-
-// Weekday-long date label in AWST (avoids the Bug #4 day-boundary flip).
-function fmtAwstDateLabel(dateStr: string): string {
-  return new Date(dateStr + "T00:00:00").toLocaleDateString("en-US", {
-    timeZone: "Australia/Perth",
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
 }
 
 // Clock-time label (e.g. "3:42 PM") in AWST for the offer deadline.

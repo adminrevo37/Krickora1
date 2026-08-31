@@ -11,6 +11,7 @@ import { useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
 import { LANES, type Booking } from '../lib/booking-data'
+import { formatDateLong } from '../lib/dateFormat'
 
 interface Props {
   bookings: Booking[]
@@ -157,7 +158,7 @@ export default function AdminLaneReassignModal({ bookings, onClose, onDone }: Pr
               {isSwapMode ? (
                 <div className="space-y-2">
                   <p className="text-xs text-gray-500 dark:text-gray-400">
-                    All selected bookings are at the same time ({bookings[0].date}, {LANES.find((l) => l.id === bookings[0].laneId)?.shortName}). Pick each one's new lane.
+                    All selected bookings are at the same time ({formatDateLong(bookings[0].date)}, {LANES.find((l) => l.id === bookings[0].laneId)?.shortName}). Pick each one's new lane.
                   </p>
                   {bookings.map((b) => (
                     <div key={b.id} className="flex items-center gap-2 bg-gray-50 dark:bg-gray-800/60 rounded-lg p-2.5">
@@ -191,7 +192,7 @@ export default function AdminLaneReassignModal({ bookings, onClose, onDone }: Pr
                       <div className="min-w-0">
                         <div className="font-semibold text-gray-800 dark:text-gray-200 truncate">{b.customerName}</div>
                         <div className="text-gray-500 dark:text-gray-400">
-                          {b.date} · {laneShortName(b.laneId)}
+                          {formatDateLong(b.date)} · {laneShortName(b.laneId)}
                         </div>
                       </div>
                     </div>
@@ -259,7 +260,7 @@ export default function AdminLaneReassignModal({ bookings, onClose, onDone }: Pr
                         {m.customerName} <span className="font-normal text-gray-500 dark:text-gray-400">({m.customerEmail})</span>
                       </div>
                       <div className="mt-1 text-gray-600 dark:text-gray-400 grid grid-cols-2 gap-x-3 gap-y-0.5">
-                        <div>Date: {m.date}</div>
+                        <div>Date: {formatDateLong(m.date)}</div>
                         <div>Time: {m.timeSlot}</div>
                         <div>Duration: {m.durationLabel}</div>
                         <div>New Lane: {m.newLaneName}</div>

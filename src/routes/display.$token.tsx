@@ -13,6 +13,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
+import { formatDateLong } from '../lib/dateFormat'
 
 export const Route = createFileRoute('/display/$token')({
   component: DisplayBoard,
@@ -69,12 +70,7 @@ function fmtHourLabel(h: number): string {
   return `${h12}${ampm}`
 }
 
-function fmtDateLong(date: string): string {
-  const [y, m, d] = date.split('-').map(Number)
-  return new Date(y, m - 1, d).toLocaleDateString('en-AU', {
-    weekday: 'long', day: 'numeric', month: 'long',
-  })
-}
+const fmtDateLong = formatDateLong
 
 function laneAccent(lane: Lane): string {
   return lane.mode === 'RU' ? 'text-amber-300' : 'text-sky-300'

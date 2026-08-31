@@ -4,6 +4,7 @@ import { useAuth } from '../hooks/useAuth'
 import { api } from '../../convex/_generated/api'
 import { buildCoachLedger, todayAndMonthStart } from '../lib/statementLedger'
 import CoachBalancePanel from '../components/CoachBalancePanel'
+import { formatDateLong } from '../lib/dateFormat'
 
 export const Route = createFileRoute('/statements')({
   component: StatementsPage,
@@ -115,7 +116,7 @@ function StatementsPage() {
                     : r.raw?.note ? `${r.label} — ${r.raw.note}` : r.label
                   return (
                     <tr key={i} className={`border-t border-gray-100 ${isFuture ? 'opacity-50' : ''}`}>
-                      <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{r.date || '—'}</td>
+                      <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{r.date ? formatDateLong(r.date) : '—'}</td>
                       <td className="px-5 py-3">{typeBadge}</td>
                       <td className="px-5 py-3 text-gray-700">{desc}</td>
                       <td className="px-5 py-3 text-right text-gray-900">{r.charge > 0 ? `$${r.charge.toFixed(2)}` : ''}</td>

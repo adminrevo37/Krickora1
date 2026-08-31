@@ -10,6 +10,7 @@ import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
 import { useSettings } from '../hooks/useSettings'
 import { formatDateKey } from '../lib/booking-data'
+import { formatDateLong } from '../lib/dateFormat'
 import LaneSegmentEditor from './LaneSegmentEditor'
 import { type LaneRow, type Segment, DEFAULT_OPEN_HOUR, DEFAULT_CLOSE_HOUR } from '../lib/lanes'
 
@@ -105,7 +106,7 @@ export default function LaneOverrideModal({ date, onClose }: Props) {
           <div>
             <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">Edit lane layout for this date</h2>
             <p className="text-xs text-gray-500 mt-0.5">
-              {date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+              {formatDateLong(date)}
             </p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>

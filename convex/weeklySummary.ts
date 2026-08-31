@@ -4,6 +4,7 @@ import { sendTemplateEmail } from "./lib/email";
 // EML-1 (audit 2026-06): shared snapshot-aware lane name (the local map below used
 // yet another spelling — "Run-up Lane N" — and ignored laneNameSnapshot).
 import { laneNameForBooking } from "./lib/lanes";
+import { fmtAwstDateLabel } from "./lib/dates";
 
 // AWST = UTC+8, no DST
 function nowInAWST(): Date {
@@ -24,14 +25,7 @@ function addDays(d: Date, days: number): Date {
   return nd;
 }
 
-function formatDateLong(dateStr: string): string {
-  const d = new Date(dateStr + "T00:00:00");
-  return d.toLocaleDateString("en-US", {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-}
+const formatDateLong = fmtAwstDateLabel;
 
 function formatHour(h: number): string {
   const hr = Math.floor(h);

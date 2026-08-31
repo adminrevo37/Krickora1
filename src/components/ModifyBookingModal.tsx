@@ -3,6 +3,7 @@ import { useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
 import { fmtMoney } from '../lib/money'
+import { formatDateLong } from '../lib/dateFormat'
 import {
   LANES, formatDateKey, formatTime, canBookSlot, getCustomerPrice, getCoachPrice,
   getCoachDurations, getCustomerDurations, getValidCoachStartTimes, getCoachRolling7Days,
@@ -309,10 +310,7 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
     // notes ("$X credit added to your account") and the new-door-code warning.
   }
 
-  const formatDate = (dateStr: string) => {
-    const [y, m, d] = dateStr.split('-').map(Number)
-    return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-  }
+  const formatDate = formatDateLong
   const formatDuration = (mins: number) => {
     const h = Math.floor(mins / 60); const m = mins % 60
     if (h > 0 && m > 0) return `${h}hr ${m}min`

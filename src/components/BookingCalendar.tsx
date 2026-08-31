@@ -38,6 +38,7 @@ import { useBookings } from '../hooks/useBookingStore'
 import { useLaneBlocks } from '../hooks/useLaneBlocks'
 import { useAuth } from '../hooks/useAuth'
 import { getErrorMessage } from '../lib/errors'
+import { formatDateLong } from '../lib/dateFormat'
 import ModalShell from './ModalShell'
 import { useSettings } from '../hooks/useSettings'
 import BookingModal from './BookingModal'
@@ -688,7 +689,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
           legends are removed entirely (the selected day is obvious from the day
           strip above, and the grid gets the full height). */}
       <div className="hidden sm:block">
-        <h3 className="text-xl font-bold text-gray-800 dark:text-gray-100">{selectedDay.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</h3>
+        <h3 className="text-xl font-bold text-gray-800 dark:text-gray-100">{formatDateLong(selectedDay)}</h3>
         <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">{isToday(selectedDay) ? '🟢 Today' : formatDayLabel(selectedDay)} &middot; {formatTime(getHoursForDate(settings, selectedDay).open)} - {formatTime(getHoursForDate(settings, selectedDay).close)} AWST &middot; 5 Lanes</p>
       </div>
       <div className="hidden sm:block space-y-3">
@@ -1082,7 +1083,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                   {formatTime(offer.hour)} – {formatTime(offer.hour + 1)}
                 </div>
                 <div className="text-xs text-emerald-700 dark:text-emerald-400">
-                  {formatDayLabel(new Date(offer.date + 'T00:00:00'))} · {offer.pool === 'bm' ? 'Bowling machine' : 'Run-up'} lane
+                  {formatDateLong(offer.date)} · {offer.pool === 'bm' ? 'Bowling machine' : 'Run-up'} lane
                 </div>
               </div>
               <p className={`mt-3 text-xs rounded-lg p-2.5 border ${offer.exclusive
@@ -1178,7 +1179,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
               You&apos;re in the {poolTag} queue
             </h3>
             <p className="text-sm text-gray-600 dark:text-gray-300">
-              {formatDayLabel(selectedDay)} at {formatTime(manageQueue.hour)} · {poolLabel}.
+              {formatDateLong(selectedDay)} at {formatTime(manageQueue.hour)} · {poolLabel}.
             </p>
             <div className="mt-3 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/50 p-3">
               <div className="text-2xl font-bold text-emerald-700 dark:text-emerald-300">
@@ -1281,7 +1282,7 @@ function ReleaseBanner({ role, tier, settings, nextWeekOpen, lastDay }: {
       <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/50 rounded-2xl px-4 py-3 flex items-center gap-2">
         <span className="text-lg">✅</span>
         <p className="text-sm font-medium text-emerald-800">
-          Next week is now open — book through {lastDay.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}.
+          Next week is now open — book through {formatDateLong(lastDay)}.
         </p>
       </div>
     )

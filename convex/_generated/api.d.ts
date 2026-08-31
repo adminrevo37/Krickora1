@@ -42,6 +42,7 @@ import type * as lib_analyticsHelpers from "../lib/analyticsHelpers.js";
 import type * as lib_bookingWindow from "../lib/bookingWindow.js";
 import type * as lib_coachLedger from "../lib/coachLedger.js";
 import type * as lib_credit from "../lib/credit.js";
+import type * as lib_dates from "../lib/dates.js";
 import type * as lib_discounts from "../lib/discounts.js";
 import type * as lib_email from "../lib/email.js";
 import type * as lib_identity from "../lib/identity.js";
@@ -124,6 +125,7 @@ declare const fullApi: ApiFromModules<{
   "lib/bookingWindow": typeof lib_bookingWindow;
   "lib/coachLedger": typeof lib_coachLedger;
   "lib/credit": typeof lib_credit;
+  "lib/dates": typeof lib_dates;
   "lib/discounts": typeof lib_discounts;
   "lib/email": typeof lib_email;
   "lib/identity": typeof lib_identity;

@@ -207,7 +207,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
       const isBooking = Boolean(d.laneName);
       if (isBooking) {
         return {
-          subject: `Booking confirmed — ${esc(d.laneName)}, ${esc(d.date)}`,
+          subject: `Booking confirmed — ${esc(d.laneName)}, ${esc(d.dateShort ?? d.date)}`,
           html: layout({
             title: "Booking confirmed",
             preheader: `${esc(d.laneName)} on ${esc(d.date)}${d.accessCode ? ` — door code ${esc(d.accessCode)}` : ""}.`,
@@ -269,7 +269,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
     // ── Bookings ──────────────────────────────────────────────────────────────
     case "booking-confirmation":
       return {
-        subject: `Booking confirmed — ${esc(d.laneName)}, ${esc(d.date)}`,
+        subject: `Booking confirmed — ${esc(d.laneName)}, ${esc(d.dateShort ?? d.date)}`,
         html: layout({
           title: "Booking confirmed",
           preheader: `${esc(d.laneName)} on ${esc(d.date)} at ${esc(d.timeSlot)}.`,
@@ -289,7 +289,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
       };
     case "booking-cancellation":
       return {
-        subject: `Booking cancelled — ${esc(d.laneName)}, ${esc(d.date)}`,
+        subject: `Booking cancelled — ${esc(d.laneName)}, ${esc(d.dateShort ?? d.date)}`,
         html: layout({
           title: "Booking cancelled",
           preheader: `Your ${esc(d.laneName)} session on ${esc(d.date)} was cancelled.`,
@@ -308,7 +308,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
       };
     case "booking-rescheduled":
       return {
-        subject: `Booking updated — ${esc(d.newLaneName)}, ${esc(d.newDate)}`,
+        subject: `Booking updated — ${esc(d.newLaneName)}, ${esc(d.newDateShort ?? d.newDate)}`,
         html: layout({
           title: "Booking updated",
           preheader: `Your session is now ${esc(d.newLaneName)} on ${esc(d.newDate)} at ${esc(d.newTimeSlot)}.`,
@@ -330,7 +330,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
     // per-send in the admin tool; Session Details block is always server-filled).
     case "admin-lane-change":
       return {
-        subject: `Lane update for your upcoming session — ${esc(d.date)}`,
+        subject: `Lane update for your upcoming session — ${esc(d.dateShort ?? d.date)}`,
         html: layout({
           title: "Lane update",
           preheader: `Your session on ${esc(d.date)} at ${esc(d.timeSlot)} is now on ${esc(d.newLaneName)}.`,
@@ -411,7 +411,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
     // no hold) — it must never be dropped, it is what makes the race fair.
     case "waitlist-alt-time-offer":
       return {
-        subject: `A ${esc(d.timeSlot)} slot has opened up — ${esc(d.date)}`,
+        subject: `A ${esc(d.timeSlot)} slot has opened up — ${esc(d.dateShort ?? d.date)}`,
         html: layout({
           title: "A different time has opened up",
           preheader: `${esc(d.timeSlot)} on ${esc(d.date)} — you asked for ${esc(d.requestedSlot)}.`,
@@ -433,7 +433,7 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
     // ── Athlete / parent (mandatory) ─────────────────────────────────────────
     case "athlete-allocation":
       return {
-        subject: `${esc(d.athleteName)} has a session — ${esc(d.date)}`,
+        subject: `${esc(d.athleteName)} has a session — ${esc(d.dateShort ?? d.date)}`,
         html: layout({
           title: "Session allocated",
           preheader: `${esc(d.athleteName)} with ${esc(d.coachName)} on ${esc(d.date)}.`,

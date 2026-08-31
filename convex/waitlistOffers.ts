@@ -25,6 +25,7 @@ import { internal } from "./_generated/api";
 import { requireAdmin, getCallerContext } from "./lib/adminGuard";
 import { resolveDayLanes } from "./lanes";
 import { resolveSegment, segmentIsClosed, segmentStartHours } from "./lib/lanes";
+import { fmtAwstDateLabel, fmtAwstDateShort } from "./lib/dates";
 
 type Pool = "bm" | "ru";
 
@@ -34,15 +35,6 @@ function fmtHour12(h: number): string {
   const period = hr >= 12 ? "PM" : "AM";
   const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr;
   return `${display}:${min.toString().padStart(2, "0")} ${period}`;
-}
-function fmtAwstDateLabel(dateStr: string): string {
-  return new Date(dateStr + "T00:00:00").toLocaleDateString("en-US", {
-    timeZone: "Australia/Perth",
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
 }
 /** ms for a (date, hour) in AWST — used only to tell whether the slot has passed. */
 function slotStartMs(date: string, hour: number): number {
@@ -295,6 +287,7 @@ export const createWaitlistOffer = mutation({
     // enabled notifications or is on a device that never registered.
     const when = `${fmtHour12(args.hour)} - ${fmtHour12(args.hour + 1)}`;
     const dateLabel = fmtAwstDateLabel(args.date);
+    const dateLabelShort = fmtAwstDateShort(args.date);
     const poolLabel = pool === "bm" ? "bowling machine" : "run-up";
     const offerUrl = `/?offer=${token}`;
     // The recipient must never think the slot is being held for them — it isn't.
@@ -311,6 +304,7 @@ export const createWaitlistOffer = mutation({
         customerName: r.userName,
         poolLabel,
         date: dateLabel,
+        dateShort: dateLabelShort,
         timeSlot: when,
         requestedSlot: `${fmtHour12(args.sourceHour)} - ${fmtHour12(args.sourceHour + 1)}`,
         note: sharedNote,

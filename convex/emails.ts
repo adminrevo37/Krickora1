@@ -2,6 +2,7 @@ import { internalAction, action, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { sendTemplateEmail } from "./lib/email";
+import { fmtAwstDateLabel } from "./lib/dates";
 
 // Templates that users CANNOT opt out of (transactional/auth + all athlete
 // notifications). Athlete emails are MANDATORY per the notifications redesign
@@ -233,6 +234,7 @@ export const sendPaymentConfirmation = internalAction({
     // it renders the plain receipt as before.
     laneName: v.optional(v.string()),
     date: v.optional(v.string()),
+    dateShort: v.optional(v.string()),
     timeSlot: v.optional(v.string()),
     duration: v.optional(v.string()),
     accessCode: v.optional(v.string()),
@@ -251,6 +253,7 @@ export const sendPaymentConfirmation = internalAction({
       paymentDate: args.paymentDate,
       ...(args.laneName ? { laneName: args.laneName } : {}),
       ...(args.date ? { date: args.date } : {}),
+      ...(args.dateShort ? { dateShort: args.dateShort } : {}),
       ...(args.timeSlot ? { timeSlot: args.timeSlot } : {}),
       ...(args.duration ? { duration: args.duration } : {}),
       ...(args.accessCode ? { accessCode: args.accessCode } : {}),
@@ -290,6 +293,7 @@ export const sendBookingConfirmation = internalAction({
     customerName: v.string(),
     laneName: v.string(),
     date: v.string(),
+    dateShort: v.optional(v.string()),
     timeSlot: v.string(),
     duration: v.string(),
     amount: v.string(),
@@ -306,6 +310,7 @@ export const sendBookingConfirmation = internalAction({
       firstName: await resolveFirstName(ctx, args.to),
       laneName: args.laneName,
       date: args.date,
+      ...(args.dateShort ? { dateShort: args.dateShort } : {}),
       timeSlot: args.timeSlot,
       duration: args.duration,
       amount: args.amount,
@@ -325,6 +330,7 @@ export const sendBookingCancellation = internalAction({
     customerName: v.string(),
     laneName: v.string(),
     date: v.string(),
+    dateShort: v.optional(v.string()),
     timeSlot: v.string(),
     duration: v.string(),
     calendarUrl: v.optional(v.string()),
@@ -342,6 +348,7 @@ export const sendBookingCancellation = internalAction({
       firstName: await resolveFirstName(ctx, args.to),
       laneName: args.laneName,
       date: args.date,
+      ...(args.dateShort ? { dateShort: args.dateShort } : {}),
       timeSlot: args.timeSlot,
       duration: args.duration,
       cancellationReason: args.reason ?? "",
@@ -366,6 +373,7 @@ export const sendLaneChangeEmail = internalAction({
     introText: v.string(),
     closingText: v.optional(v.string()),
     date: v.string(),
+    dateShort: v.optional(v.string()),
     timeSlot: v.string(),
     duration: v.string(),
     newLaneName: v.string(),
@@ -382,6 +390,7 @@ export const sendLaneChangeEmail = internalAction({
       introText: args.introText,
       closingText: args.closingText ?? "",
       date: args.date,
+      ...(args.dateShort ? { dateShort: args.dateShort } : {}),
       timeSlot: args.timeSlot,
       duration: args.duration,
       newLaneName: args.newLaneName,
@@ -399,6 +408,7 @@ export const sendBookingRescheduled = internalAction({
     oldTimeSlot: v.string(),
     newLaneName: v.string(),
     newDate: v.string(),
+    newDateShort: v.optional(v.string()),
     newTimeSlot: v.string(),
     newDuration: v.string(),
     accessCode: v.string(),
@@ -417,6 +427,7 @@ export const sendBookingRescheduled = internalAction({
       oldTimeSlot: args.oldTimeSlot,
       newLaneName: args.newLaneName,
       newDate: args.newDate,
+      ...(args.newDateShort ? { newDateShort: args.newDateShort } : {}),
       newTimeSlot: args.newTimeSlot,
       newDuration: args.newDuration,
       accessCode: args.accessCode,
@@ -496,9 +507,7 @@ export const sendWaitlistConfirmation = internalAction({
     const sortedDates = Array.from(byDate.keys()).sort();
     const slotsHtml = sortedDates.map((date) => {
       const slots = byDate.get(date)!.sort((a, b) => a.hour - b.hour);
-      const formattedDate = new Date(date + "T00:00:00").toLocaleDateString("en-US", {
-        weekday: "long", year: "numeric", month: "long", day: "numeric",
-      });
+      const formattedDate = fmtAwstDateLabel(date);
       const times = slots
         .map((s) => `${fmtHour(s.hour)} – ${fmtHour(s.hour + 1)}${s.pool ? ` (${s.pool})` : ""}`)
         .join(", ");
@@ -567,6 +576,7 @@ export const sendWaitlistAltTimeOffer = internalAction({
     customerName: v.string(),
     poolLabel: v.string(), // "bowling machine" | "run-up"
     date: v.string(),
+    dateShort: v.optional(v.string()),
     timeSlot: v.string(), // the OFFERED window
     requestedSlot: v.string(), // what they originally queued for
     note: v.string(), // "reserved for you" OR the multi-recipient race disclosure
@@ -588,6 +598,7 @@ export const sendWaitlistAltTimeOffer = internalAction({
       firstName: await resolveFirstName(ctx, args.to),
       poolLabel: args.poolLabel,
       date: args.date,
+      ...(args.dateShort ? { dateShort: args.dateShort } : {}),
       timeSlot: args.timeSlot,
       requestedSlot: args.requestedSlot,
       note: args.note,
@@ -608,6 +619,7 @@ export const sendAthleteAllocation = internalAction({
     coachName: v.string(),
     laneName: v.string(),
     date: v.string(),
+    dateShort: v.optional(v.string()),
     timeSlot: v.string(),
     duration: v.string(),
     accessCode: v.string(),
@@ -623,6 +635,7 @@ export const sendAthleteAllocation = internalAction({
       coachName: args.coachName,
       laneName: args.laneName,
       date: args.date,
+      ...(args.dateShort ? { dateShort: args.dateShort } : {}),
       timeSlot: args.timeSlot,
       duration: args.duration,
       accessCode: args.accessCode,

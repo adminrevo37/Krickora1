@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
+import { formatDateLong } from '../lib/dateFormat'
 import { useAuth } from '../hooks/useAuth'
 
 export const Route = createFileRoute('/join')({
@@ -75,7 +76,7 @@ function JoinPage() {
       <Centered
         emoji="👥"
         title={`${invite.ownerName} invited you to a Cricket Revolution booking`}
-        subtitle={`${invite.laneName} · ${invite.date} · ${invite.timeSlot}. Sign in or create an account to join and get the door code.`}
+        subtitle={`${invite.laneName} · ${formatDateLong(invite.date ?? '')} · ${invite.timeSlot}. Sign in or create an account to join and get the door code.`}
       >
         <button onClick={() => navigate({ to: '/' })} className="mt-4 px-5 py-2 bg-emerald-600 text-white rounded-xl font-medium">
           Sign in / Sign up
@@ -109,7 +110,7 @@ function JoinPage() {
     <Centered
       emoji="👥"
       title={`Join ${invite.ownerName}'s booking`}
-      subtitle={`${invite.laneName} · ${invite.date} · ${invite.timeSlot} · ${invite.duration}`}
+      subtitle={`${invite.laneName} · ${formatDateLong(invite.date ?? '')} · ${invite.timeSlot} · ${invite.duration}`}
     >
       <button
         onClick={handleAccept}

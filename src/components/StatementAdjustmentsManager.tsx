@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
+import { formatDateLong } from '../lib/dateFormat'
 
 // SPEC_STATEMENTS_EDITING — compact admin manager for a subject's statement
 // adjustment lines. Used in the customer EditUserModal (subjectType 'customer');
@@ -91,7 +92,7 @@ export default function StatementAdjustmentsManager({ subjectType, subjectId }: 
           {[...list].sort((a, b) => (b.date || '').localeCompare(a.date || '')).map((a: any) => (
             <div key={a._id} className="py-1.5 flex items-center justify-between gap-2 text-xs">
               <span className="text-gray-600 truncate">
-                <span className="text-gray-400">{a.date}</span> · {a.label}
+                <span className="text-gray-400">{formatDateLong(a.date)}</span> · {a.label}
                 {a.note ? <span className="text-gray-400"> — {a.note}</span> : null}
               </span>
               <span className="flex items-center gap-2 shrink-0">

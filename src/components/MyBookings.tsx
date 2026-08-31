@@ -21,6 +21,7 @@ import { formatAccessCode } from '../lib/access-code'
 import { trackCodeView } from '../lib/tracker'
 import { getErrorMessage } from '../lib/errors'
 import { fmtMoney } from '../lib/money'
+import { formatDateLong } from '../lib/dateFormat'
 import ModalShell from './ModalShell'
 // SPEC_CHECKOUT_ABANDONMENT — resume payment / cancel an unpaid booking.
 import { createCheckoutSession, cancelUnpaidCheckout } from '../lib/stripe'
@@ -108,12 +109,7 @@ function formatDuration(mins: number): string {
   return `${mins}min`
 }
 
-function formatDate(dateStr: string): string {
-  const [year, month, day] = dateStr.split('-').map(Number)
-  return new Date(year, month - 1, day).toLocaleDateString('en-US', {
-    weekday: 'short', month: 'short', day: 'numeric',
-  })
-}
+const formatDate = formatDateLong
 
 // ── component ─────────────────────────────────────────────────────────────────
 
@@ -619,7 +615,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   ) => {
     const lane = getLane(booking.laneId)
     const variantName = getVariantName(booking)
-    const dateLabel = new Date(booking.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+    const dateLabel = formatDateLong(booking.date)
     const timeRange = `${formatTime(slot.startHour)} – ${formatTime(slot.startHour + slot.durationMinutes / 60)}`
     const laneName = bookingLaneName(booking) + (variantName ? ` (${variantName})` : '')
     const code = slot.accessCode ? formatAccessCode(slot.accessCode) : '—'
@@ -1244,7 +1240,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                     className="shrink-0 flex flex-col items-start px-3 py-2 bg-white dark:bg-gray-900 border border-orange-200 dark:border-orange-800 rounded-xl text-left hover:bg-orange-50 dark:hover:bg-orange-900/20 active:scale-95 transition-all"
                   >
                     <span className="text-[11px] font-bold text-orange-700 dark:text-orange-400">
-                      {dateObj.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                      {formatDateLong(dateObj)}
                     </span>
                     <span className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
                       {formatTime(b.startHour)} · {lane?.shortName ?? b.laneId}
@@ -1270,13 +1266,13 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           let dateSub: string
           if (isToday) {
             dateLabel = 'Today'
-            dateSub = dateObj.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+            dateSub = formatDateLong(dateObj)
           } else if (isTomorrow) {
             dateLabel = 'Tomorrow'
-            dateSub = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+            dateSub = formatDateLong(dateObj)
           } else {
             dateLabel = dateObj.toLocaleDateString('en-US', { weekday: 'long' })
-            dateSub = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+            dateSub = formatDateLong(dateObj)
           }
 
           return (
@@ -1360,13 +1356,13 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           let dateSub: string
           if (isToday) {
             dateLabel = 'Today'
-            dateSub = dateObj.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+            dateSub = formatDateLong(dateObj)
           } else if (isTomorrow) {
             dateLabel = 'Tomorrow'
-            dateSub = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+            dateSub = formatDateLong(dateObj)
           } else {
             dateLabel = dateObj.toLocaleDateString('en-US', { weekday: 'long' })
-            dateSub = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+            dateSub = formatDateLong(dateObj)
           }
           return (
             <div key={date} className="space-y-2">
@@ -1399,7 +1395,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
 
   // ── unified day view (§2): date strip + status dots + the selected day's cards ─
   const renderDayView = () => {
-    const selectedLabel = new Date(selectedDateKey + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+    const selectedLabel = formatDateLong(selectedDateKey)
     return (
       <div className="space-y-3">
         {/* Date strip */}
@@ -1836,8 +1832,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       {cancelConfirm && (() => {
         // SPEC_COACH_FLEXIBLE_WINDOW: a flexible coach's charge window is the shorter 3h.
         const hrs = coachFlexHours ?? settings?.coachLateCancellationHours ?? 24
-        const [yy, mm, dd] = cancelConfirm.date.split('-').map(Number)
-        const dateLabel = new Date(yy, mm - 1, dd).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })
+        const dateLabel = formatDateLong(cancelConfirm.date)
         const timeRange = `${formatTime(cancelConfirm.startHour)} – ${formatTime(cancelConfirm.startHour + cancelConfirm.duration / 60)}`
         const charge = cancelConfirm.coachPrice ?? getCoachPrice(cancelConfirm.duration)
         const busy = cancellingId === cancelConfirm.id

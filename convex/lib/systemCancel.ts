@@ -13,6 +13,7 @@
 import { internal } from "../_generated/api";
 import { issueCredit } from "./credit";
 import { releaseHoldForBooking } from "./slotHolds";
+import { fmtAwstDateLabel, fmtAwstDateShort } from "./dates";
 
 const LANE_NAMES: Record<string, string> = {
   bm1: "Bowling Machine 1",
@@ -142,7 +143,8 @@ export async function systemCancelBooking(
       to: booking.customerEmail,
       customerName: booking.customerName || "Valued Customer",
       laneName: LANE_NAMES[booking.laneId] ?? booking.laneId,
-      date: booking.date,
+      date: fmtAwstDateLabel(booking.date),
+      dateShort: fmtAwstDateShort(booking.date),
       timeSlot,
       duration: durationLabel,
       reason: opts.reason,

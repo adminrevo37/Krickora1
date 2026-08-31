@@ -4,6 +4,7 @@ import type { Id } from '../../convex/_generated/dataModel'
 import { getErrorMessage } from '../lib/errors'
 import { LANES, formatTime } from '../lib/booking-data'
 import { formatAccessCode } from '../lib/access-code'
+import { formatDateLong } from '../lib/dateFormat'
 
 /**
  * Read-only "shared with you" bookings (SPEC_ADD_A_MATE). Rendered inside My
@@ -38,7 +39,7 @@ export default function MateBookingsSection() {
               <div className="min-w-0">
                 <div className="text-sm font-semibold text-gray-800 dark:text-gray-200">{laneName(b.laneId)}</div>
                 <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                  {b.date} · {formatTime(b.startHour)} · {b.duration} min
+                  {formatDateLong(b.date)} · {formatTime(b.startHour)} · {b.duration} min
                 </div>
                 <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Booked by {b.ownerName}</div>
                 {b.otherMates.length > 0 && (

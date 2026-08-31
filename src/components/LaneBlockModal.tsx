@@ -3,6 +3,7 @@ import { useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
 import { LANES, formatDateKey, generateTimeSlots } from '../lib/booking-data'
+import { formatDateLong } from '../lib/dateFormat'
 
 interface Props {
   date: Date
@@ -69,7 +70,7 @@ export default function LaneBlockModal({ date, prefill, onClose }: Props) {
         </div>
 
         <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-          {date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+          {formatDateLong(date)}
         </p>
 
         <div className="space-y-4">

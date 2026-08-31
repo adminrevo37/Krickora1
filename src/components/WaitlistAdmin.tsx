@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import ModalShell from './ModalShell'
+import { formatDateLong } from '../lib/dateFormat'
 
 // SPEC_WAITLIST_OFFER_REDESIGN — admin waitlist & first-refusal offer dashboard.
 // Shows each slot's queue (oldest first), the current offeree + live countdown,
@@ -24,11 +25,7 @@ function fmtHour12(h: number): string {
   return `${display}:${min.toString().padStart(2, '0')} ${period}`
 }
 
-function fmtDate(date: string): string {
-  return new Date(date + 'T00:00:00').toLocaleDateString('en-US', {
-    weekday: 'short', month: 'short', day: 'numeric',
-  })
-}
+const fmtDate = formatDateLong
 
 function Countdown({ expiresAt }: { expiresAt: number }) {
   const [now, setNow] = useState(() => Date.now())

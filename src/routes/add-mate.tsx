@@ -7,6 +7,7 @@ import { useAuth } from '../hooks/useAuth'
 import { LANES, formatTime } from '../lib/booking-data'
 import { formatAccessCode } from '../lib/access-code'
 import { getErrorMessage } from '../lib/errors'
+import { formatDateLong } from '../lib/dateFormat'
 
 export const Route = createFileRoute('/add-mate')({
   component: AddMatePage,
@@ -171,7 +172,7 @@ function AddMatePage() {
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5 mb-6">
           <div className="text-sm text-gray-800 font-semibold">{laneLabel}</div>
           <div className="text-sm text-gray-500 mt-0.5">
-            {booking.date} · {formatTime(booking.startHour)} · {booking.duration} min
+            {formatDateLong(booking.date)} · {formatTime(booking.startHour)} · {booking.duration} min
           </div>
           {booking.accessCode && (
             <div className="text-sm text-gray-500 mt-0.5">Door code: <span className="font-mono font-semibold text-gray-800">{formatAccessCode(booking.accessCode)}</span></div>

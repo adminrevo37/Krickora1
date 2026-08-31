@@ -5,7 +5,8 @@ import { redeemCredit } from "./lib/credit";
 import { recordDiscountRedemption } from "./lib/discounts";
 import { releaseHoldForBooking } from "./lib/slotHolds";
 import { scheduleWaitlistAdvance } from "./waitlist";
-import { applyBookingChange, fmtHour12, durationLabel, fmtAwstDateLabel } from "./mutations";
+import { applyBookingChange, fmtHour12, durationLabel } from "./mutations";
+import { fmtAwstDateLabel, fmtAwstDateShort } from "./lib/dates";
 import { laneNameForBooking } from "./lib/lanes";
 
 /**
@@ -132,9 +133,10 @@ export const confirmBookingPayment = internalMutation({
               to: b.customerEmail,
               customerName: b.customerName ?? "there",
               amount: `$${(args.amountPaid / 100).toFixed(2)} ${currency}`,
-              description: `Session extension — ${laneName} ${newDate}`,
+              description: `Session extension — ${laneName} ${fmtAwstDateLabel(newDate)}`,
               reference: args.stripeSessionId,
-              paymentDate: new Date().toLocaleDateString("en-US", {
+              paymentDate: new Date().toLocaleDateString("en-AU", {
+                timeZone: "Australia/Perth",
                 year: "numeric",
                 month: "long",
                 day: "numeric",
@@ -359,7 +361,8 @@ export const confirmBookingPayment = internalMutation({
       // snapshot-first; legacy snapshot-less rows now get the canonical default name.
       const laneName = laneNameForBooking(b);
       const description = `${laneName} — ${b.date}`;
-      const paymentDate = new Date().toLocaleDateString("en-US", {
+      const paymentDate = new Date().toLocaleDateString("en-AU", {
+        timeZone: "Australia/Perth",
         year: "numeric",
         month: "long",
         day: "numeric",
@@ -378,6 +381,7 @@ export const confirmBookingPayment = internalMutation({
         paymentDate,
         laneName,
         date: fmtAwstDateLabel(b.date),
+        dateShort: fmtAwstDateShort(b.date),
         timeSlot: `${fmtHour12(b.startHour)} - ${fmtHour12(endHour)}`,
         duration: durationLabel(b.duration),
         ...(b.accessCode ? { accessCode: String(b.accessCode) } : {}),
@@ -485,9 +489,10 @@ export const recordTopUpPayment = internalMutation({
         to: b.customerEmail,
         customerName: b.customerName ?? "there",
         amount: `$${amountDollars.toFixed(2)} ${currency}`,
-        description: `Session extension — ${laneName} ${b.date}`,
+        description: `Session extension — ${laneName} ${fmtAwstDateLabel(b.date)}`,
         reference: args.stripeSessionId,
-        paymentDate: new Date().toLocaleDateString("en-US", {
+        paymentDate: new Date().toLocaleDateString("en-AU", {
+          timeZone: "Australia/Perth",
           year: "numeric",
           month: "long",
           day: "numeric",

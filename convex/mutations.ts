@@ -32,6 +32,7 @@ import { composeName, splitName } from "./lib/names";
 import { resolveCanonicalCustomerByEmail } from "./lib/identity";
 import { assertValidLocation, validateLocationIfProvided, normalizePostcode, normalizeSuburb } from "./lib/locations";
 import { notifyMatesOnCancel, notifyMatesOnModify } from "./mates";
+import { fmtAwstDateLabel, fmtAwstDateShort } from "./lib/dates";
 import { scheduleCapReconcileForBooking } from "./billingCaps";
 
 // ============================================================================
@@ -50,19 +51,6 @@ export function fmtHour12(h: number): string {
 
 export function durationLabel(m: number): string {
   return m === 60 ? "1 hour" : m === 90 ? "1.5 hours" : m === 120 ? "2 hours" : `${m} minutes`;
-}
-
-// Format a YYYY-MM-DD booking date as a weekday-long label in AWST (Bug #4).
-// toLocaleDateString without an explicit timeZone uses the Convex server zone
-// (UTC), which can flip the weekday at the day boundary for AWST recipients.
-export function fmtAwstDateLabel(dateStr: string): string {
-  return new Date(dateStr + "T00:00:00").toLocaleDateString("en-US", {
-    timeZone: "Australia/Perth",
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
 }
 
 // Build the booking-confirmation email payload from a booking-like object.
@@ -95,6 +83,7 @@ function buildConfirmationEmailArgs(b: {
     customerName: b.customerName,
     laneName,
     date: fmtAwstDateLabel(b.date),
+    dateShort: fmtAwstDateShort(b.date),
     timeSlot: `${fmtHour12(b.startHour)} - ${fmtHour12(endHour)}`,
     duration: durationLabel(b.duration),
     amount,
@@ -247,6 +236,7 @@ async function scheduleAllocationEmails(
 ): Promise<void> {
   const laneName = (opts as any).laneNameSnapshot || defaultLaneName(opts.laneId);
   const formattedDate = fmtAwstDateLabel(opts.date);
+  const formattedDateShort = fmtAwstDateShort(opts.date);
   const groups = await groupSlotsByAccount(ctx, opts.slots);
   for (const { to, entries } of groups) {
     const code = entries[0].accessCode ?? opts.bookingAccessCode ?? "N/A";
@@ -258,6 +248,7 @@ async function scheduleAllocationEmails(
         coachName: opts.coachName,
         laneName,
         date: formattedDate,
+        dateShort: formattedDateShort,
         timeSlot: fmtTimeRange(s.startHour, s.durationMinutes),
         duration: durationLabel(s.durationMinutes),
         accessCode: s.accessCode ?? code,
@@ -274,6 +265,7 @@ async function scheduleAllocationEmails(
         coachName: opts.coachName,
         laneName,
         date: formattedDate,
+        dateShort: formattedDateShort,
         timeSlot: combinedTime,
         duration: durationLabel(totalDur),
         accessCode: code,
@@ -743,10 +735,11 @@ export async function applyBookingChange(
       to: booking.customerEmail,
       customerName: booking.customerName || "Valued Customer",
       oldLaneName: booking.laneNameSnapshot || defaultLaneName(booking.laneId),
-      oldDate: booking.date,
+      oldDate: fmtAwstDateLabel(booking.date),
       oldTimeSlot: fmtHour12(booking.startHour),
       newLaneName: newSnap.laneNameSnapshot,
-      newDate: change.newDate,
+      newDate: fmtAwstDateLabel(change.newDate),
+      newDateShort: fmtAwstDateShort(change.newDate),
       newTimeSlot: fmtHour12(change.newStartHour),
       newDuration: durationLabel(change.newDuration),
       accessCode: accessCode ?? "",
@@ -2905,10 +2898,11 @@ export const updateBooking = mutation({
           to: notifyEmail,
           customerName: (cleanUpdates as any).customerName ?? (existing as any).customerName ?? "Valued Customer",
           oldLaneName: (existing as any).laneNameSnapshot || defaultLaneName((existing as any).laneId),
-          oldDate: (existing as any).date,
+          oldDate: fmtAwstDateLabel((existing as any).date),
           oldTimeSlot: fmtTUpd((existing as any).startHour),
           newLaneName: newSnap?.laneNameSnapshot ?? defaultLaneName(effNewLaneId),
-          newDate: effNewDate,
+          newDate: fmtAwstDateLabel(effNewDate),
+          newDateShort: fmtAwstDateShort(effNewDate),
           newTimeSlot: fmtTUpd(effNewStartHour),
           newDuration: fmtDUpd(effNewDuration),
           accessCode: (cleanUpdates as any).accessCode ?? (existing as any).accessCode ?? "",
@@ -3217,7 +3211,8 @@ async function cancelBookingCore(
         to: booking.customerEmail,
         customerName: booking.customerName || "Valued Customer",
         laneName: booking.laneNameSnapshot || defaultLaneName(booking.laneId),
-        date: booking.date,
+        date: fmtAwstDateLabel(booking.date),
+        dateShort: fmtAwstDateShort(booking.date),
         timeSlot,
         duration: durationLabel,
       });
@@ -3335,7 +3330,8 @@ export const deleteBooking = mutation({
           to: delBooking.customerEmail,
           customerName: delBooking.customerName || "Valued Customer",
           laneName: delBooking.laneNameSnapshot || defaultLaneName(delBooking.laneId),
-          date: delBooking.date,
+          date: fmtAwstDateLabel(delBooking.date),
+          dateShort: fmtAwstDateShort(delBooking.date),
           timeSlot,
           duration: durationLabel,
         });

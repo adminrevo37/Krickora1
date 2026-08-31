@@ -8,6 +8,7 @@ import { useMemo, useState } from 'react'
 import { useQuery } from 'convex/react'
 import { Link } from '@tanstack/react-router'
 import { api } from '../../../convex/_generated/api'
+import { formatDateLong } from '../../lib/dateFormat'
 
 // ── Local date helpers (Perth admin → browser-local date is AWST) ──────────
 function ymd(d: Date): string {
@@ -42,10 +43,7 @@ function balanceCell(n: number | undefined) {
   if (v < 0) return <span className="text-emerald-700">{money(v)} cr</span>
   return <span className="text-gray-400">$0.00</span>
 }
-function prettyDate(dateStr: string): string {
-  const [y, m, d] = dateStr.split('-').map(Number)
-  return new Date(y, m - 1, d).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })
-}
+const prettyDate = formatDateLong
 function fmtHour(h: number): string {
   const whole = Math.floor(h)
   const mins = Math.round((h - whole) * 60)

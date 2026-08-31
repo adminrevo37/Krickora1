@@ -3,6 +3,7 @@ import { useQuery, useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
 import { formatDateKey } from '../lib/booking-data'
+import { formatDateLong } from '../lib/dateFormat'
 
 export default function ClosureManager({ selectedDate }: { selectedDate: Date }) {
   const closures = (useQuery(api.closures.listUpcoming) ?? []) as any[]
@@ -44,14 +45,11 @@ export default function ClosureManager({ selectedDate }: { selectedDate: Date })
   }
 
   const handleRemove = async (id: string, date: string) => {
-    if (!confirm(`Reopen ${date}?`)) return
+    if (!confirm(`Reopen ${formatDateLong(date)}?`)) return
     try { await removeClosure({ id: id as any }) } catch (e: any) { alert(getErrorMessage(e) ?? 'Failed') }
   }
 
-  const fmtDate = (d: string) => {
-    const [y, m, day] = d.split('-').map(Number)
-    return new Date(y, m - 1, day).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
-  }
+  const fmtDate = formatDateLong
 
   return (
     <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-4 shadow-sm">
@@ -65,7 +63,7 @@ export default function ClosureManager({ selectedDate }: { selectedDate: Date })
       {/* Close selected date */}
       <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/40 rounded-lg p-3 mb-3">
         <div className="text-[11px] font-semibold text-red-700 dark:text-red-400 mb-2">
-          Selected: {selectedDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+          Selected: {formatDateLong(selectedDate)}
         </div>
         {isPast ? (
           <div className="text-xs text-gray-500">Cannot close past dates.</div>

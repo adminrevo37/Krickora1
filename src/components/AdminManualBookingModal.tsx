@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from 'react'
 import { useAction, useMutation, useQuery } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
+import { formatDateLong } from '../lib/dateFormat'
 import {
   formatDateKey, formatTime, getCustomerPrice, getCoachPrice,
   bookingOccupiesLane, LANES, getCoachSplitOptions, type Lane, type LaneVariant, type Booking,
@@ -485,7 +486,7 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-lg font-bold">🛡️ Admin Manual Booking</h3>
-              <p className="text-white/80 text-sm mt-0.5">{date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
+              <p className="text-white/80 text-sm mt-0.5">{formatDateLong(date)}</p>
             </div>
             <button onClick={onClose} disabled={submitting} className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center transition-colors">✕</button>
           </div>
@@ -686,7 +687,7 @@ export default function AdminManualBookingModal({ lane, date, startHour, custome
                 <div className="max-h-32 overflow-y-auto bg-gray-50 dark:bg-gray-800 rounded-lg p-2 space-y-1">
                   {occurrenceInfo.map((o, i) => (
                     <div key={i} className={`flex items-center justify-between text-[11px] px-2 py-1 rounded ${o.conflict ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400' : 'text-gray-600 dark:text-gray-400'}`}>
-                      <span>#{i + 1} — {o.date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                      <span>#{i + 1} — {formatDateLong(o.date)}</span>
                       <span className="font-semibold">{o.conflict ? '⚠️ Conflict' : '✓ Available'}</span>
                     </div>
                   ))}

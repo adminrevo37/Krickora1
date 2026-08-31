@@ -11,6 +11,7 @@ import MultiDatePicker from './MultiDatePicker'
 import { useAuth } from '../hooks/useAuth'
 import { useSettings } from '../hooks/useSettings'
 import { getErrorMessage } from '../lib/errors'
+import { formatDateLong } from '../lib/dateFormat'
 import {
   formatTime,
   formatDayLabel,
@@ -35,13 +36,7 @@ function fmtHourShort(date: Date): string {
   return m === 0 ? `${display}${period}` : `${display}:${String(m).padStart(2, '0')}${period}`
 }
 
-function fmtLongDate(key: string): string {
-  return new Date(key + 'T00:00:00').toLocaleDateString('en-AU', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'short',
-  })
-}
+const fmtLongDate = formatDateLong
 
 export default function RepeatBookingButton({ booking, compact }: { booking: Booking; compact?: boolean }) {
   const { customerRecord } = useAuth()

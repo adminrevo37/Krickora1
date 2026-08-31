@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import { getErrorMessage } from '../lib/errors'
+import { formatDateLong } from '../lib/dateFormat'
 import ModalShell from './ModalShell'
 // SPEC_WAITLIST_SPLIT_BM_RU — time-slot based waitlist, split into BM / RU pools.
 // Entries are keyed by pool sentinel laneId: '*bm' (bowling machines) / '*ru'
@@ -46,11 +47,7 @@ export default function WaitlistModal({ pool, selectedSlots, availableHours, dat
     return `${display}${period}`
   }
 
-  const formatDate = (dateStr: string) => {
-    const [year, month, day] = dateStr.split('-').map(Number)
-    const d = new Date(year, month - 1, day)
-    return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-  }
+  const formatDate = formatDateLong
 
   // The list of hours to offer as a checklist: the day's full hours if provided,
   // else just the seeded hour(s). Always include the seeded hours.
