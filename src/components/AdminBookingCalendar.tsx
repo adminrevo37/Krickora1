@@ -11,6 +11,7 @@ import { useSettings } from '../hooks/useSettings'
 import { useBookingActions } from '../hooks/useBookingStore'
 import AdminManualBookingModal, { type AdminCustomerOption, type BookingConfirmResult } from './AdminManualBookingModal'
 import AdminBookingDetailsModal from './AdminBookingDetailsModal'
+import AdminLaneReassignModal from './AdminLaneReassignModal'
 import LaneBlockModal from './LaneBlockModal'
 import LaneOverrideModal from './LaneOverrideModal'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
@@ -346,6 +347,20 @@ export default function AdminBookingCalendar() {
   }>
   const overriddenBays = laneLayout.filter((l) => l.isOverride)
   const [overrideModalOpen, setOverrideModalOpen] = useState(false)
+  // Lane reassign/swap tool: while active, clicking a booked cell toggles
+  // selection instead of opening the details modal.
+  const [reassignMode, setReassignMode] = useState(false)
+  const [selectedForReassign, setSelectedForReassign] = useState<Booking[]>([])
+  const [reassignModalOpen, setReassignModalOpen] = useState(false)
+  function toggleReassignSelect(b: Booking) {
+    setSelectedForReassign((prev) =>
+      prev.some((x) => x.id === b.id) ? prev.filter((x) => x.id !== b.id) : [...prev, b]
+    )
+  }
+  function exitReassignMode() {
+    setReassignMode(false)
+    setSelectedForReassign([])
+  }
   const [blockModalOpen, setBlockModalOpen] = useState(false)
   const [blockPrefill, setBlockPrefill] = useState<{ laneId: string; startHour: number } | null>(null)
   const [customerDropdownOpen, setCustomerDropdownOpen] = useState(false)
@@ -571,6 +586,17 @@ export default function AdminBookingCalendar() {
             >
               🔧 Block Lane
             </button>
+            <button
+              onClick={() => (reassignMode ? exitReassignMode() : setReassignMode(true))}
+              title="Select bookings to move to another lane, or swap two lanes' bookings around"
+              className={`text-[11px] px-2.5 py-1 rounded-lg font-semibold transition-colors ${
+                reassignMode
+                  ? 'bg-indigo-500 text-white hover:bg-indigo-600'
+                  : 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-200 dark:hover:bg-indigo-900/50'
+              }`}
+            >
+              🔀 {reassignMode ? `Selecting (${selectedForReassign.length}) — cancel` : 'Reassign Lanes'}
+            </button>
           </div>
         </div>
         {laneBlocks.length > 0 && (
@@ -694,6 +720,10 @@ export default function AdminBookingCalendar() {
                         ...(booked.isCoachBooking ? { color: coachTextColor } : {}),
                       }}
                       className={`relative group text-[10px] py-2 px-1 rounded font-semibold flex flex-col ${
+                        reassignMode && selectedForReassign.some((x) => x.id === booked.id)
+                          ? 'ring-2 ring-indigo-500 ring-offset-1'
+                          : ''
+                      } ${
                         booked.isCoachBooking
                           ? ''
                           : isFirstBooking
@@ -704,9 +734,22 @@ export default function AdminBookingCalendar() {
                       {/* Admin view: solid coach colour (no amber unallocated bands — admin
                           only needs to identify the coach; athlete names below stay visible). */}
                       {booked.isCoachBooking && <CoverageBlockBg booking={booked} coachColor={coachColor} solid />}
+                      {reassignMode && (
+                        <div className="absolute top-0.5 right-0.5 z-20 w-4 h-4 rounded-full bg-white/90 dark:bg-gray-900/90 border border-indigo-400 flex items-center justify-center text-[9px]">
+                          {selectedForReassign.some((x) => x.id === booked.id) ? '✓' : ''}
+                        </div>
+                      )}
                       <button
-                        onClick={(e) => { e.stopPropagation(); setDetailsBooking(booked) }}
-                        title={`View / modify booking — ${booked.customerName}${isFirstBooking ? ' (first-ever booking)' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          if (reassignMode) toggleReassignSelect(booked)
+                          else setDetailsBooking(booked)
+                        }}
+                        title={
+                          reassignMode
+                            ? `Select ${booked.customerName} for lane reassignment`
+                            : `View / modify booking — ${booked.customerName}${isFirstBooking ? ' (first-ever booking)' : ''}`
+                        }
                         className="relative z-10 text-left w-full hover:opacity-80 transition-opacity leading-tight flex-1"
                       >
                         <div className="break-words font-semibold">
@@ -826,6 +869,34 @@ export default function AdminBookingCalendar() {
           </div>
         </div>
       </div>
+
+      {reassignMode && selectedForReassign.length > 0 && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 bg-gray-900 dark:bg-gray-800 text-white rounded-full shadow-2xl px-4 py-2.5">
+          <span className="text-sm font-semibold">
+            {selectedForReassign.length} selected
+          </span>
+          <button
+            onClick={() => setSelectedForReassign([])}
+            className="text-xs text-gray-300 hover:text-white underline"
+          >
+            Clear
+          </button>
+          <button
+            onClick={() => setReassignModalOpen(true)}
+            className="text-xs font-semibold bg-indigo-500 hover:bg-indigo-600 px-3 py-1.5 rounded-full transition-colors"
+          >
+            🔀 Reassign
+          </button>
+        </div>
+      )}
+
+      {reassignModalOpen && (
+        <AdminLaneReassignModal
+          bookings={selectedForReassign}
+          onClose={() => setReassignModalOpen(false)}
+          onDone={() => exitReassignMode()}
+        />
+      )}
 
       {detailsBooking && (
         <AdminBookingDetailsModal
