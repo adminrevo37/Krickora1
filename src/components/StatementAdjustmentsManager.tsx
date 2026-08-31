@@ -29,6 +29,10 @@ export default function StatementAdjustmentsManager({ subjectType, subjectId }: 
 
   const [open, setOpen] = useState(false)
   const [editId, setEditId] = useState<string | null>(null)
+  // Inline confirm state, keyed by adjustment id — see CoachStatementTable's
+  // confirmKey for why this replaces window.confirm() (automation can't drive
+  // it, and Chrome silently suppresses repeated dialogs on one page).
+  const [confirmId, setConfirmId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [sign, setSign] = useState<'charge' | 'credit' | 'note'>('charge')
   const [amount, setAmount] = useState('')
@@ -69,11 +73,10 @@ export default function StatementAdjustmentsManager({ subjectType, subjectId }: 
   }
 
   const remove = async (id: string) => {
-    if (!confirm('Delete this adjustment line? This cannot be undone.')) return
     setBusy(true)
     try { await deleteAdjustment({ id } as any) }
     catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to delete') }
-    finally { setBusy(false) }
+    finally { setBusy(false); setConfirmId(null) }
   }
 
   const list = adjustments ?? []
@@ -99,8 +102,18 @@ export default function StatementAdjustmentsManager({ subjectType, subjectId }: 
                 <span className={`font-semibold ${(a.delta ?? 0) > 0 ? 'text-amber-700' : (a.delta ?? 0) < 0 ? 'text-emerald-700' : 'text-gray-400'}`}>
                   {(a.delta ?? 0) === 0 ? 'note' : `${a.delta > 0 ? '+' : '−'}$${Math.abs(a.delta).toFixed(2)}`}
                 </span>
-                <button type="button" disabled={busy} onClick={() => startEdit(a)} className="text-blue-600 hover:underline disabled:opacity-50">Edit</button>
-                <button type="button" disabled={busy} onClick={() => remove(a._id)} className="text-red-600 hover:underline disabled:opacity-50">Delete</button>
+                {confirmId === a._id ? (
+                  <>
+                    <span className="text-red-700">Delete?</span>
+                    <button type="button" disabled={busy} onClick={() => remove(a._id)} className="text-red-600 font-semibold hover:underline disabled:opacity-50">Confirm</button>
+                    <button type="button" disabled={busy} onClick={() => setConfirmId(null)} className="text-gray-500 hover:underline disabled:opacity-50">Cancel</button>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" disabled={busy} onClick={() => startEdit(a)} className="text-blue-600 hover:underline disabled:opacity-50">Edit</button>
+                    <button type="button" disabled={busy} onClick={() => setConfirmId(a._id)} className="text-red-600 hover:underline disabled:opacity-50">Delete</button>
+                  </>
+                )}
               </span>
             </div>
           ))}

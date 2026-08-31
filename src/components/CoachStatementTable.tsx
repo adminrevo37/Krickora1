@@ -46,6 +46,14 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName, ed
 
   // ── Row edit state ──────────────────────────────────────────────────────
   const [editKey, setEditKey] = useState<string | null>(null)
+  // Inline "are you sure" state for destructive actions, keyed by row id.
+  // Replaces window.confirm(): a native confirm() dialog can't be driven by
+  // browser automation (it blocks the tab until timeout) and after a few fire
+  // in quick succession Chrome silently suppresses further dialogs for the
+  // page — confirm() then returns false with no prompt at all, so the button
+  // looks broken with zero feedback. An inline two-click confirm has neither
+  // failure mode.
+  const [confirmKey, setConfirmKey] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const savePaymentEdit = async (id: string, amount: number, dateReceived: string, method: string, description: string) => {
@@ -57,11 +65,10 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName, ed
     finally { setBusy(false) }
   }
   const removePayment = async (id: string) => {
-    if (!confirm('Delete this payment? This cannot be undone.')) return
     setBusy(true)
     try { await deletePayment({ id } as any) }
     catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to delete payment') }
-    finally { setBusy(false) }
+    finally { setBusy(false); setConfirmKey(null) }
   }
   const saveAdjustEdit = async (id: string, delta: number, label: string, note: string, date: string) => {
     setBusy(true)
@@ -72,11 +79,10 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName, ed
     finally { setBusy(false) }
   }
   const removeAdjust = async (id: string) => {
-    if (!confirm('Delete this adjustment line? This cannot be undone.')) return
     setBusy(true)
     try { await deleteAdjustment({ id } as any) }
     catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to delete adjustment') }
-    finally { setBusy(false) }
+    finally { setBusy(false); setConfirmKey(null) }
   }
   const saveChargeEdit = async (bookingId: string, coachPrice: number) => {
     setBusy(true)
@@ -87,11 +93,10 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName, ed
     finally { setBusy(false) }
   }
   const removeBooking = async (bookingId: string) => {
-    if (!confirm('Remove this session\'s charge from the statement? It won\'t count toward the balance. You can restore it later.')) return
     setBusy(true)
     try { await setBookingExcluded({ bookingId, excluded: true } as any) }
     catch (err: any) { alert(getErrorMessage(err) ?? 'Failed to remove charge') }
-    finally { setBusy(false) }
+    finally { setBusy(false); setConfirmKey(null) }
   }
   const restoreBooking = async (bookingId: string) => {
     setBusy(true)
@@ -176,6 +181,9 @@ export default function CoachStatementTable({ coachId, coachEmail, coachName, ed
                     isEditing={editKey === (r.raw?._id ?? '')}
                     onEdit={() => setEditKey(r.raw?._id ?? null)}
                     onCancelEdit={() => setEditKey(null)}
+                    isConfirming={confirmKey === (r.raw?._id ?? '')}
+                    onRequestConfirm={() => setConfirmKey(r.raw?._id ?? null)}
+                    onCancelConfirm={() => setConfirmKey(null)}
                     onSavePayment={savePaymentEdit}
                     onDeletePayment={removePayment}
                     onSaveAdjust={saveAdjustEdit}
@@ -324,6 +332,7 @@ function AddAdjustmentForm({
 // ── One ledger row (with optional inline editor) ───────────────────────────
 function LedgerTableRow({
   r, editable, busy, isEditing, onEdit, onCancelEdit,
+  isConfirming, onRequestConfirm, onCancelConfirm,
   onSavePayment, onDeletePayment, onSaveAdjust, onDeleteAdjust,
   onSaveCharge, onRemoveBooking, onRestoreBooking,
 }: {
@@ -333,6 +342,9 @@ function LedgerTableRow({
   isEditing: boolean
   onEdit: () => void
   onCancelEdit: () => void
+  isConfirming: boolean
+  onRequestConfirm: () => void
+  onCancelConfirm: () => void
   onSavePayment: (id: string, amount: number, dateReceived: string, method: string, description: string) => Promise<void>
   onDeletePayment: (id: string) => Promise<void>
   onSaveAdjust: (id: string, delta: number, label: string, note: string, date: string) => Promise<void>
@@ -387,19 +399,31 @@ function LedgerTableRow({
       {editable && (
         <td className="px-5 py-3 text-right whitespace-nowrap">
           {canEdit && (
-            r.kind === 'booking' ? (
+            isConfirming ? (
+              <span className="inline-flex gap-2 items-center whitespace-nowrap">
+                <span className="text-xs text-red-700">
+                  {r.kind === 'booking' ? "Remove charge? Won't count toward balance." : 'Delete? Cannot be undone.'}
+                </span>
+                <button
+                  disabled={busy}
+                  onClick={() => r.kind === 'booking' ? onRemoveBooking(r.raw._id) : r.kind === 'payment' ? onDeletePayment(r.raw._id) : onDeleteAdjust(r.raw._id)}
+                  className="text-xs text-red-600 font-semibold hover:underline disabled:opacity-50"
+                >Confirm</button>
+                <button disabled={busy} onClick={onCancelConfirm} className="text-xs text-gray-500 hover:underline disabled:opacity-50">Cancel</button>
+              </span>
+            ) : r.kind === 'booking' ? (
               isExcluded ? (
                 <button disabled={busy} onClick={() => onRestoreBooking(r.raw._id)} className="text-xs text-blue-600 hover:underline disabled:opacity-50">Restore</button>
               ) : (
                 <span className="inline-flex gap-3">
                   <button disabled={busy} onClick={onEdit} className="text-xs text-blue-600 hover:underline disabled:opacity-50">Edit</button>
-                  <button disabled={busy} onClick={() => onRemoveBooking(r.raw._id)} className="text-xs text-red-600 hover:underline disabled:opacity-50">Remove</button>
+                  <button disabled={busy} onClick={onRequestConfirm} className="text-xs text-red-600 hover:underline disabled:opacity-50">Remove</button>
                 </span>
               )
             ) : (
               <span className="inline-flex gap-3">
                 <button disabled={busy} onClick={onEdit} className="text-xs text-blue-600 hover:underline disabled:opacity-50">Edit</button>
-                <button disabled={busy} onClick={() => r.kind === 'payment' ? onDeletePayment(r.raw._id) : onDeleteAdjust(r.raw._id)} className="text-xs text-red-600 hover:underline disabled:opacity-50">Delete</button>
+                <button disabled={busy} onClick={onRequestConfirm} className="text-xs text-red-600 hover:underline disabled:opacity-50">Delete</button>
               </span>
             )
           )}
