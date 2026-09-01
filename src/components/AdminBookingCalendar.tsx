@@ -849,9 +849,9 @@ export default function AdminBookingCalendar() {
                   <div key={`e-${lane.id}-${slot.hour}`}
                        style={{ gridRow: rowIdx + 2, gridColumn: laneIdx + 2 }}
                        className={`relative group rounded ${band}`}>
-                    {bs.isStart && bs.multi && (
-                      <div className="absolute top-0 left-0 z-[5] text-[7px] leading-tight font-semibold text-gray-600 bg-white/70 rounded-br px-1 pointer-events-none max-w-full truncate">
-                        {bandTagText(lane.id, dateKey, bs.seg)}
+                    {bs.showTag && (
+                      <div className="absolute top-0 left-0 z-[5] text-[7px] leading-tight font-semibold text-gray-600 dark:text-gray-300 bg-white/70 dark:bg-gray-900/70 rounded-br px-1 pointer-events-none max-w-full truncate">
+                        {bandTagText(lane.id, dateKey, bs.seg, bs.isRepeat)}
                       </div>
                     )}
                     <button

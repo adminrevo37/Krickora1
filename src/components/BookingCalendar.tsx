@@ -990,9 +990,9 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                         if (past || isLaneInactiveAtHalfHour) return
                         if (!booked && canBook && hasDurations && timeCheck.allowed) handleSlotClick(lane, slot)
                       }}>
-                      {!booked && !past && bs.isStart && bs.multi && (
+                      {!booked && !past && bs.showTag && (
                         <div className="absolute top-0 left-0 z-[5] text-[7px] leading-tight font-semibold text-gray-600 dark:text-gray-300 bg-white/70 dark:bg-gray-900/70 rounded-br px-1 py-0.5 pointer-events-none max-w-full truncate">
-                          {bandTagText(lane.id, dateKey, bs.seg)}
+                          {bandTagText(lane.id, dateKey, bs.seg, bs.isRepeat)}
                         </div>
                       )}
                       {renderBlockHere && booked && ownCoachBooking && (
