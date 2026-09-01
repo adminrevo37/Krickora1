@@ -1,27 +1,34 @@
 // Admin lane reassignment / swap tool.
 //
-// Two UI flows share one engine:
-//  - Bulk move: N bookings (any date/time) -> all reassigned to ONE target lane.
-//  - Hour swap: N bookings that share a date+hour -> each reassigned to a
-//    different lane among the selected set (the 2-booking case is a plain
-//    "lane 4 <-> lane 5" swap; N-booking is a rotation).
-// Both are just "a set of {bookingId, newLaneId} pairs applied atomically" —
-// the validation below is what makes that safe:
-//  - updateBooking's single-edit conflict scan only excludes the ONE booking
-//    being edited, so a genuine 2-way swap would false-positive against
-//    itself (booking A's old slot looks "taken" by booking B, which is
-//    moving OUT of it in the same operation). This engine excludes every
-//    booking in the whole batch, not just one.
-//  - Every leg still gets the full CAL-4 delete-old-event + create-new-event
-//    dance (convex/mutations.ts ~2860-2887) so the door code correctly moves
-//    with the booking to its new lane's calendar (HA reads per-lane
-//    calendars; this IS the door-code sync mechanism in this codebase).
-//  - Multi-lane bookings (additionalLaneIds) are out of scope for v1 and are
-//    rejected with a clear message rather than silently mishandled.
+// The engine is one thing: "a set of {booking, which lane leg, new lane} moves
+// applied atomically". Every UI flow (straight 2-way swap, whole-day shuffle,
+// bulk move onto one lane, moving a single lane out of a club booking) is just
+// a different set of legs.
 //
-// The customer email is a SEPARATE, explicit step (adminSendLaneChangeEmails)
-// so the admin can review/edit the intro text before anything sends — nothing
-// here sends email on its own.
+// v2 (2026-09-01) — two changes, both driven by real admin use:
+//  - PER-LEG MOVES. A multi-lane booking (club bookings, mostly) used to be
+//    rejected outright. Now an assignment names the leg via `fromLaneId`, so
+//    one lane can be moved out of a 4-lane club booking while the other three
+//    stay put. `fromLaneId` is optional only for single-lane bookings.
+//  - OCCUPANCY-BASED CONFLICT SCAN. The old scan excluded every booking in the
+//    batch (needed so a genuine A<->B swap doesn't false-positive against
+//    itself). That shortcut breaks the moment a booking only PARTIALLY vacates:
+//    a club booking moving its lane-1 leg still occupies lanes 2/3, and a
+//    blanket exclusion would happily let another booking land on top of them.
+//    So instead of excluding anything, we build the post-move occupancy map
+//    (batch bookings at their FINAL lane sets, everyone else where they are)
+//    and look for overlaps in that. Strictly more correct, and it subsumes the
+//    old separate intra-batch collision check.
+//
+// Unchanged and load-bearing:
+//  - Every affected booking gets the full CAL-4 teardown + rebuild of its
+//    calendar events (convex/mutations.ts ~2860-2887). This IS the door-code
+//    sync mechanism — HA reads per-lane Google Calendars — so a reassignment
+//    without it leaves a live door code on the lane the customer no longer has.
+//    Rebuilding the WHOLE set (not just the moved leg) is deliberate: it reuses
+//    the reconciler's proven recreate pattern and can't leave orphan events.
+//  - The customer email is a SEPARATE, explicit step (adminSendLaneChangeEmails)
+//    so the admin reviews/edits the text first — nothing here sends email.
 
 import { mutation } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
@@ -51,6 +58,11 @@ function fmtDuration(mins: number): string {
   return `${mins} min`;
 }
 
+/** Ordered lane set of a booking: [primary, ...additional]. */
+function laneSetOf(b: any): string[] {
+  return [b.laneId, ...(((b.additionalLaneIds as string[] | undefined) ?? []))];
+}
+
 type ReassignResult = {
   bookingId: string;
   customerEmail: string;
@@ -64,6 +76,7 @@ type ReassignResult = {
   newLaneName: string;
   newLaneId: string;
   laneType: string;
+  isMultiLane: boolean;
 };
 
 export const adminReassignLanes = mutation({
@@ -72,6 +85,10 @@ export const adminReassignLanes = mutation({
       v.object({
         bookingId: v.id("bookings"),
         newLaneId: v.string(),
+        // Which lane leg to move. Optional ONLY for single-lane bookings (where
+        // it can be inferred); required for multi-lane, so the caller can never
+        // silently move "the" lane of a booking that has several.
+        fromLaneId: v.optional(v.string()),
       })
     ),
   },
@@ -81,30 +98,108 @@ export const adminReassignLanes = mutation({
     if (args.assignments.length === 0) {
       throw new ConvexError("No bookings selected.");
     }
-    const seen = new Set<string>();
+
+    // ── Load each booking once ────────────────────────────────────────────
+    const bookingById = new Map<string, any>();
     for (const a of args.assignments) {
-      const key = a.bookingId.toString();
-      if (seen.has(key)) throw new ConvexError("The same booking was selected twice.");
-      seen.add(key);
+      const id = a.bookingId.toString();
+      if (bookingById.has(id)) continue;
+      const booking = await ctx.db.get(a.bookingId);
+      if (!booking) {
+        throw new ConvexError("A selected booking no longer exists — refresh and try again.");
+      }
+      if (booking.status === "cancelled") {
+        throw new ConvexError(`${booking.customerName}'s booking is cancelled — cannot move it.`);
+      }
+      bookingById.set(id, booking);
     }
 
-    const loaded = await Promise.all(
-      args.assignments.map(async (a) => {
-        const booking = await ctx.db.get(a.bookingId);
-        if (!booking) throw new ConvexError("A selected booking no longer exists — refresh and try again.");
-        if (booking.status === "cancelled") {
-          throw new ConvexError(`${booking.customerName}'s booking is cancelled — cannot move it.`);
-        }
-        if ((booking.additionalLaneIds?.length ?? 0) > 0) {
+    // ── Resolve each assignment to a concrete leg move, building each
+    //    booking's FINAL lane set as we go (a booking may have >1 leg moved).
+    const finalLanes = new Map<string, string[]>();
+    const movedLegsByBooking = new Map<string, Array<{ from: string; to: string }>>();
+    const seenLegs = new Set<string>();
+
+    for (const a of args.assignments) {
+      const id = a.bookingId.toString();
+      const booking = bookingById.get(id)!;
+      const origSet = laneSetOf(booking);
+      const current = finalLanes.get(id) ?? origSet;
+
+      let from: string;
+      if (a.fromLaneId != null) {
+        from = a.fromLaneId;
+      } else {
+        if (origSet.length > 1) {
           throw new ConvexError(
-            `${booking.customerName}'s booking spans multiple lanes — this tool only handles single-lane bookings. Use the booking editor for that one.`
+            `${booking.customerName}'s booking uses ${origSet.length} lanes — select the specific lane to move.`
           );
         }
-        return { assignment: a, booking };
-      })
-    );
+        from = booking.laneId as string;
+      }
+      if (!origSet.includes(from)) {
+        throw new ConvexError(
+          `${booking.customerName}'s booking isn't on ${defaultLaneName(from)} — refresh and try again.`
+        );
+      }
 
-    const batchIds = new Set(loaded.map((l) => l.assignment.bookingId.toString()));
+      const legKey = `${id}|${from}`;
+      if (seenLegs.has(legKey)) {
+        throw new ConvexError(
+          `${booking.customerName}'s ${defaultLaneName(from)} was selected twice — pick one destination for it.`
+        );
+      }
+      seenLegs.add(legKey);
+
+      if (a.newLaneId === from) continue; // no-op leg, nothing to do
+
+      const idx = current.indexOf(from);
+      if (idx < 0) {
+        throw new ConvexError(`${booking.customerName}'s ${defaultLaneName(from)} leg was already moved in this batch.`);
+      }
+      if (current.includes(a.newLaneId)) {
+        throw new ConvexError(
+          `${booking.customerName}'s booking already uses ${defaultLaneName(a.newLaneId)} — pick a different lane.`
+        );
+      }
+
+      const next = [...current];
+      next[idx] = a.newLaneId;
+      finalLanes.set(id, next);
+      movedLegsByBooking.set(id, [...(movedLegsByBooking.get(id) ?? []), { from, to: a.newLaneId }]);
+    }
+
+    if (finalLanes.size === 0) {
+      return { moved: [] };
+    }
+
+    // ── Validate every newly-occupied lane (type/variant compatibility, the
+    //    date-resolved display snapshot, closed segments, boundary crossings).
+    const snapshotByLane = new Map<string, { laneNameSnapshot: string; mode: string }>();
+    for (const [id, legs] of movedLegsByBooking) {
+      const booking = bookingById.get(id)!;
+      for (const leg of legs) {
+        const snap = await validateAndSnapshotLane(ctx, {
+          laneId: leg.to,
+          variantId: booking.variantId,
+          date: booking.date,
+          startHour: booking.startHour,
+          durationMinutes: booking.duration,
+          isAdmin: true,
+        });
+        snapshotByLane.set(`${id}|${leg.to}`, {
+          laneNameSnapshot: snap.laneNameSnapshot,
+          mode: snap.segment.mode,
+        });
+      }
+    }
+
+    // ── Conflict scan over POST-MOVE occupancy ────────────────────────────
+    // Nothing is "excluded". Each booking is placed at the lane set it will
+    // actually hold once this batch commits, then we look for two different
+    // bookings overlapping in time on the same lane. This is what makes a real
+    // swap pass (both vacate together) while still catching a partially-vacating
+    // multi-lane booking's retained lanes.
     const dayCache = new Map<string, any[]>();
     async function dayBookings(date: string) {
       if (!dayCache.has(date)) {
@@ -119,133 +214,129 @@ export const adminReassignLanes = mutation({
       return dayCache.get(date)!;
     }
 
-    const results: ReassignResult[] = [];
+    const dates = new Set<string>();
+    for (const id of finalLanes.keys()) dates.add(bookingById.get(id)!.date);
 
-    for (const { assignment, booking } of loaded) {
-      const { newLaneId } = assignment;
-      if (newLaneId === booking.laneId) continue; // no-op, nothing to do for this one
-
-      // Lane-type/variant compatibility + the date-resolved display snapshot,
-      // in one call (also rejects a closed segment / a boundary-crossing move).
-      const snap = await validateAndSnapshotLane(ctx, {
-        laneId: newLaneId,
-        variantId: booking.variantId,
-        date: booking.date,
-        startHour: booking.startHour,
-        durationMinutes: booking.duration,
-        isAdmin: true,
-      });
-
-      const endHour = booking.startHour + booking.duration / 60;
-      const day = await dayBookings(booking.date);
-      const conflict = day.some((b: any) => {
-        if (batchIds.has(b._id.toString())) return false; // vacated together in this same batch
-        if (b.status === "cancelled") return false;
-        const occupies = b.laneId === newLaneId || ((b.additionalLaneIds as string[] | undefined) ?? []).includes(newLaneId);
-        if (!occupies) return false;
-        const bEnd = b.startHour + b.duration / 60;
-        return booking.startHour < bEnd && endHour > b.startHour;
-      });
-      if (conflict) {
-        throw new ConvexError(`${booking.customerName}'s new lane is already booked at that time.`);
+    for (const date of dates) {
+      type Occ = { bookingId: string; lane: string; start: number; end: number; name: string; inBatch: boolean };
+      const occ: Occ[] = [];
+      for (const b of await dayBookings(date)) {
+        if (b.status === "cancelled") continue;
+        const id = b._id.toString();
+        const inBatch = finalLanes.has(id);
+        const lanes = inBatch ? finalLanes.get(id)! : laneSetOf(b);
+        for (const lane of lanes) {
+          occ.push({
+            bookingId: id,
+            lane,
+            start: b.startHour,
+            end: b.startHour + b.duration / 60,
+            name: b.customerName,
+            inBatch,
+          });
+        }
       }
-      if (
-        await hasActiveHoldConflict(ctx, {
-          laneIds: [newLaneId],
-          date: booking.date,
-          startHour: booking.startHour,
-          endHour,
-          excludeBookingId: booking._id.toString(),
-          bypassWaitlistHolds: true,
-        })
-      ) {
-        throw new ConvexError(`${booking.customerName}'s new lane has an in-flight checkout — try again shortly.`);
-      }
-
-      results.push({
-        bookingId: booking._id.toString(),
-        customerEmail: booking.customerEmail,
-        customerName: booking.customerName,
-        date: booking.date,
-        startHour: booking.startHour,
-        duration: booking.duration,
-        timeSlot: fmtTimeSlot(booking.startHour),
-        durationLabel: fmtDuration(booking.duration),
-        oldLaneName: booking.laneNameSnapshot || defaultLaneName(booking.laneId),
-        newLaneName: snap.laneNameSnapshot,
-        newLaneId,
-        laneType: LANE_TYPE_LABEL[snap.segment.mode] ?? snap.segment.mode,
-      });
-    }
-
-    if (results.length === 0) {
-      return { moved: [] };
-    }
-
-    // Cross-batch conflict: two bookings in THIS batch could both land on the
-    // same new lane at overlapping times (a bad bulk-move selection) — nothing
-    // above catches that, since each leg is only checked against bookings
-    // OUTSIDE the batch.
-    const byLaneDate = new Map<string, ReassignResult[]>();
-    for (const r of results) {
-      const key = `${r.newLaneId}|${r.date}`;
-      const arr = byLaneDate.get(key) ?? [];
-      arr.push(r);
-      byLaneDate.set(key, arr);
-    }
-    for (const group of byLaneDate.values()) {
-      for (let i = 0; i < group.length; i++) {
-        for (let j = i + 1; j < group.length; j++) {
-          const a = group[i];
-          const b = group[j];
-          const aEnd = a.startHour + a.duration / 60;
-          const bEnd = b.startHour + b.duration / 60;
-          if (a.startHour < bEnd && aEnd > b.startHour) {
+      for (let i = 0; i < occ.length; i++) {
+        for (let j = i + 1; j < occ.length; j++) {
+          const a = occ[i];
+          const b = occ[j];
+          if (a.lane !== b.lane) continue;
+          if (a.bookingId === b.bookingId) continue; // same booking, its own lanes
+          if (!a.inBatch && !b.inBatch) continue; // pre-existing, not ours to police
+          if (a.start < b.end && a.end > b.start) {
             throw new ConvexError(
-              `${a.customerName} and ${b.customerName} would both end up on the same lane at overlapping times — check your selection.`
+              `${a.name} and ${b.name} would both be on ${defaultLaneName(a.lane)} at overlapping times — check your selection.`
             );
           }
         }
       }
     }
 
-    // Everything validated — apply. (Convex mutations are transactional: if
-    // anything above threw, nothing below ever ran and nothing was written.)
-    const byId = new Map(loaded.map((l) => [l.assignment.bookingId.toString(), l]));
-    for (const r of results) {
-      const { assignment, booking } = byId.get(r.bookingId)!;
-      const prevHistory = booking.modificationHistory ?? [];
+    // ── In-flight checkout holds on each newly-occupied lane ──────────────
+    for (const [id, legs] of movedLegsByBooking) {
+      const booking = bookingById.get(id)!;
+      const endHour = booking.startHour + booking.duration / 60;
+      for (const leg of legs) {
+        if (
+          await hasActiveHoldConflict(ctx, {
+            laneIds: [leg.to],
+            date: booking.date,
+            startHour: booking.startHour,
+            endHour,
+            excludeBookingId: id,
+            bypassWaitlistHolds: true,
+          })
+        ) {
+          throw new ConvexError(`${booking.customerName}'s new lane has an in-flight checkout — try again shortly.`);
+        }
+      }
+    }
 
-      await ctx.db.patch(assignment.bookingId, {
-        laneId: assignment.newLaneId,
-        laneNameSnapshot: r.newLaneName,
+    // ── Everything validated — apply. (Convex mutations are transactional: if
+    //    anything above threw, nothing below ever ran and nothing was written.)
+    const results: ReassignResult[] = [];
+
+    for (const [id, finalSet] of finalLanes) {
+      const booking = bookingById.get(id)!;
+      const legs = movedLegsByBooking.get(id) ?? [];
+      const origSet = laneSetOf(booking);
+      const newPrimary = finalSet[0];
+      const newAdditional = finalSet.slice(1);
+      const isMultiLane = finalSet.length > 1;
+
+      // The stored display snapshot tracks the PRIMARY lane only. If the primary
+      // leg moved, take the freshly-resolved name; otherwise leave it alone.
+      const primaryMoved = newPrimary !== booking.laneId;
+      const newPrimaryName = primaryMoved
+        ? snapshotByLane.get(`${id}|${newPrimary}`)!.laneNameSnapshot
+        : booking.laneNameSnapshot || defaultLaneName(booking.laneId);
+
+      const prevHistory = booking.modificationHistory ?? [];
+      await ctx.db.patch(booking._id, {
+        laneId: newPrimary,
+        additionalLaneIds: newAdditional.length > 0 ? newAdditional : undefined,
+        laneNameSnapshot: newPrimaryName,
         modificationHistory: [
           ...prevHistory,
           {
             modifiedAt: new Date().toISOString(),
             modifiedByUserId: (adminUser as any)?._id?.toString?.() ?? (adminUser as any)?.id ?? undefined,
             modifiedByName: (adminUser as any)?.name ?? (adminUser as any)?.email ?? "Admin",
-            changes: [{ field: "laneId", oldValue: booking.laneId, newValue: assignment.newLaneId }],
+            changes: [
+              {
+                field: isMultiLane || origSet.length > 1 ? "lanes" : "laneId",
+                oldValue: origSet.join(", "),
+                newValue: finalSet.join(", "),
+              },
+            ],
           },
         ],
       });
 
+      const oldLaneName = legs.map((l) => defaultLaneName(l.from)).join(", ");
+      const newLaneName = isMultiLane
+        ? finalSet
+            .map((l) => (l === newPrimary ? newPrimaryName : snapshotByLane.get(`${id}|${l}`)?.laneNameSnapshot ?? defaultLaneName(l)))
+            .join(" + ")
+        : newPrimaryName;
+      // Lane type comes from a moved leg (they're all the same session, and a
+      // mixed-type multi-lane move is rejected upstream by the variant check).
+      const movedMode = snapshotByLane.get(`${id}|${legs[0].to}`)?.mode ?? "";
+
       await recordBookingEvent(ctx, {
         type: "modified",
-        bookingId: r.bookingId,
-        customerName: r.customerName,
+        bookingId: id,
+        customerName: booking.customerName,
         actorName: (adminUser as any)?.name ?? (adminUser as any)?.email ?? "Admin",
         isCoachBooking: booking.isCoachBooking,
-        before: { date: booking.date, startHour: booking.startHour, duration: booking.duration, lane: r.oldLaneName },
-        after: { date: booking.date, startHour: booking.startHour, duration: booking.duration, lane: r.newLaneName },
+        before: { date: booking.date, startHour: booking.startHour, duration: booking.duration, lane: origSet.join(", ") },
+        after: { date: booking.date, startHour: booking.startHour, duration: booking.duration, lane: finalSet.join(", ") },
       });
 
-      // Calendar resync (CAL-4 pattern): a reassignment is always a lane-set
-      // change here (no-ops were skipped above), so this always deletes the old
-      // event + clears the stored ids + creates a fresh event on the new lane's
-      // calendar — never an update-in-place. Clearing the ids before the create
-      // matters: otherwise the new lane's id gets MERGED alongside the stale
-      // now-deleted old-lane id (mutations.ts CAL-4, 2026-06-23).
+      // Calendar resync (CAL-4 pattern), whole-set teardown + rebuild. Clearing
+      // the stored ids before the create matters: setBookingLaneCalendarEventIds
+      // MERGES by laneId, so a surviving stale entry for the vacated lane would
+      // otherwise persist alongside the new one and keep a door code live there.
       const hadEvents =
         !!booking.googleCalendarEventId ||
         (Array.isArray(booking.googleCalendarEventIds) && booking.googleCalendarEventIds.length > 0);
@@ -254,14 +345,14 @@ export const adminReassignLanes = mutation({
           googleCalendarEventId: booking.googleCalendarEventId ?? "",
           laneCalendarEventIds: booking.googleCalendarEventIds,
         });
-        await ctx.db.patch(assignment.bookingId, {
+        await ctx.db.patch(booking._id, {
           googleCalendarEventId: undefined,
           googleCalendarEventIds: undefined,
         });
       }
       await ctx.scheduler.runAfter(500, internal.googleCalendar.createCalendarEvent, {
-        bookingId: r.bookingId,
-        laneId: assignment.newLaneId,
+        bookingId: id,
+        laneId: newPrimary,
         variantId: booking.variantId,
         date: booking.date,
         startHour: booking.startHour,
@@ -272,14 +363,30 @@ export const adminReassignLanes = mutation({
         status: booking.status,
         isCoachBooking: booking.isCoachBooking,
         accessCode: booking.accessCode,
-        additionalLaneIds: [],
+        additionalLaneIds: newAdditional,
         athleteSlots: (booking.athleteSlots ?? []).map((s: any) => ({
           athleteName: s.athleteName,
           startHour: s.startHour,
           durationMinutes: s.durationMinutes,
         })),
-        laneNameSnapshot: r.newLaneName,
+        laneNameSnapshot: newPrimaryName,
         variantLabelSnapshot: booking.variantLabelSnapshot,
+      });
+
+      results.push({
+        bookingId: id,
+        customerEmail: booking.customerEmail,
+        customerName: booking.customerName,
+        date: booking.date,
+        startHour: booking.startHour,
+        duration: booking.duration,
+        timeSlot: fmtTimeSlot(booking.startHour),
+        durationLabel: fmtDuration(booking.duration),
+        oldLaneName,
+        newLaneName,
+        newLaneId: legs[0].to,
+        laneType: LANE_TYPE_LABEL[movedMode] ?? movedMode,
+        isMultiLane,
       });
     }
 
@@ -323,6 +430,12 @@ export const adminSendLaneChangeEmails = mutation({
         skipVariantCheck: true,
       }).catch(() => ({ segment: { mode: "" } as any }));
 
+      // Multi-lane: name every lane the customer now holds, not just the primary
+      // (a club booking that kept 3 lanes and moved 1 needs the full picture).
+      const laneNames = laneSetOf(booking)
+        .map((l, i) => (i === 0 ? booking.laneNameSnapshot || defaultLaneName(l) : defaultLaneName(l)))
+        .join(" + ");
+
       await ctx.scheduler.runAfter(0, internal.emails.sendLaneChangeEmail, {
         to: booking.customerEmail,
         customerName: booking.customerName,
@@ -332,7 +445,7 @@ export const adminSendLaneChangeEmails = mutation({
         dateShort: fmtAwstDateShort(booking.date),
         timeSlot: fmtTimeSlot(booking.startHour),
         duration: fmtDuration(booking.duration),
-        newLaneName: booking.laneNameSnapshot || defaultLaneName(booking.laneId),
+        newLaneName: laneNames,
         laneType: LANE_TYPE_LABEL[segment.mode] ?? segment.mode ?? "",
       });
       sent.push(item.bookingId.toString());

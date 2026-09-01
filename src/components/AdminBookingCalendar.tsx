@@ -350,12 +350,21 @@ export default function AdminBookingCalendar() {
   const [overrideModalOpen, setOverrideModalOpen] = useState(false)
   // Lane reassign/swap tool: while active, clicking a booked cell toggles
   // selection instead of opening the details modal.
+  //
+  // Selection is a (booking, LANE) pair, not a booking. A multi-lane booking
+  // (club bookings, mostly) appears in every lane column it occupies; keying on
+  // the booking alone meant clicking one column selected ALL of its lanes and
+  // there was no way to move just one of them.
   const [reassignMode, setReassignMode] = useState(false)
-  const [selectedForReassign, setSelectedForReassign] = useState<Booking[]>([])
+  const [selectedForReassign, setSelectedForReassign] = useState<Array<{ booking: Booking; laneId: string }>>([])
   const [reassignModalOpen, setReassignModalOpen] = useState(false)
-  function toggleReassignSelect(b: Booking) {
+  const isLegSelected = (bookingId: string, laneId: string) =>
+    selectedForReassign.some((x) => x.booking.id === bookingId && x.laneId === laneId)
+  function toggleReassignSelect(b: Booking, laneId: string) {
     setSelectedForReassign((prev) =>
-      prev.some((x) => x.id === b.id) ? prev.filter((x) => x.id !== b.id) : [...prev, b]
+      prev.some((x) => x.booking.id === b.id && x.laneId === laneId)
+        ? prev.filter((x) => !(x.booking.id === b.id && x.laneId === laneId))
+        : [...prev, { booking: b, laneId }]
     )
   }
   function exitReassignMode() {
@@ -721,7 +730,7 @@ export default function AdminBookingCalendar() {
                         ...(booked.isCoachBooking ? { color: coachTextColor } : {}),
                       }}
                       className={`relative group text-[10px] py-2 px-1 rounded font-semibold flex flex-col ${
-                        reassignMode && selectedForReassign.some((x) => x.id === booked.id)
+                        reassignMode && isLegSelected(booked.id, lane.id)
                           ? 'ring-2 ring-indigo-500 ring-offset-1'
                           : ''
                       } ${
@@ -737,18 +746,18 @@ export default function AdminBookingCalendar() {
                       {booked.isCoachBooking && <CoverageBlockBg booking={booked} coachColor={coachColor} solid />}
                       {reassignMode && (
                         <div className="absolute top-0.5 right-0.5 z-20 w-4 h-4 rounded-full bg-white/90 dark:bg-gray-900/90 border border-indigo-400 flex items-center justify-center text-[9px]">
-                          {selectedForReassign.some((x) => x.id === booked.id) ? '✓' : ''}
+                          {isLegSelected(booked.id, lane.id) ? '✓' : ''}
                         </div>
                       )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
-                          if (reassignMode) toggleReassignSelect(booked)
+                          if (reassignMode) toggleReassignSelect(booked, lane.id)
                           else setDetailsBooking(booked)
                         }}
                         title={
                           reassignMode
-                            ? `Select ${booked.customerName} for lane reassignment`
+                            ? `Select ${booked.customerName}'s ${lane.name} for reassignment`
                             : `View / modify booking — ${booked.customerName}${isFirstBooking ? ' (first-ever booking)' : ''}`
                         }
                         className="relative z-10 text-left w-full hover:opacity-80 transition-opacity leading-tight flex-1"
@@ -874,7 +883,7 @@ export default function AdminBookingCalendar() {
       {reassignMode && selectedForReassign.length > 0 && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 bg-gray-900 dark:bg-gray-800 text-white rounded-full shadow-2xl px-4 py-2.5">
           <span className="text-sm font-semibold">
-            {selectedForReassign.length} selected
+            {selectedForReassign.length} lane{selectedForReassign.length !== 1 ? 's' : ''} selected
           </span>
           <button
             onClick={() => setSelectedForReassign([])}
@@ -893,7 +902,7 @@ export default function AdminBookingCalendar() {
 
       {reassignModalOpen && (
         <AdminLaneReassignModal
-          bookings={selectedForReassign}
+          legs={selectedForReassign}
           onClose={() => setReassignModalOpen(false)}
           onDone={() => exitReassignMode()}
         />
