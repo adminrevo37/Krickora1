@@ -244,11 +244,12 @@ export function buildLaneWarning(
     resolved.variants.length === def.variants.length &&
     resolved.variants.every((v) => def.variants.includes(v));
   if (same) return null;
-  const fullVariant = (v: string) => (normalizeVariant(v) === VARIANT_TRUMAN ? "Truman" : "Standard");
-  const describe = (mode: LaneMode, variants: string[]) =>
-    mode === "RU" ? "9m Run-Up" : variants.map(fullVariant).join(" / ") + " Bowling Machine";
-  return `⚠️ WARNING: Set up as a ${describe(resolved.mode, resolved.variants)} today — not its usual ${describe(
-    def.mode,
-    def.variants
-  )}. Please check before booking.`;
+  // 2026-09-01 (Inspector): reworded — see the identical note in src/lib/lanes.ts.
+  // The old text framed the change as a fault in BOTH directions, but for lanes
+  // 4-5 the only realistic direction is RU→BM, which is an UPGRADE and was being
+  // flagged in red like a downgrade. State what the lane IS. Mode-aware so the
+  // reverse direction stays accurate if it ever occurs.
+  return resolved.mode === "BM"
+    ? "WARNING: This lane is set as a bowling machine for this session time."
+    : "WARNING: This lane is set as a 9m run-up net for this session time.";
 }

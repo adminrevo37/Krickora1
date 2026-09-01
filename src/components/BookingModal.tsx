@@ -56,6 +56,13 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const resolvedLaneName = resolvedLane.name
   const resolvedLaneIcon = resolvedLane.icon
   const laneWarning = getLaneWarning(lane.id, dkForSeg, startHour)
+  // 2026-09-01 (Inspector): the lane-setup warning must be ACKNOWLEDGED, not just
+  // displayed — a customer booking what they think is a run-up net and finding a
+  // bowling machine is the failure this exists to prevent. Gates the confirm
+  // button below. Keyed on the warning text so changing lane/time re-arms it
+  // rather than carrying a stale tick.
+  const [laneWarningAck, setLaneWarningAck] = useState(false)
+  useEffect(() => { setLaneWarningAck(false) }, [laneWarning])
   const laneNm = (id: string) => resolveLaneAt(id, dkForSeg, startHour).name
   const settingsForPrice = getSettingsStore().get()
   const variantOptions = useMemo<LaneVariant[]>(
@@ -852,6 +859,17 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
             {laneWarning && (
               <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-300 dark:border-red-800/60">
                 <p className="text-sm font-medium text-red-700 dark:text-red-400">{laneWarning}</p>
+                <label className="mt-2.5 flex items-start gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={laneWarningAck}
+                    onChange={(e) => setLaneWarningAck(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 shrink-0 accent-red-600 cursor-pointer"
+                  />
+                  <span className="text-sm font-semibold text-red-700 dark:text-red-400">
+                    I understand and want to book this session
+                  </span>
+                </label>
               </div>
             )}
             {isCoach && (
@@ -1222,7 +1240,13 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               </div>
             )}
 
-            <button onClick={handleContinueToPayment} disabled={(splitOn ? !splitReady : availableDurations.length === 0) || (isCoach && !isValidCoachStart)}
+            {laneWarning && !laneWarningAck && (
+              <p className="text-xs text-red-600 dark:text-red-400 -mb-1">
+                Tick the box above to continue.
+              </p>
+            )}
+
+            <button onClick={handleContinueToPayment} disabled={(splitOn ? !splitReady : availableDurations.length === 0) || (isCoach && !isValidCoachStart) || (!!laneWarning && !laneWarningAck)}
               className={`w-full py-3 font-semibold rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600' : totalPrice === 0 ? 'bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600' : 'bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600'}`}>
               {!user ? 'Sign In to Book →' : isCoach ? `Confirm — $${fmtMoney(totalPrice)} →` : totalPrice === 0 ? 'Confirm Free Booking →' : `Continue to Payment — $${fmtMoney(totalPrice)} →`}
             </button>
