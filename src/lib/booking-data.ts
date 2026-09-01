@@ -15,22 +15,31 @@ export interface Lane {
   variants?: LaneVariant[]
 }
 
+// ⚠️ LEGACY STATIC MAP — prefer the date-resolved resolver in `src/lib/lanes.ts`
+// (`resolveLaneAt`), which honours per-day lane overrides. This map is a FALLBACK
+// only, for the handful of call sites that have no date/hour to resolve against.
+//
+// 2026-09-01: the ru1/ru2 entries still said "9m Run Up 1"/"2" and "RU 1"/"RU 2"
+// from before the bay renumbering — those lanes display as RU 4 / RU 5 everywhere
+// else, so any fallback through here showed a name that matched nothing on screen.
+// Icons were also inverted against the resolver (🎯/🏏 here vs 🏏/🏃‍♂️ there), so a
+// BM booking could render 🏏 — the resolver's RU icon. Both corrected to match.
 export const LANES: Lane[] = [
-  { id: 'bm1', name: 'Bowling Machine 1', shortName: 'BM 1', type: 'bowling-machine', icon: '🎯' },
-  { id: 'bm2', name: 'Bowling Machine 2', shortName: 'BM 2', type: 'bowling-machine', icon: '🎯' },
+  { id: 'bm1', name: 'BM 1', shortName: 'BM 1', type: 'bowling-machine', icon: '🏏' },
+  { id: 'bm2', name: 'BM 2', shortName: 'BM 2', type: 'bowling-machine', icon: '🏏' },
   {
     id: 'bm3',
-    name: 'Bowling Machine 3',
+    name: 'BM 3',
     shortName: 'BM 3',
     type: 'bowling-machine',
-    icon: '🎯',
+    icon: '🏏',
     variants: [
       { id: 'bm3-standard', name: 'Standard', pricePerHour: 40, description: 'Standard bowling machine' },
       { id: 'bm3-truman', name: 'Truman', pricePerHour: 50, description: 'Premium Truman bowling machine' },
     ],
   },
-  { id: 'ru1', name: '9m Run Up 1', shortName: 'RU 1', type: 'run-up', icon: '🏏' },
-  { id: 'ru2', name: '9m Run Up 2', shortName: 'RU 2', type: 'run-up', icon: '🏏' },
+  { id: 'ru1', name: 'RU 4', shortName: 'RU 4', type: 'run-up', icon: '🏃‍♂️' },
+  { id: 'ru2', name: 'RU 5', shortName: 'RU 5', type: 'run-up', icon: '🏃‍♂️' },
 ]
 
 // Coach pricing (1-hour minimum; per-hour rate only)

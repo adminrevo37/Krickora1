@@ -4,17 +4,25 @@ import { useAuth } from '../hooks/useAuth'
 import { useImpersonation } from '../hooks/useImpersonation'
 import { api } from '../../convex/_generated/api'
 import { formatDateLong } from '../lib/dateFormat'
+import { resolveLaneAt } from '../lib/lanes'
 
 export const Route = createFileRoute('/payments')({
   component: PaymentsPage,
 })
 
-const LANE_NAMES: Record<string, string> = {
-  bm1: 'Bowling Machine 1',
-  bm2: 'Bowling Machine 2',
-  bm3: 'Bowling Machine 3',
-  ru1: '9m Run Up 1',
-  ru2: '9m Run Up 2',
+// EML-1 pattern (audit 2026-06), applied here 2026-09-01. This replaced a local
+// hardcoded LANE_NAMES map still carrying the pre-migration "9m Run Up 1"/"2"
+// names — those lanes have displayed as RU 4 / RU 5 since the bay renumbering,
+// so a customer's own payment history disagreed with every other screen.
+// Prefer the booking's snapshot (what the lane was actually called when booked);
+// fall back to resolving against the current layout for legacy rows.
+function laneLabel(p: { laneId: string; laneNameSnapshot?: string | null; date: string; startHour: number }): string {
+  if (p.laneNameSnapshot) return p.laneNameSnapshot
+  try {
+    return resolveLaneAt(p.laneId, p.date, p.startHour).name
+  } catch {
+    return p.laneId
+  }
 }
 
 function formatHour(h: number) {
@@ -156,7 +164,7 @@ function PaymentsPage() {
                   <tr key={p.bookingId} className="border-t border-gray-100">
                     <td className="px-5 py-3 text-gray-700 whitespace-nowrap">{formatDateLong(p.date)}</td>
                     <td className="px-5 py-3 text-gray-700">
-                      {(LANE_NAMES[p.laneId] ?? p.laneId)} • {formatHour(p.startHour)}
+                      {laneLabel(p)} • {formatHour(p.startHour)}
                       {p.discountCode ? <span className="ml-2 text-xs text-purple-600">({p.discountCode})</span> : null}
                     </td>
                     <td className="px-5 py-3 text-right text-gray-900">${(p.amountPaid || 0).toFixed(2)}</td>

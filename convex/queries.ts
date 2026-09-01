@@ -1179,6 +1179,10 @@ export const listMyPayments = query({
         bookingId: b._id.toString(),
         date: b.date,
         laneId: b.laneId,
+        // The name the lane had when it was booked. Without this the payments
+        // page can only fall back to a static map, which goes stale after a bay
+        // renumbering or a reconfigurable-lane flip (2026-09-01).
+        laneNameSnapshot: b.laneNameSnapshot,
         startHour: b.startHour,
         duration: b.duration,
         amountPaid: (b.priceInCents ?? 0) / 100,

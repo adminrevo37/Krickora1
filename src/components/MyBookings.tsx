@@ -544,7 +544,12 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
         customerName: booking.customerName,
         customerEmail: booking.customerEmail,
         price: getBookingPrice(booking),
-        additionalLanes: (booking.additionalLaneIds ?? []).map(id => getLane(id)?.name ?? id),
+        // Date-resolved, not the legacy static map — these names are shown on the
+        // Stripe checkout page, and the static map still says "9m Run Up 1"/"2"
+        // for lanes that display as RU 4 / RU 5 everywhere else (2026-09-01).
+        additionalLanes: (booking.additionalLaneIds ?? []).map(id =>
+          laneNameById(id, booking.date, booking.startHour)
+        ),
         bookingId: booking.id,
       })
       // SPEC_EMBEDDED_CHECKOUT — pay in-app when available; else hosted redirect.
@@ -1231,7 +1236,6 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             </div>
             <div className="flex gap-2 overflow-x-auto pb-0.5">
               {unallocated.map(b => {
-                const lane = getLane(b.laneId)
                 const dateObj = new Date(b.date + 'T00:00:00')
                 return (
                   <button
@@ -1243,7 +1247,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                       {formatDateLong(dateObj)}
                     </span>
                     <span className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
-                      {formatTime(b.startHour)} · {lane?.shortName ?? b.laneId}
+                      {formatTime(b.startHour)} · {bookingLaneName(b)}
                     </span>
                   </button>
                 )

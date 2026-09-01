@@ -14,14 +14,13 @@ import { internal } from "../_generated/api";
 import { issueCredit } from "./credit";
 import { releaseHoldForBooking } from "./slotHolds";
 import { fmtAwstDateLabel, fmtAwstDateShort } from "./dates";
-
-const LANE_NAMES: Record<string, string> = {
-  bm1: "Bowling Machine 1",
-  bm2: "Bowling Machine 2",
-  bm3: "Bowling Machine 3",
-  ru1: "9m Run Up 1",
-  ru2: "9m Run Up 2",
-};
+// EML-1 (audit 2026-06), applied here 2026-09-01: use the shared, snapshot-aware
+// resolver instead of a local hardcoded map. The map this replaced still carried
+// the pre-migration "9m Run Up 1"/"2" names (those lanes display as RU 4 / RU 5
+// since the bay renumbering) and ignored laneNameSnapshot, so a closure-triggered
+// cancellation named the wrong lane to the customer — worse after a reconfigurable
+// -lane flip, where the booked lane may not even have been a run-up that day.
+import { laneNameForBooking } from "./lanes";
 
 export interface SystemCancelSummary {
   bookingId: string;
@@ -142,7 +141,7 @@ export async function systemCancelBooking(
     await ctx.scheduler.runAfter(0, internal.emails.sendBookingCancellation, {
       to: booking.customerEmail,
       customerName: booking.customerName || "Valued Customer",
-      laneName: LANE_NAMES[booking.laneId] ?? booking.laneId,
+      laneName: laneNameForBooking(booking),
       date: fmtAwstDateLabel(booking.date),
       dateShort: fmtAwstDateShort(booking.date),
       timeSlot,
@@ -155,7 +154,7 @@ export async function systemCancelBooking(
         email: booking.customerEmail,
         category: "booking-changes",
         title: "Booking cancelled",
-        body: `${LANE_NAMES[booking.laneId] ?? booking.laneId} · ${booking.date}, ${timeSlot}${opts.reason ? ` — ${opts.reason}` : ""}. Credit issued.`,
+        body: `${laneNameForBooking(booking)} · ${fmtAwstDateLabel(booking.date)}, ${timeSlot}${opts.reason ? ` — ${opts.reason}` : ""}. Credit issued.`,
         url: "/bookings",
         tag: `booking-${booking._id.toString()}`,
       });
