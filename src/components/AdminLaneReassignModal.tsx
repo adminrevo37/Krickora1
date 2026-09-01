@@ -227,7 +227,7 @@ export default function AdminLaneReassignModal({ legs, onClose, onDone }: Props)
                   <option value="">— choose —</option>
                   {DEFAULT_LANE_META.map((l) => (
                     <option key={l.laneId} value={l.laneId}>
-                      Lane {l.bayNumber}
+                      {laneNameAt(l.laneId, legs[0].booking.date, legs[0].booking.startHour)}
                     </option>
                   ))}
                 </select>
