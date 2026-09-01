@@ -8,6 +8,7 @@ import {
   LANES, canBookSlot, formatDateKey, formatTime, getCustomerPrice, getCoachPrice, getCoachPerHourRate,
   getCoachDurations, getCustomerDurations, getValidCoachStartTimes, isLaneCustomStart, isCoachEdgeStart,
   generateGoogleCalendarUrl, roundCoachBookingDuration, getMinCoachDurationFromAthletes, getCoachSplitOptions,
+  getAvailableStartTimes,
   type Booking, type Lane, type LaneVariant, type AthleteSlot,
 } from '../lib/booking-data'
 import { createCheckoutSession, cancelUnpaidCheckout, type CheckoutSessionRequest } from '../lib/stripe'
@@ -233,6 +234,13 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     const { segments } = getDaySegments(laneId, dkForSeg)
     const { segment, crosses } = segmentForBooking(segments, startHour, duration)
     if (segmentIsClosed(segment) || crosses) return false
+    // 2026-09-01: the start time must be valid on THIS lane's own grid, not just
+    // the primary lane's. Lane 4's BM segment starts 11:30, so its starts are
+    // :30 — booking it at 12:30 and adding RU 5 (whole-hour grid) handed RU 5 a
+    // 12:30 start it never offers, stranding 12:00-12:30 as unsellable. Coaches
+    // keep their own start rules, mirroring the server's !isAdmin && !isCoach.
+    if (!isCoach && !getAvailableStartTimes(existingBookings, laneId, dateKey)
+      .some((h) => Math.abs(h - startHour) < 1e-6)) return false
     const endHour = startHour + duration / 60
     return !getBlocksForLaneDate(laneId, dateKey).some(b => {
       const bEnd = b.startHour + b.duration / 60

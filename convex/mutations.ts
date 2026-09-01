@@ -1310,6 +1310,37 @@ export const createBooking = mutation({
       isCoach: effectiveIsCoachBooking,
     });
 
+    // 2026-09-01: ADDITIONAL lanes were only ever checked for CONFLICTS — they
+    // never went through validateAndSnapshotLane, so their own segment was never
+    // consulted. That let three things through on an added lane: a CLOSED period,
+    // a booking that CROSSES its segment boundary, and an off-grid start. The
+    // reported case is the last one: lane 4's BM segment starts 11:30 so its grid
+    // is :30, and a customer booking it at 12:30 could add RU 5 (whole-hour grid)
+    // and get a 12:30 start that lane never offers, stranding 12:00–12:30.
+    // skipVariantCheck: additional lanes carry no variant of their own and are
+    // priced at the standard rate (see the gross-price loop above).
+    for (const addLaneId of args.additionalLaneIds ?? []) {
+      try {
+        await validateAndSnapshotLane(ctx, {
+          laneId: addLaneId,
+          variantId: undefined,
+          date: args.date,
+          startHour: args.startHour,
+          durationMinutes: args.duration,
+          skipVariantCheck: true,
+          allowAfterHours,
+          isAdmin: isAdminCaller,
+          isCoach: effectiveIsCoachBooking,
+        });
+      } catch (e: any) {
+        // Name the lane — the underlying messages say "this lane", which is
+        // ambiguous when the problem is an ADDED lane, not the one being booked.
+        throw new ConvexError(
+          `${defaultLaneName(addLaneId)} isn't available at that start time. Remove it or pick a different time.`
+        );
+      }
+    }
+
     // ── Auto-merge back-to-back coach bookings ───────────────────────────────
     // When a coach books a slot exactly adjacent to an existing coach booking of
     // theirs on the SAME lane/date/variant, EXTEND that booking instead of making
