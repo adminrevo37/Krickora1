@@ -42,9 +42,15 @@ const snapDuration = (value: number, maxMins: number): number => {
 interface BookingModalProps {
   lane: Lane; date: Date; startHour: number; existingBookings: Booking[]
   onClose: () => void; onConfirm: (booking: Booking) => void
+  // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 C3 — a waitlist offer deep-link carries
+  // the offered length (&dur=); pre-select it when it is a valid option here.
+  initialDuration?: number
+  // C6 — when the booking is refused because the slot was taken, offer to join
+  // the waitlist for that hour instead of leaving the customer at a dead end.
+  onJoinWaitlist?: (hour: number) => void
 }
 
-export default function BookingModal({ lane, date, startHour, existingBookings, onClose, onConfirm }: BookingModalProps) {
+export default function BookingModal({ lane, date, startHour, existingBookings, onClose, onConfirm, initialDuration, onJoinWaitlist }: BookingModalProps) {
   const { user, isCoach, getCreditBalance, customerRecord } = useAuth()
   useLaneConfigState() // SPEC_RECONFIGURABLE_LANES: react to layout changes
   // Resolve the lane's segment for THIS (date, startHour): drives variant options,
@@ -88,7 +94,10 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     return base.filter((d) => startHour + d / 60 <= seg.endHour + 1e-9)
   }, [existingBookings, lane.id, dkForSeg, startHour, isCoach, seg.endHour])
 
-  const [duration, setDuration] = useState<number>(() => availableDurations.length > 0 ? availableDurations[0] : 60)
+  const [duration, setDuration] = useState<number>(() =>
+    initialDuration && availableDurations.includes(initialDuration)
+      ? initialDuration
+      : availableDurations.length > 0 ? availableDurations[0] : 60)
   // SPEC_EARLY_ACCESS_2026-08 — matches the calendar's weekday half-hours (every
   // coach) + the admin-granted 6:30am slot (this account only, if flagged).
   const hasEarlyAccess = (customerRecord as any)?.earlyAccess630 === true
@@ -861,6 +870,17 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
             {error && (
               <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-200 dark:border-red-800/50">
                 <p className="text-sm text-red-700 dark:text-red-400">⚠️ {error}</p>
+                {/* C6 — the slot went to someone else mid-flow: the moment of intent
+                    is now, so offer the queue right here rather than a dead end. */}
+                {onJoinWaitlist && !isCoach && /no longer available|not available|already booked/i.test(error) && (
+                  <button
+                    type="button"
+                    onClick={() => onJoinWaitlist(Math.floor(startHour))}
+                    className="mt-2.5 w-full py-2 text-sm font-semibold rounded-lg bg-amber-500 hover:bg-amber-600 text-white"
+                  >
+                    🔔 Join the waitlist for {formatTime(Math.floor(startHour))} instead
+                  </button>
+                )}
               </div>
             )}
             {/* SPEC_RECONFIGURABLE_LANES: lane set up differently than usual today */}

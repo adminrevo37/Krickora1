@@ -136,7 +136,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   const { isLaneBlocked } = useLaneBlocks()
 
   const [modalOpen, setModalOpen] = useState(false)
-  const [selectedSlot, setSelectedSlot] = useState<{ lane: Lane; date: Date; startHour: number } | null>(null)
+  const [selectedSlot, setSelectedSlot] = useState<{ lane: Lane; date: Date; startHour: number; duration?: number } | null>(null)
   const [authModalOpen, setAuthModalOpen] = useState(false)
   const [pendingAction, setPendingAction] = useState<{ type: 'book'; lane: Lane; slot: TimeSlot } | { type: 'waitlist'; hour: number; pool: 'bm' | 'ru' } | null>(null)
   // SPEC_MOBILE_BOOKING_UPDATES §4 — the "waitlist mode" toggle is gone; the modal
@@ -533,6 +533,9 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     const bookLane = p.get('book')
     const dateP = p.get('date')
     const hourP = p.get('hour')
+    // C3 — a waitlist offer carries the offered length; pre-select it in the modal.
+    const durP = Number(p.get('dur'))
+    const durPref = Number.isFinite(durP) && durP >= 60 ? durP : undefined
     // SPEC_WAITLIST_ALT_TIME_OFFER_2026-08 — ?offer=<token> is an admin offer of a
     // DIFFERENT time to someone on the waitlist. Resolution is a server query
     // (ownership + liveness), so just stash the token here and let the effect below
@@ -597,7 +600,7 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
         setSelectedDay(match)
       } else {
         setSelectedDay(match)
-        setSelectedSlot({ lane, date: match, startHour: hourNum })
+        setSelectedSlot({ lane, date: match, startHour: hourNum, duration: durPref })
         setModalOpen(true)
       }
       cleanUrl()
@@ -1069,11 +1072,20 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       {/* Modals */}
       {modalOpen && selectedSlot && (
         <BookingModal lane={selectedSlot.lane} date={selectedSlot.date} startHour={selectedSlot.startHour} existingBookings={bookings}
+          initialDuration={selectedSlot.duration}
+          onJoinWaitlist={(hour) => {
+            // C6 — refused mid-flow: hand straight to the queue for that hour, in
+            // the pool the tapped lane belongs to at that time.
+            const pool = lanePoolAt(selectedSlot.lane.id, hour) ?? 'bm'
+            setModalOpen(false); setSelectedSlot(null)
+            openWaitlistForHour(hour, pool)
+          }}
           onClose={() => { setModalOpen(false); setSelectedSlot(null) }} onConfirm={handleBookingConfirm} />
       )}
       {authModalOpen && <AuthModal onClose={() => { setAuthModalOpen(false); setPendingAction(null) }} onSuccess={handleAuthSuccess} />}
       {waitlistModalOpen && (
         <WaitlistModal pool={waitlistPool} selectedSlots={waitlistSelections} availableHours={fullHoursByPool[waitlistPool]} date={dateKey}
+          waitingByHour={Object.fromEntries(waitlistByHour.count[waitlistPool])}
           onClose={() => setWaitlistModalOpen(false)}
           onSuccess={() => { setWaitlistModalOpen(false); setWaitlistSelections([]) }} />
       )}

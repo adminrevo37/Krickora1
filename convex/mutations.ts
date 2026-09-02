@@ -6115,6 +6115,8 @@ export const addToWaitlist = mutation({
         // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 D4 — "Also tell me if a nearby
         // time frees up". Absent → true (old clients keep the default-ON).
         altTimeOptIn: v.optional(v.boolean()),
+        // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 C3 — preferred length (minutes).
+        durationMinutes: v.optional(v.number()),
       })
     ),
   },
@@ -6169,6 +6171,13 @@ export const addToWaitlist = mutation({
         hour: entry.hour,
         notified: false,
         ...(entry.altTimeOptIn === false ? { altTimeOptIn: false } : {}),
+        // Clamp to a sane 30-min grid, 1h–4h; 60 is the default so it is not stored.
+        ...(() => {
+          const d = Number(entry.durationMinutes);
+          if (!Number.isFinite(d) || d <= 60) return {};
+          const clamped = Math.min(240, Math.round(d / 30) * 30);
+          return clamped > 60 ? { durationMinutes: clamped } : {};
+        })(),
       });
       ids.push(id);
       insertedEntries.push({ ...entry, laneId });

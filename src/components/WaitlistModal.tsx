@@ -8,6 +8,7 @@ import ModalShell from './ModalShell'
 // Entries are keyed by pool sentinel laneId: '*bm' (bowling machines) / '*ru'
 // (run-ups). The pool prop drives labels + the sentinel written to the server.
 import { useAuth } from '../hooks/useAuth'
+import { useSettings } from '../hooks/useSettings'
 
 interface WaitlistModalProps {
   pool: 'bm' | 'ru'
@@ -17,14 +18,24 @@ interface WaitlistModalProps {
   // hour(s) start pre-ticked.
   availableHours?: number[]
   date?: string
+  // C7 — live "n waiting" per hour for THIS pool, so the customer sees the queue
+  // depth before joining. Some will decide not to bother — a good outcome.
+  waitingByHour?: Record<string, number>
   onClose: () => void
   onSuccess: () => void
 }
 
-export default function WaitlistModal({ pool, selectedSlots, availableHours, date, onClose, onSuccess }: WaitlistModalProps) {
+export default function WaitlistModal({ pool, selectedSlots, availableHours, date, waitingByHour, onClose, onSuccess }: WaitlistModalProps) {
   const poolTag = pool.toUpperCase()
   const poolNoun = pool === 'bm' ? 'BM (bowling machine) lane' : 'RU (run-up) lane'
-  const { user } = useAuth()
+  const { user, isCoach } = useAuth()
+  const { settings } = useSettings()
+  // C3 — preferred length. Options from the role's max duration, 30-min grid.
+  const maxMin = (isCoach ? settings.coachMaxDurationMinutes : settings.customerMaxDurationMinutes) ?? 120
+  const durationOptions = [60, 90, 120, 150, 180, 240].filter(d => d <= Math.max(60, maxMin))
+  const [durationMinutes, setDurationMinutes] = useState(60)
+  const fmtDur = (m: number) => (m % 60 === 0 ? `${m / 60} hour${m === 60 ? '' : 's'}` : `${Math.floor(m / 60)}h ${m % 60}m`)
+  const waitingAt = (h: number) => Number(waitingByHour?.[String(h)] ?? 0)
   const addToWaitlistServer = useMutation(api.mutations.addToWaitlist)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [done, setDone] = useState(false)
@@ -71,6 +82,7 @@ export default function WaitlistModal({ pool, selectedSlots, availableHours, dat
       date: s.date,
       hour: s.hour,
       altTimeOptIn,
+      durationMinutes,
     }))
     try {
       await addToWaitlistServer({ entries })
@@ -160,9 +172,34 @@ export default function WaitlistModal({ pool, selectedSlots, availableHours, dat
                   className={`text-sm px-3 py-1.5 rounded-full font-medium border transition-colors ${on ? 'bg-amber-500 border-amber-500 text-white' : 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'}`}
                 >
                   {on ? '✓ ' : ''}{formatHour(h)}
+                  {waitingAt(h) > 0 && <span className={`ml-1.5 text-[11px] ${on ? 'text-white/80' : 'text-amber-600'}`}>· {waitingAt(h)} waiting</span>}
                 </button>
               )
             })}
+          </div>
+          {chosenHours.length > 0 && (
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              {chosenHours.slice().sort((a, b) => a - b).map(h => `${formatHour(h)}: you'd be #${waitingAt(h) + 1}`).join(' · ')}
+            </p>
+          )}
+
+          <div>
+            <p className="text-sm text-gray-700 dark:text-gray-300 mb-1.5">How long do you want?</p>
+            <div className="flex flex-wrap gap-2">
+              {durationOptions.map(d => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setDurationMinutes(d)}
+                  className={`text-sm px-3 py-1.5 rounded-full font-medium border transition-colors ${durationMinutes === d ? 'bg-gray-900 border-gray-900 text-white dark:bg-white dark:text-gray-900' : 'bg-gray-50 border-gray-200 text-gray-700 hover:bg-gray-100 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-300'}`}
+                >
+                  {fmtDur(d)}
+                </button>
+              ))}
+            </div>
+            {durationMinutes > 60 && (
+              <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">If only a shorter gap frees up we'll still offer it to you and say how long it is.</p>
+            )}
           </div>
 
           <label className="flex items-start gap-2.5 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">

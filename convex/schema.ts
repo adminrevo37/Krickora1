@@ -655,6 +655,11 @@ export default defineSchema({
     altOfferDeclined: v.optional(v.boolean()),
     // Part C2 — ms of the last weekly "still waiting?" reminder sent for this entry.
     lastStillWaitingReminderAt: v.optional(v.number()),
+    // Part C3 — preferred session length in minutes (absent = 60). The exact-hour
+    // engine offers this much if the freed lane can host it from the offered
+    // start, else falls back to 60 — a 2h gap used to be offered as 1h and the
+    // rest went unsold.
+    durationMinutes: v.optional(v.number()),
   })
     .index("by_userId", ["userId"])
     .index("by_slot", ["laneId", "date", "hour"])

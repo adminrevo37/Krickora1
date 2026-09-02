@@ -510,6 +510,40 @@ export const advanceWaitlistOffer = internalMutation({
       const holdMs = holdMinutes * 60 * 1000;
       const expiresAtMs = now + holdMs;
 
+      // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 C3 — honour the member's preferred
+      // length when the lane can host it from the offered start: no booking,
+      // block or other hold across the whole window, inside the segment, and
+      // (custom-start grids) an end the booking rules would accept. Otherwise
+      // fall back to the standard hour — offer what exists, never nothing.
+      const wantMin = Math.max(60, Number(next.durationMinutes) || 60);
+      let offerMin = 60;
+      if (wantMin > 60) {
+        const seg = laneInfo.get(offerLane)?.segment;
+        const end = offerStart + wantMin / 60;
+        const insideSeg = !seg || end <= seg.endHour + 1e-6;
+        let endOk = true;
+        if (seg && segmentHasCustomStarts(seg)) {
+          const allowed = segmentStartHours(seg);
+          endOk =
+            Math.abs(end - seg.endHour) < 1e-6 ||
+            allowed.some((h2) => Math.abs(h2 - end) < 1e-6) ||
+            dayBookings.some(
+              (b: any) =>
+                b.status !== "cancelled" && occupiesLane(b, offerLane) && Math.abs(b.startHour - end) < 1e-6
+            );
+        }
+        if (
+          insideSeg &&
+          endOk &&
+          !windowTaken(offerLane, offerStart, end) &&
+          !windowBlocked(offerLane, offerStart, end) &&
+          !windowHeldByOther(offerLane, offerStart, end)
+        ) {
+          offerMin = wantMin;
+        }
+      }
+      const offerEnd = offerStart + offerMin / 60;
+
       await ctx.db.patch(next._id, {
         status: "offered",
         offerExpiresAt: new Date(expiresAtMs).toISOString(),
@@ -520,7 +554,7 @@ export const advanceWaitlistOffer = internalMutation({
         laneId: offerLane,
         date,
         startHour: offerStart,
-        duration: 60,
+        duration: offerMin,
         holdType: "waitlist",
         userId: next.userId,
         userEmail: next.userEmail,
@@ -539,8 +573,8 @@ export const advanceWaitlistOffer = internalMutation({
         customerName: next.userName,
         laneName,
         date: fmtAwstDateLabel(date),
-        timeSlot: `${fmtHour12(offerStart)} - ${fmtHour12(offerStart + 1)}`,
-        bookingUrl: `https://cricketrevolution.com.au/?book=${offerLane}&date=${date}&hour=${offerStart}`,
+        timeSlot: `${fmtHour12(offerStart)} - ${fmtHour12(offerEnd)}`,
+        bookingUrl: `https://cricketrevolution.com.au/?book=${offerLane}&date=${date}&hour=${offerStart}&dur=${offerMin}`,
         otherWaitlistCount: "0",
         offerDeadline: `${fmtAwstTime(expiresAtMs)} AWST`,
       });
@@ -548,13 +582,14 @@ export const advanceWaitlistOffer = internalMutation({
       // SPEC_PWA_PUSH §5.1 + V2 §5/§8 — waitlist vacancy offer push (time-sensitive),
       // deep-linked straight to checkout for the held slot (&wl=1) with Accept/Deny
       // action buttons. Accept → checkout; Deny → release + roll to the next person.
-      const checkoutUrl = `/?book=${offerLane}&date=${date}&hour=${offerStart}&wl=1`;
+      const checkoutUrl = `/?book=${offerLane}&date=${date}&hour=${offerStart}&dur=${offerMin}&wl=1`;
       const declineUrl = `/?wlDecline=${offerLane}&date=${date}&hour=${hour}`;
+      const shorterNote = wantMin > offerMin ? ` (${offerMin} min available — you asked for ${wantMin})` : "";
       await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
         email: next.userEmail,
         category: "waitlist-offers",
         title: "Waitlist session has been allocated to you! 🏏",
-        body: `${laneName} · ${fmtAwstDateLabel(date)}, ${fmtHour12(offerStart)} - ${fmtHour12(offerStart + 1)} — reserved for you. Accept to pay, or Deny to pass it on (until ${fmtAwstTime(expiresAtMs)} AWST).`,
+        body: `${laneName} · ${fmtAwstDateLabel(date)}, ${fmtHour12(offerStart)} - ${fmtHour12(offerEnd)}${shorterNote} — reserved for you. Accept to pay, or Deny to pass it on (until ${fmtAwstTime(expiresAtMs)} AWST).`,
         url: checkoutUrl,
         tag: `waitlist-${offerLane}-${date}-${hour}`,
         actions: [
@@ -578,7 +613,7 @@ export const advanceWaitlistOffer = internalMutation({
         await ctx.scheduler.runAfter(
           holdMs - EXPIRY_REMINDER_LEAD_MS,
           internal.waitlist.remindWaitlistOfferExpiring,
-          { waitlistId: next._id, offerLane, laneName, date, hour, offerStartHour: offerStart, expiresAtMs }
+          { waitlistId: next._id, offerLane, laneName, date, hour, offerStartHour: offerStart, offerMinutes: offerMin, expiresAtMs }
         );
       }
 
@@ -843,6 +878,8 @@ export const remindWaitlistOfferExpiring = internalMutation({
     // OFFER-SNAP: the actual offered start (may be e.g. :30 on a custom-start
     // grid). Book deep-links use this; the entry stays keyed by `hour`.
     offerStartHour: v.optional(v.number()),
+    // C3 — the offered length (minutes); absent = 60.
+    offerMinutes: v.optional(v.number()),
     expiresAtMs: v.number(),
   },
   handler: async (ctx, args) => {
@@ -856,13 +893,14 @@ export const remindWaitlistOfferExpiring = internalMutation({
 
     const laneName = args.laneName ?? args.offerLane;
     const startH = args.offerStartHour ?? args.hour;
-    const checkoutUrl = `/?book=${args.offerLane}&date=${args.date}&hour=${startH}&wl=1`;
+    const mins = args.offerMinutes ?? 60;
+    const checkoutUrl = `/?book=${args.offerLane}&date=${args.date}&hour=${startH}&dur=${mins}&wl=1`;
     const declineUrl = `/?wlDecline=${args.offerLane}&date=${args.date}&hour=${args.hour}`;
     await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
       email: entry.userEmail,
       category: "waitlist-offers",
       title: "Your net is about to be released ⏳",
-      body: `${laneName} · ${fmtAwstDateLabel(args.date)}, ${fmtHour12(startH)} - ${fmtHour12(startH + 1)} — claim it before ${fmtAwstTime(exp)} AWST.`,
+      body: `${laneName} · ${fmtAwstDateLabel(args.date)}, ${fmtHour12(startH)} - ${fmtHour12(startH + mins / 60)} — claim it before ${fmtAwstTime(exp)} AWST.`,
       url: checkoutUrl,
       // Distinct tag so it doesn't overwrite the original offer notification.
       tag: `waitlist-expiry-${args.offerLane}-${args.date}-${args.hour}`,
