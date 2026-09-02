@@ -23,6 +23,7 @@ import {
   DAY_MS,
   awstDateKey,
   awstDateKeyToMs,
+  awstParts,
   dayLabel,
   isoWeekKey,
   monthKey,
@@ -862,6 +863,9 @@ function emptyCancelSummary() {
     medianBookingLeadHoursCancelled: 0,
     medianBookingLeadHoursKept: 0,
     who: { self: 0, admin: 0, system: 0, unknown: 0 },
+    // Inspector 2026-09-02: cancellations by weekday × hour of the SESSION, with
+    // the confirmed+cancelled base for that cell so a rate can be shown.
+    byDowHour: [] as Array<{ dow: number; dowLabel: string; hour: number; cancelled: number; base: number }>,
   };
 }
 type CancelSummary = ReturnType<typeof emptyCancelSummary>;
@@ -874,11 +878,24 @@ function summariseCancellations(rows: any[], lateWindowH: number, from?: string,
   const pos: number[] = [];
   const leadCancelled: number[] = [];
   const leadKept: number[] = [];
+  const cells = new Map<string, { dow: number; hour: number; cancelled: number; base: number }>();
+  const cellOf = (b: any) => {
+    const dow = awstParts(awstDateKeyToMs(b.date)).dow;
+    const hour = Math.floor(b.startHour ?? 0);
+    const k = `${dow}|${hour}`;
+    let c = cells.get(k);
+    if (!c) {
+      c = { dow, hour, cancelled: 0, base: 0 };
+      cells.set(k, c);
+    }
+    return c;
+  };
   for (const b of rows) {
     const createdMs: number = typeof b.createdAt === "number" ? b.createdAt : b._creationTime;
     const startMs = awstDateKeyToMs(b.date) + (b.startHour ?? 0) * HOUR_MS;
     if (b.status === "confirmed") {
       out.base++;
+      if (inRange(b.date, from, to)) cellOf(b).base++;
       if (Number.isFinite(createdMs)) leadKept.push((startMs - createdMs) / HOUR_MS);
       continue;
     }
@@ -890,6 +907,11 @@ function summariseCancellations(rows: any[], lateWindowH: number, from?: string,
     }
     out.base++;
     out.cancelled++;
+    {
+      const c = cellOf(b);
+      c.base++;
+      c.cancelled++;
+    }
     if (b.isClubBooking) out.clubCancelled++;
     if (b.coachLateCancelCharged) out.lateCharged++;
 
@@ -949,6 +971,9 @@ function summariseCancellations(rows: any[], lateWindowH: number, from?: string,
   out.medianPositionPct = pos.length ? Math.round(median(pos) * 100) : 0;
   out.medianBookingLeadHoursCancelled = leadCancelled.length ? round2(median(leadCancelled)) : 0;
   out.medianBookingLeadHoursKept = leadKept.length ? round2(median(leadKept)) : 0;
+  out.byDowHour = [...cells.values()]
+    .map((c) => ({ ...c, dowLabel: DOW_LABELS[c.dow] }))
+    .sort((a, b) => a.dow - b.dow || a.hour - b.hour);
   return out;
 }
 

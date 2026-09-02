@@ -191,6 +191,84 @@ function CancellationPanel({ cancel }: { cancel: any }) {
   )
 }
 
+// Cancellations by weekday × hour of the SESSION. Cell = count; tooltip and the
+// "rate" mode = cancelled / (confirmed + cancelled) for that cell.
+const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0]
+const DOW_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const fmtHourShort = (h: number) => {
+  const hr = Math.floor(h)
+  const period = hr >= 12 ? 'pm' : 'am'
+  const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr
+  return `${display}${period}`
+}
+function CancelHeatmap({ cells }: { cells: Array<{ dow: number; hour: number; cancelled: number; base: number }> }) {
+  const [mode, setMode] = useState<'count' | 'rate'>('count')
+  const grid = new Map<string, { cancelled: number; base: number }>()
+  const hours = new Set<number>()
+  let max = 0
+  for (const c of cells) {
+    grid.set(`${c.dow}|${c.hour}`, { cancelled: c.cancelled, base: c.base })
+    if (c.cancelled > 0) hours.add(c.hour)
+    const v = mode === 'count' ? c.cancelled : c.base > 0 ? c.cancelled / c.base : 0
+    if (c.cancelled > 0 && v > max) max = v
+  }
+  // Show every hour that has any booking in the base between the first and last
+  // cancelled hour, so the row axis reads as a day, not a scatter.
+  const hrs = [...hours].sort((a, b) => a - b)
+  if (hrs.length === 0) return <Empty label="No cancellations to place." />
+  const rows: number[] = []
+  for (let h = hrs[0]; h <= hrs[hrs.length - 1]; h++) rows.push(h)
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3 mb-1.5 flex-wrap">
+        <p className="text-xs font-semibold text-gray-500 uppercase">Cancellations by weekday × hour of the session</p>
+        <div className="flex gap-1">
+          {(['count', 'rate'] as const).map((m) => (
+            <button key={m} onClick={() => setMode(m)}
+              className={`text-[11px] px-2 py-0.5 rounded-md font-semibold ${mode === m ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+              {m === 'count' ? 'Count' : 'Rate'}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="text-xs border-separate border-spacing-0.5">
+          <thead>
+            <tr>
+              <th className="text-left text-[11px] font-semibold text-gray-500 pr-2 py-1">Hour</th>
+              {DOW_ORDER.map((dw) => <th key={dw} className="text-[11px] font-semibold text-gray-500 px-1 py-1 w-11 text-center">{DOW_SHORT[dw]}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((h) => (
+              <tr key={h}>
+                <td className="text-gray-600 pr-2 whitespace-nowrap">{fmtHourShort(h)}</td>
+                {DOW_ORDER.map((dw) => {
+                  const c = grid.get(`${dw}|${h}`)
+                  const n = c?.cancelled ?? 0
+                  const base = c?.base ?? 0
+                  const ratePct = base > 0 ? Math.round((n / base) * 100) : 0
+                  const v = mode === 'count' ? n : base > 0 ? n / base : 0
+                  const a = max > 0 && n > 0 ? v / max : 0
+                  const label = mode === 'count' ? (n || '') : (n ? `${ratePct}%` : '')
+                  return (
+                    <td key={dw} title={`${DOW_SHORT[dw]} ${fmtHourShort(h)}: ${n} cancelled of ${base} bookings (${ratePct}%)`}
+                      className="text-center rounded font-medium h-7 w-11"
+                      style={{ backgroundColor: n === 0 ? '#f9fafb' : `rgba(239,68,68,${0.15 + 0.75 * a})`, color: a > 0.55 ? '#fff' : '#1f2937' }}>
+                      {label}
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-[11px] text-gray-400 mt-1">Rate = cancelled ÷ (confirmed + cancelled) for that weekday and hour in the range.</p>
+    </div>
+  )
+}
+
 function CancelGroup({ title, icon, g }: { title: string; icon: string; g: any }) {
   const fmtH = (h: number) => (Math.abs(h) >= 48 ? `${(h / 24).toFixed(1)} days` : `${h.toFixed(1)} h`)
   const notice = [
@@ -245,6 +323,7 @@ function CancelGroup({ title, icon, g }: { title: string; icon: string; g: any }
               Cancelled bookings were made a median {fmtH(g.medianBookingLeadHoursCancelled)} ahead; kept bookings {fmtH(g.medianBookingLeadHoursKept)} ahead.
             </p>
           </div>
+          <CancelHeatmap cells={g.byDowHour ?? []} />
           {g.abandonedCheckouts > 0 && (
             <p className="text-[11px] text-gray-400">
               Plus <strong className="text-gray-600">{g.abandonedCheckouts}</strong> abandoned checkouts (unpaid, auto-released) — not counted as cancellations.
