@@ -88,23 +88,45 @@ export default defineConfig({
         // analytics *Tab-*, MapTab/leaflet, rev-ops-7k2p*, AdminBookingCalendar) are
         // lazy-loaded at runtime; keep them OUT of every customer's PWA precache.
         globIgnores: ["**/charts-*.js", "**/pdflib-*.js", "**/*Tab-*.js", "**/MapTab-*.css", "**/rev-ops-7k2p*.js", "**/AdminBookingCalendar-*.js", "**/facility-instructions/**", "**/access/**", "**/58f7d9/**", "**/d058cb/**", "**/3fff00/**"],
-        // App-shell navigations are served the PRECACHED shell (NOT NetworkFirst —
-        // see the SYNC-4 note above). NEVER fall back for /api/*.
-        navigateFallback: "/index.html",
-        // /api/* never gets the SPA fallback. /reset-password and /rev-ops-7k2p are
-        // also denylisted so a fresh navigation to them always hits the NETWORK for
-        // the latest shell — otherwise a stale cached install serves an old
-        // index.html that lacks the route and 404s ("Not Found"). /reset-password =
-        // a coach clicking their emailed reset link; /rev-ops-7k2p = an admin tapping
-        // a deep-linked push (payment-failed, fault report, hourly digest) — both
-        // post-date older installs (audit 2026-06-10 #5).
-        navigateFallbackDenylist: [/^\/api\//, /^\/reset-password/, /^\/rev-ops-7k2p/, /^\/facility-instructions/, /^\/access/, /^\/58f7d9/, /^\/d058cb/, /^\/3fff00/],
+        // STALE-BUNDLE FIX (2026-09-02, Inspector: "fix the stale bundle problem").
+        // `navigateFallback` is GONE. It registered a NavigationRoute that served the
+        // PRECACHED index.html for every navigation, ahead of any runtime route — so
+        // a normal refresh could never show a new deploy; freshness depended entirely
+        // on the service-worker auto-apply below, which (a) needs the new worker to
+        // finish precaching ~1 MB first and (b) had a per-tab budget a long-lived
+        // phone PWA exhausts after two deploys. Measured symptom: a client was still
+        // writing the retired waitlist sentinel the day the replacement shipped.
+        //
+        // Navigations are now NETWORK-FIRST (3 s timeout) via the runtime route below:
+        // any refresh or cold start with a network gets the CURRENT index.html and
+        // its current hashed chunks straight from Vercel, whatever worker is active.
+        // Offline / timeout falls back to the cached navigation, then the precached
+        // shell (precacheFallback). The waiting-worker auto-apply still runs, but it
+        // is now the mechanism for updating the OFFLINE shell, not the only way to
+        // see a deploy. /api/* and the hosted static guides are excluded: they were
+        // network-only before and stay that way.
+        navigateFallback: null,
         // CRITICAL: do NOT intercept Convex realtime/HTTP or Better Auth traffic.
         // Those are cross-origin (*.convex.cloud/.site) so the same-origin routes
         // below never match them — the SW leaves them entirely alone (realtime +
         // cross-site auth cookies keep working). We only runtime-cache our own
         // static assets; everything else (incl. cross-origin) bypasses the SW.
         runtimeCaching: [
+          {
+            // App-shell navigations: network first, short timeout, offline fallback
+            // to the precached shell. See the STALE-BUNDLE FIX note above.
+            urlPattern: ({ request, url, sameOrigin }: { request: Request; url: URL; sameOrigin: boolean }) =>
+              sameOrigin &&
+              request.mode === "navigate" &&
+              !/^\/(?:api\/|facility-instructions|access|58f7d9|d058cb|3fff00)/.test(url.pathname),
+            handler: "NetworkFirst",
+            options: {
+              cacheName: "app-shell",
+              networkTimeoutSeconds: 3,
+              expiration: { maxEntries: 20, maxAgeSeconds: 7 * 24 * 60 * 60 },
+              precacheFallback: { fallbackURL: "/index.html" },
+            },
+          },
           {
             urlPattern: ({ url, sameOrigin }: { url: URL; sameOrigin: boolean }) =>
               sameOrigin && /\.(?:png|svg|ico|woff2?|jpg|jpeg|webp)$/.test(url.pathname),

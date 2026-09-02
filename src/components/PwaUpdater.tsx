@@ -54,23 +54,55 @@ const RELOAD_FLAG = 'krickora.chunkReloadAttempted'
 // Both auto tiers are gated on isAppBusy(): since U8 every modal surface (incl.
 // the Stripe embedded checkout) marks the app busy via ModalShell, so the
 // "switched apps mid-payment to fetch my card, came back" case can never reload.
-const AUTO_APPLY_COUNT = 'krickora.swAutoApplyCount'
-const MAX_AUTO_APPLIES = 2 // hard cap per tab session — a broken deploy cannot loop
-const COLD_START_MS = 15_000
+// STALE-BUNDLE FIX (2026-09-02). Two things starved the auto-apply:
+//   1. The budget was "2 per tab session". A phone PWA's tab session lives for
+//      WEEKS, so after two deploys it fell back to the toast forever — and a
+//      dismissed toast meant a stale bundle indefinitely. The guard exists only to
+//      stop a reload LOOP on a broken deploy, and a loop is fast — so the budget is
+//      now a sliding WINDOW (2 applies per 10 min), which still stops a loop and
+//      never starves a long-lived install.
+//   2. The cold-start window was 15 s from module evaluation, but the waiting
+//      worker only appears once it has precached ~1 MB — on a slow mobile link
+//      that is often later than 15 s, so Tier 1 missed and the user sat on the
+//      stale shell until they backgrounded the app. Window is now 60 s, and a
+//      new "idle" tier applies whenever the user hasn't touched the page for 30 s.
+// (The navigation route is now NetworkFirst too — see vite.config.ts — so the
+// shell itself is fresh on any refresh regardless of what happens here.)
+const AUTO_APPLY_LOG = 'krickora.swAutoApplyLog' // JSON array of ms timestamps
+const MAX_AUTO_APPLIES_PER_WINDOW = 2
+const AUTO_APPLY_WINDOW_MS = 10 * 60 * 1000
+const COLD_START_MS = 60_000
+const IDLE_MS = 30_000
 // Module evaluation ≈ app start; a ref would reset on remount.
 const APP_STARTED_AT = Date.now()
+let lastInteractionAt = Date.now()
+if (typeof window !== 'undefined') {
+  const bump = () => { lastInteractionAt = Date.now() }
+  for (const ev of ['pointerdown', 'keydown', 'touchstart', 'wheel'] as const) {
+    window.addEventListener(ev, bump, { passive: true, capture: true })
+  }
+}
 
+function recentApplies(): number[] {
+  try {
+    const arr = JSON.parse(sessionStorage.getItem(AUTO_APPLY_LOG) ?? '[]')
+    const cutoff = Date.now() - AUTO_APPLY_WINDOW_MS
+    return Array.isArray(arr) ? arr.filter((t: unknown) => typeof t === 'number' && t > cutoff) : []
+  } catch {
+    return []
+  }
+}
 function autoApplyBudgetLeft(): boolean {
   try {
-    return Number(sessionStorage.getItem(AUTO_APPLY_COUNT) ?? '0') < MAX_AUTO_APPLIES
+    if (typeof sessionStorage === 'undefined') return false // can't guard a loop
+    return recentApplies().length < MAX_AUTO_APPLIES_PER_WINDOW
   } catch {
-    return false // no sessionStorage → never auto-apply (can't guard the loop)
+    return false
   }
 }
 function noteAutoApply() {
   try {
-    const n = Number(sessionStorage.getItem(AUTO_APPLY_COUNT) ?? '0')
-    sessionStorage.setItem(AUTO_APPLY_COUNT, String(n + 1))
+    sessionStorage.setItem(AUTO_APPLY_LOG, JSON.stringify([...recentApplies(), Date.now()]))
   } catch { /* ignore */ }
 }
 
@@ -140,12 +172,22 @@ export default function PwaUpdater() {
 
     // Tier 1 — cold start. Nothing is in flight this early, so just take it.
     if (Date.now() - APP_STARTED_AT < COLD_START_MS && apply()) return
+    // Tier 1b — already hidden when the update landed: nobody is looking.
+    if (document.hidden && apply()) return
 
     // Tier 2 — apply when the app is backgrounded and nothing is open. Re-checked
     // on each transition: a user who backgrounds mid-checkout is busy and skipped,
     // and will be picked up on a later, idle backgrounding instead.
     const onHidden = () => { if (document.hidden) apply() }
     document.addEventListener('visibilitychange', onHidden)
+
+    // Tier 2b — idle: the page is visible but untouched for IDLE_MS and nothing is
+    // open. A reload here costs nothing the user is doing. Polled, cheap.
+    const idleTimer = setInterval(() => {
+      if (!document.hidden && Date.now() - lastInteractionAt >= IDLE_MS && apply()) {
+        clearInterval(idleTimer)
+      }
+    }, 5_000)
 
     // Tier 3 — the visible, in-use case keeps the non-blocking toast it always had.
     toast('A new version of Cricket Revolution is available', {
@@ -158,7 +200,10 @@ export default function PwaUpdater() {
       onDismiss: () => setNeedRefresh(false),
     })
 
-    return () => document.removeEventListener('visibilitychange', onHidden)
+    return () => {
+      document.removeEventListener('visibilitychange', onHidden)
+      clearInterval(idleTimer)
+    }
   }, [needRefresh, updateServiceWorker, setNeedRefresh])
 
   return null
