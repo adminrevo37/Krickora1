@@ -618,7 +618,9 @@ export const expirePassedWaitlistEntries = internalMutation({
       for (const e of rows) {
         const st = statusOf(e);
         if (st !== "waiting" && st !== "offered") continue;
-        const ended = e.date < today || e.hour + 1 <= nowHourFrac;
+        // Explicit date guard even though the index range is date <= today: the
+        // hour test alone would read a FUTURE morning entry as "ended".
+        const ended = e.date < today || (e.date === today && e.hour + 1 <= nowHourFrac);
         if (!ended) continue;
         if (reaped >= LIMIT) {
           more = true;
