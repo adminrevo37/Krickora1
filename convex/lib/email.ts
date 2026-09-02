@@ -382,6 +382,21 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
             muted(`You'll only be charged if you choose to book a slot that's offered to you.`),
         }),
       };
+    case "waitlist-still-waiting":
+      return {
+        subject: "Still waiting? Your waitlist places — Cricket Revolution",
+        html: layout({
+          title: "Still waiting?",
+          preheader: `You're holding ${esc(d.slotCount)} waitlist place(s). Keep them or free them up.`,
+          bodyHtml:
+            p(`Hi ${greetFirst(d, "customerName")}, you joined the waitlist a while ago and nothing has opened up yet. Here's where you stand:`) +
+            (d.slotsHtml || "") +
+            p(`<strong>Still keen?</strong> Nothing to do — we'll offer you the first lane that frees up, and we'll also tell you if a nearby time opens.`) +
+            p(`<strong>No longer need it?</strong> Open the calendar, tap the green waitlist band on that hour and choose <em>Leave the queue</em>, so the place goes to the next person.`) +
+            linkLine("Open the calendar:", d.manageUrl) +
+            muted(`You'll only be charged if you choose to book a slot that's offered to you.`),
+        }),
+      };
     case "waitlist-vacancy":
       return {
         subject: "A spot opened up — reserved for you",

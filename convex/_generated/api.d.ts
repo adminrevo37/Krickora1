@@ -81,6 +81,7 @@ import type * as users from "../users.js";
 import type * as waitlist from "../waitlist.js";
 import type * as waitlistAutoAlt from "../waitlistAutoAlt.js";
 import type * as waitlistOffers from "../waitlistOffers.js";
+import type * as waitlistReminders from "../waitlistReminders.js";
 import type * as webhooks from "../webhooks.js";
 import type * as weeklySummary from "../weeklySummary.js";
 import type * as weeklySummaryQueries from "../weeklySummaryQueries.js";
@@ -165,6 +166,7 @@ declare const fullApi: ApiFromModules<{
   waitlist: typeof waitlist;
   waitlistAutoAlt: typeof waitlistAutoAlt;
   waitlistOffers: typeof waitlistOffers;
+  waitlistReminders: typeof waitlistReminders;
   webhooks: typeof webhooks;
   weeklySummary: typeof weeklySummary;
   weeklySummaryQueries: typeof weeklySummaryQueries;

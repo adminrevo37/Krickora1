@@ -284,6 +284,15 @@ export default function SettingsPanel() {
             <NumberInput label="Nearby window (± hours)" value={settings.waitlistAltTimeWindowHours ?? 2} onChange={(v) => updateSettings({ waitlistAltTimeWindowHours: v })} />
             <NumberInput label="Offer to everyone if the session starts within (hours)" value={settings.waitlistAltTimeBroadcastWithinHours ?? 5} onChange={(v) => updateSettings({ waitlistAltTimeBroadcastWithinHours: v })} />
           </div>
+          <ToggleRow
+            label={'Weekly "still waiting?" check-in'}
+            description="Daily at 10:15am, anyone holding a waitlist place older than the threshold gets one push + email listing their places and how to leave the queue. Keeps queues honest so offers go to people who still want them. The booking window is about a week, so keep the threshold short."
+            checked={settings.waitlistStillWaitingReminderEnabled ?? true}
+            onChange={(v) => updateSettings({ waitlistStillWaitingReminderEnabled: v })}
+          />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <NumberInput label="Check-in after (days on the waitlist, and between check-ins)" value={settings.waitlistStillWaitingReminderDays ?? 2} onChange={(v) => updateSettings({ waitlistStillWaitingReminderDays: v })} />
+          </div>
         </div>
       </div>
 

@@ -537,6 +537,21 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
     // DIFFERENT time to someone on the waitlist. Resolution is a server query
     // (ownership + liveness), so just stash the token here and let the effect below
     // act on it once it resolves.
+    // Part C2 — ?wlDay=<date> from the weekly "still waiting?" reminder: open
+    // that day; the green band on their hour carries the manage/leave sheet.
+    const wlDay = p.get('wlDay')
+    if (wlDay) {
+      setDeepLinkHandled(true)
+      const match = weekDays.find(d => formatDateKey(d) === wlDay)
+      if (match) {
+        setSelectedDay(match)
+        setDeclineNotice({ ok: true, text: 'Tap the green waitlist band on your hour to see your place or leave the queue.' })
+      } else {
+        setDeclineNotice({ ok: false, text: 'That waitlist day is outside the current booking window.' })
+      }
+      cleanUrl()
+      return
+    }
     const offerToken = p.get('offer')
     if (offerToken) {
       if (!user) return // wait for auth, exactly like ?book

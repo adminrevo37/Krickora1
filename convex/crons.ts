@@ -67,6 +67,16 @@ crons.daily(
   internal.retention.runDailyRetention
 );
 
+// SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part C2 — daily "still waiting?" check-in
+// to everyone holding a waitlist place older than the threshold (default 2 days;
+// measured: 75% of joins are <24h out, so weekly/7-day would never fire). 10:15 AWST =
+// 02:15 UTC, clear of the Monday weekly summary at 02:00.
+crons.daily(
+  "waitlist-still-waiting",
+  { hourUTC: 2, minuteUTC: 15 },
+  internal.waitlistReminders.sendStillWaitingReminders
+);
+
 // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part A1 — hourly reaper for waitlist
 // entries whose session has ENDED (there was no time-based expiry at all, so
 // entries lived forever). Runs a few minutes past the hour so an entry for the

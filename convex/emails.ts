@@ -570,6 +570,46 @@ export const sendWaitlistVacancy = internalAction({
 
 // SPEC_WAITLIST_ALT_TIME_OFFER_2026-08 — offer of a DIFFERENT time to a waitlist
 // queue. Sent alongside a push to the same person (both channels, always).
+// SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part C2 — weekly "still waiting?" reminder.
+export const sendWaitlistStillWaiting = internalAction({
+  args: {
+    to: v.string(),
+    customerName: v.string(),
+    items: v.array(
+      v.object({
+        date: v.string(),
+        dateLabel: v.string(),
+        time: v.string(),
+        pool: v.string(),
+        position: v.number(),
+      })
+    ),
+    manageUrl: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (!(await emailEnabledForUser(ctx, args.to, "waitlist-still-waiting"))) {
+      console.log(`[waitlist-still-waiting] Skipped — user disabled this email: ${args.to}`);
+      return { success: false, skipped: true, reason: "User disabled this email" };
+    }
+    const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+    const slotsHtml = args.items
+      .map(
+        (i) =>
+          `<div style="margin-bottom:10px;"><p style="margin:0 0 2px;font-family:${FONT};color:#10151c;font-size:14px;font-weight:600;">${i.dateLabel}</p><p style="margin:0;font-family:${FONT};color:#23292f;font-size:14px;">${i.time}${i.pool !== "any" ? ` (${i.pool})` : ""} — you're <strong>#${i.position}</strong> in the queue</p></div>`
+      )
+      .join("");
+    const result = await sendEmail("waitlist-still-waiting", args.to, {
+      customerName: args.customerName,
+      firstName: await resolveFirstName(ctx, args.to),
+      slotCount: String(args.items.length),
+      slotsHtml,
+      manageUrl: args.manageUrl,
+    });
+    if (!result.success) console.error(`[waitlist-still-waiting] Failed to ${args.to}: ${result.reason}`);
+    return result;
+  },
+});
+
 export const sendWaitlistAltTimeOffer = internalAction({
   args: {
     to: v.string(),

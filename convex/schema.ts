@@ -653,6 +653,8 @@ export default defineSchema({
     altTimeOptIn: v.optional(v.boolean()),
     lastAltOfferAt: v.optional(v.number()),
     altOfferDeclined: v.optional(v.boolean()),
+    // Part C2 — ms of the last weekly "still waiting?" reminder sent for this entry.
+    lastStillWaitingReminderAt: v.optional(v.number()),
   })
     .index("by_userId", ["userId"])
     .index("by_slot", ["laneId", "date", "hour"])
@@ -900,6 +902,12 @@ export default defineSchema({
     waitlistAutoAltOffersEnabled: v.optional(v.boolean()),
     waitlistAltTimeWindowHours: v.optional(v.number()),
     waitlistAltTimeBroadcastWithinHours: v.optional(v.number()),
+    // Part C2 — weekly "you're still #N for Thu 7pm — stay or leave?" reminder.
+    //   enabled: kill switch (default true)
+    //   days: minimum age of an entry, and minimum gap between reminders (default 2 —
+    //     measured 2026-09-02: 75% of joins are <24h before the session; 7 never fires)
+    waitlistStillWaitingReminderEnabled: v.optional(v.boolean()),
+    waitlistStillWaitingReminderDays: v.optional(v.number()),
     // SPEC_ADD_A_MATE "Misc Settings". Max mates a customer may add to one
     // booking (the owner is NOT counted). Default 2 → 3 people total per net
     // (matches the facility "max 3 people per lane" safety rule).

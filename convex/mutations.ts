@@ -2624,6 +2624,10 @@ export const updateBooking = mutation({
   },
   handler: async (ctx, args) => {
     const adminUser = await requireAdmin(ctx);
+    // BATCH 15.3 — coachPrice is money: adminSetCoachPrice is behind the
+    // second-factor unlock, so the same field written through this generic
+    // patch must be too, or the gate is bypassable.
+    if (args.coachPrice !== undefined) await requireAdminUnlocked(ctx);
     const { id, notify, ...updates } = args;
     const cleanUpdates = Object.fromEntries(
       Object.entries(updates).filter(([_, v]) => v !== undefined)
@@ -5588,10 +5592,34 @@ export const updateCustomerByEmail = mutation({
 });
 
 // Delete a customer — ADMIN ONLY
+// BATCH 15.3 (VERIFY_BACKLOG) — was a bare requireAdmin + ctx.db.delete with no
+// cascade, sitting outside the second-factor gate while the cascade tool was
+// inside it. Now: unlock-gated, and refuses when the account has any history —
+// that is adminCleanup.adminDeleteCustomerCascade's job (dry-run first).
 export const deleteCustomer = mutation({
   args: { id: v.id("customers") },
   handler: async (ctx, args) => {
-    await requireAdmin(ctx);
+    await requireAdminUnlocked(ctx);
+    const cust: any = await ctx.db.get(args.id);
+    if (!cust) throw new ConvexError("Customer not found.");
+    const email = String(cust.email ?? "").toLowerCase().trim();
+    const booking = await ctx.db
+      .query("bookings")
+      .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", email))
+      .first();
+    const credit = await ctx.db
+      .query("creditLedger")
+      .withIndex("by_customerId", (q: any) => q.eq("customerId", args.id))
+      .first();
+    const payment = await ctx.db
+      .query("payments")
+      .withIndex("by_coachId", (q: any) => q.eq("coachId", args.id))
+      .first();
+    if (booking || credit || payment) {
+      throw new ConvexError(
+        "This account has bookings, credit or payment history. Use the cascade delete tool (dry-run first) so nothing is orphaned."
+      );
+    }
     await ctx.db.delete(args.id);
     return args.id;
   },
@@ -6319,6 +6347,8 @@ export const updateSiteSettings = mutation({
     waitlistAutoAltOffersEnabled: v.optional(v.boolean()),
     waitlistAltTimeWindowHours: v.optional(v.number()),
     waitlistAltTimeBroadcastWithinHours: v.optional(v.number()),
+    waitlistStillWaitingReminderEnabled: v.optional(v.boolean()),
+    waitlistStillWaitingReminderDays: v.optional(v.number()),
     maxMatesPerBooking: v.optional(v.number()),
     pushEnabledGlobal: v.optional(v.boolean()),
     faultReportEmail: v.optional(v.string()), // EML-3 (audit 2026-06)

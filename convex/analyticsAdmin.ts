@@ -998,9 +998,62 @@ export async function computeCancellationAnalytics(ctx: any, args: { from?: stri
   const customerRows = (all as any[]).filter((b) => b.isCoachBooking !== true);
   const customer = summariseCancellations(customerRows, customerLateH, args.from, args.to);
   const coach = summariseCancellations(coachRows, coachLateH, args.from, args.to);
+
+  // Inspector 2026-09-02 — repeat cancellers, coach side. Coaches are staff-like
+  // and already named throughout the admin panel, so names are fine here
+  // (customers stay aggregate-only, like Top Customers).
+  const perCoach = new Map<string, {
+    email: string; name: string; bookings: number; cancelled: number; late: number;
+    lateCharged: number; lateChargedAmount: number; self: number; admin: number;
+  }>();
+  const rowFor = (b: any) => {
+    const email = String(b.customerEmail ?? "").toLowerCase().trim();
+    let r = perCoach.get(email);
+    if (!r) {
+      r = { email, name: b.customerName ?? email, bookings: 0, cancelled: 0, late: 0, lateCharged: 0, lateChargedAmount: 0, self: 0, admin: 0 };
+      perCoach.set(email, r);
+    }
+    return r;
+  };
+  for (const b of coachRows) {
+    if (!inRange(b.date, args.from, args.to)) continue;
+    if (b.status === "confirmed") {
+      rowFor(b).bookings++;
+      continue;
+    }
+    if (b.status !== "cancelled") continue;
+    if (b.paymentStatus === "failed" && !b.cancelledByUserId) continue; // abandoned checkout
+    const r = rowFor(b);
+    r.bookings++;
+    r.cancelled++;
+    if (b.coachLateCancelCharged) {
+      r.lateCharged++;
+      r.lateChargedAmount += coachBookingCost(b);
+    }
+    const cancelledAtMs = b.cancelledAt ? Date.parse(b.cancelledAt) : NaN;
+    if (Number.isFinite(cancelledAtMs)) {
+      const startMs = awstDateKeyToMs(b.date) + (b.startHour ?? 0) * HOUR_MS;
+      const leadH = (startMs - cancelledAtMs) / HOUR_MS;
+      if (leadH >= 0 && leadH < coachLateH) r.late++;
+    }
+    const by = b.cancelledByUserId;
+    if (by && by === b.userId) r.self++;
+    else if (by && !String(by).includes("@")) r.admin++;
+  }
+  const coachTable = [...perCoach.values()]
+    .filter((r) => r.cancelled > 0)
+    .map((r) => ({
+      ...r,
+      lateChargedAmount: round2(r.lateChargedAmount),
+      cancellationRatePct: r.bookings > 0 ? Math.round((r.cancelled / r.bookings) * 100) : 0,
+    }))
+    .sort((a, b) => b.cancelled - a.cancelled || b.late - a.late)
+    .slice(0, 20);
+
   return {
     customer,
     coach,
+    coachTable,
     // Back-compat aggregate (the old single-number KPIs).
     cancelled: customer.cancelled + coach.cancelled,
     cancellationRatePct:

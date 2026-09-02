@@ -197,6 +197,18 @@ function AdminPage() {
   // client decides if the unlock is still valid (queries can't read the clock).
   const gate = useQuery((api as any).adminGate.getAdminGateStatus)
   const [localUnlocked, setLocalUnlocked] = useState(false)
+  // BATCH 15.4 — a tab left open past the unlock window used to keep rendering the
+  // panel while every gated mutation threw "Admin session locked" with no
+  // re-prompt. Tick every 30s so the lock re-evaluates, and drop the local flag
+  // once the server-issued expiry has passed.
+  const [nowTick, setNowTick] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 30_000)
+    return () => clearInterval(t)
+  }, [])
+  useEffect(() => {
+    if (localUnlocked && gate?.expiresAt && nowTick >= gate.expiresAt) setLocalUnlocked(false)
+  }, [localUnlocked, gate?.expiresAt, nowTick])
   // BUG-6: Detect child routes (e.g. /admin/analytics) to render <Outlet /> instead of section panels
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const isChildRoute = pathname.startsWith('/rev-ops-7k2p/') && pathname.length > '/rev-ops-7k2p/'.length
@@ -229,7 +241,7 @@ function AdminPage() {
   const gateLocked =
     gate?.enabled === true &&
     !localUnlocked &&
-    !(gate?.expiresAt && Date.now() < gate.expiresAt)
+    !(gate?.expiresAt && nowTick < gate.expiresAt)
   if (gateLocked) {
     return <AdminUnlock onUnlocked={() => setLocalUnlocked(true)} />
   }

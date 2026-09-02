@@ -1257,6 +1257,7 @@ export const listEmailTemplates = query({
       { slug: "athlete-allocation", label: "Coach Session Allocation", description: "Sent when your coach allocates you a training session." },
       { slug: "waitlist-confirmation", label: "Waitlist Confirmation", description: "Sent when you join a waitlist." },
       { slug: "waitlist-vacancy", label: "Waitlist Vacancy Alerts", description: "Sent when a waitlisted slot opens up." },
+      { slug: "waitlist-still-waiting", label: "Waitlist Check-in", description: "A weekly reminder of the waitlist places you're holding, so you can keep or free them." },
       { slug: "welcome", label: "Welcome Email", description: "Sent when you create your account." },
     ];
   },
