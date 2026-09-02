@@ -106,6 +106,12 @@ export default defineConfig({
         // see a deploy. /api/* and the hosted static guides are excluded: they were
         // network-only before and stay that way.
         navigateFallback: null,
+        // ⚠️ Without this, the precached index.html ALSO answers `/` (workbox's
+        // default directoryIndex), and precache routes are registered ahead of
+        // runtime routes — so the home navigation still came from the precache
+        // (verified on prod 2026-09-02: app-shell cache created but EMPTY,
+        // transferSize 0). null = only explicit /index.html hits the precache.
+        directoryIndex: null,
         // CRITICAL: do NOT intercept Convex realtime/HTTP or Better Auth traffic.
         // Those are cross-origin (*.convex.cloud/.site) so the same-origin routes
         // below never match them — the SW leaves them entirely alone (realtime +
