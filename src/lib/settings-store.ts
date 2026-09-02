@@ -59,6 +59,7 @@ export interface SiteSettings {
   waitlistAltTimeBroadcastWithinHours?: number
   waitlistStillWaitingReminderEnabled?: boolean
   waitlistStillWaitingReminderDays?: number
+  waitlistMaxEntriesPerAccount?: number
   maxMatesPerBooking?: number
   pushEnabledGlobal?: boolean
   registrationLocked?: boolean
@@ -112,6 +113,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   waitlistAltTimeBroadcastWithinHours: 5,
   waitlistStillWaitingReminderEnabled: true,
   waitlistStillWaitingReminderDays: 2,
+  waitlistMaxEntriesPerAccount: 10,
   maxMatesPerBooking: 2,
   pushEnabledGlobal: true,
   registrationLocked: false,

@@ -984,6 +984,16 @@ export const declineWaitlistOffer = mutation({
       date: args.date,
       hour: args.hour,
     });
+    // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 C9 — close the loop. A Pass from the
+    // notification action buttons had no UI at all; say what happened.
+    await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+      email: mine.userEmail,
+      category: "waitlist-offers",
+      title: "Passed ✔",
+      body: `${fmtAwstDateLabel(args.date)}, ${fmtHour12(args.hour)} - ${fmtHour12(args.hour + 1)} has been offered to the next person on the waitlist. You're no longer queued for that hour — rejoin from the calendar if you change your mind.`,
+      url: `/?wlDay=${args.date}`,
+      tag: `wl-passed-${args.date}-${args.hour}`,
+    });
     return { declined: true };
   },
 });

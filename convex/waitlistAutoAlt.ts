@@ -567,6 +567,15 @@ export const declineAutoAltOffer = mutation({
       }
     }
     if (offer.exclusive) await rerunChain(ctx, offer);
+    // C9 — close the loop on a Pass.
+    await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+      email: me.userEmail,
+      category: "waitlist-offers",
+      title: "Passed ✔",
+      body: `${fmtAwstDateLabel(offer.date)}, ${fmtHour12(offer.hour)} - ${fmtHour12(offer.hour + 1)} has been offered to the next person. You're still on the waitlist for ${fmtHour12(offer.sourceHour)}.`,
+      url: `/?wlDay=${offer.date}`,
+      tag: `wl-passed-${offer.date}-${offer.hour}`,
+    });
     return { ok: true as const };
   },
 });

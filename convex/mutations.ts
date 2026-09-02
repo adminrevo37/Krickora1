@@ -25,7 +25,7 @@ import {
 } from "./lib/bookingWindow";
 import { computeCustomerPriceCents, decreaseCreditCents } from "./lib/pricing";
 import { mondayOfWeek } from "./lib/coachLedger";
-import { validateAndSnapshotLane, resolveLaneSnapshot } from "./lanes";
+import { validateAndSnapshotLane, resolveLaneSnapshot, resolveLanesAtHour } from "./lanes";
 import { defaultLaneName, variantRatePerHour, DEFAULT_LANE_META } from "./lib/lanes";
 import { PRICE_DEFAULTS } from "./lib/priceDefaults";
 import { composeName, splitName } from "./lib/names";
@@ -6130,13 +6130,48 @@ export const addToWaitlist = mutation({
     const authedName = (identity as any)?.name ?? null;
     const callerUserId = identity.subject;
 
+    // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 C4 — cap the LIVE places one account
+    // can hold. Bounds a table that could not shrink before the reaper, and stops
+    // one person queueing for a whole evening. Admin setting, default 10.
+    const settingsRow = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    const maxEntries = Math.max(1, Number((settingsRow as any)?.waitlistMaxEntriesPerAccount ?? 10));
+    const awstNow = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    const todayKey = awstNow.toISOString().slice(0, 10);
+    const nowHourFrac = awstNow.getUTCHours() + awstNow.getUTCMinutes() / 60;
+    const mine = await ctx.db
+      .query("waitlist")
+      .withIndex("by_userId", (q: any) => q.eq("userId", callerUserId))
+      .collect();
+    let liveCount = mine.filter((e: any) => {
+      const st = e.status ?? "waiting";
+      if (st !== "waiting" && st !== "offered") return false;
+      return e.date > todayKey || (e.date === todayKey && e.hour + 1 > nowHourFrac);
+    }).length;
+
     const ids: string[] = [];
     const insertedEntries: typeof args.entries = [];
     for (const entry of args.entries) {
       // SPEC_WAITLIST_SPLIT_BM_RU — entries are keyed by POOL sentinel: '*bm'
-      // (bowling machines) / '*ru' (run-ups). Legacy '*' (any lane, pre-split
-      // cached clients) stays valid; anything else is coerced to '*'.
-      const laneId = ["*", "*bm", "*ru"].includes(entry.laneId) ? entry.laneId : "*";
+      // (bowling machines) / '*ru' (run-ups).
+      // Part C5 (2026-09-02) — the legacy '*' (any-lane) sentinel is RETIRED on
+      // the write path. A real lane id from a stale cached client is resolved to
+      // that lane's pool at (date, hour); a bare '*' can't be placed in a pool
+      // and is refused with a refresh prompt (only a stale bundle sends it —
+      // measured: one '*' row was still being created the day this shipped).
+      // Read paths keep tolerating existing '*' rows until they age out.
+      let laneId = entry.laneId;
+      if (laneId !== "*bm" && laneId !== "*ru") {
+        if (laneId === "*") {
+          throw new ConvexError("This version of the app is out of date — please refresh and try again.");
+        }
+        const lanesAt = await resolveLanesAtHour(ctx, entry.date, entry.hour);
+        const real = lanesAt.find((l) => l.laneId === laneId);
+        if (!real) throw new ConvexError("That lane isn't available at this time — please refresh and try again.");
+        laneId = real.pool === "ru" ? "*ru" : "*bm";
+      }
       // Duplicate scan: the target sentinel + any group whose queue overlaps it —
       // a live legacy '*' row already sits in BOTH pools' queues, so joining a
       // pool on top of it would give the user two positions in one FIFO; and a
@@ -6161,6 +6196,12 @@ export const addToWaitlist = mutation({
         return e.userId === callerUserId && (s === "waiting" || s === "offered");
       });
       if (isDuplicate) continue;
+      if (liveCount >= maxEntries) {
+        throw new ConvexError(
+          `You can hold up to ${maxEntries} waitlist place${maxEntries === 1 ? "" : "s"} at a time. Leave one you no longer need, then try again.`
+        );
+      }
+      liveCount++;
 
       const id = await ctx.db.insert("waitlist", {
         userId: callerUserId,
@@ -6358,6 +6399,7 @@ export const updateSiteSettings = mutation({
     waitlistAltTimeBroadcastWithinHours: v.optional(v.number()),
     waitlistStillWaitingReminderEnabled: v.optional(v.boolean()),
     waitlistStillWaitingReminderDays: v.optional(v.number()),
+    waitlistMaxEntriesPerAccount: v.optional(v.number()),
     maxMatesPerBooking: v.optional(v.number()),
     pushEnabledGlobal: v.optional(v.boolean()),
     faultReportEmail: v.optional(v.string()), // EML-3 (audit 2026-06)

@@ -913,6 +913,8 @@ export default defineSchema({
     //     measured 2026-09-02: 75% of joins are <24h before the session; 7 never fires)
     waitlistStillWaitingReminderEnabled: v.optional(v.boolean()),
     waitlistStillWaitingReminderDays: v.optional(v.number()),
+    // Part C4 — max LIVE waitlist places one account may hold (default 10).
+    waitlistMaxEntriesPerAccount: v.optional(v.number()),
     // SPEC_ADD_A_MATE "Misc Settings". Max mates a customer may add to one
     // booking (the owner is NOT counted). Default 2 → 3 people total per net
     // (matches the facility "max 3 people per lane" safety rule).

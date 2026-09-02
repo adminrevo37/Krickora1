@@ -227,8 +227,83 @@ function AltTimeOfferSheet({
   )
 }
 
+// SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 C8 — add someone to a queue on their behalf.
+function AddToQueueSheet({ onClose }: { onClose: () => void }) {
+  const add = useMutation(api.waitlistAdmin.adminAddToWaitlist)
+  const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10)
+  const [email, setEmail] = useState('')
+  const [pool, setPool] = useState<'bm' | 'ru'>('bm')
+  const [date, setDate] = useState(today)
+  const [hours, setHours] = useState<number[]>([])
+  const [duration, setDuration] = useState(60)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const hourOptions = Array.from({ length: 16 }, (_, i) => 6 + i) // 6am–9pm
+  const toggle = (h: number) => setHours(p => p.includes(h) ? p.filter(x => x !== h) : [...p, h])
+  return (
+    <ModalShell onClose={onClose} labelledBy="add-queue-title"
+      overlayClassName="fixed inset-0 z-[60] flex items-center justify-center p-4"
+      panelClassName="relative bg-white rounded-2xl shadow-2xl border border-gray-200 w-full max-w-md p-5 max-h-[85dvh] overflow-y-auto">
+      <h3 id="add-queue-title" className="text-base font-bold text-gray-900">Add someone to a waitlist</h3>
+      <p className="text-xs text-gray-500 mt-0.5">Same as if they joined themselves: FIFO place, confirmation email, offers and reminders.</p>
+      <div className="mt-4 space-y-3">
+        <label className="block text-xs font-semibold text-gray-600">Customer email
+          <input value={email} onChange={e => setEmail(e.target.value)} type="email" placeholder="name@example.com"
+            className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="block text-xs font-semibold text-gray-600">Pool
+            <select value={pool} onChange={e => setPool(e.target.value as 'bm' | 'ru')} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+              <option value="bm">BM — bowling machine</option>
+              <option value="ru">RU — run-up</option>
+            </select>
+          </label>
+          <label className="block text-xs font-semibold text-gray-600">Date
+            <input value={date} onChange={e => setDate(e.target.value)} type="date" min={today} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+          </label>
+        </div>
+        <div>
+          <p className="text-xs font-semibold text-gray-600 mb-1">Hours</p>
+          <div className="flex flex-wrap gap-1.5">
+            {hourOptions.map(h => (
+              <button key={h} type="button" onClick={() => toggle(h)}
+                className={`text-xs px-2.5 py-1 rounded-full border font-medium ${hours.includes(h) ? 'bg-amber-500 border-amber-500 text-white' : 'bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100'}`}>
+                {fmtHour12(h)}
+              </button>
+            ))}
+          </div>
+        </div>
+        <label className="block text-xs font-semibold text-gray-600">Preferred length
+          <select value={duration} onChange={e => setDuration(Number(e.target.value))} className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+            {[60, 90, 120, 150, 180].map(d => <option key={d} value={d}>{d % 60 === 0 ? `${d / 60} hour${d === 60 ? '' : 's'}` : `${Math.floor(d / 60)}h ${d % 60}m`}</option>)}
+          </select>
+        </label>
+        {msg && <p className={`text-sm ${msg.ok ? 'text-emerald-700' : 'text-red-600'}`}>{msg.text}</p>}
+        <div className="flex gap-3 pt-1">
+          <button onClick={onClose} className="flex-1 py-2.5 bg-gray-100 text-gray-700 font-semibold rounded-xl text-sm">Close</button>
+          <button disabled={busy || !email || hours.length === 0}
+            onClick={async () => {
+              setBusy(true); setMsg(null)
+              try {
+                const r: any = await add({ email, pool, date, hours, durationMinutes: duration })
+                setMsg({ ok: true, text: `${r.name}: ${r.added} added${r.skippedDuplicates ? `, ${r.skippedDuplicates} already queued` : ''}. Confirmation email sent.` })
+                setHours([])
+              } catch (e: any) {
+                setMsg({ ok: false, text: e?.data ?? e?.message ?? 'Could not add them.' })
+              } finally { setBusy(false) }
+            }}
+            className="flex-[2] py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-semibold rounded-xl text-sm disabled:opacity-50">
+            Add to waitlist
+          </button>
+        </div>
+      </div>
+    </ModalShell>
+  )
+}
+
 export default function WaitlistAdmin() {
   const data = useQuery(api.queries.listWaitlistAdmin, {})
+  const [addOpen, setAddOpen] = useState(false)
   const offerNow = useMutation(api.waitlist.manualAdvanceWaitlistOffer)
   const clearOffer = useMutation(api.waitlist.adminClearWaitlistOffer)
   const [busy, setBusy] = useState<string | null>(null)
@@ -250,6 +325,8 @@ export default function WaitlistAdmin() {
         <div className="text-4xl mb-3">🎟️</div>
         <p className="text-gray-600 font-medium">No active waitlist entries</p>
         <p className="text-sm text-gray-400 mt-1">Freed slots are offered automatically, oldest member first.</p>
+        <button onClick={() => setAddOpen(true)} className="mt-4 px-4 py-2 text-sm font-semibold rounded-lg bg-amber-500 hover:bg-amber-600 text-white">+ Add someone to a waitlist</button>
+        {addOpen && <AddToQueueSheet onClose={() => setAddOpen(false)} />}
       </div>
     )
   }
@@ -279,13 +356,17 @@ export default function WaitlistAdmin() {
 
   return (
     <div className="space-y-4">
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm px-6 py-4">
-        <h3 className="text-lg font-bold text-gray-800">🎟️ Waitlist & Offers</h3>
-        <p className="text-sm text-gray-500 mt-0.5">
-          Freed slots are offered automatically to the longest-waiting member first.
-          Use the overrides to re-offer a slot or clear a stuck offer.
-        </p>
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm px-6 py-4 flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-lg font-bold text-gray-800">🎟️ Waitlist & Offers</h3>
+          <p className="text-sm text-gray-500 mt-0.5">
+            Freed slots are offered automatically to the longest-waiting member first.
+            Use the overrides to re-offer a slot or clear a stuck offer.
+          </p>
+        </div>
+        <button onClick={() => setAddOpen(true)} className="shrink-0 px-3 py-2 text-sm font-semibold rounded-lg bg-amber-500 hover:bg-amber-600 text-white">+ Add someone</button>
       </div>
+      {addOpen && <AddToQueueSheet onClose={() => setAddOpen(false)} />}
 
       {liveOffers.length > 0 && (
         <div className="bg-white rounded-2xl border border-emerald-200 shadow-sm overflow-hidden">
