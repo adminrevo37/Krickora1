@@ -2,7 +2,7 @@ import { query, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { requireAdmin, getCallerContext, stripBookingPII } from "./lib/adminGuard";
-import { defaultLaneName } from "./lib/lanes";
+import { defaultLaneName, laneNameForBooking } from "./lib/lanes";
 import { validateDiscount } from "./lib/discounts";
 import {
   resolveCanonicalCustomerByEmail,
@@ -492,19 +492,26 @@ export const listCustomers = query({
 // export (dates/times/lane/door code + price + paid status). Admin-only; keyed by the
 // club's customers row. Returns null if the id isn't a club.
 export const getClubSessionsForExport = query({
-  args: { clubId: v.id("customers") },
+  // 2026-09-02 (Inspector): `scope` — 'upcoming' (default, the old behaviour) |
+  // 'past' | 'all'. "What were we booked for and what do we owe" is a recurring
+  // club question and the export used to be hardcoded to date >= today, so a club
+  // with no upcoming sessions exported EMPTY. Read via by_customerEmail (the club's
+  // own rows) instead of scanning every booking from today forward.
+  args: { clubId: v.id("customers"), scope: v.optional(v.string()) },
   handler: async (ctx, args) => {
     await requireAdmin(ctx);
     const club: any = await ctx.db.get(args.clubId);
     if (!club || club.role !== "club") return null;
     const email = (club.email ?? "").toLowerCase();
     const todayKey = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const scope = args.scope === "past" || args.scope === "all" ? args.scope : "upcoming";
     const rows = await ctx.db
       .query("bookings")
-      .withIndex("by_date", (q: any) => q.gte("date", todayKey))
+      .withIndex("by_customerEmail", (q: any) => q.eq("customerEmail", email))
       .collect();
     const sessions = rows
-      .filter((b: any) => b.status !== "cancelled" && (b.customerEmail ?? "").toLowerCase() === email)
+      .filter((b: any) => b.status !== "cancelled")
+      .filter((b: any) => (scope === "all" ? true : scope === "past" ? b.date < todayKey : b.date >= todayKey))
       .map((b: any) => {
         const lanes = [
           b.laneNameSnapshot ?? defaultLaneName(b.laneId),
@@ -521,7 +528,7 @@ export const getClubSessionsForExport = query({
         };
       })
       .sort((a: any, b: any) => a.date.localeCompare(b.date) || a.startHour - b.startHour);
-    return { clubName: club.name as string, sessions };
+    return { clubName: club.name as string, sessions, scope };
   },
 });
 
@@ -1450,14 +1457,9 @@ export const previewMergeConsecutiveCoachBookings = query({
 
     const active = allBookings.filter((b: any) => b.status !== "cancelled");
 
-    const LANE_NAMES: Record<string, string> = {
-      bm1: "Bowling Machine 1",
-      bm2: "Bowling Machine 2",
-      bm3: "Bowling Machine 3",
-      ru1: "9m Run Up 1",
-      ru2: "9m Run Up 2",
-    };
-
+    // EML-1 pattern (2026-09-02): was a local pre-migration lane map ("9m Run Up
+    // 1"/"2") — the last surface still naming lanes that read RU 4 / RU 5 everywhere
+    // else. Snapshot-first via the shared resolver.
     const fmtH = (h: number) => {
       const w = Math.floor(h);
       const m = Math.round((h - w) * 60);
@@ -1519,7 +1521,7 @@ export const previewMergeConsecutiveCoachBookings = query({
           chains.push({
             coachName: first.customerName as string,
             date: first.date as string,
-            laneName: LANE_NAMES[first.laneId as string] ?? (first.laneId as string),
+            laneName: laneNameForBooking(first as any),
             mergedStartLabel: fmtH(first.startHour),
             mergedEndLabel: fmtH(mergedEnd),
             mergedDuration: totalDuration,

@@ -50,9 +50,16 @@ export async function exportClubSchedulePdf(opts: {
   clubName: string
   sessions: ClubSession[]
   includePrices: boolean
+  // 2026-09-02 (Inspector): which sessions are in the list, and whether to append
+  // the 3-page facility guide (a "what do we owe" export doesn't need it).
+  scope?: 'upcoming' | 'past' | 'all'
+  includeGuide?: boolean
   generatedDate?: Date
 }): Promise<void> {
   const { clubName, sessions, includePrices } = opts
+  const scope = opts.scope ?? 'upcoming'
+  const includeGuide = opts.includeGuide ?? true
+  const scopeLabel = scope === 'all' ? 'all sessions' : scope === 'past' ? 'past sessions' : 'upcoming sessions'
   const doc = await PDFDocument.create()
   const font = await doc.embedFont(StandardFonts.Helvetica)
   const bold = await doc.embedFont(StandardFonts.HelveticaBold)
@@ -78,7 +85,7 @@ export async function exportClubSchedulePdf(opts: {
       y -= 22
       page.drawText(`${clubName} — Session Schedule`, { x: MARGIN, y, size: 18, font: bold, color: INK })
       y -= 18
-      page.drawText(`Generated ${genLabel}${includePrices ? '' : ' · upcoming sessions'}`, { x: MARGIN, y, size: 9, font, color: GREY })
+      page.drawText(`Generated ${genLabel} · ${scopeLabel}`, { x: MARGIN, y, size: 9, font, color: GREY })
       y -= 24
       // Door-code / auto-door note box
       page.drawRectangle({ x: MARGIN, y: y - 26, width: A4.w - 2 * MARGIN, height: 32, color: rgb(0.96, 0.97, 1) })
@@ -143,12 +150,12 @@ export async function exportClubSchedulePdf(opts: {
   }
 
   // Footer on the last schedule page
-  page.drawText('Cricket Revolution · 78 Jones St, Stirling WA · Facility access guide follows.', {
+  page.drawText(`Cricket Revolution · 78 Jones St, Stirling WA${includeGuide ? ' · Facility access guide follows.' : ''}`, {
     x: MARGIN, y: MARGIN - 12, size: 8, font, color: GREY,
   })
 
   // ── Append the hosted 3-page facility-access guide ────────────────────────
-  try {
+  if (includeGuide) try {
     const res = await fetch('/facility-access.pdf', { cache: 'no-store' })
     if (res.ok) {
       const bytes = await res.arrayBuffer()

@@ -413,6 +413,10 @@ export const sendBookingRescheduled = internalAction({
     newDuration: v.string(),
     accessCode: v.string(),
     calendarUrl: v.optional(v.string()),
+    // Optional payment receipt for a change paid by top-up (one email, not two).
+    receiptAmount: v.optional(v.string()),
+    receiptReference: v.optional(v.string()),
+    receiptDate: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     if (!(await emailEnabledForUser(ctx, args.to, "booking-rescheduled"))) {
@@ -432,6 +436,9 @@ export const sendBookingRescheduled = internalAction({
       newDuration: args.newDuration,
       accessCode: args.accessCode,
       calendarUrl: args.calendarUrl ?? "https://cricketrevolution.com.au",
+      ...(args.receiptAmount ? { receiptAmount: args.receiptAmount } : {}),
+      ...(args.receiptReference ? { receiptReference: args.receiptReference } : {}),
+      ...(args.receiptDate ? { receiptDate: args.receiptDate } : {}),
     });
   },
 });

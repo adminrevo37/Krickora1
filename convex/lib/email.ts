@@ -184,16 +184,23 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
             muted(`If you didn't request this, ignore this email — your password won't change.`),
         }),
       };
+    // NOTIFICATION_CONTENT_TODO (2026-05-30, applied 2026-09-02): this IS the welcome
+    // email — there is no separate one — so it carries the welcome copy and a
+    // prominent Facility Instructions link ahead of the verify link.
     case "email-verification":
       return {
-        subject: "Verify your email for Cricket Revolution",
+        subject: "Welcome to Cricket Revolution — verify your email",
         html: layout({
-          title: "Verify your email",
-          preheader: "Confirm your email to finish setting up your account.",
+          title: "Welcome to Cricket Revolution",
+          preheader: "Confirm your email, then read the facility instructions before your first visit.",
           bodyHtml:
             p(`Hi ${greetFirst(d, "name")},`) +
-            p(`Welcome to Cricket Revolution. Please confirm your email address to activate your account.`) +
+            p(`Welcome to Cricket Revolution. Your account is almost ready — confirm your email address to activate it.`) +
             linkLine("Verify your email:", d.verificationUrl) +
+            p(`<strong>First time visiting?</strong> Read the facility instructions before you come — how to find us, parking, your door code and how the lanes work.`) +
+            linkLine("Facility instructions:", `${SITE}/access`) +
+            p(`Then book a net at 78 Jones Street, Stirling — bowling machines and run-up nets, 7am to 10pm daily.`) +
+            linkLine("Book a net:", SITE) +
             muted(`If you didn't create an account, you can ignore this email.`),
         }),
       };
@@ -322,6 +329,14 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
               ["Duration", d.newDuration],
             ]) +
             codeBox(d.accessCode) +
+            (d.receiptAmount
+              ? p(`<strong>Payment received</strong> for this change:`) +
+                detailRows([
+                  ["Amount", d.receiptAmount],
+                  ["Reference", d.receiptReference || ""],
+                  ["Date", d.receiptDate || ""],
+                ])
+              : "") +
             linkLine("How to find us — directions, parking & getting in:", `${SITE}/access`) +
             linkLine("Add to calendar:", d.calendarUrl || SITE),
         }),

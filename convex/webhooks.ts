@@ -68,6 +68,23 @@ export const confirmBookingPayment = internalMutation({
           newDate !== b.date ||
           newStartHour !== b.startHour ||
           newLaneId !== b.laneId;
+        // 2026-09-02 email review: the top-up receipt rides inside the ONE "booking
+        // updated" email applyBookingChange sends (was a second "payment received"
+        // email at the same moment).
+        const receiptCurrency = (args.currency ?? "AUD").toUpperCase();
+        const receipt =
+          args.amountPaid > 0
+            ? {
+                amount: `$${(args.amountPaid / 100).toFixed(2)} ${receiptCurrency}`,
+                reference: args.stripeSessionId,
+                paymentDate: new Date().toLocaleDateString("en-AU", {
+                  timeZone: "Australia/Perth",
+                  year: "numeric",
+                  month: "long",
+                  day: "numeric",
+                }),
+              }
+            : undefined;
         await applyBookingChange(ctx, booking, {
           newDate,
           newStartHour,
@@ -80,6 +97,7 @@ export const confirmBookingPayment = internalMutation({
           newPriceInCents: pe.newPriceInCents,
           actorUserId: pe.actorUserId ?? b.userId,
           actorName: b.customerName,
+          receipt,
         });
         // B2 (2026-08): applyBookingChange stored the new GROSS in priceInCents. On a
         // PAID extend, override to the money invariant — priceInCents = cash settled
@@ -128,20 +146,8 @@ export const confirmBookingPayment = internalMutation({
               description: `Session extension top-up — ${laneName} ${newDate}`,
               receiptUrl: args.receiptUrl,
             } as any);
-            // Receipt to the customer for the top-up (the extend path sent none before).
-            await ctx.scheduler.runAfter(0, internal.emails.sendPaymentConfirmation, {
-              to: b.customerEmail,
-              customerName: b.customerName ?? "there",
-              amount: `$${(args.amountPaid / 100).toFixed(2)} ${currency}`,
-              description: `Session extension — ${laneName} ${fmtAwstDateLabel(newDate)}`,
-              reference: args.stripeSessionId,
-              paymentDate: new Date().toLocaleDateString("en-AU", {
-                timeZone: "Australia/Perth",
-                year: "numeric",
-                month: "long",
-                day: "numeric",
-              }),
-            });
+            // No separate receipt email here any more — it is folded into the
+            // "booking updated" email applyBookingChange sent above (2026-09-02).
           }
         }
         await releaseHoldForBooking(ctx, booking._id.toString());

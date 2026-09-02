@@ -139,9 +139,14 @@ export default function AdminBookingCalendar() {
   }, [allCustomers, selectedCustomerId])
 
   // SPEC_CLUB_TEAM_BOOKINGS_2026-07: club PDF export (schedule + appended facility guide).
+  // 2026-09-02 (Inspector): scope + guide toggles — "what were we booked for and
+  // what do we owe" needs PAST sessions and no guide; the old export was hardcoded
+  // to upcoming + guide.
+  const [exportScope, setExportScope] = useState<'upcoming' | 'past' | 'all'>('upcoming')
+  const [includeGuide, setIncludeGuide] = useState(true)
   const clubExport = useQuery(
     (api.queries as any).getClubSessionsForExport,
-    selectedCustomer?.role === 'club' ? { clubId: selectedCustomer._id as any } : 'skip'
+    selectedCustomer?.role === 'club' ? { clubId: selectedCustomer._id as any, scope: exportScope } : 'skip'
   ) as { clubName: string; sessions: any[] } | null | undefined
   const [includePrices, setIncludePrices] = useState(false)
   const [exportingPdf, setExportingPdf] = useState(false)
@@ -150,7 +155,7 @@ export default function AdminBookingCalendar() {
     setExportingPdf(true)
     try {
       const { exportClubSchedulePdf } = await import('../lib/clubPdf')
-      await exportClubSchedulePdf({ clubName: clubExport.clubName, sessions: clubExport.sessions, includePrices })
+      await exportClubSchedulePdf({ clubName: clubExport.clubName, sessions: clubExport.sessions, includePrices, scope: exportScope, includeGuide })
     } catch (e: any) {
       alert(getErrorMessage(e) ?? 'Failed to export PDF')
     } finally {
@@ -583,9 +588,23 @@ export default function AdminBookingCalendar() {
                 >
                   {exportingPdf ? 'Building…' : `📄 Export PDF${clubExport ? ` (${clubExport.sessions.length})` : ''}`}
                 </button>
+                <select
+                  value={exportScope}
+                  onChange={(e) => setExportScope(e.target.value as 'upcoming' | 'past' | 'all')}
+                  title="Which sessions to include"
+                  className="text-[10px] px-1.5 py-1 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-300"
+                >
+                  <option value="upcoming">Upcoming</option>
+                  <option value="past">Past</option>
+                  <option value="all">All</option>
+                </select>
                 <label className="flex items-center gap-1 text-[10px] text-gray-500 dark:text-gray-400 cursor-pointer select-none">
                   <input type="checkbox" checked={includePrices} onChange={(e) => setIncludePrices(e.target.checked)} className="w-3 h-3 accent-purple-500" />
                   incl. prices
+                </label>
+                <label className="flex items-center gap-1 text-[10px] text-gray-500 dark:text-gray-400 cursor-pointer select-none">
+                  <input type="checkbox" checked={includeGuide} onChange={(e) => setIncludeGuide(e.target.checked)} className="w-3 h-3 accent-purple-500" />
+                  incl. guide
                 </label>
               </div>
             )}

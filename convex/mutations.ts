@@ -26,7 +26,7 @@ import {
 import { computeCustomerPriceCents, decreaseCreditCents } from "./lib/pricing";
 import { mondayOfWeek } from "./lib/coachLedger";
 import { validateAndSnapshotLane, resolveLaneSnapshot, resolveLanesAtHour } from "./lanes";
-import { defaultLaneName, variantRatePerHour, DEFAULT_LANE_META } from "./lib/lanes";
+import { defaultLaneName, variantRatePerHour, DEFAULT_LANE_META, laneNameForBooking } from "./lib/lanes";
 import { PRICE_DEFAULTS } from "./lib/priceDefaults";
 import { composeName, splitName } from "./lib/names";
 import { resolveCanonicalCustomerByEmail } from "./lib/identity";
@@ -532,6 +532,10 @@ export async function applyBookingChange(
     newCreditApplied?: number;    // B2 (2026-08): total credit spent on the booking (dollars)
     actorUserId?: string;
     actorName: string;
+    // 2026-09-02 email review — when the change was paid for by a Stripe top-up,
+    // the receipt rides INSIDE the "booking updated" email instead of a second
+    // "payment received" email landing at the same moment.
+    receipt?: { amount: string; reference: string; paymentDate: string };
   }
 ): Promise<{ droppedAthletes: string[] }> {
   // C3 (SECURITY): on a slot-identity change the server mints the new door code —
@@ -743,6 +747,13 @@ export async function applyBookingChange(
       newTimeSlot: fmtHour12(change.newStartHour),
       newDuration: durationLabel(change.newDuration),
       accessCode: accessCode ?? "",
+      ...(change.receipt
+        ? {
+            receiptAmount: change.receipt.amount,
+            receiptReference: change.receipt.reference,
+            receiptDate: change.receipt.paymentDate,
+          }
+        : {}),
     });
     // SPEC_PWA_PUSH §5.1 — booking change push (customer bookings only).
     if (!booking.isCoachBooking) {
@@ -7356,7 +7367,7 @@ export const mergeConsecutiveCoachBookings = mutation({
             return `${w}:${m.toString().padStart(2, "0")}`;
           };
           mergedSummary.push(
-            `${first.customerName} · ${first.date} · ${first.laneId} · ` +
+            `${first.customerName} · ${first.date} · ${laneNameForBooking(first as any)} · ` +
               `${fmtH(first.startHour)} → ${totalDuration}min (${chain.length} blocks)`
           );
         }
