@@ -515,6 +515,10 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   // once the booking actually succeeds.
   const [acceptingOffer, setAcceptingOffer] = useState<{ offerId: string; dropOriginalEntry: boolean } | null>(null)
   const acceptWaitlistOffer = useMutation(api.waitlistOffers.acceptWaitlistOffer)
+  // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part B — "Pass" on an AUTOMATIC exclusive
+  // offer: releases the hold and rolls it to the next person straight away.
+  const declineAutoAltOffer = useMutation(api.waitlistAutoAlt.declineAutoAltOffer)
+  const [passingAltOffer, setPassingAltOffer] = useState(false)
 
   const declineWaitlistOffer = useMutation(api.waitlist.declineWaitlistOffer)
   const [deepLinkHandled, setDeepLinkHandled] = useState(false)
@@ -1089,11 +1093,14 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
               <p className={`mt-3 text-xs rounded-lg p-2.5 border ${offer.exclusive
                 ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800/50 text-blue-800 dark:text-blue-300'
                 : 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800/50 text-amber-800 dark:text-amber-300'}`}>
-                {/* `exclusive` is only ever true for offers made before
-                    2026-08-18; alt-time offers no longer hold the slot. Keep the
-                    branch so any of those still reads correctly. */}
+                {/* Admin-sent offers never hold (2026-08-18 ruling); an AUTOMATIC
+                    exclusive offer (Part B, 2026-09-02) holds for the standard
+                    window and says until when. `exclusive` on an admin row can
+                    only be a pre-2026-08-18 legacy offer. */}
                 {offer.exclusive
-                  ? 'This slot is reserved for you until the session starts.'
+                  ? (offer.source === 'auto' && offer.expiresAt
+                      ? `This slot is reserved for you until ${new Date(offer.expiresAt).toLocaleTimeString('en-AU', { timeZone: 'Australia/Perth', hour: 'numeric', minute: '2-digit' })} — after that it's offered to the next person on the waitlist.`
+                      : 'This slot is reserved for you until the session starts.')
                   : offer.recipientCount > 1
                     ? `This has been offered to ${offer.recipientCount} people on the waitlist, and it stays on sale to everyone else too — first to book gets it.`
                     : 'This slot is not reserved — it stays available to everyone until someone books it, so book now to secure it.'}
@@ -1110,10 +1117,29 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                 </label>
               )}
               <div className="flex gap-3 mt-4">
-                <button
-                  onClick={() => setOfferSheetDismissed(true)}
-                  className="flex-1 py-2.5 min-h-[40px] bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl text-sm"
-                >Not now</button>
+                {offer.source === 'auto' && offer.exclusive ? (
+                  <button
+                    disabled={passingAltOffer}
+                    onClick={async () => {
+                      setPassingAltOffer(true)
+                      try {
+                        await declineAutoAltOffer({ offerId: offer.offerId as any })
+                        setDeclineNotice({ ok: true, text: 'Passed — it’s been offered to the next person. You’re still on the waitlist for your original time.' })
+                      } catch {
+                        setDeclineNotice({ ok: false, text: 'Could not pass on that offer — it may have already closed.' })
+                      } finally {
+                        setPassingAltOffer(false)
+                        setOfferSheetDismissed(true)
+                      }
+                    }}
+                    className="flex-1 py-2.5 min-h-[40px] bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl text-sm disabled:opacity-50"
+                  >Pass</button>
+                ) : (
+                  <button
+                    onClick={() => setOfferSheetDismissed(true)}
+                    className="flex-1 py-2.5 min-h-[40px] bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl text-sm"
+                  >Not now</button>
+                )}
                 <button
                   onClick={() => {
                     const lane = LANES.find(l => l.id === offer.laneId)
@@ -1145,9 +1171,13 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
                     ? 'That session has already started.'
                     : offer.state === 'cancelled'
                       ? 'We withdrew this offer. You’re still on the waitlist for your original time.'
-                      : offer.state === 'booked_by_you'
-                        ? 'It’s in My Bookings.'
-                        : 'This link isn’t valid for your account.'}
+                      : offer.state === 'expired'
+                        ? 'The reservation window has lapsed and the slot has been offered to the next person. You’re still on the waitlist for your original time.'
+                        : offer.state === 'declined'
+                          ? 'You passed on this one. You’re still on the waitlist for your original time.'
+                          : offer.state === 'booked_by_you'
+                            ? 'It’s in My Bookings.'
+                            : 'This link isn’t valid for your account.'}
               </p>
               <button
                 onClick={() => setOfferSheetDismissed(true)}

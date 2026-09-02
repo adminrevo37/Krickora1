@@ -36,6 +36,8 @@ export default function WaitlistModal({ pool, selectedSlots, availableHours, dat
   const seedHours = selectedSlots.map(s => s.hour)
   const seedDate = date ?? selectedSlots[0]?.date ?? ''
   const [chosenHours, setChosenHours] = useState<number[]>(() => Array.from(new Set(seedHours)))
+  // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 D4 — nearby-time alerts, default ON.
+  const [altTimeOptIn, setAltTimeOptIn] = useState(true)
   const toggleHour = (h: number) =>
     setChosenHours(prev => prev.includes(h) ? prev.filter(x => x !== h) : [...prev, h])
 
@@ -68,6 +70,7 @@ export default function WaitlistModal({ pool, selectedSlots, availableHours, dat
       laneId: `*${pool}`,
       date: s.date,
       hour: s.hour,
+      altTimeOptIn,
     }))
     try {
       await addToWaitlistServer({ entries })
@@ -161,6 +164,19 @@ export default function WaitlistModal({ pool, selectedSlots, availableHours, dat
               )
             })}
           </div>
+
+          <label className="flex items-start gap-2.5 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={altTimeOptIn}
+              onChange={e => setAltTimeOptIn(e.target.checked)}
+              className="mt-0.5 rounded"
+            />
+            <span>
+              Also tell me if a <strong>nearby time</strong> frees up
+              <span className="block text-xs text-gray-500 dark:text-gray-400">Within a couple of hours either side. Untick if only these exact times work for you.</span>
+            </span>
+          </label>
 
           <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 text-xs text-gray-500 dark:text-gray-400">
             <strong className="text-gray-700 dark:text-gray-300">How it works:</strong> You will get a notification the moment any {poolTag} lane becomes available at these times (from cancellations, changes, etc). It does not matter which {poolTag} lane — you will be notified as soon as anything opens up.

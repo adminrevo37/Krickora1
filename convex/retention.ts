@@ -107,6 +107,16 @@ export const runDailyRetention = internalMutation({
 
     // laneOverrides — fully-past overrides (endDate < today; date-string compare).
     await schedule("laneOverrides", "by_endDate", "endDate", today);
+
+    // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part A3 — waitlist rows for sessions
+    // older than the event window (the hourly reaper has long since expired
+    // them; waitlistOfferEvents keeps the analytics signal).
+    await schedule(
+      "waitlist",
+      "by_date",
+      "date",
+      awstDateKey(now - EVENT_RETENTION_DAYS * DAY_MS)
+    );
   },
 });
 

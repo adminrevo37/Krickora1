@@ -67,6 +67,16 @@ crons.daily(
   internal.retention.runDailyRetention
 );
 
+// SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part A1 — hourly reaper for waitlist
+// entries whose session has ENDED (there was no time-based expiry at all, so
+// entries lived forever). Runs a few minutes past the hour so an entry for the
+// hour just ended is caught on the first pass.
+crons.hourly(
+  "waitlist-reap-passed",
+  { minuteUTC: 5 },
+  internal.waitlist.expirePassedWaitlistEntries
+);
+
 // Audit 2026-06 (SEC-3) — hourly prune of stale rate-limit buckets (bounds the
 // table under rotating-key / XFF-spoof abuse).
 crons.hourly(

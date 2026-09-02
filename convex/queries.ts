@@ -817,11 +817,28 @@ export const listWaitlistAdmin = query({
   args: {},
   handler: async (ctx) => {
     await requireAdmin(ctx);
-    const all = await ctx.db.query("waitlist").collect();
+    // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part A2 — only entries whose session
+    // hasn't started, read via the by_laneId_date index from today forward
+    // (was a full-table collect that also listed months-old sessions — the
+    // reaper in waitlist.ts now retires those; this filter makes the tab
+    // correct immediately).
+    const now = Date.now();
+    const awst = new Date(now + 8 * 60 * 60 * 1000);
+    const today = awst.toISOString().slice(0, 10);
+    const currentHour = awst.getUTCHours();
+    const all: any[] = [];
+    for (const sentinel of ["*", "*bm", "*ru"]) {
+      const rows = await ctx.db
+        .query("waitlist")
+        .withIndex("by_laneId_date", (q: any) => q.eq("laneId", sentinel).gte("date", today))
+        .collect();
+      all.push(...rows);
+    }
     const entries = all
       .filter((e: any) => {
         const st = e.status ?? "waiting";
-        return st === "waiting" || st === "offered";
+        if (st !== "waiting" && st !== "offered") return false;
+        return e.date > today || e.hour >= currentHour;
       })
       .sort((a: any, b: any) => a._creationTime - b._creationTime)
       .map((e: any) => ({
@@ -835,10 +852,18 @@ export const listWaitlistAdmin = query({
         status: e.status ?? "waiting",
         offerExpiresAt: e.offerExpiresAt ?? null,
         createdAt: e._creationTime,
+        altTimeOptIn: e.altTimeOptIn !== false,
       }));
-    const now = Date.now();
-    const holds = (await ctx.db.query("slotHolds").collect())
-      .filter((h: any) => h.holdType === "waitlist" && h.expiresAt > now)
+    const holds = (
+      await ctx.db
+        .query("slotHolds")
+        .withIndex("by_date", (q: any) => q.gte("date", today))
+        .collect()
+    )
+      .filter(
+        (h: any) =>
+          (h.holdType === "waitlist" || h.holdType === "waitlist-alt") && h.expiresAt > now
+      )
       .map((h: any) => ({
         laneId: h.laneId,
         date: h.date,

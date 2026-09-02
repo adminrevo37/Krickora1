@@ -110,7 +110,10 @@ export async function hasActiveHoldConflict(
   return holds.some((h: any) => {
     if (h.expiresAt <= now) return false; // expired — not blocking
     if (args.excludeBookingId && h.bookingId === args.excludeBookingId) return false;
-    if (h.holdType === "waitlist") {
+    // 'waitlist-alt' (SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part B) is the same
+    // class: an exclusive reservation for ONE customer that fences off other
+    // customers only.
+    if (h.holdType === "waitlist" || h.holdType === "waitlist-alt") {
       if (args.bypassWaitlistHolds) return false; // coach/admin not fenced off
       if (args.callerUserId && h.userId === args.callerUserId) return false; // the offeree
     }

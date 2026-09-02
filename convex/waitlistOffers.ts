@@ -27,9 +27,9 @@ import { resolveDayLanes } from "./lanes";
 import { resolveSegment, segmentIsClosed, segmentStartHours } from "./lib/lanes";
 import { fmtAwstDateLabel, fmtAwstDateShort } from "./lib/dates";
 
-type Pool = "bm" | "ru";
+export type Pool = "bm" | "ru";
 
-function fmtHour12(h: number): string {
+export function fmtHour12(h: number): string {
   const hr = Math.floor(h);
   const min = Math.round((h - hr) * 60);
   const period = hr >= 12 ? "PM" : "AM";
@@ -37,7 +37,7 @@ function fmtHour12(h: number): string {
   return `${display}:${min.toString().padStart(2, "0")} ${period}`;
 }
 /** ms for a (date, hour) in AWST — used only to tell whether the slot has passed. */
-function slotStartMs(date: string, hour: number): number {
+export function slotStartMs(date: string, hour: number): number {
   const whole = Math.floor(hour);
   const mins = Math.round((hour - whole) * 60);
   return Date.parse(
@@ -48,7 +48,7 @@ function slotStartMs(date: string, hour: number): number {
 const POOL_SENTINEL: Record<Pool, string> = { bm: "*bm", ru: "*ru" };
 
 /** The day's bookings / service blocks / live holds, read ONCE. */
-async function loadDayAvailability(ctx: any, date: string) {
+export async function loadDayAvailability(ctx: any, date: string) {
   const now = Date.now();
   return {
     bookings: (
@@ -64,8 +64,8 @@ async function loadDayAvailability(ctx: any, date: string) {
   };
 }
 
-type DayAvailability = Awaited<ReturnType<typeof loadDayAvailability>>;
-type DayLane = { laneId: string; bayNumber: number; segments: any[] };
+export type DayAvailability = Awaited<ReturnType<typeof loadDayAvailability>>;
+export type DayLane = { laneId: string; bayNumber: number; segments: any[] };
 
 /**
  * Lane ids of `pool` that can host a full hour starting at `hour`:
@@ -74,7 +74,7 @@ type DayLane = { laneId: string; bayNumber: number; segments: any[] };
  *   · no overlapping booking, service block, or someone else's live hold
  * Pure/in-memory so a whole day can be evaluated from one set of reads.
  */
-function freeLaneIdsAt(
+export function freeLaneIdsAt(
   day: DayAvailability,
   dayLanes: DayLane[],
   hour: number,
@@ -350,7 +350,7 @@ export const cancelWaitlistOffer = mutation({
         .collect();
       for (const h of holds as any[]) {
         if (
-          h.holdType === "waitlist" &&
+          (h.holdType === "waitlist" || h.holdType === "waitlist-alt") &&
           h.startHour === offer.hour &&
           h.userId === offer.recipients[0]?.userId
         ) {
@@ -388,6 +388,10 @@ export const listLiveWaitlistOffers = query({
         recipientCount: o.recipients.length,
         recipientNames: o.recipients.map((r: any) => r.userName),
         createdAt: o.createdAt,
+        // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part B — 'auto' rows are made by
+        // the engine; an exclusive one carries the hold's expiry.
+        source: (o.source ?? "admin") as "admin" | "auto",
+        expiresAt: o.expiresAt ?? null,
       }));
   },
 });
@@ -412,6 +416,9 @@ export const getOfferByToken = query({
     if (!me) return { state: "not_yours" as const };
 
     if (offer.status === "cancelled") return { state: "cancelled" as const };
+    // Auto exclusive offers (Part B) can lapse or be passed on.
+    if (offer.status === "expired") return { state: "expired" as const };
+    if (offer.status === "declined") return { state: "declined" as const };
     if (offer.status === "booked") {
       return {
         state: (offer.bookedByEmail?.toLowerCase() === email ? "booked_by_you" : "taken") as
@@ -420,6 +427,16 @@ export const getOfferByToken = query({
       };
     }
     if (slotStartMs(offer.date, offer.hour) <= Date.now()) return { state: "passed" as const };
+    // An exclusive AUTO offer whose hold has lapsed but whose expiry job hasn't
+    // landed yet reads as expired — never show "reserved for you" past the deadline.
+    if (
+      offer.source === "auto" &&
+      offer.exclusive &&
+      typeof offer.expiresAt === "number" &&
+      offer.expiresAt <= Date.now()
+    ) {
+      return { state: "expired" as const };
+    }
 
     // Liveness is COMPUTED: a public customer booking the slot kills the offer with
     // no write-path coupling. The exclusive holder ignores their own hold.
@@ -443,6 +460,8 @@ export const getOfferByToken = query({
       exclusive: offer.exclusive,
       recipientCount: offer.recipients.length,
       waitlistEntryId: me.waitlistEntryId ?? null,
+      source: (offer.source ?? "admin") as "admin" | "auto",
+      expiresAt: (offer.expiresAt ?? null) as number | null,
     };
   },
 });
@@ -484,7 +503,11 @@ export const acceptWaitlistOffer = mutation({
         .withIndex("by_date", (q: any) => q.eq("date", offer.date))
         .collect();
       for (const h of holds as any[]) {
-        if (h.holdType === "waitlist" && h.startHour === offer.hour && h.userId === me.userId) {
+        if (
+          (h.holdType === "waitlist" || h.holdType === "waitlist-alt") &&
+          h.startHour === offer.hour &&
+          h.userId === me.userId
+        ) {
           await ctx.db.delete(h._id);
         }
       }

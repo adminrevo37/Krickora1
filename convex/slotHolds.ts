@@ -116,7 +116,10 @@ export const releaseExpiredHolds = internalMutation({
       // Waitlist offer holds — the engine's self-scheduled roll-on normally
       // fires first; this backstop catches a missed one. Drop the expired hold
       // and re-run the engine so the offer rolls to the next member.
-      const wasWaitlist = hold.holdType === "waitlist";
+      // 'waitlist-alt' (auto alt-time offer hold): expireAutoAltOffer is the
+      // primary path; if it was missed, freeing the lane + kicking the engine
+      // lets the engine's no_waiting branch re-enter the alt pass.
+      const wasWaitlist = hold.holdType === "waitlist" || hold.holdType === "waitlist-alt";
       await ctx.db.delete(hold._id);
       if (wasWaitlist) {
         await scheduleWaitlistAdvance(ctx, {

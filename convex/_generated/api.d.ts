@@ -79,6 +79,7 @@ import type * as stripeWebhook from "../stripeWebhook.js";
 import type * as usageRollup from "../usageRollup.js";
 import type * as users from "../users.js";
 import type * as waitlist from "../waitlist.js";
+import type * as waitlistAutoAlt from "../waitlistAutoAlt.js";
 import type * as waitlistOffers from "../waitlistOffers.js";
 import type * as webhooks from "../webhooks.js";
 import type * as weeklySummary from "../weeklySummary.js";
@@ -162,6 +163,7 @@ declare const fullApi: ApiFromModules<{
   usageRollup: typeof usageRollup;
   users: typeof users;
   waitlist: typeof waitlist;
+  waitlistAutoAlt: typeof waitlistAutoAlt;
   waitlistOffers: typeof waitlistOffers;
   webhooks: typeof webhooks;
   weeklySummary: typeof weeklySummary;

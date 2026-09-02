@@ -6084,6 +6084,9 @@ export const addToWaitlist = mutation({
         laneId: v.string(),
         date: v.string(),
         hour: v.number(),
+        // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 D4 — "Also tell me if a nearby
+        // time frees up". Absent → true (old clients keep the default-ON).
+        altTimeOptIn: v.optional(v.boolean()),
       })
     ),
   },
@@ -6137,6 +6140,7 @@ export const addToWaitlist = mutation({
         date: entry.date,
         hour: entry.hour,
         notified: false,
+        ...(entry.altTimeOptIn === false ? { altTimeOptIn: false } : {}),
       });
       ids.push(id);
       insertedEntries.push({ ...entry, laneId });
@@ -6312,6 +6316,9 @@ export const updateSiteSettings = mutation({
     adminUnlockMinutes: v.optional(v.number()),
     abandonedCheckoutMinutes: v.optional(v.number()),
     waitlistOfferHoldMinutes: v.optional(v.number()),
+    waitlistAutoAltOffersEnabled: v.optional(v.boolean()),
+    waitlistAltTimeWindowHours: v.optional(v.number()),
+    waitlistAltTimeBroadcastWithinHours: v.optional(v.number()),
     maxMatesPerBooking: v.optional(v.number()),
     pushEnabledGlobal: v.optional(v.boolean()),
     faultReportEmail: v.optional(v.string()), // EML-3 (audit 2026-06)

@@ -264,6 +264,29 @@ export default function SettingsPanel() {
         </div>
       </div>
 
+      {/* SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part B — automatic nearby-time offers */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h3 className="text-lg font-bold text-gray-800">🎟️ Waitlist — nearby-time offers</h3>
+          <p className="text-sm text-gray-500 mt-0.5">
+            When a slot frees and nobody is waiting for that exact hour, automatically offer it to people waitlisted for a nearby hour whose own hour is still full.
+            Far-out sessions are offered one person at a time with the hold above; sessions starting soon are offered to everyone eligible at once (first to book wins).
+          </p>
+        </div>
+        <div className="p-6 space-y-4">
+          <ToggleRow
+            label="Automatic nearby-time offers"
+            description="Turn off to stop all automatic alternative-time offers instantly. Admin-sent offers from the Waitlist tab are unaffected."
+            checked={settings.waitlistAutoAltOffersEnabled ?? true}
+            onChange={(v) => updateSettings({ waitlistAutoAltOffersEnabled: v })}
+          />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <NumberInput label="Nearby window (± hours)" value={settings.waitlistAltTimeWindowHours ?? 2} onChange={(v) => updateSettings({ waitlistAltTimeWindowHours: v })} />
+            <NumberInput label="Offer to everyone if the session starts within (hours)" value={settings.waitlistAltTimeBroadcastWithinHours ?? 5} onChange={(v) => updateSettings({ waitlistAltTimeBroadcastWithinHours: v })} />
+          </div>
+        </div>
+      </div>
+
       {/* Misc (SPEC_ADD_A_MATE) */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-100">

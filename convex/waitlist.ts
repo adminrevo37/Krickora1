@@ -62,7 +62,9 @@ const statusOf = (e: any): string => e.status ?? "waiting";
 // share who never press a button. Best-effort: never blocks the engine.
 async function logWaitlistOfferEvent(
   ctx: any,
-  action: "offered" | "accepted" | "declined" | "expired",
+  // 'lapsed' (Part A reaper) = the session ended with the entry never offered —
+  // a different signal from an offer someone ignored ('expired').
+  action: "offered" | "accepted" | "declined" | "expired" | "lapsed",
   entry: any,
   slot?: { laneId?: string; date?: string; hour?: number }
 ): Promise<void> {
@@ -420,7 +422,7 @@ export const advanceWaitlistOffer = internalMutation({
       const windowHeldByOther = (lid: string, ws: number, we: number) =>
         dayHolds.some(
           (h: any) =>
-            h.holdType === "waitlist" &&
+            (h.holdType === "waitlist" || h.holdType === "waitlist-alt") &&
             !deleted.has(h._id) &&
             h.laneId === lid &&
             ws < h.startHour + h.duration / 60 &&
@@ -485,6 +487,16 @@ export const advanceWaitlistOffer = internalMutation({
       if (!next) {
         await deleteHoldsForPool(pool);
         results[pool] = "no_waiting";
+        // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part B — this hour's own queue is
+        // empty and a lane of this pool is free (offerLane/offerStart): offer it
+        // to nearby-hour waiters whose own hour is still full. R1 by
+        // construction — this only runs once the exact-hour queue is exhausted.
+        await ctx.scheduler.runAfter(0, internal.waitlistAutoAlt.runAutoAltTimeOffers, {
+          pool,
+          date,
+          hour: offerStart,
+          freedHour: hour,
+        });
         continue;
       }
       claimed.add(next._id);
@@ -574,6 +586,55 @@ export const advanceWaitlistOffer = internalMutation({
     }
 
     return { results };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part A1 — the reaper. There was NO
+// time-based expiry: an entry only ever left 'waiting' when something HAPPENED
+// (pool filled / they booked / an offer lapsed). If the hour simply passed with
+// a lane still free and nobody booked, nothing ran and the entry stayed
+// 'waiting' forever — which is why the admin list showed months-old sessions.
+//
+// Hourly cron. Keys on the session END (hour + 1), not the start: the facility
+// takes walk-ups (minBookingNoticeMinutes = 0), so a running session can still
+// be joined late. Indexed reads (by_laneId_date, date <= today) — never a scan.
+// ---------------------------------------------------------------------------
+export const expirePassedWaitlistEntries = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const awst = new Date(now + 8 * 60 * 60 * 1000);
+    const today = awst.toISOString().slice(0, 10);
+    const nowHourFrac = awst.getUTCHours() + awst.getUTCMinutes() / 60;
+    const LIMIT = 300;
+    let reaped = 0;
+    let more = false;
+    for (const sentinel of ALL_SENTINELS) {
+      const rows = await ctx.db
+        .query("waitlist")
+        .withIndex("by_laneId_date", (q: any) => q.eq("laneId", sentinel).lte("date", today))
+        .collect();
+      for (const e of rows) {
+        const st = statusOf(e);
+        if (st !== "waiting" && st !== "offered") continue;
+        const ended = e.date < today || e.hour + 1 <= nowHourFrac;
+        if (!ended) continue;
+        if (reaped >= LIMIT) {
+          more = true;
+          break;
+        }
+        await ctx.db.patch(e._id, { status: "expired", offerExpiresAt: undefined });
+        await logWaitlistOfferEvent(ctx, "lapsed", e);
+        reaped++;
+      }
+      if (more) break;
+    }
+    // First run drains a months-long backlog in batches rather than one huge write.
+    if (more) {
+      await ctx.scheduler.runAfter(0, internal.waitlist.expirePassedWaitlistEntries, {});
+    }
+    return { reaped, more };
   },
 });
 

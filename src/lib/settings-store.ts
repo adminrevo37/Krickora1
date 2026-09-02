@@ -53,6 +53,10 @@ export interface SiteSettings {
   modifyMoveEarlierMaxHours?: number
   abandonedCheckoutMinutes?: number
   waitlistOfferHoldMinutes?: number
+  // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part B
+  waitlistAutoAltOffersEnabled?: boolean
+  waitlistAltTimeWindowHours?: number
+  waitlistAltTimeBroadcastWithinHours?: number
   maxMatesPerBooking?: number
   pushEnabledGlobal?: boolean
   registrationLocked?: boolean
@@ -101,6 +105,9 @@ const DEFAULT_SETTINGS: SiteSettings = {
   modifyMoveEarlierMaxHours: 1,
   abandonedCheckoutMinutes: 10,
   waitlistOfferHoldMinutes: 15,
+  waitlistAutoAltOffersEnabled: true,
+  waitlistAltTimeWindowHours: 2,
+  waitlistAltTimeBroadcastWithinHours: 5,
   maxMatesPerBooking: 2,
   pushEnabledGlobal: true,
   registrationLocked: false,

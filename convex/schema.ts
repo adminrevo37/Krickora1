@@ -328,7 +328,12 @@ export default defineSchema({
     date: v.string(), // YYYY-MM-DD
     startHour: v.number(),
     duration: v.number(), // minutes
-    holdType: v.string(), // 'checkout' | 'waitlist'
+    // 'waitlist-alt' (SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part B) = an AUTOMATIC
+    // exclusive alternative-time offer hold. Distinct from 'waitlist' so the
+    // exact-hour engine's pool-wide hold cleanup never deletes it; treated as a
+    // waitlist-class hold by the conflict checker (offeree passes their own,
+    // coaches/admin bypass).
+    holdType: v.string(), // 'checkout' | 'waitlist' | 'waitlist-alt'
     bookingId: v.optional(v.string()), // checkout holds → the pending_payment booking
     userId: v.optional(v.string()),
     userEmail: v.optional(v.string()),
@@ -637,10 +642,23 @@ export default defineSchema({
     // alongside status='offered'. Lets the response analytics measure how long a
     // member took to accept/decline (or that they never acted). Additive/optional.
     offeredAt: v.optional(v.number()),
+    // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part B — automatic alternative-time
+    // offers. All additive/optional.
+    //   altTimeOptIn: false = "only tell me about the exact hour I asked for"
+    //     (absent → true, the D4 default-ON checkbox at join).
+    //   lastAltOfferAt: ms of the most recent auto alt-offer sent to this entry
+    //     (R6 — at most one per entry per AWST day).
+    //   altOfferDeclined: they pressed Pass on an auto alt-offer → never again
+    //     for this entry (R6).
+    altTimeOptIn: v.optional(v.boolean()),
+    lastAltOfferAt: v.optional(v.number()),
+    altOfferDeclined: v.optional(v.boolean()),
   })
     .index("by_userId", ["userId"])
     .index("by_slot", ["laneId", "date", "hour"])
-    .index("by_laneId_date", ["laneId", "date"]),
+    .index("by_laneId_date", ["laneId", "date"])
+    // Part A3 — retention prune by date (lexicographic == chronological).
+    .index("by_date", ["date"]),
 
   // SPEC_WAITLIST_ALT_TIME_OFFER_2026-08 — an admin offering a queue a DIFFERENT
   // time from the one they're waiting on (e.g. a 9am cancellation offered to the
@@ -669,12 +687,24 @@ export default defineSchema({
       })
     ),
     exclusive: v.boolean(), // true = single recipient, slot held for them
-    status: v.string(), // 'live' | 'booked' | 'cancelled'
+    // 'expired' / 'declined' are AUTO exclusive offers only (timer lapsed / Pass).
+    status: v.string(), // 'live' | 'booked' | 'cancelled' | 'expired' | 'declined'
     token: v.string(), // random; the deep link is /?offer=<token>
     bookedByEmail: v.optional(v.string()),
     bookedBookingId: v.optional(v.string()),
     createdAt: v.number(),
     createdByEmail: v.string(),
+    // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part B — automatic offers. Absent on
+    // every admin-created row (read as 'admin').
+    //   source: 'admin' | 'auto'
+    //   expiresAt: ms the exclusive auto hold lapses (sequential mode only)
+    //   freedHour: the whole hour whose free-up triggered this offer — the
+    //     sequential chain re-runs the pass for it on expiry/decline
+    //   laneId: the lane the exclusive auto hold sits on
+    source: v.optional(v.string()),
+    expiresAt: v.optional(v.number()),
+    freedHour: v.optional(v.number()),
+    laneId: v.optional(v.string()),
   })
     .index("by_token", ["token"])
     .index("by_slot", ["date", "hour"])
@@ -860,6 +890,16 @@ export default defineSchema({
     // long a freed slot is reserved exclusively for the next waitlisted member
     // before the offer rolls to the person behind them. Default 15.
     waitlistOfferHoldMinutes: v.optional(v.number()),    // default 15
+    // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part B — automatic alternative-time
+    // offers to nearby-hour waiters when a slot frees and its own queue is empty.
+    //   enabled: kill switch (default true)
+    //   windowHours: ±N hours around the waiter's hour (default 2)
+    //   broadcastWithinHours: if the freed session starts within N hours, tell
+    //     EVERY eligible waiter at once (no hold, race) instead of one at a time
+    //     with a 15-min hold (default 5 — Inspector 2026-09-02)
+    waitlistAutoAltOffersEnabled: v.optional(v.boolean()),
+    waitlistAltTimeWindowHours: v.optional(v.number()),
+    waitlistAltTimeBroadcastWithinHours: v.optional(v.number()),
     // SPEC_ADD_A_MATE "Misc Settings". Max mates a customer may add to one
     // booking (the owner is NOT counted). Default 2 → 3 people total per net
     // (matches the facility "max 3 people per lane" safety rule).

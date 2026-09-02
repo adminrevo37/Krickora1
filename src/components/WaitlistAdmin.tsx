@@ -292,7 +292,8 @@ export default function WaitlistAdmin() {
           <div className="px-6 py-3 border-b border-emerald-100 bg-emerald-50/60">
             <span className="font-semibold text-gray-800">📨 Live alternative-time offers</span>
             <p className="text-xs text-gray-500 mt-0.5">
-              Sent by push and email. They expire on their own when the session starts, or when someone books the slot.
+              Sent by push and email. Admin-sent offers expire when the session starts or someone books the slot.
+              <span className="font-medium text-emerald-700"> AUTO</span> offers are made by the system when a slot frees with nobody waiting for that exact hour — a held one rolls to the next person when its timer lapses.
             </p>
           </div>
           <ul className="divide-y divide-gray-50">
@@ -300,13 +301,19 @@ export default function WaitlistAdmin() {
               <li key={o.id} className="px-6 py-3 flex items-center justify-between gap-3 text-sm">
                 <div className="min-w-0">
                   <p className="font-medium text-gray-800">
+                    {o.source === 'auto' && (
+                      <span className="inline-block mr-1.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800 align-middle">AUTO</span>
+                    )}
                     {GROUP_NAMES[`*${o.pool}`]} · {fmtDate(o.date)} · {fmtHour12(o.hour)} – {fmtHour12(o.hour + 1)}
                   </p>
                   <p className="text-xs text-gray-500 truncate">
                     to {o.recipientNames.join(', ')} · asked for {fmtHour12(o.sourceHour)} ·{' '}
-                    {/* Only offers made before 2026-08-18 can be `exclusive`. */}
+                    {/* Admin offers made before 2026-08-18 can be `exclusive` (legacy);
+                        AUTO exclusive offers hold for the configured window. */}
                     {o.exclusive
-                      ? <span className="text-blue-700 font-medium">held for them (legacy offer)</span>
+                      ? (o.source === 'auto' && o.expiresAt
+                          ? <span className="text-blue-700 font-medium">held for them until {new Date(o.expiresAt).toLocaleTimeString('en-AU', { timeZone: 'Australia/Perth', hour: 'numeric', minute: '2-digit' })}</span>
+                          : <span className="text-blue-700 font-medium">held for them (legacy offer)</span>)
                       : <span className="text-amber-700 font-medium">not held — first to book wins</span>}
                   </p>
                 </div>
