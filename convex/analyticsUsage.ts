@@ -9,6 +9,7 @@ import { getCallerContext } from "./lib/adminGuard";
 import {
   awstDateKey,
   awstDateKeyToMs,
+  awstParts,
   parseUserAgent,
   median,
   round2,
@@ -547,3 +548,103 @@ export const getWaitlistAnalytics = query({
     };
   },
 });
+
+// ============================================================================
+// SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part C1 — WAITLIST DEMAND. The waitlist
+// is the only place the business records demand it FAILED to serve; nothing
+// read it. Keyed on the SESSION date (what was wanted, when), not the join
+// date, via the `waitlist.by_date` index. Every row counts as one unit of
+// demand whatever its outcome; outcome is reported alongside so "unserved"
+// (never even offered a lane) is visible separately from "offered but lost".
+// ============================================================================
+const DOW_LABEL = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+export const getWaitlistDemand = query({
+  args: { from: v.optional(v.string()), to: v.optional(v.string()), fromMs: v.optional(v.number()), toMs: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    if (!(await isAdmin(ctx))) return null;
+    return await computeWaitlistDemand(ctx, args);
+  },
+});
+
+export async function computeWaitlistDemand(
+  ctx: any,
+  args: { from?: string; to?: string; fromMs?: number; toMs?: number }
+) {
+  {
+    const { fromMs, toMs } = rangeMs(args.from, args.to, args.fromMs, args.toMs);
+    const fromKey = Number.isFinite(fromMs) ? awstDateKey(fromMs) : "0000-00-00";
+    const toKey = Number.isFinite(toMs) ? awstDateKey(toMs) : "9999-12-31";
+    const rows = await ctx.db
+      .query("waitlist")
+      .withIndex("by_date", (q: any) => q.gte("date", fromKey).lte("date", toKey))
+      .collect();
+
+    const poolOf = (laneId: string) => (laneId === "*bm" ? "bm" : laneId === "*ru" ? "ru" : "any");
+    const emailOf = (e: any) => String(e.userEmail ?? "").toLowerCase().trim();
+    const dowOf = (date: string) => awstParts(awstDateKeyToMs(date)).dow;
+
+    type Cell = { entries: number; customers: Set<string>; dates: Set<string> };
+    const recurring = new Map<string, Cell & { dow: number; hour: number; pool: string }>();
+    const sessions = new Map<string, { date: string; hour: number; pool: string; entries: number; customers: Set<string> }>();
+    const byHour = new Map<number, number>();
+    const byDow = new Map<number, number>();
+    const byPool: Record<string, number> = { bm: 0, ru: 0, any: 0 };
+    const customers = new Set<string>();
+    let booked = 0, open = 0, neverOffered = 0, offeredLost = 0;
+
+    for (const e of rows as any[]) {
+      const pool = poolOf(e.laneId);
+      const st = e.status ?? "waiting";
+      const email = emailOf(e);
+      customers.add(email);
+      byPool[pool] = (byPool[pool] ?? 0) + 1;
+      if (st === "booked") booked++;
+      else if (st === "waiting" || st === "offered") open++;
+      else if (typeof e.offeredAt === "number") offeredLost++;
+      else neverOffered++;
+
+      const dow = dowOf(e.date);
+      const rk = `${dow}|${e.hour}|${pool}`;
+      const rc = recurring.get(rk) ?? { dow, hour: e.hour, pool, entries: 0, customers: new Set(), dates: new Set() };
+      rc.entries++; rc.customers.add(email); rc.dates.add(e.date);
+      recurring.set(rk, rc);
+
+      const sk = `${e.date}|${e.hour}|${pool}`;
+      const sc = sessions.get(sk) ?? { date: e.date, hour: e.hour, pool, entries: 0, customers: new Set() };
+      sc.entries++; sc.customers.add(email);
+      sessions.set(sk, sc);
+
+      byHour.set(e.hour, (byHour.get(e.hour) ?? 0) + 1);
+      byDow.set(dow, (byDow.get(dow) ?? 0) + 1);
+    }
+
+    const total = rows.length;
+    const pct = (a: number, b: number) => (b > 0 ? Math.round((a / b) * 100) : 0);
+    const cells = [...recurring.values()].map((c) => ({
+      dow: c.dow,
+      dowLabel: DOW_LABEL[c.dow],
+      hour: c.hour,
+      pool: c.pool,
+      entries: c.entries,
+      customers: c.customers.size,
+      dates: c.dates.size,
+    }));
+    return {
+      total,
+      uniqueCustomers: customers.size,
+      byPool,
+      outcomes: { booked, open, neverOffered, offeredLost },
+      servedPct: pct(booked, total),
+      neverOfferedPct: pct(neverOffered, total),
+      // Every (weekday, hour, pool) cell — the UI draws the heatmap from this.
+      cells: cells.sort((a, b) => a.dow - b.dow || a.hour - b.hour),
+      topRecurring: [...cells].sort((a, b) => b.entries - a.entries || b.customers - a.customers).slice(0, 15),
+      topSessions: [...sessions.values()]
+        .map((s) => ({ date: s.date, dowLabel: DOW_LABEL[dowOf(s.date)], hour: s.hour, pool: s.pool, entries: s.entries, customers: s.customers.size }))
+        .sort((a, b) => b.entries - a.entries || a.date.localeCompare(b.date))
+        .slice(0, 10),
+      byHour: [...byHour.entries()].map(([hour, entries]) => ({ hour, entries })).sort((a, b) => a.hour - b.hour),
+      byDow: [...byDow.entries()].map(([dow, entries]) => ({ dow, dowLabel: DOW_LABEL[dow], entries })).sort((a, b) => a.dow - b.dow),
+    };
+  }
+}
