@@ -822,58 +822,168 @@ export const getBookingLeadTime = query({
 });
 
 // ============================================================================
-// Cancellation timing — how early/late people cancel relative to session start.
+// Cancellation analytics — split COACH vs CUSTOMER (Inspector, 2026-09-02), each
+// measured three ways:
+//   · notice before the SESSION  (the original view; late window differs per role)
+//   · time since the BOOKING was made (did they cancel straight away, or sit on it?)
+//   · position in the wait      (0% = right after booking … 100% = at session start)
+// plus who pressed cancel (self / admin / closure-or-block) and how far ahead the
+// cancelled bookings were made vs the ones that were kept.
+//
+// Abandoned checkouts (unpaid, auto-released) are EXCLUDED and counted on their own.
+// Attribution: cancelledByUserId === booking.userId → self; a value containing "@"
+// → system (closures/lane blocks store the admin's EMAIL there); any other value →
+// admin; absent → unknown (legacy rows). Booking time = createdAt (ms, set from
+// 2026-06) falling back to _creationTime, which every row has.
 // ============================================================================
+function emptyCancelSummary() {
+  return {
+    cancelled: 0,
+    base: 0,
+    cancellationRatePct: 0,
+    // Unpaid checkouts auto-cancelled by the abandoned-checkout release
+    // (paymentStatus 'failed', nobody recorded). NOT cancellations — the customer
+    // never completed the booking. Counted separately, excluded from everything
+    // else. Measured 2026-09-02: 129 of 176 "customer cancellations" over 3 months
+    // were these, which the old single-number view silently counted.
+    abandonedCheckouts: 0,
+    clubCancelled: 0,
+    medianNoticeHours: 0,
+    avgNoticeHours: 0,
+    lateWindowHours: 0,
+    withinLateWindow: 0,
+    lateCancelPct: 0,
+    lateCharged: 0,
+    noticeBuckets: { gt48h: 0, h24_48: 0, h6_24: 0, h2_6: 0, lt2h: 0, after_start: 0 },
+    sinceBookingBuckets: { lt1h: 0, h1_6: 0, h6_24: 0, d1_3: 0, d3_7: 0, gt7d: 0 },
+    medianSinceBookingHours: 0,
+    positionBuckets: { q1: 0, q2: 0, q3: 0, q4: 0, after: 0 },
+    medianPositionPct: 0,
+    medianBookingLeadHoursCancelled: 0,
+    medianBookingLeadHoursKept: 0,
+    who: { self: 0, admin: 0, system: 0, unknown: 0 },
+  };
+}
+type CancelSummary = ReturnType<typeof emptyCancelSummary>;
+
+function summariseCancellations(rows: any[], lateWindowH: number, from?: string, to?: string): CancelSummary {
+  const out = emptyCancelSummary();
+  out.lateWindowHours = lateWindowH;
+  const notice: number[] = [];
+  const since: number[] = [];
+  const pos: number[] = [];
+  const leadCancelled: number[] = [];
+  const leadKept: number[] = [];
+  for (const b of rows) {
+    const createdMs: number = typeof b.createdAt === "number" ? b.createdAt : b._creationTime;
+    const startMs = awstDateKeyToMs(b.date) + (b.startHour ?? 0) * HOUR_MS;
+    if (b.status === "confirmed") {
+      out.base++;
+      if (Number.isFinite(createdMs)) leadKept.push((startMs - createdMs) / HOUR_MS);
+      continue;
+    }
+    if (b.status !== "cancelled") continue;
+    if (!inRange(b.date, from, to)) continue;
+    if (b.paymentStatus === "failed" && !b.cancelledByUserId) {
+      out.abandonedCheckouts++;
+      continue;
+    }
+    out.base++;
+    out.cancelled++;
+    if (b.isClubBooking) out.clubCancelled++;
+    if (b.coachLateCancelCharged) out.lateCharged++;
+
+    const by = b.cancelledByUserId;
+    if (by == null || by === "") out.who.unknown++;
+    else if (by === b.userId) out.who.self++;
+    else if (String(by).includes("@")) out.who.system++;
+    else out.who.admin++;
+
+    const cancelledAtMs = b.cancelledAt ? Date.parse(b.cancelledAt) : NaN;
+    if (!Number.isFinite(cancelledAtMs)) continue;
+
+    // 1. notice before the session
+    const leadH = (startMs - cancelledAtMs) / HOUR_MS;
+    notice.push(leadH);
+    const nb = out.noticeBuckets;
+    if (leadH < 0) nb.after_start++;
+    else if (leadH < 2) nb.lt2h++;
+    else if (leadH < 6) nb.h2_6++;
+    else if (leadH < 24) nb.h6_24++;
+    else if (leadH < 48) nb.h24_48++;
+    else nb.gt48h++;
+    if (leadH >= 0 && leadH < lateWindowH) out.withinLateWindow++;
+
+    if (!Number.isFinite(createdMs)) continue;
+    // 2. time since the booking was made
+    const sinceH = Math.max(0, (cancelledAtMs - createdMs) / HOUR_MS);
+    since.push(sinceH);
+    const sb = out.sinceBookingBuckets;
+    if (sinceH < 1) sb.lt1h++;
+    else if (sinceH < 6) sb.h1_6++;
+    else if (sinceH < 24) sb.h6_24++;
+    else if (sinceH < 72) sb.d1_3++;
+    else if (sinceH < 168) sb.d3_7++;
+    else sb.gt7d++;
+
+    // 3. position in the wait (booking → session)
+    const waitH = (startMs - createdMs) / HOUR_MS;
+    leadCancelled.push(waitH);
+    if (waitH > 0) {
+      const p = sinceH / waitH;
+      pos.push(Math.min(p, 1.5));
+      const pb = out.positionBuckets;
+      if (p >= 1) pb.after++;
+      else if (p >= 0.75) pb.q4++;
+      else if (p >= 0.5) pb.q3++;
+      else if (p >= 0.25) pb.q2++;
+      else pb.q1++;
+    }
+  }
+  const avg = (a: number[]) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
+  out.cancellationRatePct = out.base > 0 ? Math.round((out.cancelled / out.base) * 100) : 0;
+  out.medianNoticeHours = notice.length ? round2(median(notice)) : 0;
+  out.avgNoticeHours = notice.length ? round2(avg(notice)) : 0;
+  out.lateCancelPct = out.cancelled > 0 ? Math.round((out.withinLateWindow / out.cancelled) * 100) : 0;
+  out.medianSinceBookingHours = since.length ? round2(median(since)) : 0;
+  out.medianPositionPct = pos.length ? Math.round(median(pos) * 100) : 0;
+  out.medianBookingLeadHoursCancelled = leadCancelled.length ? round2(median(leadCancelled)) : 0;
+  out.medianBookingLeadHoursKept = leadKept.length ? round2(median(leadKept)) : 0;
+  return out;
+}
+
 export const getCancellationAnalytics = query({
   args: { from: v.optional(v.string()), to: v.optional(v.string()) },
   handler: async (ctx, args) => {
     if (!(await isAdmin(ctx))) return null;
-    const settings = await ctx.db
-      .query("siteSettings")
-      .withIndex("by_key", (q: any) => q.eq("key", "global"))
-      .first();
-    const lateWindowH = settings?.customerCancellationHours ?? settings?.cancellationHoursBefore ?? 2;
-
-    const all = await rangeBookings(ctx, args.from, args.to);
-    const leadsH: number[] = [];
-    const buckets = { gt48h: 0, h24_48: 0, h6_24: 0, h2_6: 0, lt2h: 0, after_start: 0 };
-    let cancelled = 0;
-    let withinLateWindow = 0; // cancelled inside the customer cancellation window
-    let coachLateCharged = 0;
-    let confirmedOrCancelled = 0;
-    for (const b of all as any[]) {
-      if (b.status === "confirmed") confirmedOrCancelled++;
-      if (b.status !== "cancelled") continue;
-      if (!inRange(b.date, args.from, args.to)) continue;
-      cancelled++;
-      confirmedOrCancelled++;
-      if (b.coachLateCancelCharged) coachLateCharged++;
-      const cancelledAtMs = b.cancelledAt ? Date.parse(b.cancelledAt) : NaN;
-      if (!Number.isFinite(cancelledAtMs)) continue;
-      const startMs = awstDateKeyToMs(b.date) + (b.startHour ?? 0) * HOUR_MS;
-      const leadH = (startMs - cancelledAtMs) / HOUR_MS; // +ve = before start
-      leadsH.push(leadH);
-      if (leadH < 0) buckets.after_start++;
-      else if (leadH < 2) buckets.lt2h++;
-      else if (leadH < 6) buckets.h2_6++;
-      else if (leadH < 24) buckets.h6_24++;
-      else if (leadH < 48) buckets.h24_48++;
-      else buckets.gt48h++;
-      if (leadH >= 0 && leadH < lateWindowH) withinLateWindow++;
-    }
-    return {
-      cancelled,
-      cancellationRatePct: confirmedOrCancelled > 0 ? Math.round((cancelled / confirmedOrCancelled) * 100) : 0,
-      medianLeadHours: leadsH.length ? round2(median(leadsH)) : 0,
-      avgLeadHours: leadsH.length ? round2(leadsH.reduce((s, x) => s + x, 0) / leadsH.length) : 0,
-      lateWindowHours: lateWindowH,
-      withinLateWindow,
-      lateCancelPct: cancelled > 0 ? Math.round((withinLateWindow / cancelled) * 100) : 0,
-      coachLateCharged,
-      buckets,
-    };
+    return await computeCancellationAnalytics(ctx, args);
   },
 });
+
+export async function computeCancellationAnalytics(ctx: any, args: { from?: string; to?: string }) {
+  const settings = await ctx.db
+    .query("siteSettings")
+    .withIndex("by_key", (q: any) => q.eq("key", "global"))
+    .first();
+  const customerLateH = settings?.customerCancellationHours ?? settings?.cancellationHoursBefore ?? 2;
+  const coachLateH = settings?.coachLateCancellationHours ?? 24;
+
+  const all = await rangeBookings(ctx, args.from, args.to);
+  const coachRows = (all as any[]).filter((b) => b.isCoachBooking === true);
+  const customerRows = (all as any[]).filter((b) => b.isCoachBooking !== true);
+  const customer = summariseCancellations(customerRows, customerLateH, args.from, args.to);
+  const coach = summariseCancellations(coachRows, coachLateH, args.from, args.to);
+  return {
+    customer,
+    coach,
+    // Back-compat aggregate (the old single-number KPIs).
+    cancelled: customer.cancelled + coach.cancelled,
+    cancellationRatePct:
+      customer.base + coach.base > 0
+        ? Math.round(((customer.cancelled + coach.cancelled) / (customer.base + coach.base)) * 100)
+        : 0,
+  };
+}
 
 // ============================================================================
 // Top customers — this month vs all time, side by side (no email/PII).
