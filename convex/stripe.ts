@@ -103,9 +103,28 @@ export const createCheckoutSession = action({
 
     const siteUrl = process.env.SITE_URL || "http://localhost:5173";
 
+    // SPEC_STRIPE_RECONCILIATION_METADATA_2026-08 — reconciliation tags on the
+    // PAYMENT INTENT (which propagates to the Charge and is what Stripe's payout
+    // reconciliation report reads), NOT on the session. The existing session
+    // metadata block below is untouched: the webhook routes on it. Resolved from
+    // the booking server-side; `source` names the BUSINESS UNIT, not the app.
+    const tags = await ctx.runQuery(internal.queries.getBookingStripeTags, {
+      bookingId: args.bookingId || undefined,
+    });
+    const reconciliationMetadata: Record<string, string> = {
+      source: "cricket_revolution",
+      booking_id: String(args.bookingId || ""),
+      booking_date: String(tags.bookingDate || args.date || ""),
+      lane: String(tags.lane || ""),
+      booking_type: String(tags.bookingType || (args.isCoachBooking ? "coach" : "net_hire")),
+      customer_id: String(tags.customerId || ""),
+      ...(tags.lanes ? { lanes: String(tags.lanes) } : {}),
+    };
+
     const common: Stripe.Checkout.SessionCreateParams = {
       payment_method_types: ["card"],
       mode: "payment",
+      payment_intent_data: { metadata: reconciliationMetadata },
       // Stripe minimum is 30 min from now. When it lapses, the
       // checkout.session.expired webhook releases the held slot (the cron
       // backstop releases earlier per abandonedCheckoutMinutes).
@@ -361,8 +380,24 @@ export const createPaymentLink = action({
       currency: "aud",
     });
 
+    // SPEC_STRIPE_RECONCILIATION_METADATA_2026-08 — same tags on the payment
+    // intent behind a payment link (the ad-hoc / top-up path an admin uses).
+    const linkTags = await ctx.runQuery(internal.queries.getBookingStripeTags, {
+      bookingId: args.bookingId || undefined,
+    });
     const paymentLink = await stripe.paymentLinks.create({
       line_items: [{ price: price.id, quantity: 1 }],
+      payment_intent_data: {
+        metadata: {
+          source: "cricket_revolution",
+          booking_id: String(args.bookingId || ""),
+          booking_date: String(linkTags.bookingDate || args.date || ""),
+          lane: String(linkTags.lane || ""),
+          booking_type: String(args.topUp ? "topup" : linkTags.bookingType || "net_hire"),
+          customer_id: String(linkTags.customerId || ""),
+          ...(linkTags.lanes ? { lanes: String(linkTags.lanes) } : {}),
+        },
+      },
       metadata: {
         bookingId: args.bookingId || "",
         customerName: args.customerName,

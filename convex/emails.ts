@@ -35,6 +35,49 @@ const MANDATORY_TEMPLATES = new Set([
 // directly, so it ALWAYS threw, the catch returned `true`, and per-template
 // opt-out was silently bypassed (every email sent regardless of prefs). The fix
 // is to read prefs through `ctx.runQuery` (the only DB access an action has).
+// 2026-09-03 (Inspector) — push-or-email. For INFORMATIONAL notifications the
+// email is skipped when the recipient will get the push: an active device, push
+// on globally, the category not switched off by them, and the admin setting on.
+// Durable-record emails (door codes, receipts, cancellations, verification) never
+// pass through this.
+export const getEmailRoutingInternal = internalQuery({
+  args: { email: v.string(), category: v.string() },
+  handler: async (ctx, args) => {
+    const settings = await ctx.db
+      .query("siteSettings")
+      .withIndex("by_key", (q: any) => q.eq("key", "global"))
+      .first();
+    if ((settings as any)?.emailSkipWhenPushReachable === false) return { skipEmail: false, reason: "setting off" };
+    if ((settings as any)?.pushEnabledGlobal === false) return { skipEmail: false, reason: "push off globally" };
+    const email = args.email.toLowerCase().trim();
+    const pref = await ctx.db
+      .query("pushPreferences")
+      .withIndex("by_email", (q: any) => q.eq("email", email))
+      .first();
+    const cat = ((pref as any)?.categories ?? {}) as Record<string, boolean>;
+    if (cat[args.category] === false) return { skipEmail: false, reason: "category off for user" };
+    const sub = await ctx.db
+      .query("pushSubscriptions")
+      .withIndex("by_email", (q: any) => q.eq("email", email))
+      .first();
+    if (!sub) return { skipEmail: false, reason: "no device" };
+    return { skipEmail: true, reason: "push reachable" };
+  },
+});
+
+async function emailSkippedForPush(ctx: any, email: string, category: string, tag: string): Promise<boolean> {
+  try {
+    const r = await ctx.runQuery(internal.emails.getEmailRoutingInternal, { email, category });
+    if (r?.skipEmail) {
+      console.log(`[${tag}] Skipped — recipient reachable by push (${category}): ${email}`);
+      return true;
+    }
+  } catch {
+    /* fail open: a routing bug must never suppress an email */
+  }
+  return false;
+}
+
 async function emailEnabledForUser(
   ctx: any,
   email: string,
@@ -459,6 +502,7 @@ export const sendBookingReminder = internalAction({
     calendarUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    if (await emailSkippedForPush(ctx, args.to, "session-reminders", "sendBookingReminder")) return { success: false, skipped: true, reason: "push reachable" };
     if (!(await emailEnabledForUser(ctx, args.to, "booking-reminder"))) {
       console.log(`[booking-reminder] Skipped — user disabled this email: ${args.to}`);
       return { success: false, skipped: true, reason: "User disabled this email" };
@@ -551,6 +595,7 @@ export const sendWaitlistVacancy = internalAction({
     offerDeadline: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    if (await emailSkippedForPush(ctx, args.to, "waitlist-offers", "sendWaitlistVacancy")) return { success: false, skipped: true, reason: "push reachable" };
     if (!(await emailEnabledForUser(ctx, args.to, "waitlist-vacancy"))) {
       console.log(`[waitlist-vacancy] Skipped — user disabled this email: ${args.to}`);
       return { success: false, skipped: true, reason: "User disabled this email" };
@@ -594,6 +639,7 @@ export const sendWaitlistStillWaiting = internalAction({
     manageUrl: v.string(),
   },
   handler: async (ctx, args) => {
+    if (await emailSkippedForPush(ctx, args.to, "waitlist-offers", "sendWaitlistStillWaiting")) return { success: false, skipped: true, reason: "push reachable" };
     if (!(await emailEnabledForUser(ctx, args.to, "waitlist-still-waiting"))) {
       console.log(`[waitlist-still-waiting] Skipped — user disabled this email: ${args.to}`);
       return { success: false, skipped: true, reason: "User disabled this email" };
@@ -631,6 +677,7 @@ export const sendWaitlistAltTimeOffer = internalAction({
     bookingUrl: v.string(),
   },
   handler: async (ctx, args) => {
+    if (await emailSkippedForPush(ctx, args.to, "waitlist-offers", "sendWaitlistAltTimeOffer")) return { success: false, skipped: true, reason: "push reachable" };
     // Same preference key as the standard vacancy offer — a customer who has
     // turned waitlist emails off should not be mailed by this route either.
     if (!(await emailEnabledForUser(ctx, args.to, "waitlist-vacancy"))) {

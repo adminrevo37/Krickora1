@@ -6422,6 +6422,7 @@ export const updateSiteSettings = mutation({
     waitlistMaxEntriesPerAccount: v.optional(v.number()),
     maxMatesPerBooking: v.optional(v.number()),
     pushEnabledGlobal: v.optional(v.boolean()),
+    emailSkipWhenPushReachable: v.optional(v.boolean()),
     faultReportEmail: v.optional(v.string()), // EML-3 (audit 2026-06)
     dailyHours: v.optional(
       v.array(

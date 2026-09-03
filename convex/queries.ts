@@ -1546,3 +1546,40 @@ export const previewMergeConsecutiveCoachBookings = query({
     return chains;
   },
 });
+
+// ============================================================================
+// SPEC_STRIPE_RECONCILIATION_METADATA_2026-08 — the reconciliation tags for a
+// charge, resolved from the BOOKING (server-authoritative; the caller never
+// supplies them). Returns "" fields for a missing booking — nothing about
+// tagging may ever fail a payment.
+// ============================================================================
+export const getBookingStripeTags = internalQuery({
+  args: { bookingId: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const empty = { lane: "", lanes: "", bookingType: "", customerId: "", bookingDate: "" };
+    if (!args.bookingId) return empty;
+    let b: any = null;
+    try { b = await ctx.db.get(args.bookingId as any); } catch { b = null; }
+    if (!b || typeof b.laneId !== "string") return empty;
+    const laneSet = [b.laneId, ...((b.additionalLaneIds ?? []) as string[])];
+    const bookingType = b.extensionOfId
+      ? "extension"
+      : b.isCoachBooking === true
+        ? "coach"
+        : b.isClubBooking === true
+          ? "club"
+          : "net_hire";
+    let customerId = "";
+    try {
+      const c = await resolveCanonicalCustomerByEmail(ctx, b.customerEmail);
+      customerId = c?._id ? String(c._id) : "";
+    } catch { customerId = ""; }
+    return {
+      lane: String(b.laneId),
+      lanes: laneSet.length > 1 ? laneSet.join(",") : "",
+      bookingType,
+      customerId,
+      bookingDate: String(b.date ?? ""),
+    };
+  },
+});

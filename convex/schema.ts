@@ -930,6 +930,13 @@ export default defineSchema({
     // short-circuits — all push disabled instantly without a deploy (email
     // unaffected). Default true.
     pushEnabledGlobal: v.optional(v.boolean()),
+    // 2026-09-03 (Inspector) — INFORMATIONAL notifications (waitlist offers, the
+    // still-waiting check-in, session reminders) go by push only when the
+    // recipient is reachable by push; the email is sent only when they are not.
+    // Emails that are a durable record (confirmations with door codes, receipts,
+    // cancellations, verification) always send. Default true. Reverses the
+    // 2026-08-14 "both channels every time" ruling on Inspector's call.
+    emailSkipWhenPushReachable: v.optional(v.boolean()),
     // EML-3 (audit 2026-06) — where equipment/facility fault reports are emailed.
     // Absent → falls back to the hardcoded ops inbox. Additive.
     faultReportEmail: v.optional(v.string()),

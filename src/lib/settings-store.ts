@@ -62,6 +62,7 @@ export interface SiteSettings {
   waitlistMaxEntriesPerAccount?: number
   maxMatesPerBooking?: number
   pushEnabledGlobal?: boolean
+  emailSkipWhenPushReachable?: boolean
   registrationLocked?: boolean
   adminGateEnabled?: boolean
   adminUnlockMinutes?: number
@@ -116,6 +117,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   waitlistMaxEntriesPerAccount: 10,
   maxMatesPerBooking: 2,
   pushEnabledGlobal: true,
+  emailSkipWhenPushReachable: true,
   registrationLocked: false,
   adminGateEnabled: false,
   adminUnlockMinutes: 45,

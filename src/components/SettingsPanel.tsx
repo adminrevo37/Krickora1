@@ -321,6 +321,14 @@ export default function SettingsPanel() {
             checked={settings.pushEnabledGlobal ?? true}
             onChange={(v) => updateSettings({ pushEnabledGlobal: v })}
           />
+          <div className="mt-4">
+            <ToggleRow
+              label="Push instead of email when possible"
+              description="Waitlist offers, the still-waiting check-in and session reminders go by push only when the person has push set up; the email is sent only when they don't. Booking confirmations, door codes, receipts, cancellations and verification always email. Turn off to send both every time."
+              checked={settings.emailSkipWhenPushReachable ?? true}
+              onChange={(v) => updateSettings({ emailSkipWhenPushReachable: v })}
+            />
+          </div>
         </div>
       </div>
 

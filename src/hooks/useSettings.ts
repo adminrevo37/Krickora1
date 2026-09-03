@@ -28,7 +28,7 @@ const REMOTE_SCALAR_KEYS = [
   'waitlistOfferHoldMinutes', 'maxMatesPerBooking',
   'waitlistAutoAltOffersEnabled', 'waitlistAltTimeWindowHours', 'waitlistAltTimeBroadcastWithinHours',
   'waitlistStillWaitingReminderEnabled', 'waitlistStillWaitingReminderDays', 'waitlistMaxEntriesPerAccount',
-  'pushEnabledGlobal',
+  'pushEnabledGlobal', 'emailSkipWhenPushReachable',
   'registrationLocked', 'adminGateEnabled', 'adminUnlockMinutes',
 ] as const
 
