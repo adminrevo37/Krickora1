@@ -64,6 +64,11 @@ export interface SiteSettings {
   maxMatesPerBooking?: number
   pushEnabledGlobal?: boolean
   emailSkipWhenPushReachable?: boolean
+  mobileGateEnabled?: boolean
+  mobileGateScope?: 'booking-action' | 'blanket' | 'off'
+  mobileGateAndroidHardWall?: boolean
+  mobileGatePushSnoozeDays?: number
+  mobileGateExemptCoachesFromPush?: boolean
   registrationLocked?: boolean
   adminGateEnabled?: boolean
   adminUnlockMinutes?: number
@@ -120,6 +125,11 @@ const DEFAULT_SETTINGS: SiteSettings = {
   maxMatesPerBooking: 2,
   pushEnabledGlobal: true,
   emailSkipWhenPushReachable: true,
+  mobileGateEnabled: false,
+  mobileGateScope: 'booking-action',
+  mobileGateAndroidHardWall: false,
+  mobileGatePushSnoozeDays: 14,
+  mobileGateExemptCoachesFromPush: true,
   registrationLocked: false,
   adminGateEnabled: false,
   adminUnlockMinutes: 45,

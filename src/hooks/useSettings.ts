@@ -29,6 +29,7 @@ const REMOTE_SCALAR_KEYS = [
   'waitlistAutoAltOffersEnabled', 'waitlistAltTimeWindowHours', 'waitlistAltTimeBroadcastWithinHours',
   'waitlistStillWaitingReminderEnabled', 'waitlistStillWaitingReminderDays', 'waitlistMaxEntriesPerAccount', 'machineDemandAlertMinWaiters',
   'pushEnabledGlobal', 'emailSkipWhenPushReachable',
+  'mobileGateEnabled', 'mobileGateScope', 'mobileGateAndroidHardWall', 'mobileGatePushSnoozeDays', 'mobileGateExemptCoachesFromPush',
   'registrationLocked', 'adminGateEnabled', 'adminUnlockMinutes',
 ] as const
 

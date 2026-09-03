@@ -333,6 +333,47 @@ export default function SettingsPanel() {
         </div>
       </div>
 
+      {/* SPEC_MOBILE_APP_GATE_2026-06 — mobile install/login/push wall */}
+      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <h3 className="text-lg font-bold text-gray-800">📲 Mobile app gate</h3>
+          <p className="text-sm text-gray-500 mt-0.5">
+            On a phone's web browser, nudge people to install the app, log in and turn on notifications — only when they try to book or open My Bookings. Browsing the timetable is never walled. iPhone needs the installed app for notifications; Android does not, so Android is only walled if you say so. The notifications step is always skippable (a denied permission on iPhone has no recovery), and skipping snoozes it.
+          </p>
+        </div>
+        <div className="p-6 space-y-4">
+          <ToggleRow
+            label="Mobile app gate enabled"
+            description="Master switch. Ships OFF. Turn on after giving coaches a heads-up — a coach's first cold visit on a phone browser sees the install step like anyone else; once logged in they are exempt."
+            checked={settings.mobileGateEnabled ?? false}
+            onChange={(v) => updateSettings({ mobileGateEnabled: v })}
+          />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <label className="block text-sm">
+              <span className="block text-xs font-semibold text-gray-600 mb-1">Scope</span>
+              <select value={settings.mobileGateScope ?? 'booking-action'} onChange={(e) => updateSettings({ mobileGateScope: e.target.value as any })} className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+                <option value="booking-action">At the booking action only (recommended)</option>
+                <option value="blanket">Blanket — also when opening the booking calendar</option>
+                <option value="off">Off (same as disabled)</option>
+              </select>
+            </label>
+            <NumberInput label="Snooze the notifications step for (days)" value={settings.mobileGatePushSnoozeDays ?? 14} onChange={(v) => updateSettings({ mobileGatePushSnoozeDays: v })} />
+          </div>
+          <ToggleRow
+            label="Wall Android too"
+            description="Treat Android like iPhone and require the installed app before booking. Off by default: Android notifications work in the browser, so there is no technical reason to force it."
+            checked={settings.mobileGateAndroidHardWall ?? false}
+            onChange={(v) => updateSettings({ mobileGateAndroidHardWall: v })}
+          />
+          <ToggleRow
+            label="Coaches skip the notifications step"
+            description="Logged-in coaches are never asked to turn on notifications by the gate (they may rationally prefer email). Their install step still applies on a first cold visit."
+            checked={settings.mobileGateExemptCoachesFromPush ?? true}
+            onChange={(v) => updateSettings({ mobileGateExemptCoachesFromPush: v })}
+          />
+        </div>
+      </div>
+
       {/* Admin Security Gate */}
       <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
         <div className="px-6 py-4 border-b border-gray-100">

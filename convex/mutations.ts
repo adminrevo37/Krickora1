@@ -6482,6 +6482,11 @@ export const updateSiteSettings = mutation({
     maxMatesPerBooking: v.optional(v.number()),
     pushEnabledGlobal: v.optional(v.boolean()),
     emailSkipWhenPushReachable: v.optional(v.boolean()),
+    mobileGateEnabled: v.optional(v.boolean()),
+    mobileGateScope: v.optional(v.string()),
+    mobileGateAndroidHardWall: v.optional(v.boolean()),
+    mobileGatePushSnoozeDays: v.optional(v.number()),
+    mobileGateExemptCoachesFromPush: v.optional(v.boolean()),
     faultReportEmail: v.optional(v.string()), // EML-3 (audit 2026-06)
     dailyHours: v.optional(
       v.array(

@@ -1,9 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { useAuth } from '../hooks/useAuth'
+import { useAppGate } from '../hooks/useAppGate'
+import AppGateWall from '../components/AppGateWall'
 import MyBookings from '../components/MyBookings'
 import { useImpersonation } from '../hooks/useImpersonation'
 
 export const Route = createFileRoute('/bookings')({
-  component: BookingsPage,
+  component: GatedBookingsPage,
 })
 
 function BookingsPage() {
@@ -18,4 +21,18 @@ function BookingsPage() {
       <MyBookings impersonatedEmail={isImpersonating ? impersonatedUser?.email : undefined} />
     </div>
   )
+}
+
+// SPEC_MOBILE_APP_GATE_2026-06 Trigger 2 — /bookings while logged out on mobile web.
+function GatedBookingsPage() {
+  const { user } = useAuth()
+  const gate = useAppGate('my-bookings')
+  if (!user && gate.stage !== 'none') {
+    return (
+      <div className="min-h-[60vh]">
+        <AppGateWall stage={gate.stage} trigger="my-bookings" onSnooze={gate.snoozePush} />
+      </div>
+    )
+  }
+  return <BookingsPage />
 }

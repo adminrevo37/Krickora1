@@ -1,4 +1,6 @@
 import { useState, useMemo, useEffect } from 'react'
+import { useAppGate } from '../hooks/useAppGate'
+import AppGateWall from './AppGateWall'
 import {
   LANES,
   getCoachRolling7Days,
@@ -82,6 +84,8 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   const hasEarlyAccess = (customerRecord as any)?.earlyAccess630 === true
   // BOOKING LOCK — server refuses anyway; this tells them before they try.
   const bookingLocked = (customerRecord as any)?.bookingLocked === true
+  // SPEC_MOBILE_APP_GATE_2026-06 — 'blanket' scope only: wall the calendar itself.
+  const blanketGate = useAppGate('blanket')
   const releaseRole: 'coach' | 'customer' = userIsCoach ? 'coach' : 'customer'
   const coachWindowDays = settings.coachBookingWindowDays ?? 8
   // SPEC_COACH_CALENDAR §1E — coach back-navigation. 0 = live view; -1/-2 = past
@@ -622,6 +626,9 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   return (
     <div className="space-y-6">
       {/* U4 — outcome of a waitlist "Pass" push deep-link. */}
+      {blanketGate.stage !== 'none' && (
+        <AppGateWall stage={blanketGate.stage} trigger="blanket" onSnooze={blanketGate.snoozePush} />
+      )}
       {bookingLocked && (
         <div className="mb-3 rounded-xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-3">
           <p className="text-sm font-semibold text-red-700 dark:text-red-300">Bookings on your account are currently suspended.</p>

@@ -980,6 +980,15 @@ export default defineSchema({
     // cancellations, verification) always send. Default true. Reverses the
     // 2026-08-14 "both channels every time" ruling on Inspector's call.
     emailSkipWhenPushReachable: v.optional(v.boolean()),
+    // SPEC_MOBILE_APP_GATE_2026-06 (built 2026-09-03). Gate-at-action wall that
+    // nudges MOBILE WEB users to install the PWA → log in → enable push, at the
+    // two high-intent moments only (Book/Confirm, My Bookings while logged out).
+    // Ships with mobileGateEnabled FALSE — flip on in a separate action.
+    mobileGateEnabled: v.optional(v.boolean()),           // default false
+    mobileGateScope: v.optional(v.string()),              // 'booking-action' | 'blanket' | 'off'
+    mobileGateAndroidHardWall: v.optional(v.boolean()),   // default false (Android push works in mobile web)
+    mobileGatePushSnoozeDays: v.optional(v.number()),     // default 14
+    mobileGateExemptCoachesFromPush: v.optional(v.boolean()), // default true
     // EML-3 (audit 2026-06) — where equipment/facility fault reports are emailed.
     // Absent → falls back to the hardcoded ops inbox. Additive.
     faultReportEmail: v.optional(v.string()),

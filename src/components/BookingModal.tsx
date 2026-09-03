@@ -1,4 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
+import { useAppGate } from '../hooks/useAppGate'
+import AppGateWall from './AppGateWall'
 import { useQuery, useConvex } from 'convex/react'
 import { trackFunnelStep, clearBookingFlow } from '../lib/tracker'
 import { getErrorMessage } from '../lib/errors'
@@ -143,6 +145,23 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   const [error, setError] = useState<string | null>(null)
   const [confirmedBooking, setConfirmedBooking] = useState<Booking | null>(null)
   const [showAuth, setShowAuth] = useState(false)
+  // SPEC_MOBILE_APP_GATE_2026-06 Trigger 1 — evaluated when Book/Confirm is tapped.
+  // When the gate clears (installed / logged in / push granted or snoozed) the
+  // original tap resumes itself: no re-tap.
+  const appGate = useAppGate('booking')
+  const [gateOpen, setGateOpen] = useState(false)
+  const resumeAfterGate = useRef(false)
+  useEffect(() => {
+    if (gateOpen && appGate.stage === 'none') {
+      setGateOpen(false)
+      if (resumeAfterGate.current) {
+        resumeAfterGate.current = false
+        // Let the modal re-render without the wall, then resume the original tap.
+        setTimeout(() => handleContinueToPayment(), 0)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gateOpen, appGate.stage])
   // SPEC_EMBEDDED_CHECKOUT — when set, render the in-app Stripe payment modal.
   const [embeddedCheckout, setEmbeddedCheckout] = useState<{ clientSecret: string; bookingId: string } | null>(null)
   const [applyCredit, setApplyCredit] = useState(false)
@@ -496,6 +515,7 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   }
 
   const handleContinueToPayment = () => {
+    if (appGate.stage !== 'none') { resumeAfterGate.current = true; setGateOpen(true); return }
     if (!user) { setShowAuth(true); return }
     if (!isCoach) trackFunnelStep('continue_to_payment', { totalPrice })
     if (isCoach) { handleCoachBooking(); return }
@@ -753,6 +773,9 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   // `{} as Booking` placeholder is preserved for that case.
   const finishSuccess = () => onConfirm(confirmedBooking ?? ({} as Booking))
 
+  if (gateOpen && appGate.stage !== 'none') {
+    return <AppGateWall stage={appGate.stage} trigger="booking" onSnooze={appGate.snoozePush} />
+  }
   if (showAuth) return <AuthModal onClose={() => setShowAuth(false)} onSuccess={() => { setShowAuth(false); setStep('confirm') }} />
 
   return (
