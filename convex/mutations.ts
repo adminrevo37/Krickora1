@@ -1,5 +1,6 @@
 import { mutation, internalMutation, query } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
+import { maybeAlertMachineDemand } from "./laneDemandMonitor";
 import { internal, components } from "./_generated/api";
 import { requireAdmin, requireAdminUnlocked, getAuthUserSafe } from "./lib/adminGuard";
 import { issueCredit, redeemCredit, recordCreditMovement } from "./lib/credit";
@@ -26,7 +27,7 @@ import {
 import { computeCustomerPriceCents, decreaseCreditCents } from "./lib/pricing";
 import { mondayOfWeek } from "./lib/coachLedger";
 import { validateAndSnapshotLane, resolveLaneSnapshot, resolveLanesAtHour } from "./lanes";
-import { defaultLaneName, variantRatePerHour, DEFAULT_LANE_META, laneNameForBooking } from "./lib/lanes";
+import { defaultLaneName, variantRatePerHour, DEFAULT_LANE_META, laneNameForBooking, VARIANT_TRUMAN, VARIANT_STANDARD } from "./lib/lanes";
 import { PRICE_DEFAULTS } from "./lib/priceDefaults";
 import { composeName, splitName } from "./lib/names";
 import { resolveCanonicalCustomerByEmail } from "./lib/identity";
@@ -198,6 +199,22 @@ const CLUB_FIXED_DOOR_CODE = "2026";
 // short flexible window (siteSettings.coachFlexibleWindowHours, default 3); otherwise
 // the passed standard default (24). Resolved from the booking's OWNER coach, so it
 // applies however the action is initiated.
+// EXTRA-LANE PRICING (Inspector decision, 2026-09-03: "price each lane at its own
+// rate"). An ADDITIONAL lane has no per-lane variant choice, so it is priced by
+// what that lane IS at (date, hour): a segment that offers ONLY the Truman
+// variant → Truman rate; anything else (standard, or standard+Truman as a
+// customer choice) → standard. Previously every extra was standard, so a Truman-
+// only extra under-billed.
+async function extraLaneVariant(ctx: any, laneId: string, date: string, hour: number): Promise<string | null> {
+  try {
+    const lanes = await resolveLanesAtHour(ctx, date, hour);
+    const l = lanes.find((x) => x.laneId === laneId);
+    const variants: string[] = (l?.segment as any)?.variants ?? [];
+    if (variants.includes(VARIANT_TRUMAN) && !variants.includes(VARIANT_STANDARD)) return VARIANT_TRUMAN;
+  } catch { /* fall through to standard */ }
+  return null;
+}
+
 // BOOKING LOCK (Inspector, 2026-09-03). Admin callers are never blocked — an
 // admin booking on a locked account's behalf is an explicit act. The reason
 // stays admin-only.
@@ -1198,8 +1215,12 @@ export const createBooking = mutation({
         args.variantId,
         args.duration
       );
-      for (const _lid of args.additionalLaneIds ?? []) {
-        grossCents += computeCustomerPriceCents(siteSettings as any, null, args.duration);
+      for (const lid of args.additionalLaneIds ?? []) {
+        grossCents += computeCustomerPriceCents(
+          siteSettings as any,
+          await extraLaneVariant(ctx, lid, args.date, args.startHour),
+          args.duration
+        );
       }
       let discountedCents = grossCents;
       if (args.discountCode) {
@@ -3676,17 +3697,25 @@ export const modifyBooking = mutation({
     } else {
       const laneCents = (variantId: string | null) =>
         computeCustomerPriceCents(settings, variantId, effDuration);
-      newPriceInCents =
-        laneCents(effVariant ?? null) + effAddl.reduce((sum: number) => sum + laneCents(null), 0);
+      // Extras at their OWN rate (2026-09-03), resolved at the effective slot.
+      let addlCents = 0;
+      for (const lid of effAddl as string[]) {
+        addlCents += laneCents(await extraLaneVariant(ctx, lid, effDate, effStart));
+      }
+      newPriceInCents = laneCents(effVariant ?? null) + addlCents;
       // Diff against the recomputed GROSS original (server-authoritative, SEC-6):
       // this charges/credits the true incremental lane cost and avoids inheriting
       // any original discount/credit into the difference.
-      oldGrossCents =
-        computeCustomerPriceCents(settings, booking.variantId ?? null, booking.duration) +
-        (booking.additionalLaneIds ?? []).reduce(
-          (sum: number) => sum + computeCustomerPriceCents(settings, null, booking.duration),
-          0
+      let oldAddlCents = 0;
+      for (const lid of (booking.additionalLaneIds ?? []) as string[]) {
+        oldAddlCents += computeCustomerPriceCents(
+          settings,
+          await extraLaneVariant(ctx, lid, booking.date, booking.startHour),
+          booking.duration
         );
+      }
+      oldGrossCents =
+        computeCustomerPriceCents(settings, booking.variantId ?? null, booking.duration) + oldAddlCents;
       priceDiffCents = newPriceInCents - oldGrossCents;
     }
 
@@ -6265,6 +6294,13 @@ export const addToWaitlist = mutation({
       ids.push(id);
       insertedEntries.push({ ...entry, laneId });
     }
+    // MACHINE-DEMAND MONITOR (2026-09-03) — after a BM join, tell the admins if the
+    // slot now has enough machine waiters while a run-up lane sits unbooked.
+    for (const e of insertedEntries) {
+      if (e.laneId === "*bm") {
+        try { await maybeAlertMachineDemand(ctx, e.date, e.hour); } catch (err) { console.error("[demand-monitor]", err); }
+      }
+    }
     // Send waitlist confirmation email (replicates booking-confirmation pattern)
     if (ids.length > 0 && insertedEntries.length > 0) {
       const first = insertedEntries[0];
@@ -6442,6 +6478,7 @@ export const updateSiteSettings = mutation({
     waitlistStillWaitingReminderEnabled: v.optional(v.boolean()),
     waitlistStillWaitingReminderDays: v.optional(v.number()),
     waitlistMaxEntriesPerAccount: v.optional(v.number()),
+    machineDemandAlertMinWaiters: v.optional(v.number()),
     maxMatesPerBooking: v.optional(v.number()),
     pushEnabledGlobal: v.optional(v.boolean()),
     emailSkipWhenPushReachable: v.optional(v.boolean()),

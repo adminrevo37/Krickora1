@@ -60,6 +60,7 @@ export interface SiteSettings {
   waitlistStillWaitingReminderEnabled?: boolean
   waitlistStillWaitingReminderDays?: number
   waitlistMaxEntriesPerAccount?: number
+  machineDemandAlertMinWaiters?: number
   maxMatesPerBooking?: number
   pushEnabledGlobal?: boolean
   emailSkipWhenPushReachable?: boolean
@@ -115,6 +116,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   waitlistStillWaitingReminderEnabled: true,
   waitlistStillWaitingReminderDays: 2,
   waitlistMaxEntriesPerAccount: 10,
+  machineDemandAlertMinWaiters: 2,
   maxMatesPerBooking: 2,
   pushEnabledGlobal: true,
   emailSkipWhenPushReachable: true,

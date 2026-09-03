@@ -13,6 +13,7 @@ import { v, ConvexError } from "convex/values";
 import { components, internal } from "./_generated/api";
 import { requireAdmin } from "./lib/adminGuard";
 import { resolveLanesAtHour } from "./lanes";
+import { maybeAlertMachineDemand } from "./laneDemandMonitor";
 
 async function resolveSubject(ctx: any, email: string): Promise<string | null> {
   try {
@@ -85,6 +86,11 @@ export const adminAddToWaitlist = mutation({
       });
       ids.push(id);
       added.push({ date: args.date, hour, pool: pool.toUpperCase() });
+    }
+    if (pool === "bm") {
+      for (const a of added) {
+        try { await maybeAlertMachineDemand(ctx, a.date, a.hour); } catch (err) { console.error("[demand-monitor]", err); }
+      }
     }
     if (added.length > 0) {
       await ctx.scheduler.runAfter(0, internal.emails.sendWaitlistConfirmation, {

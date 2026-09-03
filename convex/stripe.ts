@@ -4,6 +4,7 @@ import { action, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
 import Stripe from "stripe";
+import { fmtAwstDateLabel } from "./lib/dates";
 
 function getStripe() {
   const key = process.env.STRIPE_SECRET_KEY;
@@ -124,7 +125,11 @@ export const createCheckoutSession = action({
     const common: Stripe.Checkout.SessionCreateParams = {
       payment_method_types: ["card"],
       mode: "payment",
-      payment_intent_data: { metadata: reconciliationMetadata },
+      // Inspector decision 2026-09-03: session details on the charge (statement/receipt).
+      payment_intent_data: {
+        metadata: reconciliationMetadata,
+        description: `Cricket net hire — ${args.laneName}${variantLabel}${additionalLabel}, ${fmtAwstDateLabel(args.date)} ${formatHour(args.startHour)}-${formatHour(endHour)}`.slice(0, 1000),
+      },
       // Stripe minimum is 30 min from now. When it lapses, the
       // checkout.session.expired webhook releases the held slot (the cron
       // backstop releases earlier per abandonedCheckoutMinutes).
@@ -388,6 +393,7 @@ export const createPaymentLink = action({
     const paymentLink = await stripe.paymentLinks.create({
       line_items: [{ price: price.id, quantity: 1 }],
       payment_intent_data: {
+        description: `Cricket net hire — ${args.laneName}${variantLabel}, ${fmtAwstDateLabel(args.date)} ${formatHour(args.startHour)}-${formatHour(endHour)}${args.topUp ? " (top-up)" : ""}`.slice(0, 1000),
         metadata: {
           source: "cricket_revolution",
           booking_id: String(args.bookingId || ""),

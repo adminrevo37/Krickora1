@@ -273,10 +273,18 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
     })
   }
 
+  // Extras at their OWN rate (2026-09-03) — mirrors the server's extraLaneVariant:
+  // a lane that offers ONLY Truman at this slot prices at the Truman rate.
+  const extraVariantFor = (lid: string): string | null => {
+    try {
+      const v = resolveLaneAt(lid, dkForSeg, startHour).variants
+      return v.includes('truman') && !v.includes('standard') ? 'truman' : null
+    } catch { return null }
+  }
   const additionalLanePrice = additionalLanes.reduce((sum, lid) => {
     const l = LANES.find(la => la.id === lid)
     if (!l) return sum
-    return sum + (isCoach ? getCoachPrice(duration) : getCustomerPrice(l, null, duration))
+    return sum + (isCoach ? getCoachPrice(duration) : getCustomerPrice(l, extraVariantFor(lid), duration))
   }, 0)
 
   // Pricing order MUST mirror the server (convex/mutations.ts createBooking +

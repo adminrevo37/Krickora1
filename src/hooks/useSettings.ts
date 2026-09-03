@@ -27,7 +27,7 @@ const REMOTE_SCALAR_KEYS = [
   'coachLateCancellationHours', 'coachFlexibleWindowHours', 'abandonedCheckoutMinutes',
   'waitlistOfferHoldMinutes', 'maxMatesPerBooking',
   'waitlistAutoAltOffersEnabled', 'waitlistAltTimeWindowHours', 'waitlistAltTimeBroadcastWithinHours',
-  'waitlistStillWaitingReminderEnabled', 'waitlistStillWaitingReminderDays', 'waitlistMaxEntriesPerAccount',
+  'waitlistStillWaitingReminderEnabled', 'waitlistStillWaitingReminderDays', 'waitlistMaxEntriesPerAccount', 'machineDemandAlertMinWaiters',
   'pushEnabledGlobal', 'emailSkipWhenPushReachable',
   'registrationLocked', 'adminGateEnabled', 'adminUnlockMinutes',
 ] as const

@@ -35,6 +35,7 @@ import type * as googleCalendar from "../googleCalendar.js";
 import type * as googleCalendarMutations from "../googleCalendarMutations.js";
 import type * as http from "../http.js";
 import type * as laneBlocks from "../laneBlocks.js";
+import type * as laneDemandMonitor from "../laneDemandMonitor.js";
 import type * as laneReassign from "../laneReassign.js";
 import type * as lanes from "../lanes.js";
 import type * as lib_adminGuard from "../lib/adminGuard.js";
@@ -122,6 +123,7 @@ declare const fullApi: ApiFromModules<{
   googleCalendarMutations: typeof googleCalendarMutations;
   http: typeof http;
   laneBlocks: typeof laneBlocks;
+  laneDemandMonitor: typeof laneDemandMonitor;
   laneReassign: typeof laneReassign;
   lanes: typeof lanes;
   "lib/adminGuard": typeof lib_adminGuard;

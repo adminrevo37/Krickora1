@@ -293,6 +293,7 @@ export default function SettingsPanel() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <NumberInput label="Check-in after (days on the waitlist, and between check-ins)" value={settings.waitlistStillWaitingReminderDays ?? 2} onChange={(v) => updateSettings({ waitlistStillWaitingReminderDays: v })} />
             <NumberInput label="Max waitlist places per account" value={settings.waitlistMaxEntriesPerAccount ?? 10} onChange={(v) => updateSettings({ waitlistMaxEntriesPerAccount: v })} />
+            <NumberInput label="Machine-demand alert: waiters needed" value={settings.machineDemandAlertMinWaiters ?? 2} onChange={(v) => updateSettings({ machineDemandAlertMinWaiters: v })} />
           </div>
         </div>
       </div>

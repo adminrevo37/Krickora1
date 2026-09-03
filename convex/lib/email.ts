@@ -397,6 +397,23 @@ export function renderTemplate(slug: string, d: Data): Rendered | null {
             muted(`You'll only be charged if you choose to book a slot that's offered to you.`),
         }),
       };
+    case "duplicate-payment-credit":
+      return {
+        subject: `Payment received twice — ${esc(d.amount)} credited to your account`,
+        html: layout({
+          title: "Payment received twice",
+          preheader: `${esc(d.amount)} has been added to your Cricket Revolution credit.`,
+          bodyHtml:
+            p(`Hi ${greetFirst(d, "customerName")}, we received a second payment for a booking that was already paid — ${esc(d.laneName)} on ${esc(d.date)}.`) +
+            p(`Rather than leave it sitting with the card processor, we've added it to your account as credit. It comes off your next booking automatically.`) +
+            detailRows([
+              ["Credited", d.amount],
+              ["Booking", `${d.laneName} · ${d.date}`],
+              ["Reference", d.reference],
+            ]) +
+            muted(`Prefer it back on your card? Reply to this email and we'll refund it instead.`),
+        }),
+      };
     case "waitlist-still-waiting":
       return {
         subject: "Still waiting? Your waitlist places — Cricket Revolution",

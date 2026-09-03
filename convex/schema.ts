@@ -127,6 +127,14 @@ export default defineSchema({
     .index("by_email_sentAt", ["email", "sentAt"])
     .index("by_sentAt", ["sentAt"]),
 
+  // MACHINE-DEMAND MONITOR (Inspector decision, 2026-09-03): dedupe log for the
+  // "N waitlisted for a machine at <day time> and a run-up lane is free —
+  // convert?" admin push. One alert per (date, hour).
+  adminAlertLog: defineTable({
+    key: v.string(),
+    at: v.number(),
+  }).index("by_key", ["key"]),
+
   pushEvents: defineTable({
     at: v.number(), // ms
     type: v.string(), // 'sent' | 'failed' | 'pruned' | 'delivered' | 'clicked'
@@ -952,6 +960,11 @@ export default defineSchema({
     waitlistStillWaitingReminderDays: v.optional(v.number()),
     // Part C4 — max LIVE waitlist places one account may hold (default 10).
     waitlistMaxEntriesPerAccount: v.optional(v.number()),
+    // MACHINE-DEMAND MONITOR (2026-09-03) — push the admins when this many people
+    // are waitlisted for a bowling machine at one time while a run-up lane is
+    // unbooked. Conversion stays declare-ahead (admin override); customers see
+    // nothing. Default 2 (Inspector).
+    machineDemandAlertMinWaiters: v.optional(v.number()),
     // SPEC_ADD_A_MATE "Misc Settings". Max mates a customer may add to one
     // booking (the owner is NOT counted). Default 2 → 3 people total per net
     // (matches the facility "max 3 people per lane" safety rule).

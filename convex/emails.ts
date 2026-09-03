@@ -663,6 +663,31 @@ export const sendWaitlistStillWaiting = internalAction({
   },
 });
 
+// DOUBLE PAYMENT → CREDIT (2026-09-03).
+export const sendDuplicatePaymentCredit = internalAction({
+  args: {
+    to: v.string(),
+    customerName: v.string(),
+    amount: v.string(),
+    laneName: v.string(),
+    date: v.string(),
+    dateShort: v.optional(v.string()),
+    reference: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // Money notice — not preference-gated.
+    return await sendEmail("duplicate-payment-credit", args.to, {
+      customerName: args.customerName,
+      firstName: await resolveFirstName(ctx, args.to),
+      amount: args.amount,
+      laneName: args.laneName,
+      date: args.date,
+      ...(args.dateShort ? { dateShort: args.dateShort } : {}),
+      reference: args.reference,
+    });
+  },
+});
+
 export const sendWaitlistAltTimeOffer = internalAction({
   args: {
     to: v.string(),

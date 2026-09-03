@@ -18,6 +18,7 @@ type CreditReason =
   | "admin_adjust"
   | "redeemed"
   | "refund"
+  | "duplicate_payment"
   | "account_deleted";
 
 function roundCents(n: number): number {

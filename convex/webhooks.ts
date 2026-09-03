@@ -1,7 +1,7 @@
 import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { redeemCredit } from "./lib/credit";
+import { redeemCredit, issueCredit } from "./lib/credit";
 import { recordDiscountRedemption } from "./lib/discounts";
 import { releaseHoldForBooking } from "./lib/slotHolds";
 import { scheduleWaitlistAdvance } from "./waitlist";
@@ -260,6 +260,55 @@ export const confirmBookingPayment = internalMutation({
     // double-payment would land here; payment links are deactivated on payment
     // (SPEC_PAYMENT_LINK_TRACKING) specifically to stop that happening.
     if (b.paymentStatus === "paid") {
+      // DOUBLE PAYMENT ON A LIVE BOOKING (Inspector decision, 2026-09-03: "convert
+      // to account credit"). A second, DIFFERENT Stripe session paid for a booking
+      // that is already paid and still live. Record the money, credit the customer
+      // the full amount, tell them. No admin action required.
+      if (args.amountPaid > 0 && b.customerEmail) {
+        const currency = (args.currency ?? "AUD").toUpperCase();
+        const dollars = args.amountPaid / 100;
+        const laneName = laneNameForBooking(b);
+        await ctx.runMutation(internal.mutations.recordStripePaymentInternal, {
+          bookingId: booking._id.toString(),
+          stripeSessionId: args.stripeSessionId,
+          customerEmail: b.customerEmail,
+          customerName: b.customerName ?? "Customer",
+          amount: dollars,
+          currency,
+          status: "paid",
+          laneName,
+          date: b.date,
+          description: `Duplicate payment — converted to account credit (${laneName} ${b.date})`,
+          receiptUrl: args.receiptUrl,
+          dedupeBySession: true,
+        });
+        const credited = await issueCredit(ctx, {
+          email: b.customerEmail,
+          amount: dollars,
+          reason: "duplicate_payment",
+          bookingId: booking._id.toString(),
+          note: `Second payment received for an already-paid booking (${args.stripeSessionId})`,
+        });
+        await ctx.scheduler.runAfter(0, internal.emails.sendDuplicatePaymentCredit, {
+          to: b.customerEmail,
+          customerName: b.customerName ?? "there",
+          amount: `$${dollars.toFixed(2)} ${currency}`,
+          laneName,
+          date: fmtAwstDateLabel(b.date),
+          dateShort: fmtAwstDateShort(b.date),
+          reference: args.stripeSessionId,
+        });
+        await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
+          email: b.customerEmail,
+          category: "account-credit",
+          title: "Payment received twice — credited to your account",
+          body: `$${dollars.toFixed(2)} was paid a second time for ${laneName} on ${fmtAwstDateLabel(b.date)}. It's now account credit and will come off your next booking.`,
+          url: "/payments",
+          tag: `dup-${booking._id.toString()}`,
+        });
+        console.warn(`[webhook] DUPLICATE PAYMENT on live booking ${booking._id.toString()} — $${dollars.toFixed(2)} credited (${credited})`);
+        return { success: true, duplicateCredited: true };
+      }
       return { success: true, alreadyPaid: true };
     }
 
