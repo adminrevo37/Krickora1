@@ -441,6 +441,13 @@ export default defineSchema({
     ),
     cancelledAt: v.optional(v.string()),
     cancelledByUserId: v.optional(v.string()),
+    // 2026-09-03 (Inspector) — WHY an admin cancelled on someone's behalf. A third
+    // of coach cancellations are admin-made; without this the analytics can't tell
+    // a phoned-in coach request from an admin-initiated cancel. Required in the
+    // admin modal; absent on self-cancels and legacy rows.
+    //   'coach_requested' | 'customer_requested' | 'no_show' | 'facility' | 'error' | 'other'
+    cancelReason: v.optional(v.string()),
+    cancelNote: v.optional(v.string()),
     refilledMinutes: v.optional(v.number()),
     originalCoachId: v.optional(v.string()),
     accessCode: v.optional(v.string()),

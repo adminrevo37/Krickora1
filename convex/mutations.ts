@@ -3028,6 +3028,9 @@ export const cancelBooking = mutation({
   args: {
     id: v.id("bookings"),
     cancelledByUserId: v.optional(v.string()),
+    // 2026-09-03 — admin cancel reason (see schema.cancelReason) + free-text note.
+    reason: v.optional(v.string()),
+    note: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // SPEC_COACH_SPLIT_LANE_BOOKING: cancel acts on the WHOLE split — resolve the
@@ -3048,6 +3051,8 @@ export const cancelBooking = mutation({
         id: splitSibling._id,
         cancelledByUserId: args.cancelledByUserId,
         suppressComms: true,
+        reason: args.reason,
+        note: args.note,
       });
     }
     return args.id;
@@ -3061,7 +3066,7 @@ export const cancelBooking = mutation({
 // athlete cancellation emails fire from the carrier's slots exactly once).
 async function cancelBookingCore(
   ctx: any,
-  args: { id: any; cancelledByUserId?: string; suppressComms?: boolean }
+  args: { id: any; cancelledByUserId?: string; suppressComms?: boolean; reason?: string; note?: string }
 ) {
     const booking = await ctx.db.get(args.id);
     if (!booking) throw new ConvexError("Booking not found.");
@@ -3144,11 +3149,15 @@ async function cancelBookingCore(
       }
     }
 
+    const reasonKey = (args.reason ?? "").trim().toLowerCase();
+    const noteText = (args.note ?? "").trim().slice(0, 500);
     await ctx.db.patch(args.id, {
       status: "cancelled",
       cancelledAt: new Date().toISOString(),
       cancelledByUserId: args.cancelledByUserId,
       ...(coachLateCancelCharged ? { coachLateCancelCharged: true } : {}),
+      ...(reasonKey ? { cancelReason: reasonKey } : {}),
+      ...(noteText ? { cancelNote: noteText } : {}),
     });
 
     // WS-C live feed: record the cancel event (booking.* holds the cancelled slot).

@@ -863,6 +863,9 @@ function emptyCancelSummary() {
     medianBookingLeadHoursCancelled: 0,
     medianBookingLeadHoursKept: 0,
     who: { self: 0, admin: 0, system: 0, unknown: 0 },
+    // 2026-09-03 — admin cancellations by recorded reason ('unrecorded' = before
+    // the reason field existed, or a self-cancel path).
+    adminReasons: {} as Record<string, number>,
     // Inspector 2026-09-02: cancellations by weekday × hour of the SESSION, with
     // the confirmed+cancelled base for that cell so a rate can be shown.
     byDowHour: [] as Array<{ dow: number; dowLabel: string; hour: number; cancelled: number; base: number }>,
@@ -919,7 +922,11 @@ function summariseCancellations(rows: any[], lateWindowH: number, from?: string,
     if (by == null || by === "") out.who.unknown++;
     else if (by === b.userId) out.who.self++;
     else if (String(by).includes("@")) out.who.system++;
-    else out.who.admin++;
+    else {
+      out.who.admin++;
+      const rk = b.cancelReason || "unrecorded";
+      out.adminReasons[rk] = (out.adminReasons[rk] ?? 0) + 1;
+    }
 
     const cancelledAtMs = b.cancelledAt ? Date.parse(b.cancelledAt) : NaN;
     if (!Number.isFinite(cancelledAtMs)) continue;
@@ -1002,18 +1009,44 @@ export async function computeCancellationAnalytics(ctx: any, args: { from?: stri
   // Inspector 2026-09-02 — repeat cancellers, coach side. Coaches are staff-like
   // and already named throughout the admin panel, so names are fine here
   // (customers stay aggregate-only, like Top Customers).
+  type LateDetail = {
+    date: string; startHour: number; laneName: string; noticeHours: number; charged: boolean;
+    statementExcluded: boolean; coachPrice: number; cancelledBy: string; reason: string | null;
+    whyNotCharged: string | null;
+  };
   const perCoach = new Map<string, {
     email: string; name: string; bookings: number; cancelled: number; late: number;
     lateCharged: number; lateChargedAmount: number; self: number; admin: number;
+    windowHours: number; flexible: boolean; lateDetails: LateDetail[]; adminReasons: Record<string, number>;
   }>();
+  // Effective late window per coach (SPEC_COACH_FLEXIBLE_WINDOW: a flagged coach's
+  // window is coachFlexibleWindowHours, default 3, not 24). This is the audit's
+  // key: a cancellation inside 24h but outside the coach's OWN window is correctly
+  // uncharged, and the old table could not tell those apart from missed charges.
+  const flexH = settings?.coachFlexibleWindowHours ?? 3;
+  const coachEmails = new Set(coachRows.map((b) => String(b.customerEmail ?? "").toLowerCase().trim()));
+  const flexibleByEmail = new Map<string, boolean>();
+  for (const email of coachEmails) {
+    if (!email) continue;
+    const c: any = await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", email)).first();
+    flexibleByEmail.set(email, c?.flexibleBookingWindow === true);
+  }
   const rowFor = (b: any) => {
     const email = String(b.customerEmail ?? "").toLowerCase().trim();
     let r = perCoach.get(email);
     if (!r) {
-      r = { email, name: b.customerName ?? email, bookings: 0, cancelled: 0, late: 0, lateCharged: 0, lateChargedAmount: 0, self: 0, admin: 0 };
+      const flexible = flexibleByEmail.get(email) === true;
+      r = { email, name: b.customerName ?? email, bookings: 0, cancelled: 0, late: 0, lateCharged: 0, lateChargedAmount: 0, self: 0, admin: 0, windowHours: flexible ? flexH : coachLateH, flexible, lateDetails: [], adminReasons: {} };
       perCoach.set(email, r);
     }
     return r;
+  };
+  const whoOf = (b: any) => {
+    const by = b.cancelledByUserId;
+    if (!by) return "unknown";
+    if (by === b.userId) return "self";
+    if (String(by).includes("@")) return "system";
+    return "admin";
   };
   for (const b of coachRows) {
     if (!inRange(b.date, args.from, args.to)) continue;
@@ -1030,30 +1063,111 @@ export async function computeCancellationAnalytics(ctx: any, args: { from?: stri
       r.lateCharged++;
       r.lateChargedAmount += coachBookingCost(b);
     }
+    const who = whoOf(b);
+    if (who === "self") r.self++;
+    else if (who === "admin") {
+      r.admin++;
+      const rk = b.cancelReason || "unrecorded";
+      r.adminReasons[rk] = (r.adminReasons[rk] ?? 0) + 1;
+    }
     const cancelledAtMs = b.cancelledAt ? Date.parse(b.cancelledAt) : NaN;
     if (Number.isFinite(cancelledAtMs)) {
       const startMs = awstDateKeyToMs(b.date) + (b.startHour ?? 0) * HOUR_MS;
       const leadH = (startMs - cancelledAtMs) / HOUR_MS;
-      if (leadH >= 0 && leadH < coachLateH) r.late++;
+      // "late" for the table = inside the STANDARD window, so coaches are comparable.
+      if (leadH >= 0 && leadH < coachLateH) {
+        r.late++;
+        const charged = b.coachLateCancelCharged === true;
+        const excluded = b.statementExcluded === true;
+        let why: string | null = null;
+        if (!charged) {
+          if (leadH >= r.windowHours) why = `outside this coach's ${r.windowHours}h window (flexible)`;
+          else if (excluded) why = "charge removed by admin (statement-excluded)";
+          else why = "NOT CHARGED — inside the window, no exclusion: check";
+        } else if (excluded) {
+          why = "charged, then removed by admin (statement-excluded)";
+        }
+        r.lateDetails.push({
+          date: b.date,
+          startHour: b.startHour ?? 0,
+          laneName: b.laneNameSnapshot ?? defaultLaneName(b.laneId),
+          noticeHours: round2(leadH),
+          charged,
+          statementExcluded: excluded,
+          coachPrice: Number(b.coachPrice) || 0,
+          cancelledBy: who,
+          reason: b.cancelReason ?? null,
+          whyNotCharged: why,
+        });
+      }
     }
-    const by = b.cancelledByUserId;
-    if (by && by === b.userId) r.self++;
-    else if (by && !String(by).includes("@")) r.admin++;
   }
   const coachTable = [...perCoach.values()]
     .filter((r) => r.cancelled > 0)
     .map((r) => ({
       ...r,
+      lateDetails: r.lateDetails.sort((a, b) => b.date.localeCompare(a.date) || b.startHour - a.startHour),
+      lateUncharged: r.lateDetails.filter((d) => !d.charged).length,
       lateChargedAmount: round2(r.lateChargedAmount),
       cancellationRatePct: r.bookings > 0 ? Math.round((r.cancelled / r.bookings) * 100) : 0,
     }))
     .sort((a, b) => b.cancelled - a.cancelled || b.late - a.late)
     .slice(0, 20);
 
+  // Inspector 2026-09-03 — customer repeat cancellers, WITH names (their call).
+  const perCustomer = new Map<string, {
+    email: string; name: string; bookings: number; cancelled: number; late: number; self: number; admin: number;
+    abandoned: number; club: boolean; adminReasons: Record<string, number>;
+  }>();
+  const custRowFor = (b: any) => {
+    const email = String(b.customerEmail ?? "").toLowerCase().trim();
+    let r = perCustomer.get(email);
+    if (!r) {
+      r = { email, name: b.customerName ?? email, bookings: 0, cancelled: 0, late: 0, self: 0, admin: 0, abandoned: 0, club: b.isClubBooking === true, adminReasons: {} };
+      perCustomer.set(email, r);
+    }
+    return r;
+  };
+  for (const b of customerRows) {
+    if (!inRange(b.date, args.from, args.to)) continue;
+    if (b.status === "confirmed") {
+      custRowFor(b).bookings++;
+      continue;
+    }
+    if (b.status !== "cancelled") continue;
+    if (b.paymentStatus === "failed" && !b.cancelledByUserId) {
+      custRowFor(b).abandoned++;
+      continue;
+    }
+    const r = custRowFor(b);
+    r.bookings++;
+    r.cancelled++;
+    const who = whoOf(b);
+    if (who === "self") r.self++;
+    else if (who === "admin") {
+      r.admin++;
+      const rk = b.cancelReason || "unrecorded";
+      r.adminReasons[rk] = (r.adminReasons[rk] ?? 0) + 1;
+    }
+    const cancelledAtMs = b.cancelledAt ? Date.parse(b.cancelledAt) : NaN;
+    if (Number.isFinite(cancelledAtMs)) {
+      const startMs = awstDateKeyToMs(b.date) + (b.startHour ?? 0) * HOUR_MS;
+      const leadH = (startMs - cancelledAtMs) / HOUR_MS;
+      if (leadH >= 0 && leadH < customerLateH) r.late++;
+    }
+  }
+  const customerTable = [...perCustomer.values()]
+    .filter((r) => r.cancelled > 0)
+    .map((r) => ({ ...r, cancellationRatePct: r.bookings > 0 ? Math.round((r.cancelled / r.bookings) * 100) : 0 }))
+    .sort((a, b) => b.cancelled - a.cancelled || b.late - a.late || b.abandoned - a.abandoned)
+    .slice(0, 20);
+
   return {
     customer,
     coach,
     coachTable,
+    customerTable,
+    customerLateWindowHours: customerLateH,
     // Back-compat aggregate (the old single-number KPIs).
     cancelled: customer.cancelled + coach.cancelled,
     cancellationRatePct:

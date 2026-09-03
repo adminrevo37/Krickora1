@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
+import { CANCEL_REASONS } from '../lib/cancelReasons'
 import { useMutation, useQuery, useConvex } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
@@ -97,6 +98,9 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave, ope
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  // 2026-09-03 — reason is REQUIRED when an admin cancels on someone's behalf.
+  const [cancelReason, setCancelReason] = useState('')
+  const [cancelNote, setCancelNote] = useState('')
   // SPEC_ADMIN_MANUAL_POWERS — resend + in-app void
   const [actionNote, setActionNote] = useState<string | null>(null)
   const [showVoid, setShowVoid] = useState(false)
@@ -402,7 +406,7 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave, ope
   const handleCancel = async () => {
     setSaving(true); setError(null)
     try {
-      await cancelMut({ id: booking.id as any, cancelledByUserId: user?.id })
+      await cancelMut({ id: booking.id as any, cancelledByUserId: user?.id, reason: cancelReason || undefined, note: cancelNote || undefined })
       onClose()
     } catch (e: any) {
       setError(getErrorMessage(e) ?? 'Failed to cancel booking.')
@@ -901,6 +905,23 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave, ope
                 <div className="mt-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-lg p-4 space-y-3">
                   <p className="text-sm font-semibold text-red-700 dark:text-red-400">Cancel this booking?</p>
                   <p className="text-xs text-red-600 dark:text-red-400">The customer will receive a cancellation email. This cannot be undone.</p>
+                  <label className="block text-xs font-semibold text-red-700 dark:text-red-400">Why? <span className="font-normal text-red-500">(required)</span>
+                    <select
+                      value={cancelReason}
+                      onChange={(e) => setCancelReason(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-red-200 dark:border-red-800 bg-white dark:bg-gray-900 px-2.5 py-2 text-sm text-gray-800 dark:text-gray-200"
+                    >
+                      <option value="">Choose a reason…</option>
+                      {CANCEL_REASONS.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
+                    </select>
+                  </label>
+                  <input
+                    value={cancelNote}
+                    onChange={(e) => setCancelNote(e.target.value)}
+                    placeholder="Optional note (who called, what they said)"
+                    maxLength={500}
+                    className="w-full rounded-lg border border-red-200 dark:border-red-800 bg-white dark:bg-gray-900 px-2.5 py-2 text-sm text-gray-800 dark:text-gray-200"
+                  />
                   <div className="flex gap-2">
                     <button
                       onClick={() => setShowCancelConfirm(false)}
@@ -911,7 +932,8 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave, ope
                     </button>
                     <button
                       onClick={handleCancel}
-                      disabled={saving}
+                      disabled={saving || !cancelReason}
+                      title={!cancelReason ? 'Pick a reason first' : undefined}
                       className="flex-1 px-3 py-2 rounded-lg bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition-colors disabled:opacity-50"
                     >
                       {saving ? 'Cancelling…' : 'Yes, cancel'}

@@ -4,6 +4,19 @@ import { useState } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '../../../convex/_generated/api'
 import { type DateRange, downloadCsv, Loading, Empty, Section, KpiCard, BarRow } from './shared'
+import { CANCEL_REASON_LABEL } from '../../lib/cancelReasons'
+
+const fmtHourShortLocal = (h: number) => {
+  const hr = Math.floor(h)
+  const m = Math.round((h - hr) * 60)
+  const period = hr >= 12 ? 'pm' : 'am'
+  const display = hr === 0 ? 12 : hr > 12 ? hr - 12 : hr
+  return m ? `${display}:${String(m).padStart(2, '0')}${period}` : `${display}${period}`
+}
+const reasonsText = (r: Record<string, number> | undefined) =>
+  r && Object.keys(r).length
+    ? Object.entries(r).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${CANCEL_REASON_LABEL[k] ?? (k === 'unrecorded' ? 'no reason recorded' : k)} ${n}`).join(' · ')
+    : ''
 
 const LANES = [
   { id: '', name: 'All lanes' },
@@ -185,9 +198,43 @@ function CancellationPanel({ cancel }: { cancel: any }) {
         <div className="p-5 grid grid-cols-1 xl:grid-cols-2 gap-6">
           <CancelGroup title="Customers" icon="🏏" g={cancel.customer} />
           <CancelGroup title="Coaches" icon="🎓" g={cancel.coach} />
+          {cancel.customerTable && cancel.customerTable.length > 0 && (
+            <div className="xl:col-span-2">
+              <p className="text-xs font-semibold text-gray-500 uppercase mb-1.5">Customers by cancellations</p>
+              <div className="overflow-x-auto rounded-xl border border-gray-100">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b border-gray-200">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-[11px] font-semibold text-gray-500 uppercase">Customer</th>
+                      <th className="px-3 py-2 text-right text-[11px] font-semibold text-gray-500 uppercase">Cancelled</th>
+                      <th className="px-3 py-2 text-right text-[11px] font-semibold text-gray-500 uppercase">Of bookings</th>
+                      <th className="px-3 py-2 text-right text-[11px] font-semibold text-gray-500 uppercase">Rate</th>
+                      <th className="px-3 py-2 text-right text-[11px] font-semibold text-gray-500 uppercase">Late (&lt;{cancel.customerLateWindowHours}h)</th>
+                      <th className="px-3 py-2 text-right text-[11px] font-semibold text-gray-500 uppercase">Self / Admin</th>
+                      <th className="px-3 py-2 text-right text-[11px] font-semibold text-gray-500 uppercase">Abandoned</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {cancel.customerTable.map((r: any) => (
+                      <tr key={r.email} className={r.cancelled >= 3 ? 'bg-amber-50/40' : ''}>
+                        <td className="px-3 py-1.5 text-gray-800">{r.name}{r.club && <span className="ml-1 text-[10px] px-1 rounded bg-purple-100 text-purple-700">club</span>}<span className="block text-[11px] text-gray-400">{r.email}</span></td>
+                        <td className="px-3 py-1.5 text-right font-medium text-gray-800">{r.cancelled}</td>
+                        <td className="px-3 py-1.5 text-right text-gray-500">{r.bookings}</td>
+                        <td className="px-3 py-1.5 text-right text-gray-500">{r.cancellationRatePct}%</td>
+                        <td className={`px-3 py-1.5 text-right font-medium ${r.late > 0 ? 'text-red-600' : 'text-gray-400'}`}>{r.late}</td>
+                        <td className="px-3 py-1.5 text-right text-gray-500" title={reasonsText(r.adminReasons)}>{r.self} / {r.admin}</td>
+                        <td className="px-3 py-1.5 text-right text-gray-400">{r.abandoned || ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[11px] text-gray-400 mt-1">Real cancellations only; abandoned checkouts shown separately. Rows with 3+ cancellations are tinted.</p>
+            </div>
+          )}
           {cancel.coachTable && cancel.coachTable.length > 0 && (
             <div className="xl:col-span-2">
-              <p className="text-xs font-semibold text-gray-500 uppercase mb-1.5">Coaches by cancellations</p>
+              <p className="text-xs font-semibold text-gray-500 uppercase mb-1.5">Coaches by cancellations <span className="normal-case font-normal text-gray-400">— click a row for its late cancellations and whether each was charged</span></p>
               <div className="overflow-x-auto rounded-xl border border-gray-100">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b border-gray-200">
@@ -203,20 +250,12 @@ function CancellationPanel({ cancel }: { cancel: any }) {
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {cancel.coachTable.map((r: any) => (
-                      <tr key={r.email} className={r.late >= 3 ? 'bg-red-50/40' : ''}>
-                        <td className="px-3 py-1.5 text-gray-800">{r.name}<span className="block text-[11px] text-gray-400">{r.email}</span></td>
-                        <td className="px-3 py-1.5 text-right font-medium text-gray-800">{r.cancelled}</td>
-                        <td className="px-3 py-1.5 text-right text-gray-500">{r.bookings}</td>
-                        <td className="px-3 py-1.5 text-right text-gray-500">{r.cancellationRatePct}%</td>
-                        <td className={`px-3 py-1.5 text-right font-medium ${r.late > 0 ? 'text-red-600' : 'text-gray-400'}`}>{r.late}</td>
-                        <td className="px-3 py-1.5 text-right text-gray-600">{r.lateCharged}{r.lateChargedAmount ? ` · $${r.lateChargedAmount.toFixed(2)}` : ''}</td>
-                        <td className="px-3 py-1.5 text-right text-gray-500">{r.self} / {r.admin}</td>
-                      </tr>
+                      <CoachCancelRow key={r.email} r={r} />
                     ))}
                   </tbody>
                 </table>
               </div>
-              <p className="text-[11px] text-gray-400 mt-1">Late = cancelled inside the coach late window. Rows with 3+ late cancellations are tinted.</p>
+              <p className="text-[11px] text-gray-400 mt-1">Late = cancelled inside the standard coach window. A coach on the flexible window is only charged inside their shorter window — the drill-down says which. Rows with 3+ late cancellations are tinted; an uncharged late cancel that should have been charged is flagged in red.</p>
             </div>
           )}
         </div>
@@ -370,8 +409,73 @@ function CancelGroup({ title, icon, g }: { title: string; icon: string; g: any }
             <span>Closure / block <strong>{g.who.system}</strong> ({pct(g.who.system)}%)</span>
             {g.who.unknown > 0 && <span className="text-gray-400">Unrecorded {g.who.unknown}</span>}
           </div>
+          {g.who.admin > 0 && reasonsText(g.adminReasons) && (
+            <p className="text-[11px] text-gray-500">Admin cancels by reason: {reasonsText(g.adminReasons)}</p>
+          )}
         </>
       )}
     </div>
+  )
+}
+
+// 2026-09-03 — late-charge audit drill-down. Expands a coach row into every late
+// cancellation with charged yes/no and, when not charged, why.
+function CoachCancelRow({ r }: { r: any }) {
+  const [open, setOpen] = useState(false)
+  const flagged = (r.lateDetails ?? []).some((d: any) => d.whyNotCharged?.startsWith('NOT CHARGED'))
+  return (
+    <>
+      <tr onClick={() => setOpen(o => !o)} className={`cursor-pointer ${r.late >= 3 ? 'bg-red-50/40' : ''} hover:bg-gray-50`}>
+        <td className="px-3 py-1.5 text-gray-800">
+          <span className="text-gray-400 mr-1">{open ? '▾' : '▸'}</span>{r.name}
+          {r.flexible && <span className="ml-1 text-[10px] px-1 rounded bg-blue-100 text-blue-700" title={`Flexible window: charged only inside ${r.windowHours}h`}>{r.windowHours}h window</span>}
+          {flagged && <span className="ml-1 text-[10px] px-1 rounded bg-red-100 text-red-700">check charges</span>}
+          <span className="block text-[11px] text-gray-400">{r.email}</span>
+        </td>
+        <td className="px-3 py-1.5 text-right font-medium text-gray-800">{r.cancelled}</td>
+        <td className="px-3 py-1.5 text-right text-gray-500">{r.bookings}</td>
+        <td className="px-3 py-1.5 text-right text-gray-500">{r.cancellationRatePct}%</td>
+        <td className={`px-3 py-1.5 text-right font-medium ${r.late > 0 ? 'text-red-600' : 'text-gray-400'}`}>{r.late}</td>
+        <td className="px-3 py-1.5 text-right text-gray-600">{r.lateCharged}{r.lateChargedAmount ? ` · $${r.lateChargedAmount.toFixed(2)}` : ''}</td>
+        <td className="px-3 py-1.5 text-right text-gray-500" title={reasonsText(r.adminReasons)}>{r.self} / {r.admin}</td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={7} className="px-3 pb-3 pt-1 bg-gray-50/60">
+            {(r.lateDetails ?? []).length === 0 ? (
+              <p className="text-xs text-gray-500">No late cancellations in range.</p>
+            ) : (
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-[10px] uppercase text-gray-500">
+                    <th className="text-left py-1 pr-2">Session</th>
+                    <th className="text-right py-1 pr-2">Notice</th>
+                    <th className="text-left py-1 pr-2">By</th>
+                    <th className="text-right py-1 pr-2">Charge</th>
+                    <th className="text-left py-1">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {r.lateDetails.map((d: any, i: number) => (
+                    <tr key={i}>
+                      <td className="py-1 pr-2 text-gray-700">{d.date} {fmtHourShortLocal(d.startHour)} · {d.laneName}</td>
+                      <td className="py-1 pr-2 text-right text-gray-600">{d.noticeHours}h</td>
+                      <td className="py-1 pr-2 text-gray-600">{d.cancelledBy}{d.reason ? ` · ${CANCEL_REASON_LABEL[d.reason] ?? d.reason}` : ''}</td>
+                      <td className="py-1 pr-2 text-right text-gray-600">${(d.coachPrice ?? 0).toFixed(2)}</td>
+                      <td className={`py-1 font-medium ${d.charged && !d.statementExcluded ? 'text-emerald-700' : d.whyNotCharged?.startsWith('NOT CHARGED') ? 'text-red-600' : 'text-gray-500'}`}>
+                        {d.charged && !d.statementExcluded ? 'charged' : d.whyNotCharged}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {r.adminReasons && Object.keys(r.adminReasons).length > 0 && (
+              <p className="text-[11px] text-gray-500 mt-2">Admin cancels by reason: {reasonsText(r.adminReasons)}</p>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
   )
 }
