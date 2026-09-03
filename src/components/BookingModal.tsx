@@ -101,6 +101,8 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
   // SPEC_EARLY_ACCESS_2026-08 — matches the calendar's weekday half-hours (every
   // coach) + the admin-granted 6:30am slot (this account only, if flagged).
   const hasEarlyAccess = (customerRecord as any)?.earlyAccess630 === true
+  // BOOKING LOCK — mirror the server refusal in the UI (the server is the gate).
+  const bookingLocked = (customerRecord as any)?.bookingLocked === true
   const validCoachStarts = useMemo(() => getValidCoachStartTimes(date, hasEarlyAccess), [date, hasEarlyAccess])
   // A per-lane segment CUSTOM start (e.g. a Saturday split offering 9:30/10:30/…)
   // is bookable by coaches too — SPEC_LANE_SEGMENT_BOOKING_TIMES coach fix — as is
@@ -1268,13 +1270,18 @@ export default function BookingModal({ lane, date, startHour, existingBookings, 
               </div>
             )}
 
+            {bookingLocked && (
+              <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-3 border border-red-300 dark:border-red-800/60">
+                <p className="text-sm font-medium text-red-700 dark:text-red-400">Bookings on your account are currently suspended. Please contact Cricket Revolution.</p>
+              </div>
+            )}
             {laneWarning && !laneWarningAck && (
               <p className="text-xs text-red-600 dark:text-red-400 -mb-1">
                 Tick the box above to continue.
               </p>
             )}
 
-            <button onClick={handleContinueToPayment} disabled={(splitOn ? !splitReady : availableDurations.length === 0) || (isCoach && !isValidCoachStart) || (!!laneWarning && !laneWarningAck)}
+            <button onClick={handleContinueToPayment} disabled={bookingLocked || (splitOn ? !splitReady : availableDurations.length === 0) || (isCoach && !isValidCoachStart) || (!!laneWarning && !laneWarningAck)}
               className={`w-full py-3 font-semibold rounded-xl shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed text-white ${isCoach ? 'bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600' : totalPrice === 0 ? 'bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-600 hover:to-indigo-600' : 'bg-gradient-to-r from-emerald-500 to-green-500 hover:from-emerald-600 hover:to-green-600'}`}>
               {!user ? 'Sign In to Book →' : isCoach ? `Confirm — $${fmtMoney(totalPrice)} →` : totalPrice === 0 ? 'Confirm Free Booking →' : `Continue to Payment — $${fmtMoney(totalPrice)} →`}
             </button>

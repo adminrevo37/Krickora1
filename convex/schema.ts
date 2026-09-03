@@ -234,6 +234,16 @@ export default defineSchema({
     // account (including tier-L1 coaches) now needs this flag explicitly.
     // Absent/false = no early access, same as the pre-open floor for everyone else.
     earlyAccess630: v.optional(v.boolean()),
+    // BOOKING LOCK (Inspector, 2026-09-03) — admin suspends this account from
+    // making or changing bookings (customer OR coach). Enforced server-side on
+    // every self-service path: create, split, extend, modify, waitlist join.
+    // Cancelling stays allowed. Admin manual bookings on their behalf are NOT
+    // blocked (an explicit admin act). The reason is admin-only; the customer
+    // sees a generic "contact us" message.
+    bookingLocked: v.optional(v.boolean()),
+    bookingLockReason: v.optional(v.string()),
+    bookingLockedAt: v.optional(v.number()),
+    bookingLockedBy: v.optional(v.string()),
     bookingEmailsEnabled: v.optional(v.boolean()),
     // Bug 7: master email switch. Strict === false silences ALL preference-gated
     // emails (regular notifications + the weekly summary); legacy/absent = ON. Does

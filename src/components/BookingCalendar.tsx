@@ -80,6 +80,8 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   // component's "don't flip into coach-view mode, only reflect the viewed account"
   // impersonation stance.
   const hasEarlyAccess = (customerRecord as any)?.earlyAccess630 === true
+  // BOOKING LOCK — server refuses anyway; this tells them before they try.
+  const bookingLocked = (customerRecord as any)?.bookingLocked === true
   const releaseRole: 'coach' | 'customer' = userIsCoach ? 'coach' : 'customer'
   const coachWindowDays = settings.coachBookingWindowDays ?? 8
   // SPEC_COACH_CALENDAR §1E — coach back-navigation. 0 = live view; -1/-2 = past
@@ -620,6 +622,12 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
   return (
     <div className="space-y-6">
       {/* U4 — outcome of a waitlist "Pass" push deep-link. */}
+      {bookingLocked && (
+        <div className="mb-3 rounded-xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-3">
+          <p className="text-sm font-semibold text-red-700 dark:text-red-300">Bookings on your account are currently suspended.</p>
+          <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">You can still view and cancel existing sessions. Please contact Cricket Revolution to have this reviewed.</p>
+        </div>
+      )}
       {declineNotice && (
         <div className={`flex items-center gap-2 rounded-xl p-3 border ${declineNotice.ok
           ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800/50'

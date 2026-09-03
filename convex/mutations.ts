@@ -198,6 +198,16 @@ const CLUB_FIXED_DOOR_CODE = "2026";
 // short flexible window (siteSettings.coachFlexibleWindowHours, default 3); otherwise
 // the passed standard default (24). Resolved from the booking's OWNER coach, so it
 // applies however the action is initiated.
+// BOOKING LOCK (Inspector, 2026-09-03). Admin callers are never blocked — an
+// admin booking on a locked account's behalf is an explicit act. The reason
+// stays admin-only.
+function assertBookingNotLocked(callerCustomer: any, isAdminCaller: boolean): void {
+  if (isAdminCaller) return;
+  if (callerCustomer?.bookingLocked === true) {
+    throw new ConvexError("Bookings on this account are currently suspended. Please contact Cricket Revolution.");
+  }
+}
+
 async function resolveCoachWindowHours(
   ctx: any,
   booking: any,
@@ -984,6 +994,7 @@ export const createBooking = mutation({
     // deliberate per-account grant; existing L1 coaches who used it (Dean Holder)
     // were migrated onto this flag so nothing changed for them in practice.
     const callerHasEarlyAccess = callerCustomer?.earlyAccess630 === true;
+    assertBookingNotLocked(callerCustomer, isAdminCaller); // BOOKING LOCK
     // Admins may book ANY pre-open slot (manual / early bookings, e.g. 6:30am) as
     // an explicit override, regardless of the flag.
     const allowPreOpen = (callerHasEarlyAccess && args.startHour === 6.5) || isAdminCaller;
@@ -1871,6 +1882,7 @@ export const createSplitBooking = mutation({
     if (dayHours?.closed) throw new ConvexError("The facility is closed on this day.");
     // SPEC_EARLY_ACCESS_2026-08 — see the matching block in createBooking.
     const callerHasEarlyAccess = callerCustomer?.earlyAccess630 === true;
+    assertBookingNotLocked(callerCustomer, isAdminCaller); // BOOKING LOCK
     const allowPreOpen = (callerHasEarlyAccess && args.startHour === 6.5) || isAdminCaller;
     if (args.startHour < OPENING_HOUR && !allowPreOpen) {
       throw new ConvexError("Booking starts before opening time.");
@@ -2195,6 +2207,7 @@ export const extendBookingLive = mutation({
     const callerEmail = identity.email?.toLowerCase().trim() ?? "";
     const callerCustomer = await resolveCanonicalCustomerByEmail(ctx, callerEmail);
     const isAdminCaller = callerCustomer?.role === "admin";
+    assertBookingNotLocked(callerCustomer, isAdminCaller); // BOOKING LOCK
 
     const parent: any = await ctx.db.get(args.parentId);
     if (!parent) throw new ConvexError("Booking not found.");
@@ -3469,6 +3482,7 @@ export const modifyBooking = mutation({
       ? await ctx.db.query("customers").withIndex("by_email", (q: any) => q.eq("email", callerEmail)).first()
       : null;
     const isAdmin = callerCustomer?.role === "admin";
+    assertBookingNotLocked(callerCustomer, isAdmin); // BOOKING LOCK — modify counts as booking
     if (!isOwner && !isAdmin) {
       throw new ConvexError("You can only modify your own bookings.");
     }
@@ -6149,6 +6163,14 @@ export const addToWaitlist = mutation({
     const authedEmail = identity.email ?? null;
     const authedName = (identity as any)?.name ?? null;
     const callerUserId = identity.subject;
+    // BOOKING LOCK — a suspended account can't queue for slots either.
+    if (authedEmail) {
+      const lockCust = await ctx.db
+        .query("customers")
+        .withIndex("by_email", (q: any) => q.eq("email", authedEmail.toLowerCase().trim()))
+        .first();
+      assertBookingNotLocked(lockCust, (lockCust as any)?.role === "admin");
+    }
 
     // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 C4 — cap the LIVE places one account
     // can hold. Bounds a table that could not shrink before the reaper, and stops

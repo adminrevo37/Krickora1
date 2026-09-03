@@ -598,6 +598,9 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
   // SPEC_EARLY_ACCESS_2026-08 — role-agnostic (coach OR customer); NOT scoped inside
   // the isCoach-only block below.
   const [earlyAccess630, setEarlyAccess630] = useState<boolean>(!!user.earlyAccess630)
+  // BOOKING LOCK (2026-09-03) — suspend this account from booking (customer OR coach).
+  const [bookingLocked, setBookingLocked] = useState<boolean>(!!user.bookingLocked)
+  const [bookingLockReason, setBookingLockReason] = useState<string>(user.bookingLockReason ?? '')
   const [busy, setBusy] = useState(false)
   // SPEC_ADMIN_MANUAL_POWERS — manual support actions
   const [creditAmount, setCreditAmount] = useState('')
@@ -674,7 +677,7 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
     e.preventDefault()
     setBusy(true)
     try {
-      const args: any = { email: user.email, phone, role, earlyAccess630 }
+      const args: any = { email: user.email, phone, role, earlyAccess630, bookingLocked, bookingLockReason }
       if (isCoach) { args.name = name } else { args.firstName = firstName.trim(); args.lastName = lastName.trim() }
       if (isCoach || role === 'coach') { args.coachTier = coachTier; args.color = color; args.defaultSessionDuration = defaultSessionDuration; args.athleteCapacity = athleteCapacity; args.hideFromPublicCoachList = hideFromPublicCoachList; args.flexibleBookingWindow = flexibleBookingWindow }
       // SPEC_PROFILE_POSTCODE_SUBURB: only send when both present (avoids clobbering to blank).
@@ -807,6 +810,26 @@ function EditUserModal({ user, onClose, isCoach }: { user: any; onClose: () => v
             {' '}— lets this account book the 6:30am pre-open slot. Admin-only special access, not tied to coach tier — works for a coach or a customer.
           </span>
         </label>
+        {/* BOOKING LOCK (Inspector, 2026-09-03) — works for a customer OR a coach. */}
+        <div className={`rounded-lg p-3 space-y-2 ${bookingLocked ? 'bg-red-50 border border-red-200' : 'bg-gray-50'}`}>
+          <label className="flex items-start gap-2 text-sm cursor-pointer select-none">
+            <input type="checkbox" checked={bookingLocked} onChange={e => setBookingLocked(e.target.checked)} className="mt-0.5 w-4 h-4 accent-red-600 shrink-0" />
+            <span className="text-gray-600">
+              <span className="font-medium text-gray-800">🔒 Booking lock — suspend this account from booking</span>
+              {' '}— they can still log in and cancel, but every self-service booking, change, extension and waitlist join is refused with "Bookings on this account are currently suspended. Please contact Cricket Revolution." Admin bookings on their behalf still work.
+              {user.bookingLocked && user.bookingLockedAt && <span className="block text-xs text-red-600 mt-0.5">Locked {new Date(user.bookingLockedAt).toLocaleDateString('en-AU', { timeZone: 'Australia/Perth' })}{user.bookingLockedBy ? ` by ${user.bookingLockedBy}` : ''}</span>}
+            </span>
+          </label>
+          {bookingLocked && (
+            <input
+              value={bookingLockReason}
+              onChange={e => setBookingLockReason(e.target.value)}
+              placeholder="Reason (admin-only, never shown to the customer)"
+              maxLength={300}
+              className="w-full rounded-lg border border-red-200 bg-white px-2.5 py-2 text-sm text-gray-800"
+            />
+          )}
+        </div>
         {/* SPEC_ADMIN_MANUAL_POWERS — manual support actions */}
         <div className="border-t border-gray-100 pt-4 space-y-3">
           <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wide">Account actions</h4>
