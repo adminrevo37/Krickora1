@@ -63,6 +63,7 @@ import type * as locks from "../locks.js";
 import type * as machineUsage from "../machineUsage.js";
 import type * as mates from "../mates.js";
 import type * as mutations from "../mutations.js";
+import type * as notifications from "../notifications.js";
 import type * as paymentLinks from "../paymentLinks.js";
 import type * as push from "../push.js";
 import type * as pushNotifications from "../pushNotifications.js";
@@ -149,6 +150,7 @@ declare const fullApi: ApiFromModules<{
   machineUsage: typeof machineUsage;
   mates: typeof mates;
   mutations: typeof mutations;
+  notifications: typeof notifications;
   paymentLinks: typeof paymentLinks;
   push: typeof push;
   pushNotifications: typeof pushNotifications;

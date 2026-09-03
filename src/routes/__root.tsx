@@ -12,6 +12,8 @@ import AnnouncementHost from '../components/AnnouncementHost'
 import PushReminderBanners from '../components/PushReminderBanners'
 import { useImpersonation } from '../hooks/useImpersonation'
 import { useLaneConfig } from '../hooks/useLaneConfig'
+import { useQuery } from 'convex/react'
+import { api } from '../../convex/_generated/api'
 
 function RootComponent() {
   const { user, isAuthenticated, profileReady, isAdmin, isCoach, isLoading } = useAuth()
@@ -89,6 +91,7 @@ function RootComponent() {
                     <span className="text-sm font-medium hidden sm:inline">Facility</span>
                   </Link>
                 )}
+                <NotificationsBell />
                 <div className="relative">
                   <button
                     onClick={() => setShowUserMenu(!showUserMenu)}
@@ -125,6 +128,9 @@ function RootComponent() {
                           </Link>
                           <Link to="/bookings" onClick={() => setShowUserMenu(false)} className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
                             <span>📅</span> My Bookings
+                          </Link>
+                          <Link to="/notifications" onClick={() => setShowUserMenu(false)} className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
+                            <span>🔔</span> Notifications
                           </Link>
                           {/* Bug 8: hide Payments & Credit from coaches (and an admin
                               impersonating a coach) — coaches use Statements. */}
@@ -271,3 +277,20 @@ function RootComponent() {
 export const Route = createRootRoute({
   component: RootComponent,
 })
+
+// NOTIFICATIONS INBOX (2026-09-03) — header bell with unread count.
+function NotificationsBell() {
+  const { user } = useAuth()
+  const unread = useQuery(api.notifications.unreadCount, user ? {} : 'skip') ?? 0
+  if (!user) return null
+  return (
+    <Link to="/notifications" aria-label="Notifications" className="relative flex items-center justify-center w-9 h-9 rounded-xl hover:bg-gray-100 transition-colors">
+      <span className="text-lg leading-none">🔔</span>
+      {unread > 0 && (
+        <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+          {unread > 99 ? '99+' : unread}
+        </span>
+      )}
+    </Link>
+  )
+}

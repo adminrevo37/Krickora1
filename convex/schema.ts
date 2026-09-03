@@ -107,6 +107,26 @@ export default defineSchema({
   // `delivered`/`clicked` arrive from the service worker via the /push/beacon HTTP
   // action. email is stored only for server-side rows (never from the public
   // beacon). Additive — no migration.
+  // NOTIFICATIONS INBOX (Inspector, 2026-09-03) — every customer/coach push is
+  // also stored here (whether or not a device received it), so the full message
+  // can be re-read in the app. A push TAP opens the message in the inbox, except
+  // time-sensitive categories (waitlist offers, extend offers) which still jump
+  // straight to their action. Admin-ops pushes are NOT stored (Activity feed
+  // covers them). Pruned after 7 days (Inspector's call).
+  notifications: defineTable({
+    email: v.string(), // lowercased recipient
+    title: v.string(),
+    body: v.string(),
+    category: v.string(),
+    url: v.optional(v.string()), // the action the push carried (body tap target before this feature)
+    actions: v.optional(v.array(v.object({ title: v.string(), url: v.optional(v.string()) }))),
+    tag: v.optional(v.string()),
+    sentAt: v.number(), // ms
+    readAt: v.optional(v.number()),
+  })
+    .index("by_email_sentAt", ["email", "sentAt"])
+    .index("by_sentAt", ["sentAt"]),
+
   pushEvents: defineTable({
     at: v.number(), // ms
     type: v.string(), // 'sent' | 'failed' | 'pruned' | 'delivered' | 'clicked'

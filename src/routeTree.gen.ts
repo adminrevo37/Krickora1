@@ -14,6 +14,7 @@ import { Route as RevOps7k2pRouteImport } from './routes/rev-ops-7k2p'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as PaymentsRouteImport } from './routes/payments'
+import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as JoinRouteImport } from './routes/join'
 import { Route as FacilityRouteImport } from './routes/facility'
 import { Route as BookingsRouteImport } from './routes/bookings'
@@ -47,6 +48,11 @@ const ProfileRoute = ProfileRouteImport.update({
 const PaymentsRoute = PaymentsRouteImport.update({
   id: '/payments',
   path: '/payments',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotificationsRoute = NotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
   getParentRoute: () => rootRouteImport,
 } as any)
 const JoinRoute = JoinRouteImport.update({
@@ -101,6 +107,7 @@ export interface FileRoutesByFullPath {
   '/bookings': typeof BookingsRoute
   '/facility': typeof FacilityRoute
   '/join': typeof JoinRoute
+  '/notifications': typeof NotificationsRoute
   '/payments': typeof PaymentsRoute
   '/profile': typeof ProfileRoute
   '/reset-password': typeof ResetPasswordRoute
@@ -117,6 +124,7 @@ export interface FileRoutesByTo {
   '/bookings': typeof BookingsRoute
   '/facility': typeof FacilityRoute
   '/join': typeof JoinRoute
+  '/notifications': typeof NotificationsRoute
   '/payments': typeof PaymentsRoute
   '/profile': typeof ProfileRoute
   '/reset-password': typeof ResetPasswordRoute
@@ -134,6 +142,7 @@ export interface FileRoutesById {
   '/bookings': typeof BookingsRoute
   '/facility': typeof FacilityRoute
   '/join': typeof JoinRoute
+  '/notifications': typeof NotificationsRoute
   '/payments': typeof PaymentsRoute
   '/profile': typeof ProfileRoute
   '/reset-password': typeof ResetPasswordRoute
@@ -152,6 +161,7 @@ export interface FileRouteTypes {
     | '/bookings'
     | '/facility'
     | '/join'
+    | '/notifications'
     | '/payments'
     | '/profile'
     | '/reset-password'
@@ -168,6 +178,7 @@ export interface FileRouteTypes {
     | '/bookings'
     | '/facility'
     | '/join'
+    | '/notifications'
     | '/payments'
     | '/profile'
     | '/reset-password'
@@ -184,6 +195,7 @@ export interface FileRouteTypes {
     | '/bookings'
     | '/facility'
     | '/join'
+    | '/notifications'
     | '/payments'
     | '/profile'
     | '/reset-password'
@@ -201,6 +213,7 @@ export interface RootRouteChildren {
   BookingsRoute: typeof BookingsRoute
   FacilityRoute: typeof FacilityRoute
   JoinRoute: typeof JoinRoute
+  NotificationsRoute: typeof NotificationsRoute
   PaymentsRoute: typeof PaymentsRoute
   ProfileRoute: typeof ProfileRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
@@ -246,6 +259,13 @@ declare module '@tanstack/react-router' {
       path: '/payments'
       fullPath: '/payments'
       preLoaderRoute: typeof PaymentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/notifications': {
+      id: '/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof NotificationsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/join': {
@@ -332,6 +352,7 @@ const rootRouteChildren: RootRouteChildren = {
   BookingsRoute: BookingsRoute,
   FacilityRoute: FacilityRoute,
   JoinRoute: JoinRoute,
+  NotificationsRoute: NotificationsRoute,
   PaymentsRoute: PaymentsRoute,
   ProfileRoute: ProfileRoute,
   ResetPasswordRoute: ResetPasswordRoute,

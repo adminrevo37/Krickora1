@@ -8,6 +8,7 @@
 // When unset, sendPush no-ops gracefully (like the email path before its key).
 
 import { internalAction, action } from "./_generated/server";
+import { DIRECT_ACTION_CATEGORIES } from "./notifications";
 import { v, ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import webpush from "web-push";
@@ -117,6 +118,29 @@ export const sendPushInternal = internalAction({
     ),
   },
   handler: async (ctx, args) => {
+    // NOTIFICATIONS INBOX (2026-09-03) — store the message FIRST, delivered or not,
+    // so it can be re-read in the app (and email-only accounts get an inbox too).
+    let inboxId: string | null = null;
+    try {
+      inboxId = await ctx.runMutation(internal.notifications.recordInternal, {
+        email: args.email,
+        title: args.title,
+        body: args.body,
+        category: args.category,
+        url: args.url,
+        actions: args.actions,
+        tag: args.tag,
+      });
+    } catch (e) {
+      console.error("[push] inbox record failed (continuing with delivery)", e);
+    }
+    // Tap target: time-sensitive categories keep their direct action (a 15-min
+    // hold must not detour through an inbox); everything else opens the message.
+    const tapUrl =
+      inboxId && !DIRECT_ACTION_CATEGORIES.has(args.category)
+        ? `/notifications?n=${inboxId}`
+        : args.url;
+
     if (!configureVapid()) {
       console.log("[push] VAPID keys not set — skipping send");
       return { success: false, reason: "not configured" };
@@ -131,7 +155,7 @@ export const sendPushInternal = internalAction({
     const sent = await deliver(ctx, c.subs, {
       title: args.title,
       body: args.body,
-      url: args.url,
+      url: tapUrl,
       tag: args.tag,
       actions: args.actions,
     }, { category: args.category, email: args.email, tag: args.tag });

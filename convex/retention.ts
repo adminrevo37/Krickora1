@@ -108,6 +108,9 @@ export const runDailyRetention = internalMutation({
     // laneOverrides — fully-past overrides (endDate < today; date-string compare).
     await schedule("laneOverrides", "by_endDate", "endDate", today);
 
+    // NOTIFICATIONS INBOX (2026-09-03) — 7 days, Inspector's call.
+    await schedule("notifications", "by_sentAt", "sentAt", now - 7 * DAY_MS);
+
     // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part A3 — waitlist rows for sessions
     // older than the event window (the hourly reaper has long since expired
     // them; waitlistOfferEvents keeps the analytics signal).
