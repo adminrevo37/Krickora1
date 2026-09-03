@@ -310,6 +310,9 @@ export default function WaitlistAdmin() {
   // SPEC_WAITLIST_ALT_TIME_OFFER_2026-08 — offer a queue a DIFFERENT time.
   const liveOffers = useQuery(api.waitlistOffers.listLiveWaitlistOffers, {}) ?? []
   const cancelAltOffer = useMutation(api.waitlistOffers.cancelWaitlistOffer)
+  // C5 follow-up — move a legacy any-pool group into BM or RU so the pool-keyed
+  // actions (Offer a different time) apply to it.
+  const assignPool = useMutation(api.waitlistAdmin.adminAssignWaitlistPool)
   const [altFor, setAltFor] = useState<{ pool: 'bm' | 'ru'; date: string; sourceHour: number; entries: Entry[] } | null>(null)
 
   if (data === undefined) {
@@ -459,6 +462,25 @@ export default function WaitlistAdmin() {
                   >
                     Offer a different time
                   </button>
+                )}
+                {laneId === '*' && (
+                  <>
+                    <span className="text-[11px] text-gray-500">Legacy any-lane entry — move it to a pool to offer times:</span>
+                    {(['bm', 'ru'] as const).map(p => (
+                      <button
+                        key={p}
+                        disabled={busy === key}
+                        title={`Move ${list.length === 1 ? 'this entry' : `these ${list.length} entries`} into the ${p.toUpperCase()} queue for this hour`}
+                        onClick={async () => {
+                          setBusy(key)
+                          try { await assignPool({ entryIds: list.map(e => e._id), pool: p }) } finally { setBusy(null) }
+                        }}
+                        className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-amber-500 text-amber-700 hover:bg-amber-50 disabled:opacity-50"
+                      >
+                        → {p.toUpperCase()}
+                      </button>
+                    ))}
+                  </>
                 )}
                 {hold && (
                   <button

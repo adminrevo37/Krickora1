@@ -96,3 +96,26 @@ export const adminAddToWaitlist = mutation({
     return { added: added.length, skippedDuplicates: args.hours.length - added.length, name };
   },
 });
+
+/**
+ * C5 follow-up (Inspector, 2026-09-03: "if it shows legacy I can't offer alternate
+ * times"). Move legacy any-pool ('*') entries into a real pool so the admin tab's
+ * pool-keyed actions (Offer a different time, etc.) apply to them. Only touches
+ * '*' rows; a row already in a pool is left alone.
+ */
+export const adminAssignWaitlistPool = mutation({
+  args: { entryIds: v.array(v.string()), pool: v.string() },
+  handler: async (ctx, args) => {
+    await requireAdmin(ctx);
+    const sentinel = args.pool === "ru" ? "*ru" : "*bm";
+    let moved = 0;
+    for (const id of args.entryIds) {
+      let row: any = null;
+      try { row = await ctx.db.get(id as any); } catch { row = null; }
+      if (!row || typeof row.userEmail !== "string" || row.laneId !== "*") continue;
+      await ctx.db.patch(row._id, { laneId: sentinel });
+      moved++;
+    }
+    return { moved, pool: sentinel };
+  },
+});
