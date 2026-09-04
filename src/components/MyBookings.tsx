@@ -157,9 +157,16 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const [activeTab, setActiveTab] = useState<'schedule' | 'past' | 'waitlist' | 'coaches'>('schedule')
   const [cancellingId, setCancellingId] = useState<string | null>(null)
   const [cancelError, setCancelError] = useState<string | null>(null)
-  // Coach late-cancel (within coachLateCancellationHours of start) → an explicit
-  // "you'll still be charged" confirmation before the cancel goes through.
+  // H1 (WEB review 2026-09-05) — EVERY cancellation now goes through this
+  // confirmation, not just a coach's late cancel. Cancelling is irreversible (the
+  // slot is released to the waitlist engine and the door code is revoked) and the
+  // money comes back as ACCOUNT CREDIT, never to the card — and nothing in the
+  // cancel flow ever said so.
   const [cancelConfirm, setCancelConfirm] = useState<Booking | null>(null)
+  // H1 — too close to the start, the server REFUSES the cancellation outright
+  // (it does not merely withhold the credit). Rather than a bare error, offer the
+  // change the server DOES still allow inside the window: move it earlier / extend.
+  const [cancelBlocked, setCancelBlocked] = useState<{ booking: Booking; reason: string } | null>(null)
   // SPEC_CHECKOUT_ABANDONMENT — Pay-now / cancel-unpaid in-flight state.
   const [pendingPayId, setPendingPayId] = useState<string | null>(null)
   const [pendingPayError, setPendingPayError] = useState<string | null>(null)
@@ -498,13 +505,23 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
 
   // ── actions ─────────────────────────────────────────────────────────────────
 
-  // Perform the actual cancellation (after any confirmation).
+  // Perform the actual cancellation (after the confirmation).
   const doCancel = async (booking: Booking) => {
     setCancelError(null)
     setCancellingId(booking.id)
+    // Read the outcome BEFORE the mutation — once the booking flips to `cancelled`
+    // the reactive card is gone and the amount can no longer be described.
+    const outcome = cancelOutcome(booking)
     try {
       await cancelBooking(booking.id, user?.id)
       setCancelConfirm(null)
+      // H1 — restate the outcome on the page the customer lands on, not only in
+      // the dialog they just dismissed. This banner does not auto-dismiss.
+      if (outcome.kind === 'credit') {
+        setToast(`Booking cancelled. $${fmtMoney(outcome.amount)} has been added to your account credit — it is not refunded to your card.`)
+      } else if (outcome.kind === 'nothing') {
+        setToast('Booking cancelled.')
+      }
     } catch (err: any) {
       setCancelError(getErrorMessage(err) ?? 'Could not cancel. Please try again.')
     } finally {
@@ -512,17 +529,19 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     }
   }
 
+  // H1 — no cancellation reaches the server without an explicit confirmation that
+  // states the real outcome for THIS booking. Previously only a coach's late cancel
+  // was confirmed; a customer's Cancel fired on a single tap, from a button that
+  // wraps next to "Add a Mate" on a phone, with the credit-not-card rule stated
+  // nowhere in the flow.
   const handleCancel = (booking: Booking) => {
     setCancelError(null)
     const check = evaluateCancellation(booking, cancelOpts)
-    if (!check.allowed) { setCancelError(check.reason ?? 'Cannot cancel this booking.'); return }
-    // Coach cancelling inside the late-cancel window → warn that the session is
-    // still chargeable + require an explicit confirmation before proceeding.
-    if (booking.isCoachBooking && check.willBeCharged) {
-      setCancelConfirm(booking)
+    if (!check.allowed) {
+      setCancelBlocked({ booking, reason: check.reason ?? 'This booking can no longer be cancelled.' })
       return
     }
-    void doCancel(booking)
+    setCancelConfirm(booking)
   }
 
   // SPEC_CHECKOUT_ABANDONMENT — resume payment for an unpaid booking. The server
@@ -672,6 +691,40 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
     const perLane = lane ? getLanePrice(lane, booking.variantId ?? null, booking.duration) : 40
     return perLane * laneCount
   }
+  // H1 — what cancelling THIS booking right now actually does to the money.
+  // Mirrors convex/mutations.ts `cancelBooking` exactly:
+  //   • a coach booking is never prepaid online and is never credited; inside the
+  //     late-cancel window the session still lands on the coach's statement;
+  //   • a customer booking returns (cash actually PAID) + (account credit redeemed
+  //     on it) as ACCOUNT CREDIT — never a card refund;
+  //   • a booking that was never paid has nothing to return.
+  // KNOWN LIMIT: the server also skips the credit when an admin has already voided
+  // the charge (`refunded: true`). That flag is not carried on the client Booking
+  // type, so such a booking would be described here as still returning its value.
+  // Void-then-cancel is an admin-only workflow, so a customer can't reach it here.
+  type CancelOutcome =
+    | { kind: 'coach'; charged: boolean; charge: number; hours: number }
+    | { kind: 'credit'; amount: number }
+    | { kind: 'nothing' }
+
+  const cancelOutcome = (booking: Booking): CancelOutcome => {
+    if (booking.isCoachBooking) {
+      return {
+        kind: 'coach',
+        charged: evaluateCancellation(booking, cancelOpts).willBeCharged === true,
+        charge: booking.coachPrice ?? getCoachPrice(booking.duration),
+        hours: coachFlexHours ?? settings?.coachLateCancellationHours ?? 24,
+      }
+    }
+    // Multi-lane, discounts, comp bookings and admin overrides are all already
+    // baked into priceInCents, so this is the real cash figure — not a recompute.
+    const cashPaid = booking.paymentStatus === 'paid' && booking.priceInCents != null
+      ? Math.round(booking.priceInCents) / 100
+      : 0
+    const amount = cashPaid + (booking.creditApplied ?? 0)
+    return amount > 0 ? { kind: 'credit', amount } : { kind: 'nothing' }
+  }
+
   // U28 — the local copy of this now lives in ../lib/money so the booking modal
   // and modify modal format prices identically ("$67.50", not "$67.5").
   // All lane names for a booking (primary + additional), e.g. ["BM 3","RU 1","RU 2"].
@@ -858,7 +911,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             )}
             {booking.isCoachBooking && booking.status !== 'cancelled' && <RepeatBookingButton booking={booking} />}
             <button
-              onClick={() => { if (!cancelCheck.allowed) { setCancelError(cancelCheck.reason ?? 'This booking can no longer be cancelled.'); return } handleCancel(booking) }}
+              onClick={() => handleCancel(booking)}
               disabled={cancellingId === booking.id}
               aria-label={!cancelCheck.allowed ? 'Why can’t I cancel?' : 'Cancel booking'}
               title={!cancelCheck.allowed ? cancelCheck.reason : 'Cancel booking'}
@@ -1104,7 +1157,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
           {/* SPEC_ADD_A_MATE: one-tap to the Add-a-Mate page (customer bookings only). */}
           <Link to="/add-mate" search={{ bookingId: booking.id }} className="text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors">👥 Add a Mate</Link>
           <button
-            onClick={() => { if (!cancelCheck.allowed) { setCancelError(cancelCheck.reason ?? 'This booking can no longer be cancelled.'); return } handleCancel(booking) }}
+            onClick={() => handleCancel(booking)}
             disabled={cancellingId === booking.id}
             aria-label={!cancelCheck.allowed ? 'Why can’t I cancel?' : 'Cancel booking'}
             title={!cancelCheck.allowed ? cancelCheck.reason : 'Cancel booking'}
@@ -1831,15 +1884,20 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
         </ModalShell>
       )}
 
-      {/* Coach late-cancellation warning — cancelling within the late-cancel window
-          still charges the coach's statement, so require an explicit confirmation. */}
+      {/* H1 — cancellation confirmation, for EVERY cancel (customer and coach).
+          Cancelling is irreversible: the slot goes back to the waitlist engine and
+          the door code is revoked. It states the real money outcome for THIS
+          booking — for a customer that is ACCOUNT CREDIT, never a card refund, and
+          that sentence appeared nowhere in the cancel flow before. */}
       {cancelConfirm && (() => {
-        // SPEC_COACH_FLEXIBLE_WINDOW: a flexible coach's charge window is the shorter 3h.
-        const hrs = coachFlexHours ?? settings?.coachLateCancellationHours ?? 24
+        const outcome = cancelOutcome(cancelConfirm)
         const dateLabel = formatDateLong(cancelConfirm.date)
         const timeRange = `${formatTime(cancelConfirm.startHour)} – ${formatTime(cancelConfirm.startHour + cancelConfirm.duration / 60)}`
-        const charge = cancelConfirm.coachPrice ?? getCoachPrice(cancelConfirm.duration)
+        const laneLabel = bookingLaneNames(cancelConfirm).join(', ')
         const busy = cancellingId === cancelConfirm.id
+        // A late coach cancel is the one case that COSTS money to confirm, so it
+        // keeps the ⚠️ + "within N hours" framing it already had.
+        const lateCoach = outcome.kind === 'coach' && outcome.charged
         return (
           <ModalShell
             onClose={() => { if (!busy) { setCancelConfirm(null); setCancelError(null) } }}
@@ -1849,15 +1907,54 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             panelClassName="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm p-5"
           >
               <div className="flex items-center gap-2 mb-2">
-                <span className="text-xl">⚠️</span>
-                <h3 id="cancel-confirm-title" className="text-base font-bold text-gray-900 dark:text-white">Cancel within {hrs} hours?</h3>
+                <span className="text-xl">{lateCoach ? '⚠️' : '🗑️'}</span>
+                <h3 id="cancel-confirm-title" className="text-base font-bold text-gray-900 dark:text-white">
+                  {lateCoach && outcome.kind === 'coach' ? `Cancel within ${outcome.hours} hours?` : 'Cancel this session?'}
+                </h3>
               </div>
+
+              {/* The session being cancelled, named explicitly — the button that
+                  opens this sits in a wrapping row next to Modify and Add a Mate. */}
               <p className="text-sm text-gray-600 dark:text-gray-300">
-                This session (<span className="font-medium">{dateLabel}, {timeRange}</span>) starts within {hrs} hours. If you cancel now,{' '}
-                <span className="font-semibold text-gray-900 dark:text-white">
-                  your account will still be charged{Number.isFinite(charge) && charge > 0 ? ` $${charge}` : ''} to your statement and payment will be required.
-                </span>
+                <span className="font-medium text-gray-900 dark:text-white">{dateLabel}, {timeRange}</span>
+                <span className="block text-xs text-gray-500 dark:text-gray-400 mt-0.5">{laneLabel} · {formatDuration(cancelConfirm.duration)}</span>
               </p>
+
+              {outcome.kind === 'coach' && (
+                <p className="text-sm text-gray-600 dark:text-gray-300 mt-3">
+                  {outcome.charged ? (
+                    <>
+                      This session starts within {outcome.hours} hours. If you cancel now,{' '}
+                      <span className="font-semibold text-gray-900 dark:text-white">
+                        {/* M6 — was raw `${charge}`, so a 1.5-hour session read "$67.5". */}
+                        your account will still be charged{Number.isFinite(outcome.charge) && outcome.charge > 0 ? ` $${fmtMoney(outcome.charge)}` : ''} to your statement and payment will be required.
+                      </span>
+                    </>
+                  ) : (
+                    <>You're outside the {outcome.hours}-hour late-cancel window, so this session will <span className="font-semibold text-gray-900 dark:text-white">not be charged</span> to your statement.</>
+                  )}
+                </p>
+              )}
+
+              {outcome.kind === 'credit' && (
+                <div className="mt-3 rounded-xl border border-blue-200 dark:border-blue-800/50 bg-blue-50 dark:bg-blue-900/20 px-3 py-2.5">
+                  <p className="text-sm text-blue-900 dark:text-blue-200">
+                    <span className="font-semibold">${fmtMoney(outcome.amount)} will be added to your account credit.</span>{' '}
+                    This is <span className="font-semibold">not refunded to your card</span> — you spend it on a future booking.
+                  </p>
+                </div>
+              )}
+
+              {outcome.kind === 'nothing' && (
+                <p className="text-sm text-gray-600 dark:text-gray-300 mt-3">
+                  Nothing has been paid on this booking, so there is nothing to return.
+                </p>
+              )}
+
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
+                This can't be undone — the slot is released to anyone waiting for it, and the door code for this session stops working.
+              </p>
+
               {cancelError && (
                 <p className="text-xs text-red-600 dark:text-red-400 mt-2">{cancelError}</p>
               )}
@@ -1865,13 +1962,65 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                 <button
                   onClick={() => { setCancelConfirm(null); setCancelError(null) }}
                   disabled={busy}
-                  className="flex-1 py-2.5 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all disabled:opacity-50"
+                  className="flex-1 py-2.5 min-h-[44px] bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all disabled:opacity-50"
                 >Keep booking</button>
                 <button
                   onClick={() => { void doCancel(cancelConfirm) }}
                   disabled={busy}
-                  className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white font-semibold rounded-xl transition-all disabled:opacity-50"
-                >{busy ? 'Cancelling…' : 'Cancel anyway'}</button>
+                  className="flex-1 py-2.5 min-h-[44px] bg-red-500 hover:bg-red-600 text-white font-semibold rounded-xl transition-all disabled:opacity-50"
+                >{busy ? 'Cancelling…' : lateCoach ? 'Cancel anyway' : 'Cancel booking'}</button>
+              </div>
+          </ModalShell>
+        )
+      })()}
+
+      {/* H1 — cancel refused because the session is too close. The server rejects
+          this outright (it does not merely withhold the credit), so say so and
+          offer the change it DOES still allow inside the window: move the session
+          earlier, or extend it. Previously this was a bare red banner and the
+          customer's only visible option was to lose the session by not turning up. */}
+      {cancelBlocked && (() => {
+        const b = cancelBlocked.booking
+        const dateLabel = formatDateLong(b.date)
+        const timeRange = `${formatTime(b.startHour)} – ${formatTime(b.startHour + b.duration / 60)}`
+        // Modify is offered ONLY where it can actually succeed, so this never
+        // becomes a second dead end: the server refuses any modify once the start
+        // time has passed (`hoursUntilOriginal <= 0`), freezes coach bookings
+        // inside their own window entirely, and rejects a self-modified split leg
+        // or an admin-managed booking.
+        const [by, bm, bd] = b.date.split('-').map(Number)
+        const bStartMs = new Date(by, bm - 1, bd, Math.floor(b.startHour), Math.round((b.startHour - Math.floor(b.startHour)) * 60), 0).getTime()
+        const canOfferModify = !b.isCoachBooking && !b.splitLeg2 && !b.createdByAdmin && bStartMs > nowAwstMs
+        return (
+          <ModalShell
+            onClose={() => setCancelBlocked(null)}
+            labelledBy="cancel-blocked-title"
+            panelClassName="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm p-5"
+          >
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xl">🔒</span>
+                <h3 id="cancel-blocked-title" className="text-base font-bold text-gray-900 dark:text-white">This booking can't be cancelled</h3>
+              </div>
+              <p className="text-sm text-gray-600 dark:text-gray-300">
+                <span className="font-medium text-gray-900 dark:text-white">{dateLabel}, {timeRange}</span>
+              </p>
+              <p className="text-sm text-gray-600 dark:text-gray-300 mt-2">{cancelBlocked.reason}</p>
+              {canOfferModify && (
+                <p className="text-sm text-gray-600 dark:text-gray-300 mt-2">
+                  You can still <span className="font-semibold text-gray-900 dark:text-white">bring the session forward</span> or extend it — that keeps what you've paid, where cancelling this close would not return it.
+                </p>
+              )}
+              <div className="flex gap-3 mt-4">
+                <button
+                  onClick={() => setCancelBlocked(null)}
+                  className="flex-1 py-2.5 min-h-[44px] bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold rounded-xl hover:bg-gray-200 dark:hover:bg-gray-700 transition-all"
+                >Close</button>
+                {canOfferModify && (
+                  <button
+                    onClick={() => { setCancelBlocked(null); setModifyBookingData(b) }}
+                    className="flex-1 py-2.5 min-h-[44px] bg-violet-500 hover:bg-violet-600 text-white font-semibold rounded-xl transition-all"
+                  >Change time</button>
+                )}
               </div>
           </ModalShell>
         )
