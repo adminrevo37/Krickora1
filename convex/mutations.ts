@@ -25,6 +25,7 @@ import {
   type WindowTier,
 } from "./lib/bookingWindow";
 import { computeCustomerPriceCents, decreaseCreditCents } from "./lib/pricing";
+import { bookingSettlement } from "./lib/settlement";
 import { mondayOfWeek } from "./lib/coachLedger";
 import { validateAndSnapshotLane, resolveLaneSnapshot, resolveLanesAtHour } from "./lanes";
 import { defaultLaneName, variantRatePerHour, DEFAULT_LANE_META, laneNameForBooking, VARIANT_TRUMAN, VARIANT_STANDARD } from "./lib/lanes";
@@ -3489,6 +3490,33 @@ export const modifyBooking = mutation({
     if (booking.status === "cancelled") throw new ConvexError("Cannot modify a cancelled booking.");
     if ((booking as any).status === "pending_edit_payment") {
       throw new ConvexError("A payment for a previous change is still pending. Complete or cancel it first.");
+    }
+    // C1 (MONEY — review 2026-09-05): a booking that has NOT been settled must not
+    // be modified. modifyBooking only ever charges the DIFFERENCE between the old
+    // and the new price, so on an unsettled booking the entire original amount is
+    // silently forgiven: a $140 unpaid booking extended by 30 minutes stages a
+    // $20 top-up, and paying that $20 confirms the session, issues a live door
+    // code and records a single $20 payment. Worse, confirmBookingPayment then
+    // stamps paymentStatus "paid" while priceInCents still holds the GROSS, so a
+    // later cancellation refunds $140 of spendable credit for $20 received.
+    //
+    // There is no safe "charge the full outstanding amount instead" variant: the
+    // original checkout session stays payable in parallel for at least 30 minutes
+    // (Stripe's minimum session lifetime), so staging a second charge for the same
+    // booking invites a double payment. Refuse, exactly as for a staged edit above.
+    // The customer settles or cancels the original first — both buttons are on the
+    // "Awaiting payment" card — and an admin edits an unsettled booking with
+    // updateBooking (modifyBooking is only ever called from the customer view).
+    const settlement = bookingSettlement(booking);
+    if (settlement === "awaiting_checkout") {
+      throw new ConvexError(
+        "This booking hasn't been paid for yet — pay for it or cancel it first, then make your change."
+      );
+    }
+    if (settlement === "balance_outstanding") {
+      throw new ConvexError(
+        "This booking has an outstanding balance — please settle it before making changes."
+      );
     }
 
     // ── Auth (H3 SECURITY: authorize on the AUTHENTICATED identity only; the
