@@ -115,8 +115,8 @@ export default function EmailVerificationGate({ email }: { email: string }) {
             This page unlocks automatically once you verify — you can close that tab and come back.
           </div>
 
-          {resent && <div className="text-xs text-emerald-700 bg-emerald-50 dark:bg-emerald-900/20 rounded-lg py-2 px-3">Verification email sent to <strong>{email}</strong> — check your inbox (and spam).</div>}
-          {error && <div className="text-xs text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg py-2 px-3">{error}</div>}
+          {resent && <div className="text-xs text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-900/20 rounded-lg py-2 px-3">Verification email sent to <strong>{email}</strong> — check your inbox (and spam).</div>}
+          {error && <div className="text-xs text-red-600 dark:text-red-300 bg-red-50 dark:bg-red-900/20 rounded-lg py-2 px-3">{error}</div>}
 
           {editing ? (
             <div className="space-y-2 text-left bg-gray-50 dark:bg-gray-800/60 rounded-xl p-3 border border-gray-200 dark:border-gray-700">

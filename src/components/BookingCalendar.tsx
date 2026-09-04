@@ -1353,7 +1353,10 @@ function ReleaseBanner({ role, tier, settings, nextWeekOpen, lastDay }: {
     return (
       <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/50 rounded-2xl px-4 py-3 flex items-center gap-2">
         <span className="text-lg">✅</span>
-        <p className="text-sm font-medium text-emerald-800">
+        {/* H3 — the container has a dark ground (dark:bg-emerald-900/20) but this
+            line had no dark: variant, so emerald-800 text sat on it unreadably.
+            The one banner that tells a customer next week has opened. */}
+        <p className="text-sm font-medium text-emerald-800 dark:text-emerald-200">
           Next week is now open — book through {formatDateLong(lastDay)}.
         </p>
       </div>

@@ -85,7 +85,25 @@ if (!g.__KRICKORA_RENDERED__) {
 
   const innerApp = (
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider defaultTheme="dark" storageKey="vite-ui-theme">
+      {/* H3 (WEB review 2026-09-05) — this was defaultTheme="dark", and the app
+          has NO theme toggle: `setTheme` is never called anywhere outside the
+          provider, and nothing has ever written `vite-ui-theme` in this repo's
+          history, so the default is simply what every visitor gets, forever.
+          The dark variant here is class-based (`@custom-variant dark (&:is(.dark
+          *))` in index.css), so that default was really shipping <html
+          class="dark"> to everyone — while the app shell itself (__root.tsx:
+          container, header, footer) and twelve of the sixteen routes carry ZERO
+          dark styling. The result was a permanent white shell wrapped around
+          dark-styled cards, plus dark-on-dark text (the "next week is now open"
+          banner; and on the non-dismissable email-verification gate, the error
+          message a customer needs in order to fix a mistyped address).
+          Light is the mode this product is actually styled for: every `dark:`
+          class in the tree is an ADDITION on a complete light base
+          ("bg-white dark:bg-gray-900"), so light is fully specified everywhere
+          and dark is the half-migrated one. Making it the default is one word;
+          finishing dark mode means writing variants for the shell and twelve
+          routes. The provider stays so a toggle can be added later. */}
+      <ThemeProvider defaultTheme="light" storageKey="vite-ui-theme">
         <RouterProvider router={router} />
         <Toaster />
       </ThemeProvider>
