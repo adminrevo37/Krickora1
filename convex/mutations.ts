@@ -3165,22 +3165,21 @@ async function cancelBookingCore(
       throw new ConvexError("This session has already started and can no longer be cancelled.");
     }
 
-    // Time-based policy enforcement for customer bookings
-    if (!booking.isCoachBooking) {
-      const customerCancellationHours = (cancelSettings as any)?.customerCancellationHours ?? cancelSettings?.cancellationHoursBefore ?? 2;
-      if (hoursUntil < customerCancellationHours) {
-        // Admin bypass — admins can always cancel
-        const callerCheck = await ctx.db
-          .query("customers")
-          .withIndex("by_email", (q: any) => q.eq("email", callerEmail))
-          .first();
-        if (callerCheck?.role !== "admin") {
-          throw new ConvexError(
-            `Bookings can only be cancelled at least ${customerCancellationHours} hour${customerCancellationHours !== 1 ? "s" : ""} before the session starts.`
-          );
-        }
-      }
-    }
+    // Time-based policy for CUSTOMER bookings (2026-09-05, owner-approved change).
+    // WAS: a cancellation inside customerCancellationHours was REFUSED outright, so
+    // the customer kept a session they could not attend, the lane stayed sold, and
+    // nobody else could have it. NOW: the cancellation SUCCEEDS but NOTHING is
+    // returned — not the cash paid, not the account credit they spent on it. The
+    // slot is fully released (calendar events deleted, holds dropped, waitlist
+    // advanced) exactly as any other cancel; only the money stops moving.
+    // Unchanged by design: outside the window credit is returned as before; a
+    // session that has already STARTED is still refused above (hoursUntil <= 0);
+    // admins bypass the window entirely and their refund behaviour does not move;
+    // coach bookings never reach this branch (their own late-cancel rule below).
+    const customerCancellationHours =
+      (cancelSettings as any)?.customerCancellationHours ?? cancelSettings?.cancellationHoursBefore ?? 2;
+    const lateCancelNoRefund =
+      !booking.isCoachBooking && !cancelIsAdmin && hoursUntil < customerCancellationHours;
 
     // SPEC_PAYMENTS_AND_CREDIT #4: coach late-cancel = charged in full. Coaches
     // (and admins acting on coach bookings) may cancel, but if it's inside the
@@ -3199,13 +3198,24 @@ async function cancelBookingCore(
 
     const reasonKey = (args.reason ?? "").trim().toLowerCase();
     const noteText = (args.note ?? "").trim().slice(0, 500);
+    // Requirement 7 — a no-refund cancel must be legible months later, so it lands
+    // on the existing cancelReason/cancelNote convention rather than a new field.
+    // An explicit reason passed by an admin always wins; a customer self-cancel
+    // carries none, so the policy supplies one. Key is stable — analytics tallies
+    // on it (see src/lib/cancelReasons.ts).
+    const effectiveReason = reasonKey || (lateCancelNoRefund ? "late_no_refund" : "");
+    const effectiveNote =
+      noteText ||
+      (lateCancelNoRefund
+        ? `Cancelled ${hoursUntil.toFixed(1)}h before start — inside the ${customerCancellationHours}h window, so no credit was returned.`
+        : "");
     await ctx.db.patch(args.id, {
       status: "cancelled",
       cancelledAt: new Date().toISOString(),
       cancelledByUserId: args.cancelledByUserId,
       ...(coachLateCancelCharged ? { coachLateCancelCharged: true } : {}),
-      ...(reasonKey ? { cancelReason: reasonKey } : {}),
-      ...(noteText ? { cancelNote: noteText } : {}),
+      ...(effectiveReason ? { cancelReason: effectiveReason } : {}),
+      ...(effectiveNote ? { cancelNote: effectiveNote } : {}),
     });
 
     // WS-C live feed: record the cancel event (booking.* holds the cancelled slot).
@@ -3230,6 +3240,15 @@ async function cancelBookingCore(
     // return. Admins may still issue a manual Stripe refund as an exception.
     if (
       !booking.isCoachBooking &&
+      // 2026-09-05 (owner-approved policy): cancelling inside the customer
+      // cancellation window returns NOTHING. Skipping this whole block is what
+      // enforces that — no issueCredit call, so no creditLedger row is written,
+      // and the creditApplied the customer had already spent is not handed back
+      // either. Everything BELOW this block (hold release, waitlist advance, mate
+      // notifications, calendar-event delete, cancellation email/push) is outside
+      // it and still runs: a no-refund cancel is a COMPLETE cancel in every other
+      // respect, and in particular the door code is still revoked.
+      !lateCancelNoRefund &&
       // MON-5 (SECURITY/MONEY review 2026-08-19): a booking mid-modify sits in
       // `pending_edit_payment` for up to 30 min while the customer pays the top-up
       // (modifyBooking), and the ORIGINAL money is still fully paid — priceInCents /
