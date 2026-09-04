@@ -25,7 +25,7 @@ import {
   type WindowTier,
 } from "./lib/bookingWindow";
 import { computeCustomerPriceCents, decreaseCreditCents } from "./lib/pricing";
-import { bookingSettlement } from "./lib/settlement";
+import { bookingSettlement, isCashSettled } from "./lib/settlement";
 import { mondayOfWeek } from "./lib/coachLedger";
 import { validateAndSnapshotLane, resolveLaneSnapshot, resolveLanesAtHour } from "./lanes";
 import { defaultLaneName, variantRatePerHour, DEFAULT_LANE_META, laneNameForBooking, VARIANT_TRUMAN, VARIANT_STANDARD } from "./lib/lanes";
@@ -3868,34 +3868,61 @@ export const modifyBooking = mutation({
 
     if (amountDueCents === 0) {
       // Credit fully covers the increase → apply now, redeem the credit.
-      const wasPaid = (booking as any).paymentStatus === "paid";
-      // B2 (2026-08): an increase covered entirely by account credit adds NO new cash.
-      // On a PAID booking keep priceInCents = cash settled (unchanged) and accumulate
-      // the redeemed credit into creditApplied, so a later cancel refunds cash + the
-      // full credit actually spent (was: stored the new GROSS, creditApplied untouched →
-      // cancel over-refunded whenever the original used a discount). Unpaid bookings keep
-      // the new gross (confirm rewrites priceInCents on payment).
+      //
+      // C2 (MONEY — review 2026-09-05): this branch used to gate BOTH the redemption
+      // and the creditApplied bookkeeping on `paymentStatus === "paid"`. That is a
+      // CASH test, not a settlement test, and a booking settled entirely by account
+      // credit is confirmed with NO paymentStatus at all — so the gate never fired.
+      // The session was extended, `requiresPayment: false` was returned, and nothing
+      // was ever deducted: $40 of credit bought a 1-hour booking, and modifying it to
+      // 2 hours, then 3, then to closing time cost nothing further while the balance
+      // stayed spendable. Redemption is now unconditional here — every booking that
+      // reaches this branch is SETTLED (credit-settled, comped, $0 or card-paid), so
+      // credit used to buy more session is always taken.
+      //
+      // MON-3 (2026-08-13) is preserved, not reverted: it existed to stop credit
+      // leaving the balance for a booking that was never paid for, because an
+      // abandoned checkout would then cancel it without restoring the credit. That
+      // case can no longer reach here at all — C1 at the top of this mutation refuses
+      // an unsettled booking outright (bookingSettlement), which is a stronger
+      // guarantee than the cash test it replaces, not a looser one.
+      //
+      // `isCashSettled` still governs priceInCents, and only priceInCents: on a
+      // card-paid booking the stored value is the cash settled and must not move
+      // (B2), while on a credit-settled booking it is the gross and follows the new
+      // gross. Either way creditApplied accumulates what was actually taken, so a
+      // later cancel returns cash + every dollar of credit spent, and no more.
+      const cashSettled = isCashSettled(booking);
+      // Redeem BEFORE applying the change so creditApplied records what was really
+      // taken. redeemCredit clamps to the live balance; inside one Convex mutation
+      // that balance cannot move under us (creditAvailCents was read above in the
+      // same transaction), so a short redemption would mean the "$0 due" arithmetic
+      // was wrong — throw and let the transaction roll back rather than hand over a
+      // longer session for less credit than it costs.
+      let redeemedCents = 0;
+      if (creditUseCents > 0 && booking.customerEmail) {
+        const redeemedDollars = await redeemCredit(ctx, {
+          email: booking.customerEmail,
+          amount: creditUseCents / 100,
+          bookingId: args.id.toString(),
+        });
+        redeemedCents = Math.round(redeemedDollars * 100);
+        if (redeemedCents < creditUseCents) {
+          throw new ConvexError(
+            "Your account credit changed while this change was being applied. Please reopen the booking and try again."
+          );
+        }
+      }
       const { droppedAthletes } = await applyBookingChange(ctx, booking, {
         newDate: effDate, newStartHour: effStart, newDuration: effDuration,
         newLaneId: effLane, newVariantId: effVariant ?? undefined, newAdditionalLaneIds: effAddl,
         newAccessCode: args.newAccessCode, regenCode,
-        newPriceInCents: wasPaid ? (booking.priceInCents ?? 0) : newPriceInCents,
-        newCreditApplied: wasPaid ? ((booking.creditApplied ?? 0) + creditUseCents / 100) : undefined,
+        newPriceInCents: cashSettled ? (booking.priceInCents ?? 0) : newPriceInCents,
+        newCreditApplied:
+          redeemedCents > 0 ? (booking.creditApplied ?? 0) + redeemedCents / 100 : undefined,
         actorUserId: args.userId, actorName,
       });
-      // MON-3 (SPEC_FULL_AUDIT_IMPROVEMENTS_2026-08-13): only redeem on a PAID
-      // booking. The decrease branch above is already `wasPaid`-gated (B3); this
-      // one was not, so an increase on a still-UNPAID (pending_payment) booking
-      // deducted the credit from the balance immediately while the booking itself
-      // was never paid — and if the customer then abandoned checkout,
-      // releaseAbandonedBooking cancelled it WITHOUT restoring the credit, silently
-      // costing them the money. Unpaid bookings redeem at confirmation instead
-      // (createBooking / confirmBookingPayment own that), matching the invariant
-      // that credit only ever leaves the balance when a booking is confirmed paid.
-      if (creditUseCents > 0 && wasPaid && booking.customerEmail) {
-        await redeemCredit(ctx, { email: booking.customerEmail, amount: creditUseCents / 100, bookingId: args.id.toString() });
-      }
-      return { success: true, requiresPayment: false, creditAppliedCents: creditUseCents, priceDifferenceCents: priceDiffCents, droppedAthletes };
+      return { success: true, requiresPayment: false, creditAppliedCents: redeemedCents, priceDifferenceCents: priceDiffCents, droppedAthletes };
     }
 
     // amountDue > 0 → stash the full change in pendingEdit + hold the new slot.

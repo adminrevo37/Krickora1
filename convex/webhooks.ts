@@ -8,6 +8,7 @@ import { scheduleWaitlistAdvance } from "./waitlist";
 import { applyBookingChange, fmtHour12, durationLabel } from "./mutations";
 import { fmtAwstDateLabel, fmtAwstDateShort } from "./lib/dates";
 import { laneNameForBooking } from "./lib/lanes";
+import { isCashSettled } from "./lib/settlement";
 
 /**
  * Idempotent: marks a booking as paid/confirmed and sends the payment
@@ -51,9 +52,13 @@ export const confirmBookingPayment = internalMutation({
       if (isUnified) {
         // Capture the settled cash + applied credit BEFORE applyBookingChange
         // overwrites priceInCents (B2, 2026-08).
-        const priorCashCents = b.priceInCents ?? 0;
+        // C2 (MONEY — review 2026-09-05): cash previously settled on this booking is
+        // priceInCents ONLY when cash was actually taken. On a credit-settled, comped
+        // or written-off booking priceInCents is the GROSS and no cash was ever
+        // received, so it must count as zero here.
+        const wasPaidBefore = isCashSettled(b);
+        const priorCashCents = wasPaidBefore ? (b.priceInCents ?? 0) : 0;
         const priorCreditApplied = b.creditApplied ?? 0;
-        const wasPaidBefore = b.paymentStatus === "paid";
         // Mark paid first, then apply the full change-set (calendar resync, code
         // regen, athlete keep-what-fits, emails) via the shared helper.
         await ctx.db.patch(booking._id, {
@@ -99,16 +104,28 @@ export const confirmBookingPayment = internalMutation({
           actorName: b.customerName,
           receipt,
         });
-        // B2 (2026-08): applyBookingChange stored the new GROSS in priceInCents. On a
-        // PAID extend, override to the money invariant — priceInCents = cash settled
-        // (prior cash + this top-up) and creditApplied accumulates the credit spent —
-        // so a later cancel refunds the right amount (was: gross → over-refund whenever
-        // the original used a discount/credit). An unpaid original keeps the gross.
-        const confirmPatch: Record<string, any> = { status: "confirmed", pendingEdit: undefined };
-        if (wasPaidBefore) {
-          confirmPatch.priceInCents = priorCashCents + args.amountPaid;
-          confirmPatch.creditApplied = priorCreditApplied + (pe.creditApplied ?? 0);
-        }
+        // B2 (2026-08): applyBookingChange stored the new GROSS in priceInCents.
+        // Override to the money invariant — priceInCents = cash settled (prior cash +
+        // this top-up) and creditApplied accumulates the credit spent — so a later
+        // cancel refunds the right amount (was: gross → over-refund whenever the
+        // original used a discount/credit).
+        //
+        // C2 (MONEY — review 2026-09-05): the override used to be skipped entirely
+        // unless the booking was already CASH-paid, which left the new GROSS stored
+        // against paymentStatus "paid" for every other settlement route. A booking
+        // settled by $40 of account credit, topped up by $80 to reach a $120 session,
+        // came out with priceInCents 12000 and creditApplied 40 — so cancelling it
+        // refunded $160 of credit for $80 cash plus $40 of credit actually spent,
+        // MINTING $40. It now always runs; wasPaidBefore only decides whether there
+        // was any prior cash to carry forward (see priorCashCents above), and this
+        // booking is settled by construction because modifyBooking refuses to stage
+        // an edit on an unsettled booking (C1).
+        const confirmPatch: Record<string, any> = {
+          status: "confirmed",
+          pendingEdit: undefined,
+          priceInCents: priorCashCents + args.amountPaid,
+          creditApplied: priorCreditApplied + (pe.creditApplied ?? 0),
+        };
         await ctx.db.patch(booking._id, confirmPatch);
         // Redeem any account credit applied to the top-up (atomic on confirm).
         if ((pe.creditApplied ?? 0) > 0 && b.customerEmail) {
