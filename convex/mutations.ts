@@ -5981,7 +5981,20 @@ export const setBookingCheckoutSession = internalMutation({
     const booking = await ctx.db.get(args.bookingId as any);
     if (!booking) return;
     const b = booking as any;
-    if (b.status !== "pending_payment" && b.status !== "pending") return;
+    // `pending_edit_payment` is included deliberately. A staged modify is an
+    // already-paid booking with an unpaid TOP-UP outstanding; without this the
+    // top-up's session id was never recorded, so `booking.stripeSessionId` still
+    // pointed at the ORIGINAL, PAID session. Anything asking "has this booking's
+    // current checkout been paid?" therefore got the wrong answer — which is why a
+    // customer could not abandon a staged change (cancelUnpaidCheckout saw a paid
+    // session and refused), and why an abandon could otherwise race a top-up that
+    // had just been paid.
+    if (
+      b.status !== "pending_payment" &&
+      b.status !== "pending" &&
+      b.status !== "pending_edit_payment"
+    )
+      return;
     await ctx.db.patch(args.bookingId as any, { stripeSessionId: args.sessionId } as any);
   },
 });

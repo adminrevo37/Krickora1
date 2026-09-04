@@ -282,9 +282,18 @@ export const cancelUnpaidCheckout = action({
       bookingId: args.bookingId,
     });
     if (!state) return { released: false };
-    if (state.paymentStatus === "paid") throw new ConvexError("This booking is already paid.");
+    // A staged modify (`pending_edit_payment`) is a CONFIRMED, PAID booking with an
+    // unpaid top-up outstanding, so `paymentStatus` is "paid" and the plain status
+    // check excludes it. Both guards therefore refused it, and the ONLY way out was
+    // to wait ~30 minutes for the hold to expire — during which the customer could
+    // not re-modify, could not pay, and could not undo. Abandoning the change is not
+    // a cancellation: releaseAbandonedBooking reverts the booking to its original
+    // confirmed slot and drops only the edit's holds.
+    const isStagedEdit = state.status === "pending_edit_payment";
+    if (!isStagedEdit && state.paymentStatus === "paid")
+      throw new ConvexError("This booking is already paid.");
     if (state.status === "cancelled") return { released: true };
-    if (state.status !== "pending_payment" && state.status !== "pending")
+    if (!isStagedEdit && state.status !== "pending_payment" && state.status !== "pending")
       throw new ConvexError("This booking is not awaiting payment.");
 
     if (state.stripeSessionId) {
