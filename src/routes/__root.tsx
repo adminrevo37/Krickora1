@@ -238,6 +238,12 @@ function RootComponent() {
               <button onClick={() => openInstallHelp()} className="text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2">
                 Install app
               </button>
+              {/* Plain <a>, not a router Link: /privacy is a STATIC page in public/, served by
+                  Vercel ahead of the SPA rewrite. A router Link would try to resolve it as an
+                  in-app route and 404. Required by both app stores as a public policy URL. */}
+              <a href="/privacy" className="text-sm text-gray-500 hover:text-gray-700 underline underline-offset-2">
+                Privacy
+              </a>
               <p className="text-sm text-gray-500">&copy; {new Date().getFullYear()} Cricket Revolution Training Nets.</p>
             </div>
           </div>
