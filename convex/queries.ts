@@ -858,6 +858,14 @@ export const listWaitlistAdmin = query({
         hour: e.hour,
         status: e.status ?? "waiting",
         offerExpiresAt: e.offerExpiresAt ?? null,
+        // OFFERED-SLOT SNAPSHOT (2026-09-05) — which lane/start/length the live
+        // offer is for, straight off the entry. The admin UI previously had to
+        // join `entries` to `holds` by (user, hour) to work this out, which is
+        // ambiguous when one user holds offers in BOTH pools for the same hour.
+        offeredLaneId: e.offeredLaneId ?? null,
+        offeredLaneName: e.offeredLaneName ?? null,
+        offeredStartHour: e.offeredStartHour ?? null,
+        offeredMinutes: e.offeredMinutes ?? null,
         createdAt: e._creationTime,
         altTimeOptIn: e.altTimeOptIn !== false,
       }));
@@ -884,6 +892,21 @@ export const listWaitlistAdmin = query({
 });
 
 // List waitlist entries by user — self or admin only.
+//
+// OFFERED-SLOT SNAPSHOT (2026-09-05) — this returns the FULL row, so it carries
+// `offeredLaneId` / `offeredLaneName` / `offeredStartHour` / `offeredMinutes`:
+// the lane, snapped start and length of the offer the caller currently holds.
+// That is the only customer-readable source of the offered lane (the protecting
+// `slotHolds` row is admin-only via listWaitlistAdmin), and a client that
+// instead guesses a free lane in the pool books the WRONG lane whenever more
+// than one is free — see the schema comment on the fields.
+//
+// ⚠️ Do NOT convert this to a field-picker without carrying those four fields
+// across; dropping them silently re-opens the gap.
+//
+// A client MUST gate on `status === 'offered' && offerExpiresAt > now` before
+// using them: they are a snapshot of one offer instance, and the protecting hold
+// can be swept independently of the row.
 export const listWaitlistByUser = query({
   args: { userId: v.string() },
   handler: async (ctx, args) => {
@@ -899,6 +922,10 @@ export const listWaitlistByUser = query({
 
 // Strip identifying fields from a waitlist row for non-admin callers, keeping
 // only what's needed to compute position/membership.
+// The offered-slot snapshot (offeredLaneId/…) is deliberately NOT carried here:
+// these queries return OTHER people's rows, and which lane a named customer has
+// been offered is theirs alone. The offeree reads their own via
+// listWaitlistByUser (self-or-admin scoped).
 function scopeWaitlist(rows: any[], caller: { isAdmin: boolean; identity: any | null }) {
   if (caller.isAdmin) return rows;
   return rows.map((w: any) => ({

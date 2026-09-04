@@ -56,6 +56,30 @@ function fmtAwstTime(ms: number): string {
 
 const statusOf = (e: any): string => e.status ?? "waiting";
 
+/**
+ * OFFERED-SLOT SNAPSHOT (2026-09-05) — clear the offered lane/start/length.
+ *
+ * `offeredLaneId` + friends describe ONE live offer instance. The offered lane
+ * used to exist only on the protecting `slotHolds` row, which no customer-facing
+ * query returns (listWaitlistAdmin is requireAdmin), so a client had to GUESS a
+ * free lane in the pool — and guessing wrong leaves the real hold unconsumed, the
+ * entry never marked 'booked', and the roll-on handing the fenced lane to someone
+ * else. Denormalising the decision onto the row fixes that, but a denormalised
+ * field that is set and never cleared is worse than no field at all: a stale lane
+ * would send the next reader to a slot that is no longer theirs.
+ *
+ * So EVERY path that takes an entry out of 'offered' spreads this in alongside
+ * the status patch. Convex treats `undefined` in a patch as "remove the field"
+ * (the same idiom already used for `offerExpiresAt`); never write `null` — an
+ * optional validator rejects it and would fail the whole mutation.
+ */
+export const CLEAR_OFFERED_SLOT = {
+  offeredLaneId: undefined,
+  offeredLaneName: undefined,
+  offeredStartHour: undefined,
+  offeredMinutes: undefined,
+};
+
 // SPEC_ANALYTICS_BUILD_2026-06 — log a waitlist-offer lifecycle event. Response
 // actions (accepted/declined/expired) carry latencyMs = now − the entry's
 // offeredAt, so the dashboard can report median time-to-accept/reject and the
@@ -173,7 +197,11 @@ export async function consumeWaitlistHoldForBooking(
     if (args.startHour < eEnd && endHour > e.hour) {
       const st = statusOf(e);
       if (st === "offered" || st === "waiting") {
-        await ctx.db.patch(e._id, { status: "booked" });
+        // EXIT PATH — offer consumed by the booking. (offerExpiresAt is
+        // deliberately left as-is: every reader of it gates on status==='offered'
+        // first, and changing it here would be a behaviour change, not the
+        // additive visibility fix.)
+        await ctx.db.patch(e._id, { status: "booked", ...CLEAR_OFFERED_SLOT });
         // An offered entry that books the held slot = the offer was ACCEPTED.
         if (st === "offered") await logWaitlistOfferEvent(ctx, "accepted", e);
       }
@@ -286,7 +314,14 @@ export const advanceWaitlistOffer = internalMutation({
     if (closure) {
       for (const e of allEntries) {
         if (statusOf(e) === "offered") {
-          await ctx.db.patch(e._id, { status: "waiting", offerExpiresAt: undefined });
+          // EXIT PATH — closure revert. The held lane is being un-offered, so the
+          // snapshot must go with it or the offeree's client would still show a
+          // lane they can no longer book.
+          await ctx.db.patch(e._id, {
+            status: "waiting",
+            offerExpiresAt: undefined,
+            ...CLEAR_OFFERED_SLOT,
+          });
         }
       }
       await deleteHoldsForPool("all");
@@ -341,7 +376,12 @@ export const advanceWaitlistOffer = internalMutation({
           const st = statusOf(e);
           const isLegacy = e.laneId === "*";
           if ((st === "waiting" || st === "offered") && (!isLegacy || allOpenConfirmed)) {
-            await ctx.db.patch(e._id, { status: "expired", offerExpiresAt: undefined });
+            // EXIT PATH — the pool filled under the offer; the queue dies.
+            await ctx.db.patch(e._id, {
+              status: "expired",
+              offerExpiresAt: undefined,
+              ...CLEAR_OFFERED_SLOT,
+            });
             if (st === "offered") await logWaitlistOfferEvent(ctx, "expired", e, { date, hour });
           } else if (isLegacy && st === "offered") {
             // Legacy '*' offer surviving a pool-fill (the other pool still has
@@ -353,7 +393,14 @@ export const advanceWaitlistOffer = internalMutation({
               (h: any) => !deleted.has(h._id) && h.userId === e.userId
             );
             if (!hasLiveHold) {
-              await ctx.db.patch(e._id, { status: "waiting", offerExpiresAt: undefined });
+              // EXIT PATH — legacy '*' offer whose protecting hold was just
+              // cleared with this pool's lanes. Reverted to 'waiting', so the
+              // snapshot of the (now deleted) held lane goes too.
+              await ctx.db.patch(e._id, {
+                status: "waiting",
+                offerExpiresAt: undefined,
+                ...CLEAR_OFFERED_SLOT,
+              });
             }
           }
         }
@@ -378,7 +425,12 @@ export const advanceWaitlistOffer = internalMutation({
         const offeredExp = offered.offerExpiresAt
           ? new Date(offered.offerExpiresAt).getTime()
           : 0;
-        await ctx.db.patch(offered._id, { status: "expired", offerExpiresAt: undefined });
+        // EXIT PATH — the offer lapsed unanswered; roll on to the next member.
+        await ctx.db.patch(offered._id, {
+          status: "expired",
+          offerExpiresAt: undefined,
+          ...CLEAR_OFFERED_SLOT,
+        });
         await logWaitlistOfferEvent(ctx, "expired", offered, { date, hour });
         await deleteHoldsForPool(pool);
         if (offered.laneId === "*") {
@@ -543,11 +595,23 @@ export const advanceWaitlistOffer = internalMutation({
         }
       }
       const offerEnd = offerStart + offerMin / 60;
+      // Resolved display name for the offered lane ("BM 2" / "RU 4"). Computed
+      // here rather than at the email (§6) so the same value is snapshotted onto
+      // the entry, emailed and pushed — one decision, one string.
+      const offerLaneName = laneInfo.get(offerLane)?.name ?? offerLane;
 
+      // THE OFFER. The offered-slot snapshot is written in the SAME patch as
+      // status='offered' so the row is never momentarily 'offered' with no lane
+      // on it — a client polling mid-transaction could otherwise fall back to
+      // guessing, which is the exact failure this snapshot exists to remove.
       await ctx.db.patch(next._id, {
         status: "offered",
         offerExpiresAt: new Date(expiresAtMs).toISOString(),
         offeredAt: now,
+        offeredLaneId: offerLane,
+        offeredLaneName: offerLaneName,
+        offeredStartHour: offerStart,
+        offeredMinutes: offerMin,
       });
       await logWaitlistOfferEvent(ctx, "offered", { ...next, offeredAt: now }, { laneId: offerLane, date, hour });
       await ctx.db.insert("slotHolds", {
@@ -567,7 +631,7 @@ export const advanceWaitlistOffer = internalMutation({
       // The BOOK deep-link uses the SNAPPED start (what they'll actually book);
       // the DECLINE link keeps the entry's hour (declineWaitlistOffer looks the
       // entry up by its queued hour).
-      const laneName = laneInfo.get(offerLane)?.name ?? offerLane;
+      const laneName = offerLaneName;
       await ctx.scheduler.runAfter(0, internal.emails.sendWaitlistVacancy, {
         to: next.userEmail,
         customerName: next.userName,
@@ -661,7 +725,13 @@ export const expirePassedWaitlistEntries = internalMutation({
           more = true;
           break;
         }
-        await ctx.db.patch(e._id, { status: "expired", offerExpiresAt: undefined });
+        // EXIT PATH — the session's end passed. An entry reaped from 'offered'
+        // (its hold has long since gone) must not keep advertising a lane.
+        await ctx.db.patch(e._id, {
+          status: "expired",
+          offerExpiresAt: undefined,
+          ...CLEAR_OFFERED_SLOT,
+        });
         await logWaitlistOfferEvent(ctx, "lapsed", e);
         reaped++;
       }
@@ -720,9 +790,15 @@ export const adminClearWaitlistOffer = mutation({
       const isTarget = targetSentinel === null || sentinel === targetSentinel;
       for (const e of entries) {
         if (statusOf(e) === "offered") {
+          // EXIT PATH — admin cleared the slot. Every waitlist hold for the hour
+          // is deleted below (target group AND others), so no surviving entry may
+          // keep an offered-lane snapshot: the target expires, the rest revert to
+          // 'waiting' and are re-offered a lane by the immediate re-advance,
+          // which writes a fresh snapshot.
           await ctx.db.patch(e._id, {
             status: isTarget ? "expired" : "waiting",
             offerExpiresAt: undefined,
+            ...CLEAR_OFFERED_SLOT,
           });
         }
       }
@@ -968,7 +1044,12 @@ export const declineWaitlistOffer = mutation({
       // Nothing to decline (already rolled / booked / never offered to them).
       return { declined: false, reason: "no live offer" };
     }
-    await ctx.db.patch(mine._id, { status: "expired", offerExpiresAt: undefined });
+    // EXIT PATH — the offeree pressed Pass.
+    await ctx.db.patch(mine._id, {
+      status: "expired",
+      offerExpiresAt: undefined,
+      ...CLEAR_OFFERED_SLOT,
+    });
     await logWaitlistOfferEvent(ctx, "declined", mine, { laneId: args.laneId, date: args.date, hour: args.hour });
 
     // Release only THIS offer's hold (instance-matched by expiresAt); fall back

@@ -1,6 +1,6 @@
 import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
-import { scheduleWaitlistAdvance } from "./waitlist";
+import { scheduleWaitlistAdvance, CLEAR_OFFERED_SLOT } from "./waitlist";
 import { releaseDiscountReservation } from "./lib/discounts";
 
 /**
@@ -70,7 +70,12 @@ async function releaseAbandonedBooking(ctx: any, booking: any): Promise<boolean>
         if (e.userId !== booking.userId) continue;
         if (((e as any).status ?? "waiting") !== "booked") continue;
         if (booking.startHour < e.hour + 1 && bEnd > e.hour) {
-          await ctx.db.patch(e._id, { status: "waiting" });
+          // EXIT PATH (belt-and-braces) — 'booked' → 'waiting'. The offered-slot
+          // snapshot was already cleared on the offered→booked transition in
+          // consumeWaitlistHoldForBooking, but this is the one path that
+          // resurrects an entry from a terminal-ish state, so clear again rather
+          // than depend on that ordering holding for ever.
+          await ctx.db.patch(e._id, { status: "waiting", ...CLEAR_OFFERED_SLOT });
         }
       }
     }

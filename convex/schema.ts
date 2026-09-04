@@ -687,6 +687,37 @@ export default defineSchema({
     // alongside status='offered'. Lets the response analytics measure how long a
     // member took to accept/decline (or that they never acted). Additive/optional.
     offeredAt: v.optional(v.number()),
+    // OFFERED-SLOT SNAPSHOT (2026-09-05) — WHICH lane/start/length the live offer
+    // is for. Before these existed the offered lane lived ONLY on the protecting
+    // `slotHolds` row, and the only query returning holds is the admin-gated
+    // queries.listWaitlistAdmin — so the offeree's own client could not tell them
+    // what they had been offered. A client that guesses a free lane from public
+    // data books the WRONG lane whenever the pool has more than one free lane:
+    // consumeWaitlistHoldForBooking matches the hold by the BOOKED lane, so the
+    // real hold is never consumed, the entry is never marked 'booked', and the
+    // orphaned hold fences that lane until it expires while the roll-on re-offers
+    // it to someone else.
+    //
+    // Written ONLY at the moment status becomes 'offered' (advanceWaitlistOffer
+    // step 5) and CLEARED on every path that ends that offer — see
+    // CLEAR_OFFERED_SLOT in waitlist.ts. They are a snapshot of ONE offer
+    // instance, so a reader must gate on
+    //   status === 'offered' && offerExpiresAt > now
+    // exactly as it already must for offerExpiresAt itself; outside that gate the
+    // values are meaningless even when present.
+    //
+    //   offeredLaneId     the REAL lane id the hold sits on (never a sentinel)
+    //   offeredLaneName   display name resolved from live lane config at offer
+    //                     time ("BM 2" / "RU 4") — snapshot, so a client never
+    //                     re-derives it from a stale local lane map
+    //   offeredStartHour  the SNAPPED start, which can differ from `hour` on a
+    //                     custom-start grid (e.g. entry hour 10, offered 10.5)
+    //   offeredMinutes    the offered length; 60, or the member's longer
+    //                     durationMinutes preference where the lane could host it
+    offeredLaneId: v.optional(v.string()),
+    offeredLaneName: v.optional(v.string()),
+    offeredStartHour: v.optional(v.number()),
+    offeredMinutes: v.optional(v.number()),
     // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part B — automatic alternative-time
     // offers. All additive/optional.
     //   altTimeOptIn: false = "only tell me about the exact hour I asked for"
