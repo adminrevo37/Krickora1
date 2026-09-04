@@ -161,6 +161,29 @@ export default defineConfig({
           if (!id.includes("node_modules")) return undefined;
           if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id))
             return "react";
+          // H4 (WEB review 2026-09-05) — prop-types matched NO rule below, so
+          // Rollup default-chunked it in with its biggest consumer, recharts, i.e.
+          // into "charts" (407 KB). But prop-types has a second consumer that IS on
+          // the customer critical path: @stripe/react-stripe-js, used by
+          // EmbeddedCheckoutModal. That put a STATIC `import{P}from"./charts-*.js"`
+          // in the shared chunk which both the home/booking route and My Bookings
+          // import — so every customer downloaded and parsed the whole recharts +
+          // d3 bundle before the booking grid could render, purely to get
+          // PropTypes. Charts is used only by lazily-loaded admin analytics tabs.
+          // The coupling is invisible in the source, so if this is ever touched,
+          // re-check with:
+          //   grep -o 'from"\./charts-[^"]*"' dist/assets/*.js
+          // and confirm only the admin analytics chunks appear.
+          // prop-types' own nested react-is copy lives under
+          // node_modules/prop-types/node_modules/, which this pattern also matches;
+          // object-assign and loose-envify are its other two deps and must travel
+          // with it or the same edge re-forms through them.
+          if (
+            /[\\/]node_modules[\\/](prop-types|object-assign|loose-envify)[\\/]/.test(
+              id,
+            )
+          )
+            return "react";
           if (/[\\/]node_modules[\\/]@tanstack[\\/]/.test(id)) return "router";
           if (
             /[\\/]node_modules[\\/](convex|better-auth|@convex-dev)[\\/]/.test(id)
