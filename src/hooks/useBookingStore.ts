@@ -59,7 +59,7 @@ export function evaluateCancellation(
   // SPEC_COACH_FLEXIBLE_WINDOW: when the viewing coach is flagged flexible, pass their
   // shorter late-cancel window (hours) so the charge threshold + warning match the server.
   opts?: { coachLateHoursOverride?: number },
-): { allowed: boolean; reason?: string; willBeCharged?: boolean } {
+): { allowed: boolean; reason?: string; willBeCharged?: boolean; noRefund?: boolean; hours?: number } {
   if (!booking) return { allowed: false, reason: 'Booking not found.' }
   if (booking.status === 'cancelled')
     return { allowed: false, reason: 'Already cancelled.' }
@@ -88,9 +88,16 @@ export function evaluateCancellation(
   const cs = getSettingsStore().get()
   const cancellationHours = cs.customerCancellationHours ?? cs.cancellationHoursBefore ?? 2
   if (hoursUntil < cancellationHours) {
+    // 2026-09-05 (owner-approved policy change): this used to return allowed:false,
+    // which greyed the Cancel button to a lock and left "don't turn up" as the
+    // customer's only real option. The server no longer refuses here — it lets the
+    // cancellation through and returns NOTHING — so the action is allowed and the
+    // caller must state, before confirming, that nothing comes back.
     return {
-      allowed: false,
-      reason: `Bookings can only be cancelled or changed at least ${cancellationHours} hour${cancellationHours !== 1 ? 's' : ''} before the session starts.`,
+      allowed: true,
+      noRefund: true,
+      hours: cancellationHours,
+      reason: `This session starts within ${cancellationHours} hour${cancellationHours !== 1 ? 's' : ''}. You can still cancel, but nothing will be returned.`,
     }
   }
   return { allowed: true }

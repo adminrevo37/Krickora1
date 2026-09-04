@@ -519,6 +519,12 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       // the dialog they just dismissed. This banner does not auto-dismiss.
       if (outcome.kind === 'credit') {
         setToast(`Booking cancelled. $${fmtMoney(outcome.amount)} has been added to your account credit — it is not refunded to your card.`)
+      } else if (outcome.kind === 'no-refund') {
+        setToast(
+          outcome.forfeited > 0
+            ? `Booking cancelled. Because it was within ${outcome.hours} hour${outcome.hours !== 1 ? 's' : ''} of the session, the $${fmtMoney(outcome.forfeited)} paid has not been returned.`
+            : 'Booking cancelled.',
+        )
       } else if (outcome.kind === 'nothing') {
         setToast('Booking cancelled.')
       }
@@ -702,9 +708,13 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   // the charge (`refunded: true`). That flag is not carried on the client Booking
   // type, so such a booking would be described here as still returning its value.
   // Void-then-cancel is an admin-only workflow, so a customer can't reach it here.
+  //   • 2026-09-05 (owner-approved): a customer cancelling INSIDE the cancellation
+  //     window is no longer refused — the cancel goes through and NOTHING is
+  //     returned, neither the cash paid nor the account credit spent on it.
   type CancelOutcome =
     | { kind: 'coach'; charged: boolean; charge: number; hours: number }
     | { kind: 'credit'; amount: number }
+    | { kind: 'no-refund'; forfeited: number; hours: number }
     | { kind: 'nothing' }
 
   const cancelOutcome = (booking: Booking): CancelOutcome => {
@@ -722,6 +732,17 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
       ? Math.round(booking.priceInCents) / 100
       : 0
     const amount = cashPaid + (booking.creditApplied ?? 0)
+    // Inside the window the server skips the credit entirely, so say what is being
+    // given up rather than what is coming back. Mirrors the same settings the
+    // server reads (customerCancellationHours → legacy cancellationHoursBefore).
+    const lateCheck = evaluateCancellation(booking)
+    if (lateCheck.noRefund) {
+      return {
+        kind: 'no-refund',
+        forfeited: amount,
+        hours: lateCheck.hours ?? settings?.customerCancellationHours ?? settings?.cancellationHoursBefore ?? 2,
+      }
+    }
     return amount > 0 ? { kind: 'credit', amount } : { kind: 'nothing' }
   }
 
@@ -1160,7 +1181,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             onClick={() => handleCancel(booking)}
             disabled={cancellingId === booking.id}
             aria-label={!cancelCheck.allowed ? 'Why can’t I cancel?' : 'Cancel booking'}
-            title={!cancelCheck.allowed ? cancelCheck.reason : 'Cancel booking'}
+            title={!cancelCheck.allowed || cancelCheck.noRefund ? cancelCheck.reason : 'Cancel booking'}
             className={`text-[11px] px-3 py-2 min-h-[40px] inline-flex items-center justify-center rounded-lg border transition-colors disabled:opacity-40 ${
               cancelCheck.allowed
                 ? 'border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20'
@@ -1896,8 +1917,21 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
         const laneLabel = bookingLaneNames(cancelConfirm).join(', ')
         const busy = cancellingId === cancelConfirm.id
         // A late coach cancel is the one case that COSTS money to confirm, so it
-        // keeps the ⚠️ + "within N hours" framing it already had.
+        // keeps the ⚠️ + "within N hours" framing it already had. A customer
+        // cancelling inside their own window now costs money too — the cancel goes
+        // through and nothing is returned — so it gets the same weight.
         const lateCoach = outcome.kind === 'coach' && outcome.charged
+        const lateCustomer = outcome.kind === 'no-refund'
+        const costly = lateCoach || lateCustomer
+        // Where a modify could still succeed, offer it beside the destructive
+        // action — bringing the session forward or extending it keeps what has
+        // been paid, which cancelling this close does not. Same conditions the
+        // server enforces: no coach booking, no self-modified split leg, no
+        // admin-managed booking, and the start time has not passed.
+        const [cby, cbm, cbd] = cancelConfirm.date.split('-').map(Number)
+        const cbStartMs = new Date(cby, cbm - 1, cbd, Math.floor(cancelConfirm.startHour), Math.round((cancelConfirm.startHour - Math.floor(cancelConfirm.startHour)) * 60), 0).getTime()
+        const offerChangeTime =
+          lateCustomer && !cancelConfirm.splitLeg2 && !cancelConfirm.createdByAdmin && cbStartMs > nowAwstMs
         return (
           <ModalShell
             onClose={() => { if (!busy) { setCancelConfirm(null); setCancelError(null) } }}
@@ -1907,9 +1941,13 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
             panelClassName="relative bg-white dark:bg-gray-900 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-800 w-full max-w-sm p-5"
           >
               <div className="flex items-center gap-2 mb-2">
-                <span className="text-xl">{lateCoach ? '⚠️' : '🗑️'}</span>
+                <span className="text-xl">{costly ? '⚠️' : '🗑️'}</span>
                 <h3 id="cancel-confirm-title" className="text-base font-bold text-gray-900 dark:text-white">
-                  {lateCoach && outcome.kind === 'coach' ? `Cancel within ${outcome.hours} hours?` : 'Cancel this session?'}
+                  {lateCoach && outcome.kind === 'coach'
+                    ? `Cancel within ${outcome.hours} hours?`
+                    : outcome.kind === 'no-refund'
+                      ? `Cancel within ${outcome.hours} hour${outcome.hours !== 1 ? 's' : ''}?`
+                      : 'Cancel this session?'}
                 </h3>
               </div>
 
@@ -1945,9 +1983,32 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                 </div>
               )}
 
+              {outcome.kind === 'no-refund' && (
+                <div className="mt-3 rounded-xl border border-red-200 dark:border-red-800/50 bg-red-50 dark:bg-red-900/20 px-3 py-2.5">
+                  <p className="text-sm text-red-900 dark:text-red-200">
+                    This session starts within {outcome.hours} hour{outcome.hours !== 1 ? 's' : ''}.{' '}
+                    {outcome.forfeited > 0 ? (
+                      <>
+                        If you cancel now,{' '}
+                        <span className="font-semibold">the ${fmtMoney(outcome.forfeited)} you paid will not be returned</span>{' '}
+                        — not to your card, and not as account credit.
+                      </>
+                    ) : (
+                      <span className="font-semibold">Nothing will be returned to you.</span>
+                    )}
+                  </p>
+                </div>
+              )}
+
               {outcome.kind === 'nothing' && (
                 <p className="text-sm text-gray-600 dark:text-gray-300 mt-3">
                   Nothing has been paid on this booking, so there is nothing to return.
+                </p>
+              )}
+
+              {offerChangeTime && (
+                <p className="text-sm text-gray-600 dark:text-gray-300 mt-3">
+                  You can still <span className="font-semibold text-gray-900 dark:text-white">bring the session forward</span> or extend it instead — that keeps what you've paid.
                 </p>
               )}
 
@@ -1958,7 +2019,17 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
               {cancelError && (
                 <p className="text-xs text-red-600 dark:text-red-400 mt-2">{cancelError}</p>
               )}
-              <div className="flex gap-3 mt-4">
+              {/* The better option gets its own full-width row rather than a third
+                  of a phone-width button row — three flex-1 buttons at this panel
+                  width wrap their labels. */}
+              {offerChangeTime && (
+                <button
+                  onClick={() => { setCancelConfirm(null); setCancelError(null); setModifyBookingData(cancelConfirm) }}
+                  disabled={busy}
+                  className="w-full mt-4 py-2.5 min-h-[44px] bg-violet-500 hover:bg-violet-600 text-white font-semibold rounded-xl transition-all disabled:opacity-50"
+                >Change time instead</button>
+              )}
+              <div className={`flex gap-3 ${offerChangeTime ? 'mt-3' : 'mt-4'}`}>
                 <button
                   onClick={() => { setCancelConfirm(null); setCancelError(null) }}
                   disabled={busy}
@@ -1968,17 +2039,19 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
                   onClick={() => { void doCancel(cancelConfirm) }}
                   disabled={busy}
                   className="flex-1 py-2.5 min-h-[44px] bg-red-500 hover:bg-red-600 text-white font-semibold rounded-xl transition-all disabled:opacity-50"
-                >{busy ? 'Cancelling…' : lateCoach ? 'Cancel anyway' : 'Cancel booking'}</button>
+                >{busy ? 'Cancelling…' : costly ? 'Cancel anyway' : 'Cancel booking'}</button>
               </div>
           </ModalShell>
         )
       })()}
 
-      {/* H1 — cancel refused because the session is too close. The server rejects
-          this outright (it does not merely withhold the credit), so say so and
-          offer the change it DOES still allow inside the window: move the session
-          earlier, or extend it. Previously this was a bare red banner and the
-          customer's only visible option was to lose the session by not turning up. */}
+      {/* Cancel refused outright. 2026-09-05: the cancellation WINDOW no longer
+          reaches here — inside it the cancel is allowed and simply returns nothing
+          (that path goes through the confirm modal above, which says so). What is
+          left is the genuinely impossible: a session that has already started, one
+          already cancelled, and an admin-managed booking. Modify is still offered
+          where it could succeed, since that is often the thing the customer
+          actually wanted. */}
       {cancelBlocked && (() => {
         const b = cancelBlocked.booking
         const dateLabel = formatDateLong(b.date)
