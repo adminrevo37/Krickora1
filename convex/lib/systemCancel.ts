@@ -13,6 +13,7 @@
 import { internal } from "../_generated/api";
 import { issueCredit } from "./credit";
 import { releaseHoldForBooking } from "./slotHolds";
+import { calendarDeleteArgs } from "./calendarDelete";
 import { fmtAwstDateLabel, fmtAwstDateShort } from "./dates";
 // EML-1 (audit 2026-06), applied here 2026-09-01: use the shared, snapshot-aware
 // resolver instead of a local hardcoded map. The map this replaced still carried
@@ -112,13 +113,17 @@ export async function systemCancelBooking(
   // loading the door code and powering the machine for a session that is cancelled.
   // That is building access after cancellation, the same class as the A1 HIGH.
   if (booking.googleCalendarEventId || (booking.googleCalendarEventIds?.length ?? 0) > 0) {
-    await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-      // `googleCalendarEventId` is a REQUIRED v.string() on the action — the widened
-      // condition above now admits the per-lane-only case, so it must be coerced (a
-      // raw undefined would fail the validator and abort the whole teardown).
-      googleCalendarEventId: booking.googleCalendarEventId ?? "",
-      laneCalendarEventIds: booking.googleCalendarEventIds,
-    });
+    // `googleCalendarEventId` is a REQUIRED v.string() on the action — the widened
+    // condition above admits the per-lane-only case, so it must be coerced (a raw
+    // undefined would fail the validator and abort the whole teardown).
+    // C3 (2026-09-05): calendarDeleteArgs also passes bookingId + a snapshot, so a
+    // failed Google delete is recorded and retried. A closure cancelling a session
+    // whose delete silently failed used to leave the door code live indefinitely.
+    await ctx.scheduler.runAfter(
+      0,
+      internal.googleCalendar.deleteCalendarEvent,
+      calendarDeleteArgs(booking)
+    );
   }
 
   // Notify the customer (parents/athletes/mates notifications hook in once those

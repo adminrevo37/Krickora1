@@ -1180,6 +1180,44 @@ export default defineSchema({
     connectedAt: v.string(),
   }).index("by_key", ["key"]),
 
+  // C3 (BACKEND review 2026-09-05) — ORPHANED CALENDAR EVENTS: a Google Calendar
+  // event that SHOULD have been deleted (booking cancelled / deleted / moved) and
+  // was not, because the DELETE failed or the calendar was disconnected. Until it
+  // is gone, HA keeps reading it: the door code stays live and the lane reads as
+  // occupied — building access to an unstaffed site after a cancellation.
+  //
+  // Why a dedicated table rather than the booking's `calendarSyncStatus` flag:
+  //   • three of the ten delete call sites HARD-DELETE the booking row in the same
+  //     mutation (deleteBooking, cascadeDeleteCustomer, the coach merge), so by the
+  //     time the scheduled action runs there is no row left to flag;
+  //   • `calendarSyncStatus` is overwritten by the next successful sync, and is only
+  //     ever read by a reconcile that scans `status === "confirmed"` — which a
+  //     cancelled booking by definition is not.
+  // This row is keyed on the EVENT, survives the booking, and is retried + alerted
+  // on until it is resolved. Deliberately NOT in the retention sweep: a row is
+  // written only when a delete actually failed, so the table stays tiny and each
+  // resolved row is the audit trail of a real building-access incident.
+  calendarOrphanEvents: defineTable({
+    calendarId: v.string(),
+    eventId: v.string(),
+    // Context captured AT SCHEDULE TIME — the booking may no longer exist.
+    bookingId: v.optional(v.string()),
+    date: v.optional(v.string()), // YYYY-MM-DD (AWST session date)
+    startHour: v.optional(v.number()),
+    laneName: v.optional(v.string()),
+    customerName: v.optional(v.string()),
+    accessCode: v.optional(v.string()), // the code that may still be live
+    reason: v.string(), // 'delete-failed' | 'not-connected' | 'live-after-cancel'
+    status: v.string(), // 'open' | 'resolved'
+    attempts: v.number(),
+    firstSeenAt: v.number(), // ms
+    lastAttemptAt: v.number(), // ms
+    lastError: v.optional(v.string()),
+    resolvedAt: v.optional(v.number()),
+  })
+    .index("by_status", ["status"])
+    .index("by_event", ["calendarId", "eventId"]),
+
   // Facility closures (dates when booking is disabled)
   closures: defineTable({
     date: v.string(), // YYYY-MM-DD

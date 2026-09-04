@@ -39,6 +39,7 @@ import { recordBookingEvent } from "./bookingEvents";
 import { validateAndSnapshotLane } from "./lanes";
 import { defaultLaneName } from "./lib/lanes";
 import { fmtAwstDateLabel, fmtAwstDateShort } from "./lib/dates";
+import { calendarDeleteArgs } from "./lib/calendarDelete";
 
 const LANE_TYPE_LABEL: Record<string, string> = { BM: "Bowling Machine", RU: "Run Up" };
 
@@ -341,10 +342,14 @@ export const adminReassignLanes = mutation({
         !!booking.googleCalendarEventId ||
         (Array.isArray(booking.googleCalendarEventIds) && booking.googleCalendarEventIds.length > 0);
       if (hadEvents) {
-        await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-          googleCalendarEventId: booking.googleCalendarEventId ?? "",
-          laneCalendarEventIds: booking.googleCalendarEventIds,
-        });
+        // C3 (2026-09-05): carry bookingId + snapshot so a failed delete is
+        // recorded — a surviving event on the VACATED lane keeps that lane's door
+        // code live while the booking now sits on a different lane.
+        await ctx.scheduler.runAfter(
+          0,
+          internal.googleCalendar.deleteCalendarEvent,
+          calendarDeleteArgs(booking)
+        );
         await ctx.db.patch(booking._id, {
           googleCalendarEventId: undefined,
           googleCalendarEventIds: undefined,

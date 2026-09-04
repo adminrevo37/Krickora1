@@ -5,6 +5,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { requireAdminAction } from "./lib/adminGuard";
 import { defaultLaneName, variantLabel } from "./lib/lanes";
+import { fmtAwstDateLabel } from "./lib/dates";
 
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3";
@@ -114,11 +115,48 @@ async function refreshAccessToken(refreshToken: string): Promise<{ accessToken: 
   return { accessToken: data.access_token, expiresAt: Date.now() + ((data.expires_in || 3600) * 1000) };
 }
 
+/**
+ * H2 (BACKEND review 2026-09-05) — a Google Calendar disconnection was SILENT and
+ * SELF-CONCEALING: every write no-ops on a null token, and the daily reconcile that
+ * exists to detect missing events is gated on the SAME token, so it returned an
+ * all-zero "nothing wrong" result while nothing at all was syncing. Door codes reach
+ * the keypad only via Calendar, so the first symptom would have been a full evening
+ * of customers standing outside a locked, unstaffed building.
+ *
+ * Alerting from the one function every caller funnels through covers every path at
+ * once. Deduped to one push per 6h, and deliberately never throws — a failure to
+ * alert must not become a failure to sync.
+ */
+async function alertCalendarDisconnected(ctx: any, detail: string): Promise<void> {
+  try {
+    const claimed: boolean = await ctx.runMutation(
+      internal.googleCalendarMutations.claimAdminAlert,
+      { key: "gcal-disconnected", minIntervalMs: 6 * 60 * 60 * 1000 }
+    );
+    console.error(`[calendar] GOOGLE CALENDAR NOT CONNECTED — ${detail}`);
+    if (!claimed) return;
+    await ctx.scheduler.runAfter(0, internal.push.sendAdminPush, {
+      title: "🔴 Google Calendar disconnected",
+      body: `Door codes are NOT reaching the keypad (${detail}). Bookings are still being taken, but no calendar events are being written or removed — customers will arrive at a locked building. Reconnect Google Calendar.`,
+      url: "/rev-ops-7k2p",
+      tag: "gcal-disconnected",
+    });
+  } catch (e) {
+    console.error("Failed to raise the calendar-disconnected alert:", e);
+  }
+}
+
 async function getValidToken(ctx: any): Promise<{ accessToken: string; calendarId: string } | null> {
   const tokens = await ctx.runQuery(internal.googleCalendarMutations.getTokens, {});
-  if (!tokens) return null;
+  if (!tokens) {
+    await alertCalendarDisconnected(ctx, "no Google account is connected");
+    return null;
+  }
   if (tokens.expiresAt < Date.now() + 5 * 60 * 1000) {
-    if (!tokens.refreshToken) return null;
+    if (!tokens.refreshToken) {
+      await alertCalendarDisconnected(ctx, "the stored token has expired and there is no refresh token");
+      return null;
+    }
     try {
       const refreshed = await refreshAccessToken(tokens.refreshToken);
       await ctx.runMutation(internal.googleCalendarMutations.updateAccessToken, {
@@ -128,6 +166,10 @@ async function getValidToken(ctx: any): Promise<{ accessToken: string; calendarI
       return { accessToken: refreshed.accessToken, calendarId: tokens.calendarId };
     } catch (e) {
       console.error("Failed to refresh token:", e);
+      await alertCalendarDisconnected(
+        ctx,
+        `the refresh token was rejected by Google${tokens.connectedEmail ? ` for ${tokens.connectedEmail}` : ""}`
+      );
       return null;
     }
   }
@@ -499,10 +541,69 @@ export const deleteCalendarEvent = internalAction({
     // "failed" (a live event left behind after a cancel is an access risk —
     // at minimum make it visible/auditable).
     bookingId: v.optional(v.string()),
+    // C3 (BACKEND review 2026-09-05): session context captured AT SCHEDULE TIME.
+    // Three call sites hard-delete the booking row in the same mutation, so by the
+    // time this action runs there may be nothing left to read — without this an
+    // alert could not name the lane, the time or the door code still live on the
+    // keypad. Built by lib/calendarDelete.ts `calendarDeleteArgs()`.
+    snapshot: v.optional(
+      v.object({
+        date: v.optional(v.string()),
+        startHour: v.optional(v.number()),
+        laneName: v.optional(v.string()),
+        customerName: v.optional(v.string()),
+        accessCode: v.optional(v.string()),
+      })
+    ),
   },
   handler: async (ctx, args) => {
+    // C3: record every event this action FAILED to remove — keyed on the event, in
+    // its own table, so the record survives the booking being cancelled or
+    // hard-deleted. `sweepCalendarOrphans` retries these and alerts the admins.
+    const orphan = async (calendarId: string, eventId: string, reason: string, lastError?: string) => {
+      if (!eventId) return;
+      try {
+        await ctx.runMutation(internal.googleCalendarMutations.recordCalendarOrphan, {
+          calendarId,
+          eventId,
+          reason,
+          ...(args.bookingId !== undefined ? { bookingId: args.bookingId } : {}),
+          ...(args.snapshot?.date !== undefined ? { date: args.snapshot.date } : {}),
+          ...(args.snapshot?.startHour !== undefined ? { startHour: args.snapshot.startHour } : {}),
+          ...(args.snapshot?.laneName !== undefined ? { laneName: args.snapshot.laneName } : {}),
+          ...(args.snapshot?.customerName !== undefined ? { customerName: args.snapshot.customerName } : {}),
+          ...(args.snapshot?.accessCode !== undefined ? { accessCode: args.snapshot.accessCode } : {}),
+          ...(lastError !== undefined ? { lastError: lastError.slice(0, 500) } : {}),
+        });
+      } catch (e) {
+        // Never let bookkeeping break the teardown, but make it loud.
+        console.error(`[calendar] FAILED TO RECORD ORPHAN EVENT ${eventId} in ${calendarId}:`, e);
+      }
+    };
+
     const tokenInfo = await getValidToken(ctx);
-    if (!tokenInfo) return null;
+    if (!tokenInfo) {
+      // C3: the calendar being disconnected does NOT mean there is nothing to
+      // delete — it means the delete definitely did not happen and the event (with
+      // its door code) is still live. Previously this returned silently.
+      const tokens: any = await ctx.runQuery(internal.googleCalendarMutations.getTokens, {});
+      const fallbackCalId = tokens?.calendarId ?? "primary";
+      if (args.laneCalendarEventIds && args.laneCalendarEventIds.length > 0) {
+        for (const entry of args.laneCalendarEventIds) {
+          await orphan(entry.calendarId, entry.eventId, "not-connected");
+        }
+      } else {
+        await orphan(fallbackCalId, args.googleCalendarEventId, "not-connected");
+      }
+      if (args.bookingId) {
+        await ctx.runMutation(internal.googleCalendarMutations.setBookingCalendarSyncStatus, {
+          bookingId: args.bookingId,
+          status: "failed",
+        });
+      }
+      await ctx.scheduler.runAfter(60_000, internal.googleCalendar.sweepCalendarOrphans, {});
+      return null;
+    }
 
     // INT-4 (audit 2026-06): treat 404/410 as success (event already gone); log
     // anything else instead of swallowing it (was an empty catch{}).
@@ -519,14 +620,17 @@ export const deleteCalendarEvent = internalAction({
           );
           if (!deleteOk(res.status)) {
             anyFailed = true;
+            const body = await res.text().catch(() => "");
             console.error(
               `Calendar delete failed (${res.status}) for event ${entry.eventId} in calendar ${entry.calendarId}:`,
-              await res.text().catch(() => "")
+              body
             );
+            await orphan(entry.calendarId, entry.eventId, "delete-failed", `HTTP ${res.status} ${body}`);
           }
         } catch (e) {
           anyFailed = true;
           console.error(`Error deleting event ${entry.eventId} in calendar ${entry.calendarId}:`, e);
+          await orphan(entry.calendarId, entry.eventId, "delete-failed", String(e));
         }
       }
     } else {
@@ -538,23 +642,110 @@ export const deleteCalendarEvent = internalAction({
         );
         if (!deleteOk(res.status)) {
           anyFailed = true;
+          const body = await res.text().catch(() => "");
           console.error(
             `Calendar delete (fallback) failed (${res.status}) for event ${args.googleCalendarEventId}:`,
-            await res.text().catch(() => "")
+            body
           );
+          await orphan(tokenInfo.calendarId, args.googleCalendarEventId, "delete-failed", `HTTP ${res.status} ${body}`);
         }
       } catch (e) {
         anyFailed = true;
         console.error(`Error deleting event ${args.googleCalendarEventId} (fallback):`, e);
+        await orphan(tokenInfo.calendarId, args.googleCalendarEventId, "delete-failed", String(e));
       }
     }
-    if (anyFailed && args.bookingId) {
-      await ctx.runMutation(internal.googleCalendarMutations.setBookingCalendarSyncStatus, {
-        bookingId: args.bookingId,
-        status: "failed",
-      });
+    if (anyFailed) {
+      if (args.bookingId) {
+        await ctx.runMutation(internal.googleCalendarMutations.setBookingCalendarSyncStatus, {
+          bookingId: args.bookingId,
+          status: "failed",
+        });
+      }
+      // Retry shortly — a transient Google 5xx is the common case and usually
+      // clears within seconds. The 15-min cron is the backstop, and the admin
+      // alert comes from the sweep so a self-healing blip stays quiet.
+      await ctx.scheduler.runAfter(60_000, internal.googleCalendar.sweepCalendarOrphans, {});
     }
     return true;
+  },
+});
+
+/**
+ * C3 — retry every calendar event we failed to delete, and alert the admins about
+ * anything still standing. Runs 60s after any failed delete and every 15 min from
+ * cron. Cheap when clean: one indexed read that is normally empty.
+ *
+ * An open row means a live Google Calendar event for a session that no longer
+ * exists — HA will load its door code and power the lane. That is why this alerts
+ * REPEATEDLY (every 6h per event) rather than once.
+ */
+export const sweepCalendarOrphans = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{ open: number; resolved: number; stillOpen: number }> => {
+    const rows: Array<{
+      id: string; calendarId: string; eventId: string; bookingId: string | null;
+      date: string | null; startHour: number | null; laneName: string | null;
+      customerName: string | null; accessCode: string | null; reason: string;
+      attempts: number; firstSeenAt: number; lastError: string | null;
+    }> = await ctx.runQuery(internal.googleCalendarMutations.getOpenCalendarOrphansInternal, { limit: 100 });
+    if (rows.length === 0) return { open: 0, resolved: 0, stillOpen: 0 };
+
+    const tokenInfo = await getValidToken(ctx); // also raises the disconnected alert
+    if (!tokenInfo) {
+      console.error(
+        `[calendar] ${rows.length} orphaned calendar event(s) cannot be removed — Google Calendar is disconnected`
+      );
+      return { open: rows.length, resolved: 0, stillOpen: rows.length };
+    }
+
+    const deleteOk = (s: number) => (s >= 200 && s < 300) || s === 404 || s === 410;
+    let resolved = 0;
+    const stillOpen: typeof rows = [];
+
+    for (const row of rows) {
+      let ok = false;
+      let err: string | undefined;
+      try {
+        const res = await fetch(
+          `${GOOGLE_CALENDAR_API}/calendars/${encodeURIComponent(row.calendarId)}/events/${encodeURIComponent(row.eventId)}`,
+          { method: "DELETE", headers: { Authorization: `Bearer ${tokenInfo.accessToken}` } }
+        );
+        ok = deleteOk(res.status);
+        if (!ok) err = `HTTP ${res.status} ${await res.text().catch(() => "")}`.slice(0, 500);
+      } catch (e) {
+        err = String(e).slice(0, 500);
+      }
+      await ctx.runMutation(internal.googleCalendarMutations.finishCalendarOrphanAttempt, {
+        id: row.id,
+        resolved: ok,
+        ...(err !== undefined ? { lastError: err } : {}),
+      });
+      if (ok) resolved++;
+      else stillOpen.push(row);
+    }
+
+    for (const row of stillOpen) {
+      const claimed: boolean = await ctx.runMutation(
+        internal.googleCalendarMutations.claimAdminAlert,
+        { key: `cal-orphan-${row.eventId}`, minIntervalMs: 6 * 60 * 60 * 1000 }
+      );
+      console.error(
+        `[calendar] ORPHANED EVENT still live: ${row.eventId} in ${row.calendarId} (booking ${row.bookingId ?? "deleted"}, ${row.date ?? "?"} ${row.laneName ?? "?"}, ${row.attempts + 1} attempts): ${row.lastError ?? ""}`
+      );
+      if (!claimed) continue;
+      const when = row.date
+        ? `${fmtAwstDateLabel(row.date)}${row.startHour != null ? ` ${formatTime(row.startHour)}` : ""}`
+        : "an unknown date";
+      await ctx.scheduler.runAfter(0, internal.push.sendAdminPush, {
+        title: "🚪 Door code may still be live",
+        body: `A cancelled session's calendar event could not be removed: ${row.laneName ?? "lane ?"}, ${when}${row.customerName ? `, ${row.customerName}` : ""}${row.accessCode ? ` (code ${row.accessCode})` : ""}. HA will still open the door for it — delete the event in Google Calendar.`,
+        url: "/rev-ops-7k2p",
+        tag: `cal-orphan-${row.eventId}`,
+      });
+    }
+
+    return { open: rows.length, resolved, stillOpen: stillOpen.length };
   },
 });
 
@@ -807,9 +998,21 @@ async function runCalendarReconcile(
   // then create the whole set fresh (also rewrites the stored ids + sync flag).
   const recreate = async (b: any, entries: any[]) => {
     if (entries.length > 0 || b.googleCalendarEventId) {
+      // C3 (2026-09-05): pass the id + snapshot. If this teardown fails, the
+      // create below still runs, so the stale event survives ALONGSIDE the new one
+      // — two events, two door codes, on the same lane. That is now recorded as an
+      // orphan and retried instead of being logged and forgotten.
       await ctx.runAction(internal.googleCalendar.deleteCalendarEvent, {
         googleCalendarEventId: b.googleCalendarEventId ?? entries[0]?.eventId ?? "",
         laneCalendarEventIds: entries,
+        bookingId: b.bookingId,
+        snapshot: {
+          ...(b.date != null ? { date: b.date } : {}),
+          ...(b.startHour != null ? { startHour: b.startHour } : {}),
+          ...(b.laneNameSnapshot != null ? { laneName: b.laneNameSnapshot } : {}),
+          ...(b.customerName != null ? { customerName: b.customerName } : {}),
+          ...(b.accessCode != null ? { accessCode: b.accessCode } : {}),
+        },
       });
     }
     await ctx.runAction(internal.googleCalendar.createCalendarEvent, {
@@ -967,6 +1170,132 @@ export const auditCalendarDoorCodeDrift = action({
   },
 });
 
+/**
+ * C3 (BACKEND review 2026-09-05) — THE OTHER HALF OF THE HOLE.
+ *
+ * `getReconcileCandidates` filters `status === "confirmed"`, and a cancelled
+ * booking is by definition not confirmed — so a calendar event left behind by a
+ * failed cancel-delete was never looked at again by anything. From now on the
+ * orphan table catches those, but that only covers deletes attempted AFTER this
+ * ships; anything already stranded on a lane calendar is invisible to it.
+ *
+ * This pass closes both: it reads bookings in the window that are cancelled /
+ * no-show but still carry stored event ids, and asks GOOGLE whether the event is
+ * still there. Existence is the test, not the stored ids — several cancel paths
+ * legitimately leave the ids behind after a successful delete, so the ids alone
+ * prove nothing either way. Anything genuinely still live is deleted (and, if that
+ * delete fails, recorded as an orphan + alerted by the sweep).
+ *
+ * Hard-deleted bookings leave no row at all and are therefore NOT visible here —
+ * only the orphan table can cover those, which is exactly why it exists.
+ */
+export const reconcileCancelledCalendarEvents = internalAction({
+  args: { fromDate: v.optional(v.string()), toDate: v.optional(v.string()) },
+  handler: async (
+    ctx,
+    args
+  ): Promise<{ scanned: number; liveEvents: number; cleared: number; failed: number }> => {
+    const awstDay = (off: number) =>
+      new Date(Date.now() + 8 * 3600 * 1000 + off * 86400000).toISOString().slice(0, 10);
+    const fromDate = args.fromDate ?? awstDay(-1);
+    const toDate = args.toDate ?? awstDay(14);
+
+    const tokenInfo = await getValidToken(ctx);
+    if (!tokenInfo) return { scanned: 0, liveEvents: 0, cleared: 0, failed: 0 };
+
+    const all: any[] = await ctx.runQuery(
+      internal.googleCalendarMutations.getCancelledBookingsWithCalendarEvents,
+      { fromDate, toDate }
+    );
+    // Safety cap: this pass makes 1-3 Google GETs per booking. The first run after
+    // deploy has the largest backlog (every cancelled booking that kept its ids);
+    // it clears the ids as it goes, so later runs shrink to almost nothing.
+    const LIMIT = 200;
+    const rows = all.slice(0, LIMIT);
+    if (all.length > LIMIT) {
+      console.warn(`Calendar cancelled-pass: capped at ${LIMIT} of ${all.length} candidates`);
+    }
+
+    let liveEvents = 0, cleared = 0, failed = 0;
+
+    for (const b of rows) {
+      const entries: Array<{ laneId: string; calendarId: string; eventId: string }> =
+        (b.googleCalendarEventIds?.length ?? 0) > 0
+          ? b.googleCalendarEventIds
+          : b.googleCalendarEventId
+            ? [{ laneId: b.laneId ?? "", calendarId: tokenInfo.calendarId, eventId: b.googleCalendarEventId }]
+            : [];
+      if (entries.length === 0) continue;
+
+      let anyLive = false;
+      let anyUnreadable = false;
+      for (const e of entries) {
+        const st = await fetchEventState(tokenInfo.accessToken, e.calendarId, e.eventId);
+        if (st.state === "ok") anyLive = true;
+        else if (st.state === "unreadable") anyUnreadable = true;
+      }
+
+      if (anyLive) {
+        liveEvents++;
+        console.error(
+          `[calendar] LIVE EVENT FOR A CANCELLED BOOKING ${b.bookingId} (${b.date} ${b.laneName}) — deleting; the door code was still reachable`
+        );
+        // Reuse the normal delete path so a failure lands in the orphan table.
+        await ctx.runAction(internal.googleCalendar.deleteCalendarEvent, {
+          googleCalendarEventId: b.googleCalendarEventId ?? entries[0].eventId,
+          laneCalendarEventIds: entries,
+          bookingId: b.bookingId,
+          snapshot: {
+            ...(b.date != null ? { date: b.date } : {}),
+            ...(b.startHour != null ? { startHour: b.startHour } : {}),
+            ...(b.laneName != null ? { laneName: b.laneName } : {}),
+            ...(b.customerName != null ? { customerName: b.customerName } : {}),
+            ...(b.accessCode != null ? { accessCode: b.accessCode } : {}),
+          },
+        });
+        // Verify rather than assume — the delete is the thing that has been failing.
+        let allGone = true;
+        for (const e of entries) {
+          const st = await fetchEventState(tokenInfo.accessToken, e.calendarId, e.eventId);
+          if (st.state !== "missing") allGone = false;
+        }
+        if (allGone) {
+          await ctx.runMutation(internal.googleCalendarMutations.clearBookingCalendarEventIds, {
+            bookingId: b.bookingId,
+          });
+          cleared++;
+        } else {
+          failed++; // orphan row recorded above; sweepCalendarOrphans retries + alerts
+        }
+      } else if (!anyUnreadable) {
+        // Every event is confirmed gone — drop the stale ids so this booking stops
+        // being re-checked against Google every night.
+        await ctx.runMutation(internal.googleCalendarMutations.clearBookingCalendarEventIds, {
+          bookingId: b.bookingId,
+        });
+        cleared++;
+      }
+    }
+
+    if (liveEvents > 0) {
+      const claimed: boolean = await ctx.runMutation(
+        internal.googleCalendarMutations.claimAdminAlert,
+        { key: "cal-live-after-cancel", minIntervalMs: 12 * 60 * 60 * 1000 }
+      );
+      if (claimed) {
+        await ctx.scheduler.runAfter(0, internal.push.sendAdminPush, {
+          title: "🚪 Cancelled sessions still had calendar events",
+          body: `${liveEvents} cancelled booking${liveEvents === 1 ? "" : "s"} still had a live Google Calendar event — their door codes were reachable. ${failed === 0 ? "All removed." : `${failed} could NOT be removed — check Google Calendar.`}`,
+          url: "/rev-ops-7k2p",
+          tag: "cal-live-after-cancel",
+        });
+      }
+    }
+
+    return { scanned: rows.length, liveEvents, cleared, failed };
+  },
+});
+
 // Daily reconcile cron target. Forward window: yesterday .. +14 days (AWST). A
 // silent sync failure only locks someone out near the session (door code activates
 // ~45 min before), so the near-term window is where repair matters; the small -1d
@@ -987,6 +1316,29 @@ export const reconcileCalendarInternal = internalAction({
         `Calendar reconcile: repaired ${result.repaired} (missing=${result.missing}, stale=${result.staleCode}, drift=${result.drift}, missingSecondary=${result.missingSecondary}, failedSync=${result.failedSync}) of ${result.scanned} scanned`
       );
     }
+
+    // C3: the pass above only sees CONFIRMED bookings. These two cover the other
+    // direction — events that should be GONE and are not. Both are best-effort;
+    // neither may abort the confirmed-booking reconcile above.
+    try {
+      const cancelledPass = await ctx.runAction(
+        internal.googleCalendar.reconcileCancelledCalendarEvents,
+        {}
+      );
+      if (cancelledPass.liveEvents > 0 || cancelledPass.failed > 0) {
+        console.log(
+          `Calendar reconcile (cancelled): scanned ${cancelledPass.scanned}, live-after-cancel ${cancelledPass.liveEvents}, cleared ${cancelledPass.cleared}, failed ${cancelledPass.failed}`
+        );
+      }
+    } catch (e) {
+      console.error("Calendar reconcile (cancelled) failed:", e);
+    }
+    try {
+      await ctx.runAction(internal.googleCalendar.sweepCalendarOrphans, {});
+    } catch (e) {
+      console.error("Calendar orphan sweep failed:", e);
+    }
+
     return result;
   },
 });

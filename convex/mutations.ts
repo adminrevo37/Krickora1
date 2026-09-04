@@ -36,6 +36,11 @@ import { assertValidLocation, validateLocationIfProvided, normalizePostcode, nor
 import { notifyMatesOnCancel, notifyMatesOnModify } from "./mates";
 import { fmtAwstDateLabel, fmtAwstDateShort } from "./lib/dates";
 import { scheduleCapReconcileForBooking, scheduleCapReconcileForPayment } from "./billingCaps";
+// C3 (BACKEND review 2026-09-05): the ONLY way to build deleteCalendarEvent args.
+// It always passes bookingId + a session snapshot, so a failed Google DELETE is
+// recorded in calendarOrphanEvents, retried, and pushed to the admins. A swallowed
+// delete leaves a live door code on an unstaffed building after a cancellation.
+import { calendarDeleteArgs, hasCalendarEvents } from "./lib/calendarDelete";
 
 // ============================================================================
 // SHARED HELPERS
@@ -736,10 +741,15 @@ export async function applyBookingChange(
   } else {
     // Lane move (or no prior events): delete old, create fresh on the new lane(s).
     if (hadEvents) {
-      await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-        googleCalendarEventId: oldCalEventId ?? "",
-        laneCalendarEventIds: oldCalEventIds,
-      });
+      // C3: `booking` still holds the pre-patch ids (they were captured from it),
+      // so this deletes exactly the old-lane events — now with the id + snapshot
+      // that make a failed delete visible instead of stranding a door code on the
+      // lane the session just moved off.
+      await ctx.scheduler.runAfter(
+        0,
+        internal.googleCalendar.deleteCalendarEvent,
+        calendarDeleteArgs(booking)
+      );
     }
     await ctx.scheduler.runAfter(500, internal.googleCalendar.createCalendarEvent, {
       bookingId: booking._id.toString(),
@@ -2889,10 +2899,11 @@ export const updateBooking = mutation({
         (existing as any).googleCalendarEventId ||
         (((existing as any).googleCalendarEventIds?.length ?? 0) > 0)
       ) {
-        await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-          googleCalendarEventId: (existing as any).googleCalendarEventId ?? "",
-          laneCalendarEventIds: (existing as any).googleCalendarEventIds,
-        });
+        await ctx.scheduler.runAfter(
+          0,
+          internal.googleCalendar.deleteCalendarEvent,
+          calendarDeleteArgs(existing) // C3: records a failed delete (live door code)
+        );
         await ctx.db.patch(id, { googleCalendarEventId: undefined, googleCalendarEventIds: undefined });
       }
       await releaseHoldForBooking(ctx, id.toString());
@@ -2942,10 +2953,11 @@ export const updateBooking = mutation({
         });
       } else {
         if (hadEvents) {
-          await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-            googleCalendarEventId: (existing as any).googleCalendarEventId ?? "",
-            laneCalendarEventIds: (existing as any).googleCalendarEventIds,
-          });
+          await ctx.scheduler.runAfter(
+            0,
+            internal.googleCalendar.deleteCalendarEvent,
+            calendarDeleteArgs(existing) // C3: records a failed delete (live door code)
+          );
           // CAL-4 (audit 2026-06-23): on a lane MOVE, clear the stale ids before the
           // create below — otherwise setBookingLaneCalendarEventIds MERGES the new
           // lane's entry alongside the now-deleted old-lane entry (stale id + 404s
@@ -3033,10 +3045,11 @@ export const updateBooking = mutation({
           },
         });
         if (sib.googleCalendarEventId || ((sib.googleCalendarEventIds?.length ?? 0) > 0)) {
-          await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-            googleCalendarEventId: sib.googleCalendarEventId ?? "",
-            laneCalendarEventIds: sib.googleCalendarEventIds,
-          });
+          await ctx.scheduler.runAfter(
+            0,
+            internal.googleCalendar.deleteCalendarEvent,
+            calendarDeleteArgs(sib) // C3: records a failed delete (live door code)
+          );
           await ctx.db.patch(sib._id, { googleCalendarEventId: undefined, googleCalendarEventIds: undefined });
         }
         await releaseHoldForBooking(ctx, sib._id.toString());
@@ -3281,10 +3294,16 @@ async function cancelBookingCore(
     // machine / loads the code for a ghost session). deleteCalendarEvent deletes
     // every per-lane event from laneCalendarEventIds.
     if (booking.googleCalendarEventId || (booking.googleCalendarEventIds?.length ?? 0) > 0) {
-      await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-        googleCalendarEventId: booking.googleCalendarEventId ?? "",
-        laneCalendarEventIds: booking.googleCalendarEventIds,
-      });
+      // C3 (BACKEND review 2026-09-05): THE cancellation path. A transient Google
+      // 5xx here used to be swallowed entirely — the booking is now `cancelled`, so
+      // the nightly reconcile (confirmed-only) could never look at it again, and the
+      // event stayed live: HA programs the door code and a cancelled customer walks
+      // into an unstaffed building at night. calendarDeleteArgs records the failure.
+      await ctx.scheduler.runAfter(
+        0,
+        internal.googleCalendar.deleteCalendarEvent,
+        calendarDeleteArgs(booking)
+      );
     }
 
     // Send cancellation confirmation email (suppressed for a split's second leg —
@@ -3402,10 +3421,14 @@ export const deleteBooking = mutation({
       // DI-7: Clean up Google Calendar event. CAL-3: gate on PRIMARY *or* per-lane
       // ids so a partially-synced multi-lane booking doesn't leave orphaned events.
       if ((delBooking as any).googleCalendarEventId || (((delBooking as any).googleCalendarEventIds?.length ?? 0) > 0)) {
-        await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-          googleCalendarEventId: (delBooking as any).googleCalendarEventId ?? "",
-          laneCalendarEventIds: (delBooking as any).googleCalendarEventIds,
-        });
+        // C3: this row is HARD-DELETED a few lines below, so the booking's own
+        // calendarSyncStatus flag can never record anything here — the orphan row
+        // keyed on the event is the only durable trace of a failed delete.
+        await ctx.scheduler.runAfter(
+          0,
+          internal.googleCalendar.deleteCalendarEvent,
+          calendarDeleteArgs(delBooking)
+        );
       }
 
       // DI-7: Send cancellation email to customer (first row of a split only)
@@ -7493,11 +7516,15 @@ export const mergeConsecutiveCoachBookings = mutation({
           // Hard-delete the subsequent bookings; clean up their GCal events
           for (let k = 1; k < chain.length; k++) {
             const toDelete = chain[k] as any;
-            if (toDelete.googleCalendarEventId) {
-              await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-                googleCalendarEventId: toDelete.googleCalendarEventId,
-                laneCalendarEventIds: toDelete.googleCalendarEventIds,
-              });
+            // C3: gate widened to per-lane ids (H6/CAL-3 class — a merged booking
+            // with no primary id kept its lane events, and their door codes, live),
+            // and the args now record a failed delete. This row is hard-deleted next.
+            if (hasCalendarEvents(toDelete)) {
+              await ctx.scheduler.runAfter(
+                0,
+                internal.googleCalendar.deleteCalendarEvent,
+                calendarDeleteArgs(toDelete)
+              );
             }
             await ctx.db.delete(toDelete._id);
           }

@@ -117,6 +117,19 @@ crons.daily(
   internal.googleCalendar.reconcileCalendarInternal
 );
 
+// C3 (BACKEND review 2026-09-05) — retry every calendar event we FAILED to delete
+// (cancelled / deleted / lane-moved booking) and push the admins about anything
+// still standing. A surviving event means HA keeps loading its door code, so a
+// cancelled customer can still open an unstaffed building: once a day is far too
+// slow for that, hence 15 min. Normally a single indexed read that finds nothing.
+// A failed delete also schedules this action directly 60s later; this is the
+// backstop for the case where that scheduled run itself never happens.
+crons.interval(
+  "calendar-orphan-sweep",
+  { minutes: 15 },
+  internal.googleCalendar.sweepCalendarOrphans
+);
+
 // SPEC_COACH_LEDGER_UNIFICATION_2026-08 Phase 3 — daily coach-ledger reconciliation.
 // Recomputes every coach's balance through each engine (Coaches-tab badge, coach
 // statement, weekly report) and pushes the admins if any two disagree by more than a

@@ -17,6 +17,7 @@ import { mutation } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { components, internal } from "./_generated/api";
 import { requireAdminUnlocked, writeRoleAudit } from "./lib/adminGuard";
+import { calendarDeleteArgs, hasCalendarEvents } from "./lib/calendarDelete";
 
 const norm = (e: string) => (e ?? "").toLowerCase().trim();
 
@@ -101,11 +102,19 @@ async function collectCustomerRefs(ctx: any, customerId: any, email: string, sub
 /** Delete the bookings (+ their calendar events) in `ownBookings`. */
 async function deleteOwnBookings(ctx: any, ownBookings: Map<string, any>) {
   for (const b of ownBookings.values()) {
-    if ((b as any).googleCalendarEventId) {
-      await ctx.scheduler.runAfter(0, internal.googleCalendar.deleteCalendarEvent, {
-        googleCalendarEventId: (b as any).googleCalendarEventId,
-        laneCalendarEventIds: (b as any).googleCalendarEventIds,
-      });
+    // C3 (BACKEND review 2026-09-05): two fixes. The gate now admits a
+    // per-lane-only booking (CAL-3 class — gating on the primary id alone left
+    // those lane events live), and the args carry the booking id + a session
+    // snapshot so a FAILED delete is recorded in calendarOrphanEvents. That
+    // matters most here: the booking row is hard-deleted immediately below, so
+    // there is nothing left for the delete action to flag or for any reconcile
+    // to find. A swallowed failure = a live door code with no record anywhere.
+    if (hasCalendarEvents(b)) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.googleCalendar.deleteCalendarEvent,
+        calendarDeleteArgs(b)
+      );
     }
   }
   for (const b of ownBookings.values()) await ctx.db.delete(b._id);

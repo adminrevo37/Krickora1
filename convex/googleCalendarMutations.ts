@@ -225,6 +225,217 @@ export const getBookingAutoDoor = internalQuery({
 });
 
 // ============================================================================
+// C3 (BACKEND review 2026-09-05) — ORPHANED CALENDAR EVENTS
+// ============================================================================
+// A calendar event that should have been deleted and was not = a live door code
+// on an unstaffed building. These rows are the durable record of that: keyed on
+// the EVENT (not the booking, which may be hard-deleted in the same mutation),
+// retried by the sweep, and pushed to admins until resolved.
+
+/**
+ * Dedupe gate for admin alerts. Returns true when the caller should alert, i.e.
+ * this key has never fired or last fired longer than `minIntervalMs` ago; stamps
+ * the log as a side effect. Unlike the laneDemandMonitor pattern (alert once,
+ * ever) this deliberately RE-FIRES on an interval: the 2026-09-01 HA incident was
+ * a one-shot alert that was missed at 2pm and went silent for 18 hours while a
+ * door sat open. An unresolved door-code orphan must keep asking.
+ */
+export const claimAdminAlert = internalMutation({
+  args: { key: v.string(), minIntervalMs: v.number() },
+  handler: async (ctx, args): Promise<boolean> => {
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("adminAlertLog")
+      .withIndex("by_key", (q: any) => q.eq("key", args.key))
+      .first();
+    if (existing) {
+      if (now - existing.at < args.minIntervalMs) return false;
+      await ctx.db.patch(existing._id, { at: now });
+      return true;
+    }
+    await ctx.db.insert("adminAlertLog", { key: args.key, at: now });
+    return true;
+  },
+});
+
+/** Record (or re-open) an orphaned calendar event. Idempotent per (calendar, event). */
+export const recordCalendarOrphan = internalMutation({
+  args: {
+    calendarId: v.string(),
+    eventId: v.string(),
+    reason: v.string(),
+    bookingId: v.optional(v.string()),
+    date: v.optional(v.string()),
+    startHour: v.optional(v.number()),
+    laneName: v.optional(v.string()),
+    customerName: v.optional(v.string()),
+    accessCode: v.optional(v.string()),
+    lastError: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    if (!args.eventId) return null; // nothing identifiable to delete
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("calendarOrphanEvents")
+      .withIndex("by_event", (q: any) =>
+        q.eq("calendarId", args.calendarId).eq("eventId", args.eventId)
+      )
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        status: "open",
+        reason: args.reason,
+        lastAttemptAt: now,
+        ...(args.lastError !== undefined ? { lastError: args.lastError } : {}),
+      });
+      return existing._id;
+    }
+    return await ctx.db.insert("calendarOrphanEvents", {
+      calendarId: args.calendarId,
+      eventId: args.eventId,
+      reason: args.reason,
+      status: "open",
+      attempts: 0,
+      firstSeenAt: now,
+      lastAttemptAt: now,
+      ...(args.bookingId !== undefined ? { bookingId: args.bookingId } : {}),
+      ...(args.date !== undefined ? { date: args.date } : {}),
+      ...(args.startHour !== undefined ? { startHour: args.startHour } : {}),
+      ...(args.laneName !== undefined ? { laneName: args.laneName } : {}),
+      ...(args.customerName !== undefined ? { customerName: args.customerName } : {}),
+      ...(args.accessCode !== undefined ? { accessCode: args.accessCode } : {}),
+      ...(args.lastError !== undefined ? { lastError: args.lastError } : {}),
+    });
+  },
+});
+
+export const getOpenCalendarOrphansInternal = internalQuery({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("calendarOrphanEvents")
+      .withIndex("by_status", (q: any) => q.eq("status", "open"))
+      .take(args.limit ?? 100);
+    return rows.map((r: any) => ({
+      id: r._id.toString(),
+      calendarId: r.calendarId,
+      eventId: r.eventId,
+      bookingId: r.bookingId ?? null,
+      date: r.date ?? null,
+      startHour: r.startHour ?? null,
+      laneName: r.laneName ?? null,
+      customerName: r.customerName ?? null,
+      accessCode: r.accessCode ?? null,
+      reason: r.reason,
+      attempts: r.attempts ?? 0,
+      firstSeenAt: r.firstSeenAt,
+      lastError: r.lastError ?? null,
+    }));
+  },
+});
+
+export const finishCalendarOrphanAttempt = internalMutation({
+  args: {
+    id: v.string(),
+    resolved: v.boolean(),
+    lastError: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const row: any = await ctx.db.get(args.id as Id<"calendarOrphanEvents">);
+    if (!row) return;
+    const now = Date.now();
+    await ctx.db.patch(row._id, {
+      attempts: (row.attempts ?? 0) + 1,
+      lastAttemptAt: now,
+      status: args.resolved ? "resolved" : "open",
+      ...(args.resolved ? { resolvedAt: now } : {}),
+      ...(args.lastError !== undefined ? { lastError: args.lastError } : {}),
+    });
+  },
+});
+
+/**
+ * Retroactive detector for the pre-fix population: bookings in the window that are
+ * NO LONGER LIVE but still carry stored calendar event ids. The daily reconcile
+ * cannot see these — `getReconcileCandidates` filters `status === "confirmed"`, and
+ * a cancelled booking is by definition not confirmed, so nothing has ever looked at
+ * them. Whether the event actually survives is then checked against Google (several
+ * cancel paths legitimately leave the ids behind after a SUCCESSFUL delete).
+ */
+export const getCancelledBookingsWithCalendarEvents = internalQuery({
+  args: { fromDate: v.string(), toDate: v.string() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("bookings")
+      .withIndex("by_date", (q: any) => q.gte("date", args.fromDate).lte("date", args.toDate))
+      .collect();
+    return rows
+      .filter(
+        (b: any) =>
+          (b.status === "cancelled" || b.status === "no_show") &&
+          (!!b.googleCalendarEventId || (b.googleCalendarEventIds?.length ?? 0) > 0)
+      )
+      .map((b: any) => ({
+        bookingId: b._id.toString(),
+        date: b.date,
+        startHour: b.startHour,
+        laneId: b.laneId,
+        laneName: b.laneNameSnapshot ?? b.laneId,
+        customerName: b.customerName ?? "Customer",
+        accessCode: b.accessCode ?? null,
+        googleCalendarEventId: b.googleCalendarEventId ?? null,
+        googleCalendarEventIds: b.googleCalendarEventIds ?? [],
+      }));
+  },
+});
+
+/** Clear the stored event ids once a cancelled booking's events are confirmed gone. */
+export const clearBookingCalendarEventIds = internalMutation({
+  args: { bookingId: v.string() },
+  handler: async (ctx, args) => {
+    const target = await ctx.db.get(args.bookingId as Id<"bookings">);
+    if (target) {
+      await ctx.db.patch(target._id, {
+        googleCalendarEventId: undefined,
+        googleCalendarEventIds: undefined,
+      });
+    }
+  },
+});
+
+/**
+ * Admin-visible list of unresolved orphans (door codes that may still be live).
+ * Non-throwing, returns [] for non-admins so any subscriber renders safely.
+ */
+export const listOpenCalendarOrphans = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getAuthUserSafe(ctx);
+    if (!(await resolveIsAdmin(ctx, (user as any)?.email))) return [];
+    const rows = await ctx.db
+      .query("calendarOrphanEvents")
+      .withIndex("by_status", (q: any) => q.eq("status", "open"))
+      .take(100);
+    return rows.map((r: any) => ({
+      _id: r._id,
+      calendarId: r.calendarId,
+      eventId: r.eventId,
+      bookingId: r.bookingId ?? null,
+      date: r.date ?? null,
+      startHour: r.startHour ?? null,
+      laneName: r.laneName ?? null,
+      customerName: r.customerName ?? null,
+      accessCode: r.accessCode ?? null,
+      reason: r.reason,
+      attempts: r.attempts ?? 0,
+      firstSeenAt: r.firstSeenAt,
+      lastAttemptAt: r.lastAttemptAt,
+      lastError: r.lastError ?? null,
+    }));
+  },
+});
+
+// ============================================================================
 // LANE CALENDAR MAPPING MUTATIONS — ADMIN ONLY
 // ============================================================================
 
