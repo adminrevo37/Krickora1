@@ -6,6 +6,7 @@ import BookingCalendar from '../components/BookingCalendar'
 import AuthModal from '../components/AuthModal'
 import { useAuth } from '../hooks/useAuth'
 import { useImpersonation } from '../hooks/useImpersonation'
+import { DAY_KEYS, type DayKey, type DailyHours } from '../lib/settings-store'
 
 // Batch 5: the admin calendar (~75 KB) is only ever rendered for admins, but a
 // static import shipped it in the customer home-route chunk. Lazy-load it so the
@@ -106,16 +107,110 @@ function HomePage() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Opening hours (H2) — the public card must publish the SAME hours the booking
+// grid, the duration caps and the five server gates run off, which is
+// settings.dailyHours (per day, with a Closed flag) resolved by getHoursForDate.
+// The card previously printed settings.openingHour/closingHour as though they
+// were the hours. No admin screen can write those two fields — SettingsPanel
+// edits dailyHours only — so they sat pinned at their defaults (7 and 21) and the
+// public page advertised "7am – 9pm · 7 days a week · Daily" no matter what the
+// facility actually did.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Format an hour-of-day, including half hours and a midnight close.
+ * 9 → "9am", 21 → "9pm", 21.5 → "9:30pm", 24 → "12am".
+ * The old version did `h % 12` on the raw float, so 21.5 rendered as "9.5pm" —
+ * unreachable while the two globals could not be edited, live the moment this
+ * card reads dailyHours (which the grid steps through in 0.5 increments).
+ */
+function fmtH(h: number): string {
+  const total = Math.round(h * 60)
+  const hh24 = Math.floor(total / 60) % 24
+  const mins = ((total % 60) + 60) % 60
+  const suffix = hh24 < 12 ? 'am' : 'pm'
+  const hr = hh24 % 12 === 0 ? 12 : hh24 % 12
+  return mins ? `${hr}:${String(mins).padStart(2, '0')}${suffix}` : `${hr}${suffix}`
+}
+
+/**
+ * Read the per-day hours off the raw siteSettings doc.
+ *
+ * Convex stores dailyHours as an ARRAY of { day, open, close, closed }
+ * (convex/schema.ts); the frontend settings store keys it by day (useSettings
+ * converts between the two). This reads the server shape directly rather than
+ * going through useSettings() so the card keeps its honest "—" placeholder until
+ * the server answers, instead of flashing locally-cached or default values on a
+ * public marketing page. A record shape is accepted too, defensively.
+ *
+ * Missing days fall back to openingHour/closingHour — exactly what
+ * getHoursForDate (src/lib/settings-store.ts) does, so this card and the booking
+ * grid cannot disagree. Returns null while settings are still loading.
+ */
+function readDailyHours(
+  settings: { dailyHours?: unknown; openingHour?: number; closingHour?: number } | null | undefined,
+): Record<DayKey, DailyHours> | null {
+  if (!settings) return null
+  const raw = settings.dailyHours
+  const rows: Array<{ day?: string; open?: number; close?: number; closed?: boolean }> =
+    Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === 'object'
+        ? Object.entries(raw as Record<string, DailyHours>).map(([day, v]) => ({ day, ...v }))
+        : []
+  const parsed: Partial<Record<DayKey, DailyHours>> = {}
+  for (const r of rows) {
+    if (typeof r?.day !== 'string' || typeof r.open !== 'number' || typeof r.close !== 'number') continue
+    parsed[r.day as DayKey] = { open: r.open, close: r.close, closed: r.closed === true }
+  }
+  const fallback: DailyHours | null =
+    typeof settings.openingHour === 'number' && typeof settings.closingHour === 'number'
+      ? { open: settings.openingHour, close: settings.closingHour, closed: false }
+      : null
+  const out: Partial<Record<DayKey, DailyHours>> = {}
+  for (const k of DAY_KEYS) {
+    const v = parsed[k] ?? fallback
+    if (!v) return null
+    out[k] = v
+  }
+  return out as Record<DayKey, DailyHours>
+}
+
+/**
+ * Collapse Mon→Sun into the fewest honest rows: consecutive days that keep the
+ * same hours share a row, and a closed day says Closed rather than disappearing.
+ * Uniform hours collapse to a single row, which the card renders as the big
+ * "7am – 9pm" line it has always shown.
+ */
+function groupHours(h: Record<DayKey, DailyHours>): Array<{ label: string; text: string; closed: boolean }> {
+  const shortName = (d: DayKey) => d.charAt(0).toUpperCase() + d.slice(1, 3)
+  const sig = (d: DayKey) => (h[d].closed ? 'closed' : `${h[d].open}-${h[d].close}`)
+  const rows: Array<{ label: string; text: string; closed: boolean }> = []
+  let i = 0
+  while (i < DAY_KEYS.length) {
+    let j = i
+    while (j + 1 < DAY_KEYS.length && sig(DAY_KEYS[j + 1]) === sig(DAY_KEYS[i])) j++
+    const d = h[DAY_KEYS[i]]
+    rows.push({
+      label: i === j ? shortName(DAY_KEYS[i]) : `${shortName(DAY_KEYS[i])} – ${shortName(DAY_KEYS[j])}`,
+      text: d.closed ? 'Closed' : `${fmtH(d.open)} – ${fmtH(d.close)}`,
+      closed: d.closed,
+    })
+    i = j + 1
+  }
+  return rows
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Landing page — shown to unauthenticated visitors
 // ─────────────────────────────────────────────────────────────────────────────
 function LandingPage({ onSignIn, onSignUp }: { onSignIn: () => void; onSignUp: () => void }) {
   const settings = useQuery(api.queries.getSiteSettings)
-
-  /** Format a fractional hour like 9 → "9am", 21 → "9pm" */
-  const fmtH = (h: number) => {
-    const hr = h % 12 === 0 ? 12 : h % 12
-    return `${hr}${h < 12 ? 'am' : 'pm'}`
-  }
+  // H2 (WEB review 2026-09-05) — the hours the facility actually keeps live in
+  // settings.dailyHours; openingHour/closingHour are only the per-day fallback.
+  const hours = readDailyHours(settings)
+  const hourRows = hours ? groupHours(hours) : null
+  const openDayCount = hours ? DAY_KEYS.filter((d) => !hours[d].closed).length : 0
 
   const lanes = [
     {
@@ -285,18 +380,41 @@ function LandingPage({ onSignIn, onSignUp }: { onSignIn: () => void; onSignUp: (
               <div className="text-sm text-gray-500 mt-0.5">per hour</div>
             </div>
 
-            {/* Opening hours */}
+            {/* Opening hours — rendered from settings.dailyHours, the same source
+                of truth the booking grid and every server gate use (H2). */}
             <div className="rounded-2xl border-2 border-blue-200 bg-blue-50 p-6 text-center sm:col-span-1">
               <div className="text-3xl mb-3">🕐</div>
               <div className="font-bold text-gray-800 mb-0.5">Opening Hours</div>
-              <div className="text-[11px] text-gray-500 mb-4">7 days a week</div>
-              <div className="text-2xl sm:text-3xl font-extrabold text-blue-600">
-                {settings?.openingHour != null && settings?.closingHour != null
-                  ? `${fmtH(settings.openingHour)} – ${fmtH(settings.closingHour)}`
-                  : <span className="text-2xl text-gray-300">—</span>
-                }
+              <div className="text-[11px] text-gray-500 mb-4">
+                {hourRows
+                  ? openDayCount === 7 ? '7 days a week'
+                    : openDayCount > 0 ? `Open ${openDayCount} day${openDayCount === 1 ? '' : 's'} a week`
+                    : 'Currently closed'
+                  : ' '}
               </div>
-              <div className="text-sm text-gray-500 mt-1">Daily</div>
+              {!hourRows ? (
+                <div className="text-2xl font-extrabold text-gray-300">—</div>
+              ) : hourRows.length === 1 ? (
+                <>
+                  <div className="text-2xl sm:text-3xl font-extrabold text-blue-600">
+                    {hourRows[0].text}
+                  </div>
+                  <div className="text-sm text-gray-500 mt-1">
+                    {hourRows[0].closed ? 'All week' : 'Every day'}
+                  </div>
+                </>
+              ) : (
+                <dl className="text-left space-y-1 mx-auto max-w-[13rem]">
+                  {hourRows.map((r) => (
+                    <div key={r.label} className="flex items-baseline justify-between gap-2">
+                      <dt className="text-xs font-semibold text-gray-600 shrink-0">{r.label}</dt>
+                      <dd className={`text-sm font-bold text-right ${r.closed ? 'text-gray-400' : 'text-blue-600'}`}>
+                        {r.text}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
             </div>
 
             {/* Location */}
