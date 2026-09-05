@@ -490,7 +490,24 @@ export const getAdminAnalytics = query({
 // bookings (customer + admin-manual), one count per booking (mates ignored),
 // excluding cancelled. Uses the per-booking SNAPSHOT (bookingSuburb/bookingPostcode)
 // so a customer moving doesn't rewrite history. Optional inclusive date range.
+//
+// 2026-09-05 (catchment map fix): rows are keyed on a NORMALISED suburb (upper-case,
+// whitespace-collapsed, "Mt" -> "Mount") so "Mount Lawley" / "MOUNT LAWLEY" /
+// "Mt Lawley" no longer split into separate rows; the display name is the first
+// spelling seen. Additive result fields: unknownCustomers (distinct accounts whose
+// sessions carry no suburb snapshot) + withoutPostcode (rows with a suburb but no
+// postcode — plottable by name only). Args + existing fields unchanged.
 // ============================================================================
+function catchmentKey(suburb: string, postcode: string): string {
+  const s = suburb
+    .toUpperCase()
+    .replace(/[.'`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^MT /, "MOUNT ");
+  return `${s}|${postcode.trim()}`;
+}
+
 export const getCatchmentReport = query({
   args: { from: v.optional(v.string()), to: v.optional(v.string()) }, // YYYY-MM-DD inclusive
   handler: async (ctx, args) => {
@@ -520,6 +537,8 @@ export const getCatchmentReport = query({
     const agg = new Map<string, { suburb: string; postcode: string; bookings: number; emails: Set<string> }>();
     const allEmails = new Set<string>();
     let unknown = 0; // confirmed non-coach booking with no snapshot (backfill gap)
+    const unknownEmails = new Set<string>(); // distinct accounts behind those unknown rows
+    let withoutPostcode = 0; // suburb snapshot present but no postcode (name-only placement)
     let total = 0;
     for (const b of all) {
       if ((b as any).isCoachBooking) continue;     // A2: coach own-bookings excluded
@@ -531,8 +550,9 @@ export const getCatchmentReport = query({
       if (email) allEmails.add(email);
       const suburb = ((b as any).bookingSuburb || "").trim();
       const postcode = ((b as any).bookingPostcode || "").trim();
-      if (!suburb) { unknown++; continue; }
-      const key = `${suburb}|${postcode}`;
+      if (!suburb) { unknown++; if (email) unknownEmails.add(email); continue; }
+      if (!postcode) withoutPostcode++;
+      const key = catchmentKey(suburb, postcode);
       const row = agg.get(key) ?? { suburb, postcode, bookings: 0, emails: new Set<string>() };
       row.bookings++;
       if (email) row.emails.add(email);
@@ -546,6 +566,8 @@ export const getCatchmentReport = query({
       unknown,
       total,
       uniqueCustomers: allEmails.size,
+      unknownCustomers: unknownEmails.size,
+      withoutPostcode,
       from: from ?? null,
       to: to ?? null,
     };
@@ -570,6 +592,7 @@ export const getCustomerSuburbMap = query({
     let unknown = 0;        // a customer account with no suburb on file
     let totalCustomers = 0; // all non-staff, non-tombstone accounts
     let placed = 0;         // accounts that have a suburb (i.e. plottable)
+    let withoutPostcode = 0; // suburb on file but no postcode (2026-09-05, additive)
     for (const c of customers) {
       const role = (c as any).role;
       if (role === "coach" || role === "admin") continue;            // staff excluded
@@ -578,7 +601,8 @@ export const getCustomerSuburbMap = query({
       const suburb = ((c as any).suburb || "").trim();
       const postcode = ((c as any).postcode || "").trim();
       if (!suburb) { unknown++; continue; }
-      const key = `${suburb.toUpperCase()}|${postcode}`;
+      if (!postcode) withoutPostcode++;
+      const key = catchmentKey(suburb, postcode); // 2026-09-05: normalised (was raw upper-case)
       const row = agg.get(key) ?? { suburb, postcode, customers: 0 };
       row.customers++;
       agg.set(key, row);
@@ -587,7 +611,7 @@ export const getCustomerSuburbMap = query({
     const bySuburb = Array.from(agg.values()).sort(
       (a, b) => b.customers - a.customers || a.suburb.localeCompare(b.suburb)
     );
-    return { bySuburb, unknown, totalCustomers, placed };
+    return { bySuburb, unknown, totalCustomers, placed, withoutPostcode };
   },
 });
 
@@ -645,7 +669,7 @@ export const getAthleteCatchmentReport = query({
         const suburb = ((s.athleteSuburb as string) || "").trim();
         const postcode = ((s.athletePostcode as string) || "").trim();
         if (!suburb) { unknown++; continue; }
-        const key = `${suburb}|${postcode}`;
+        const key = catchmentKey(suburb, postcode); // 2026-09-05: normalised key
         const row = agg.get(key) ?? { suburb, postcode, bookings: 0 };
         row.bookings++;
         agg.set(key, row);
@@ -655,5 +679,28 @@ export const getAthleteCatchmentReport = query({
       (a, b) => b.bookings - a.bookings || a.suburb.localeCompare(b.suburb)
     );
     return { bySuburb, unknown, total, from: from ?? null, to: to ?? null };
+  },
+});
+
+/**
+ * Admin-callable wrapper for the legacy-booking suburb backfill.
+ *
+ * `mutations.backfillBookingSuburbs` is an internalMutation, so the deploy-scoped
+ * key cannot run it and the browser cannot call internals. Now that the postcode
+ * gate is collecting suburbs, this is the single biggest catchment-data fix:
+ * bookings made before a customer had a postcode carry no suburb snapshot and
+ * never plot. Idempotent (the internal only patches rows that lack a snapshot),
+ * so it is safe to re-run after each wave of gate completions. Run from a
+ * logged-in admin tab:
+ *   window.__KRICKORA_CONVEX__.mutation("analytics:backfillBookingSuburbsAdmin", {})
+ */
+export const backfillBookingSuburbsAdmin = mutation({
+  args: {},
+  // Explicit return type: calling internal.* from the same module graph makes TS
+  // infer the mutation's type from its own initializer (TS7022) without it.
+  handler: async (ctx): Promise<unknown> => {
+    const caller = await getCallerContext(ctx);
+    if (!caller.isAdmin) throw new Error("Admin only");
+    return await ctx.runMutation(internal.mutations.backfillBookingSuburbs, {});
   },
 });
