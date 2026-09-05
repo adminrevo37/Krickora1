@@ -48,6 +48,18 @@ import AuthModal from './AuthModal'
 import WaitlistModal from './WaitlistModal'
 import { trackEvent, startBookingFlow, trackFunnelStep } from '../lib/tracker'
 
+// CUSTOMER TODAY-ONLY RULE (Inspector, 2026-09-05): on today's grid a customer
+// never sees an hour row that has already STARTED, nor any earlier row. At
+// 11:00-11:59 AWST the first row is 12pm. A :30 row inside a started hour goes
+// with it. Coaches and admin are NOT routed through this (they keep the §7.3
+// "completed hours" rule below). Display only - the server still accepts
+// walk-up bookings in the current hour via other paths.
+// Pure + clock-injected so it can be unit-probed and ported verbatim to the app.
+export function hideStartedHoursForCustomer(slots: TimeSlot[], awstNow: Date): TimeSlot[] {
+  const startedHour = Math.floor(awstNow.getHours() + awstNow.getMinutes() / 60)
+  return slots.filter(s => Math.floor(s.hour) > startedHour)
+}
+
 export default function BookingCalendar({ impersonatedEmail, initialDate }: { impersonatedEmail?: string; initialDate?: string } = {}) {
   const { user, isAdmin: realIsAdmin, isCoach: realIsCoach, customerRecord } = useAuth()
   // When impersonating, behave as a regular customer (not admin/coach)
@@ -286,15 +298,18 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
       base.push({ hour: 6.5, label: formatTime(6.5) })
     }
     base.sort((a, b) => a.hour - b.hour)
-    // §7.3 — on TODAY, hide rows whose hour has already completed (end ≤ now AWST),
-    // so the next bookable slot sits at the top. Applies to customers + coaches.
     if (isToday(selectedDay)) {
       const now = getAWSTNow()
+      // CUSTOMERS (not coach, not admin): hide the hour that has STARTED and
+      // everything before it — see hideStartedHoursForCustomer above.
+      if (!isAdmin && !userIsCoach) return hideStartedHoursForCustomer(base, now)
+      // §7.3 — coaches + admin, unchanged: hide rows whose hour has already
+      // COMPLETED (end ≤ now AWST), so the next bookable slot sits at the top.
       const nowHour = now.getHours() + now.getMinutes() / 60
       return base.filter(s => (s.hour + 1) > nowHour)
     }
     return base
-  }, [allTimeSlots, laneActiveHalfHours, userIsCoach, hasEarlyAccess, selectedDay, validCoachStartsForDay, segmentHalfHours])
+  }, [allTimeSlots, laneActiveHalfHours, userIsCoach, isAdmin, hasEarlyAccess, selectedDay, validCoachStartsForDay, segmentHalfHours])
 
   const laneStartTimes = useMemo(() => {
     const map = new Map<string, number[]>()
@@ -781,6 +796,12 @@ export default function BookingCalendar({ impersonatedEmail, initialDate }: { im
             <div className="text-sm font-semibold text-red-700 dark:text-red-400">🚫 Facility closed on this day</div>
             {selectedClosureReason && <div className="text-xs text-red-600 dark:text-red-400 mt-0.5">{selectedClosureReason}</div>}
             <div className="text-[11px] text-red-500/80 mt-1">Bookings are unavailable — please choose another day.</div>
+          </div>
+        )}
+        {!isSelectedDayClosed && !bookingsLoading && visibleTimeSlots.length === 0 && (
+          <div className="m-3 rounded-xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/40 px-4 py-3 text-center">
+            <div className="text-sm font-semibold text-gray-600 dark:text-gray-300">No more sessions today</div>
+            <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">Please choose another day.</div>
           </div>
         )}
         <div className={isSelectedDayClosed ? 'opacity-40 pointer-events-none' : ''}>
