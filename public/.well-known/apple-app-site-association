@@ -1,0 +1,14 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["38FB2VCYNA.au.com.cricketrevolution.app"],
+        "components": [
+          { "/": "/join", "comment": "mate invite - open the app, not the website" },
+          { "/": "/join/*", "comment": "mate invite with a path token" },
+          { "/": "/add-mate", "comment": "add a mate to a booking" }
+        ]
+      }
+    ]
+  }
+}
