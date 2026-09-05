@@ -478,13 +478,37 @@ export const getFirstBookingIdsForDate = query({
 });
 
 export const listCustomers = query({
-  args: {},
-  handler: async (ctx) => {
+  // SPEC_NATIVE_ADMIN_2026-09 phase 2 (additive, 2026-09-05): optional server-side
+  // filtering for the phone. The web passes nothing and gets the full list exactly as
+  // before. `role` matches the customers row's role; `q` is the web CustomerPicker's own
+  // client-side filter (AdminBookingCalendar.tsx) moved server-side — case-insensitive
+  // substring over name / firstName / lastName / email / suburb / postcode, plus a
+  // digit-substring match on phone; `limit` caps the result (default: unlimited).
+  args: {
+    role: v.optional(v.string()),
+    q: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
     await requireAdmin(ctx);
     // Hide deactivated / merged-away accounts (SPEC_MERGE_DUPLICATE_ACCOUNTS) —
     // a soft-deleted loser row should not appear in any admin customer list.
     const rows = await ctx.db.query("customers").collect();
-    return rows.filter((c: any) => !c.deactivatedAt);
+    let out = rows.filter((c: any) => !c.deactivatedAt);
+    if (args.role) out = out.filter((c: any) => c.role === args.role);
+    const q = (args.q ?? "").trim().toLowerCase();
+    if (q) {
+      const digits = q.replace(/\D/g, "");
+      out = out.filter((c: any) => {
+        const hay = [c.name, c.firstName, c.lastName, c.email, c.suburb, c.postcode]
+          .map((x: any) => (x ?? "").toString().toLowerCase())
+          .join(" ");
+        if (hay.includes(q)) return true;
+        return digits.length >= 3 && ((c.phone ?? "").toString().replace(/\D/g, "")).includes(digits);
+      });
+    }
+    if (args.limit && args.limit > 0) out = out.slice(0, args.limit);
+    return out;
   },
 });
 
