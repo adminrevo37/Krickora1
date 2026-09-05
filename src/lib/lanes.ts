@@ -163,7 +163,10 @@ export function normalizeVariant(variantId: string | null | undefined): string |
 export function variantLabel(variantId: string | null | undefined, soloStandard = false): string {
   const v = normalizeVariant(variantId)
   if (v === VARIANT_TRUMAN) return 'Truman'
-  if (v === VARIANT_RUNUP) return '9m Run Up'
+  // 2026-09-05 (Inspector): the CALENDAR label is "Run Up" - "9m" was dropped to keep
+  // cell/chip text short. The guides and access documentation still say "9m Run Up";
+  // that is deliberate, do not "fix" them to match.
+  if (v === VARIANT_RUNUP) return 'Run Up'
   if (v === VARIANT_STANDARD) return soloStandard ? 'Machine' : 'Std'
   return variantId ?? ''
 }
@@ -327,4 +330,15 @@ export function getLaneWarning(laneId: string, date: string, hour: number): stri
   const seg = resolveSegment(segments, hour)
   const def = resolveSegment(row.segments, hour)
   return buildLaneWarning({ mode: seg.mode, variants: seg.variants }, { mode: def.mode, variants: def.variants })
+}
+
+/**
+ * Label to DISPLAY for a stored variantLabelSnapshot. Bookings made before
+ * 2026-09-05 hold "9m Run Up" in their snapshot (the label at the time), and the
+ * calendar label is now "Run Up" - so strip the legacy prefix at render time
+ * instead of rewriting rows. Money-free, display-only. Guides keep "9m".
+ */
+export function displayVariantLabel(s: string | undefined | null): string | undefined {
+  if (!s) return undefined
+  return s.startsWith('9m ') ? s.slice(3) : s
 }

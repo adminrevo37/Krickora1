@@ -16,7 +16,7 @@ import {
   getCoachPrice,
   type Booking,
 } from '../lib/booking-data'
-import { resolveLaneAt } from '../lib/lanes'
+import { resolveLaneAt, displayVariantLabel } from '../lib/lanes'
 import { formatAccessCode } from '../lib/access-code'
 import { trackCodeView } from '../lib/tracker'
 import { getErrorMessage } from '../lib/errors'
@@ -679,7 +679,7 @@ export default function MyBookings({ impersonatedEmail }: { impersonatedEmail?: 
   const bookingLaneName = (b: Booking) => b.laneNameSnapshot ?? laneNameById(b.laneId, b.date, b.startHour)
   const getVariantName = (booking: Booking) => {
     if (!booking.variantId) return null
-    return booking.variantLabelSnapshot
+    return displayVariantLabel(booking.variantLabelSnapshot)
       ?? getLane(booking.laneId)?.variants?.find(v => v.id === booking.variantId)?.name ?? null
   }
   // Multi-lane aware. A booking spanning multiple lanes (additionalLaneIds) is

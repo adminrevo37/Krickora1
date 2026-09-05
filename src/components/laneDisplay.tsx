@@ -96,7 +96,7 @@ export function bandTagText(laneId: string, dateKey: string, seg: Segment, short
   const bay = bayNumberOf(laneId)
   const solo = seg.variants.length === 1
   const variantText =
-    seg.mode === 'RU' ? '9m Run Up' : seg.variants.map((v) => variantLabel(v, solo)).join(' / ')
+    seg.mode === 'RU' ? 'Run Up' : seg.variants.map((v) => variantLabel(v, solo)).join(' / ')
   const base = `${laneIcon(seg.mode)} ${seg.mode} ${bay} · ${variantText}`
   return short ? base : `${base} · from ${formatTime(seg.startHour)}`
 }
@@ -117,7 +117,7 @@ export function segmentChips(
     const label = closed
       ? '🔒 Closed'
       : seg.mode === 'RU'
-        ? `${laneIcon('RU')} 9m Run Up`
+        ? `${laneIcon('RU')} Run Up`
         : `${laneIcon('BM')} ${seg.variants.map((v) => variantLabel(v, solo)).join(' / ')}`
     return {
       key: `${i}-${seg.startHour}`,
@@ -185,7 +185,7 @@ export function LaneLegend() {
     <div className="flex items-center gap-3 text-[11px] flex-wrap">
       <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-blue-200" />Standard / Machine</span>
       <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-purple-200" />Truman</span>
-      <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-200" />9m Run Up</span>
+      <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-200" />Run Up</span>
       <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-gray-200 border border-gray-400" />🔒 Closed</span>
       <span className="text-gray-400 dark:text-gray-500">🕐 = changes during the day</span>
     </div>

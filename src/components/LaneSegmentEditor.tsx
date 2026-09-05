@@ -234,7 +234,7 @@ export default function LaneSegmentEditor({
                     </label>
                   </span>
                 ) : (
-                  <span className="text-xs text-gray-500">9m Run Up</span>
+                  <span className="text-xs text-gray-500">Run Up</span>
                 )}
               </>
             )}

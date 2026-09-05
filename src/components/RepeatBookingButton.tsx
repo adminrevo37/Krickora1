@@ -1,3 +1,4 @@
+import { displayVariantLabel } from '@/lib/lanes'
 // Per-booking ↻ Repeat (SPEC_COACH_PLANNER_RETIRE_AND_VIEW §5). Repeats a single
 // coach session + its allocations into the same weekday/time/lane +7 days.
 // STRICT release-gating: enabled ONLY when the +7d target is actually bookable
@@ -167,7 +168,7 @@ function RepeatConfirmModal({ booking, onClose }: { booking: Booking; onClose: (
               <div className="text-xs text-gray-600 dark:text-gray-300">
                 {formatTime(preview.startHour)} – {formatTime(preview.startHour + preview.duration / 60)}
                 {' · '}{preview.laneNameSnapshot}
-                {preview.variantLabelSnapshot ? ` · ${preview.variantLabelSnapshot}` : ''}
+                {preview.variantLabelSnapshot ? ` · ${displayVariantLabel(preview.variantLabelSnapshot)}` : ''}
               </div>
               {preview.allocations.length > 0 ? (
                 <div className="pt-1 mt-1 border-t border-gray-100 dark:border-gray-800 space-y-0.5">

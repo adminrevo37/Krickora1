@@ -489,7 +489,7 @@ function validateSegments(segments: RawSegment[]): void {
       if (!ok) throw new ConvexError("A bowling-machine segment needs Standard and/or Truman.");
     } else {
       if (!(s.variants.length === 1 && s.variants[0] === "run-up"))
-        throw new ConvexError("A run-up segment must offer only 9m Run Up.");
+        throw new ConvexError("A run-up segment must offer only Run Up.");
     }
     if (i > 0 && sorted[i].startHour < sorted[i - 1].endHour)
       throw new ConvexError("Segments must not overlap.");

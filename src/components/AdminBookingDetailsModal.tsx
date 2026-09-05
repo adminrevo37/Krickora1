@@ -15,7 +15,7 @@ import AthleteAllocationEditor from './AthleteAllocationEditor'
 import { createPaymentLink } from '../lib/stripe'
 // G3 (SPEC_ADMIN_BOOKING_PARITY_2026-08): machine-type (variant) switch on an
 // existing booking — options resolved per date/segment like the booking modals.
-import { resolveLaneAt, variantLabel } from '../lib/lanes'
+import { resolveLaneAt, variantLabel, displayVariantLabel } from '../lib/lanes'
 import { useLaneConfigState } from '../hooks/useLaneConfig'
 import { formatDateLong } from '../lib/dateFormat'
 
@@ -534,7 +534,7 @@ export default function AdminBookingDetailsModal({ booking, onClose, onSave, ope
                 {/* G3 — surface the machine type (was displayed nowhere). Prefers the
                     stored snapshot; falls back to the variant id's label. */}
                 {!booking.isCoachBooking && ((booking as any).variantLabelSnapshot || variantId) && (
-                  <Field label="Machine Type" value={(booking as any).variantLabelSnapshot ?? variantLabel(variantId)} />
+                  <Field label="Machine Type" value={displayVariantLabel((booking as any).variantLabelSnapshot) ?? variantLabel(variantId)} />
                 )}
                 {booking.isCoachBooking && <Field label="Coach Price" value={`$${coachPrice.toFixed(2)}`} />}
                 {!booking.isCoachBooking && calculatedCustomerPrice !== null && (
