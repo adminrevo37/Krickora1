@@ -111,6 +111,11 @@ export const runDailyRetention = internalMutation({
     // NOTIFICATIONS INBOX (2026-09-03) — 7 days, Inspector's call.
     await schedule("notifications", "by_sentAt", "sentAt", now - 7 * DAY_MS);
 
+    // PUSH_BACKEND_SPEC §6 — Expo push tickets are transient (written on send,
+    // deleted as soon as their receipt is read by the hourly cron). This is the
+    // backstop so a run of failed cron executions cannot leak rows forever.
+    await schedule("pushTickets", "by_createdAt", "createdAt", now - DAY_MS);
+
     // SPEC_WAITLIST_AUTO_ALT_TIME_2026-08 Part A3 — waitlist rows for sessions
     // older than the event window (the hourly reaper has long since expired
     // them; waitlistOfferEvents keeps the analytics signal).

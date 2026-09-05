@@ -330,6 +330,19 @@ export default function SettingsPanel() {
               onChange={(v) => updateSettings({ emailSkipWhenPushReachable: v })}
             />
           </div>
+          {/*
+            PUSH_BACKEND_SPEC (2026-09-05). Ships OFF on purpose — do not "tidy
+            this away" as redundant with the toggle above. Detail: convex/emails.ts
+            getEmailRoutingInternal.
+          */}
+          <div className="mt-4">
+            <ToggleRow
+              label="Let the app count as push for that (native notifications)"
+              description="Off by default, and it should stay off until a phone notification from the app has actually been SEEN arriving. The setting above decides who gets an email by asking 'has this person set up notifications?' — it never checks whether the notification arrived. That is safe for browser notifications, which have worked here for a long time. It is not yet safe for the app: the notification service accepts a message and reports success before anything reaches the phone, so if the app's notifications are broken, someone who only uses the app would get NO email and NO notification, silently. While this is off, app users still receive their notifications AND keep getting the email. The only cost is one extra email each."
+              checked={settings.emailSkipWhenNativePushReachable ?? false}
+              onChange={(v) => updateSettings({ emailSkipWhenNativePushReachable: v })}
+            />
+          </div>
         </div>
       </div>
 

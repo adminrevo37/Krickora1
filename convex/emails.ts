@@ -40,6 +40,32 @@ const MANDATORY_TEMPLATES = new Set([
 // on globally, the category not switched off by them, and the admin setting on.
 // Durable-record emails (door codes, receipts, cancellations, verification) never
 // pass through this.
+//
+// ⚠️⚠️ PUSH_BACKEND_SPEC (2026-09-05) — NATIVE (Expo) ROWS ARE DELIBERATELY NOT
+// COUNTED AS PUSH-REACHABLE HERE, and that is guarded by its own admin setting
+// (`emailSkipWhenNativePushReachable`, DEFAULT FALSE). DO NOT "tidy this up" into
+// a plain `if (!sub)` — read why first:
+//
+//   Suppression here is decided from the mere EXISTENCE of a subscription row,
+//   never from a delivery outcome. That is safe for Web Push, which has years of
+//   proven delivery on this deployment and self-prunes dead endpoints on a
+//   404/410. It is NOT yet safe for the native transport: an Expo 200 is
+//   ACCEPTANCE, not delivery, and a half-configured FCM/APNs (token issued,
+//   delivery broken) returns `ok` at send time and only reports the failure in a
+//   receipt ~15 min later. So the instant a native token lands, an APP-ONLY user
+//   would stop receiving the waitlist-offer / still-waiting / session-reminder
+//   email while the push silently goes nowhere — NEITHER CHANNEL. Being told
+//   nothing is the one outcome this whole feature exists to prevent.
+//
+//   While the setting is off: an `expo` row is ignored for THIS decision only
+//   (push is still sent to it — see push.ts deliver()), so an app-only user keeps
+//   getting the email exactly as they do today, and a user with BOTH a web and a
+//   native device behaves exactly as they did before. Web rows are untouched in
+//   every case.
+//
+//   FLIP IT ON once native delivery has been SEEN arriving on a real device on
+//   both platforms — not when a build succeeds, and not when Expo returns a
+//   ticket. Until then the cost of the safe setting is one redundant email.
 export const getEmailRoutingInternal = internalQuery({
   args: { email: v.string(), category: v.string() },
   handler: async (ctx, args) => {
@@ -56,11 +82,22 @@ export const getEmailRoutingInternal = internalQuery({
       .first();
     const cat = ((pref as any)?.categories ?? {}) as Record<string, boolean>;
     if (cat[args.category] === false) return { skipEmail: false, reason: "category off for user" };
-    const sub = await ctx.db
+    // Absent = FALSE here (unlike the other push settings, which default ON) —
+    // the conservative default is the point of this switch.
+    const nativeSuppressesEmail = (settings as any)?.emailSkipWhenNativePushReachable === true;
+    const subs = await ctx.db
       .query("pushSubscriptions")
       .withIndex("by_email", (q: any) => q.eq("email", email))
-      .first();
-    if (!sub) return { skipEmail: false, reason: "no device" };
+      .collect();
+    // `platform` ABSENT means WEB (every pre-2026-09-05 row). Test `=== "expo"`,
+    // never `=== "web"`, which is true of no row that exists.
+    const counted = nativeSuppressesEmail ? subs : subs.filter((s: any) => s.platform !== "expo");
+    if (counted.length === 0) {
+      return {
+        skipEmail: false,
+        reason: subs.length > 0 ? "native-only device, native suppression off" : "no device",
+      };
+    }
     return { skipEmail: true, reason: "push reachable" };
   },
 });

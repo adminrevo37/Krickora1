@@ -1011,6 +1011,17 @@ export default defineSchema({
     // cancellations, verification) always send. Default true. Reverses the
     // 2026-08-14 "both channels every time" ruling on Inspector's call.
     emailSkipWhenPushReachable: v.optional(v.boolean()),
+    // PUSH_BACKEND_SPEC (2026-09-05) — does a NATIVE (Expo) device suppress the
+    // informational email the way a Web Push device does? ⚠️ DEFAULT FALSE, and
+    // deliberately so: suppression is decided from the existence of a
+    // subscription row, and an Expo 200 is acceptance, not delivery. A
+    // half-configured FCM/APNs (token issued, delivery broken) would leave an
+    // app-only user with NEITHER channel, silently. While this is off, an
+    // `expo` row is ignored by the email-routing decision only — push is still
+    // sent to it, and web rows are unaffected. Turn ON only once native push has
+    // been SEEN arriving on a real device. Full reasoning: emails.ts
+    // getEmailRoutingInternal.
+    emailSkipWhenNativePushReachable: v.optional(v.boolean()), // default false
     // SPEC_MOBILE_APP_GATE_2026-06 (built 2026-09-03). Gate-at-action wall that
     // nudges MOBILE WEB users to install the PWA → log in → enable push, at the
     // two high-intent moments only (Book/Confirm, My Bookings while logged out).
@@ -1032,18 +1043,51 @@ export default defineSchema({
   // identity, available at every notification send-site; §6 alt confirmed at
   // build — admin/coach/customer are all one auth user, so email is the natural
   // join key here). userId (auth subject) stored too for completeness.
+  // PUSH_BACKEND_SPEC (2026-09-05) Option A — the SAME table now carries native
+  // (Expo) devices as well as Web Push ones, so every existing consumer keeps
+  // working untouched: `by_endpoint` dedupe, unsubscribePush, the email-change
+  // repoint (users.ts), the account purge (adminCleanup.ts), the broadcast
+  // reachability scan (broadcast.ts), the email-suppression check
+  // (emails.ts getEmailRoutingInternal) and the opt-in metric (analyticsUsage.ts).
+  //
+  // ⚠️ BACK-COMPATIBILITY, and it is load-bearing: `platform` ABSENT means WEB.
+  // Every pre-2026-09-05 row (~79 of them) has no `platform` field and stays
+  // valid with no migration and no backfill. Read it as
+  // `s.platform === "expo" ? native : web` — never as `s.platform === "web"`,
+  // which is true of no row that exists. In Convex `v.optional()` means ABSENT,
+  // not null: never write `platform: null`.
+  //
+  // p256dh/auth were REQUIRED and are now web-only, so the validator no longer
+  // guarantees a web row is complete — subscribePush compensates by rejecting a
+  // web registration that is missing either.
   pushSubscriptions: defineTable({
     email: v.string(), // lowercased account email
     userId: v.optional(v.string()), // Better Auth subject at subscribe time
-    endpoint: v.string(), // unique per device/browser
-    p256dh: v.string(),
-    auth: v.string(),
-    deviceLabel: v.string(), // e.g. "iPhone · Safari"
+    endpoint: v.string(), // web: the push-service URL. expo: the ExponentPushToken.
+    platform: v.optional(v.string()), // "expo" | ABSENT (absent = web)
+    p256dh: v.optional(v.string()), // web only (VAPID crypto)
+    auth: v.optional(v.string()), // web only (VAPID crypto)
+    deviceLabel: v.string(), // e.g. "iPhone · Safari" / "iPhone 14 · App"
     createdAt: v.number(),
     lastSeenAt: v.number(),
   })
     .index("by_email", ["email"])
     .index("by_endpoint", ["endpoint"]),
+
+  // PUSH_BACKEND_SPEC §6 — Expo push RECEIPTS. An Expo 200 means "accepted", not
+  // "delivered": a token APNs/FCM has retired still returns `ok` at send time and
+  // only reports DeviceNotRegistered in its receipt ~15 min later. Without this
+  // table the native side has NO prune signal at all and the subscription table
+  // grows forever, unlike the web path which self-cleans on a 404/410.
+  // Rows are transient: written on every accepted ticket, deleted as soon as the
+  // receipt is read, with a 24 h retention backstop so a failed cron cannot leak.
+  pushTickets: defineTable({
+    ticketId: v.string(), // Expo receipt id
+    subscriptionId: v.id("pushSubscriptions"),
+    email: v.optional(v.string()),
+    category: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_createdAt", ["createdAt"]),
 
   // Per-person push category preferences. categories is a sparse map
   // categoryKey -> boolean; an ABSENT key defaults ON for the relevant role.

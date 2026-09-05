@@ -87,6 +87,17 @@ crons.hourly(
   internal.waitlist.expirePassedWaitlistEntries
 );
 
+// PUSH_BACKEND_SPEC §6 — Expo push receipts. Web Push self-cleans on a 404/410,
+// but Expo accepts a message for a dead token (`ok`) and only reports
+// DeviceNotRegistered in a receipt available ~15 min later. This is the ONLY
+// prune path for native devices; without it pushSubscriptions grows forever.
+// Silent when there are no due tickets.
+crons.hourly(
+  "push-receipts",
+  { minuteUTC: 45 },
+  internal.push.checkPushReceipts
+);
+
 // Audit 2026-06 (SEC-3) — hourly prune of stale rate-limit buckets (bounds the
 // table under rotating-key / XFF-spoof abuse).
 crons.hourly(

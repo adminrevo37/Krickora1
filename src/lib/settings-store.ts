@@ -64,6 +64,10 @@ export interface SiteSettings {
   maxMatesPerBooking?: number
   pushEnabledGlobal?: boolean
   emailSkipWhenPushReachable?: boolean
+  // PUSH_BACKEND_SPEC (2026-09-05) — ships FALSE on purpose. See emails.ts
+  // getEmailRoutingInternal: a native (Expo) device must not suppress the email
+  // until native delivery is proven, or a broken FCM = neither channel.
+  emailSkipWhenNativePushReachable?: boolean
   mobileGateEnabled?: boolean
   mobileGateScope?: 'booking-action' | 'blanket' | 'off'
   mobileGateAndroidHardWall?: boolean
@@ -125,6 +129,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   maxMatesPerBooking: 2,
   pushEnabledGlobal: true,
   emailSkipWhenPushReachable: true,
+  emailSkipWhenNativePushReachable: false,
   mobileGateEnabled: false,
   mobileGateScope: 'booking-action',
   mobileGateAndroidHardWall: false,

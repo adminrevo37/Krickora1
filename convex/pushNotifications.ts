@@ -25,6 +25,9 @@ async function requireEmail(ctx: any): Promise<string> {
 }
 
 // ── Subscribe this device (called after the OS push permission is granted) ────
+// WEB PUSH ONLY. Args are UNCHANGED (all four still required) so an in-flight old
+// client bundle keeps working against this deployment verbatim. The native (Expo)
+// equivalent is registerExpoPushToken below.
 export const subscribePush = mutation({
   args: {
     endpoint: v.string(),
@@ -36,6 +39,13 @@ export const subscribePush = mutation({
     const email = await requireEmail(ctx);
     const identity = await ctx.auth.getUserIdentity();
     const now = Date.now();
+    // PUSH_BACKEND_SPEC §1 "Cost of A" — p256dh/auth are now v.optional() at the
+    // schema level, so the validator no longer proves a web row is complete.
+    // Refuse an incomplete web registration here instead of inserting a row that
+    // can only ever fail to send.
+    if (!args.p256dh.trim() || !args.auth.trim()) {
+      throw new ConvexError("This device did not return complete push keys. Try enabling notifications again.");
+    }
     // SPEC_PUSH_NOTIFICATIONS_V2 §4 — did this account have ANY subscribed device
     // before this call? If not, this is its first-ever push-enable → run the
     // one-time email auto-off after the insert succeeds.
@@ -53,6 +63,10 @@ export const subscribePush = mutation({
       await ctx.db.patch(existing._id, {
         email,
         userId: identity?.subject,
+        // Defensive: a web endpoint URL can never collide with an Expo token, but
+        // if a row were ever re-pointed the platform must follow the keys.
+        // `undefined` in a Convex patch REMOVES the field (= web). Never null.
+        platform: undefined,
         p256dh: args.p256dh,
         auth: args.auth,
         deviceLabel: args.deviceLabel,
@@ -71,6 +85,76 @@ export const subscribePush = mutation({
       lastSeenAt: now,
     });
     // §4 — first device ever for this account: silence the superseded emails once.
+    if (isFirstEverEnable) {
+      await ctx.scheduler.runAfter(0, internal.pushNotifications.applyPushSupersedesEmailDefaults, {
+        email,
+      });
+    }
+    return insertedId;
+  },
+});
+
+// ── Register a NATIVE (Expo) device ───────────────────────────────────────────
+// PUSH_BACKEND_SPEC §2. The Expo push token is stored in `endpoint` — a pun, but
+// the schema's own comment already defines `endpoint` as "unique per device", and
+// it is exactly what an Expo token is. The payoff is that unsubscribePush, the
+// email-change repoint, the account purge, the broadcast reachability scan and
+// the email-suppression check all keep working with ZERO code changes.
+//
+// UNSUBSCRIBE needs no new mutation: call unsubscribePush({ endpoint: token }).
+export const registerExpoPushToken = mutation({
+  args: { token: v.string(), deviceLabel: v.string() },
+  handler: async (ctx, args) => {
+    const email = await requireEmail(ctx);
+    const identity = await ctx.auth.getUserIdentity();
+    const token = args.token.trim();
+
+    // Expo's own token format. Reject anything else rather than storing junk that
+    // can only ever fail — the whole reason the client refused to call
+    // subscribePush with placeholder crypto.
+    if (!/^Expo(nent)?PushToken\[[^\]]+\]$/.test(token)) {
+      throw new ConvexError("That is not a valid Expo push token.");
+    }
+    const deviceLabel = (args.deviceLabel || "").trim().slice(0, 120) || "App";
+
+    const now = Date.now();
+    // §4 first-ever-enable check, same semantics as subscribePush.
+    const priorSubs = await ctx.db
+      .query("pushSubscriptions")
+      .withIndex("by_email", (q: any) => q.eq("email", email))
+      .collect();
+    const isFirstEverEnable = priorSubs.length === 0;
+
+    const existing = await ctx.db
+      .query("pushSubscriptions")
+      .withIndex("by_endpoint", (q: any) => q.eq("endpoint", token))
+      .first();
+    if (existing) {
+      // A re-register can legitimately arrive from a DIFFERENT account on a
+      // shared device (or after a sign-out/sign-in): re-point the row rather than
+      // leaving the previous owner receiving this device's notifications.
+      await ctx.db.patch(existing._id, {
+        email,
+        userId: identity?.subject,
+        platform: "expo",
+        // `undefined` REMOVES the field — an Expo row must carry no VAPID crypto.
+        p256dh: undefined,
+        auth: undefined,
+        deviceLabel,
+        lastSeenAt: now,
+      });
+      return existing._id;
+    }
+
+    const insertedId = await ctx.db.insert("pushSubscriptions", {
+      email,
+      userId: identity?.subject,
+      endpoint: token,
+      platform: "expo",
+      deviceLabel,
+      createdAt: now,
+      lastSeenAt: now,
+    });
     if (isFirstEverEnable) {
       await ctx.scheduler.runAfter(0, internal.pushNotifications.applyPushSupersedesEmailDefaults, {
         email,
@@ -159,6 +243,9 @@ export const listMyPushDevices = query({
       .collect();
     return subs.map((s) => ({
       endpoint: s.endpoint,
+      // Additive: lets a device list distinguish "this phone's app" from a
+      // browser. Absent = web. Existing web consumers cast and ignore it.
+      platform: s.platform ?? "web",
       deviceLabel: s.deviceLabel,
       createdAt: s.createdAt,
       lastSeenAt: s.lastSeenAt,
@@ -303,6 +390,9 @@ export const getPushDeliveryContext = internalQuery({
       subs: subs.map((s) => ({
         id: s._id,
         endpoint: s.endpoint,
+        // ABSENT platform = web (every pre-2026-09-05 row). The send path splits
+        // on `=== "expo"`, never on `=== "web"`.
+        platform: s.platform,
         p256dh: s.p256dh,
         auth: s.auth,
       })),
@@ -328,7 +418,13 @@ export const getMyPushDevicesInternal = internalQuery({
       // The test button bypasses the global kill-switch (explicit user action),
       // so we return it only for context; the action ignores it for tests.
       globalEnabled: settings?.pushEnabledGlobal ?? true,
-      subs: subs.map((s) => ({ id: s._id, endpoint: s.endpoint, p256dh: s.p256dh, auth: s.auth })),
+      subs: subs.map((s) => ({
+        id: s._id,
+        endpoint: s.endpoint,
+        platform: s.platform, // absent = web
+        p256dh: s.p256dh,
+        auth: s.auth,
+      })),
     };
   },
 });
@@ -422,5 +518,70 @@ export const recordPushBeaconInternal = internalMutation({
       tag: args.tag?.slice(0, 128),
     });
     return true;
+  },
+});
+
+// ── PUSH_BACKEND_SPEC §6 — Expo push receipts ────────────────────────────────
+// An Expo HTTP 200 means ACCEPTED, not delivered. A token that APNs/FCM has
+// retired (app uninstalled) returns `ok` at send time and only reports
+// DeviceNotRegistered in its receipt, which is not available for ~15 minutes.
+// These three helpers give the node action somewhere to park ticket ids and read
+// them back later; without them the native side has no prune signal at all.
+
+export const recordPushTicketsInternal = internalMutation({
+  args: {
+    tickets: v.array(
+      v.object({
+        ticketId: v.string(),
+        subscriptionId: v.id("pushSubscriptions"),
+        email: v.optional(v.string()),
+        category: v.optional(v.string()),
+      })
+    ),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    for (const t of args.tickets) {
+      await ctx.db.insert("pushTickets", {
+        ticketId: t.ticketId,
+        subscriptionId: t.subscriptionId,
+        email: t.email,
+        category: t.category,
+        createdAt: now,
+      });
+    }
+    return args.tickets.length;
+  },
+});
+
+// Tickets old enough to have a receipt but not so old Expo has dropped them.
+// Bounded by `limit` (Expo's getReceipts caps at 1000 ids per request).
+export const listDuePushTicketsInternal = internalQuery({
+  args: { olderThanMs: v.number(), limit: v.number() },
+  handler: async (ctx, args) => {
+    const cutoff = Date.now() - args.olderThanMs;
+    const rows = await ctx.db
+      .query("pushTickets")
+      .withIndex("by_createdAt", (q: any) => q.lt("createdAt", cutoff))
+      .take(Math.max(1, Math.min(args.limit, 1000)));
+    return rows.map((r) => ({
+      id: r._id,
+      ticketId: r.ticketId,
+      subscriptionId: r.subscriptionId,
+      email: r.email,
+      category: r.category,
+      createdAt: r.createdAt,
+    }));
+  },
+});
+
+export const deletePushTicketsInternal = internalMutation({
+  args: { ids: v.array(v.id("pushTickets")) },
+  handler: async (ctx, args) => {
+    for (const id of args.ids) {
+      const row = await ctx.db.get(id);
+      if (row) await ctx.db.delete(id);
+    }
+    return args.ids.length;
   },
 });

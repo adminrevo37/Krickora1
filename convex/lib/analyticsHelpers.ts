@@ -63,9 +63,13 @@ export function dayLabel(dateKey: string): string {
   return `${MONTH_ABBR[(m || 1) - 1]} ${d}`;
 }
 
-/** Coarse platform bucket from a Web Push endpoint URL. */
+/** Coarse platform bucket from a push "endpoint" — a Web Push service URL, or
+ *  (since PUSH_BACKEND_SPEC 2026-09-05) a native ExponentPushToken. Without the
+ *  expo branch a native device falls through to "other", silently merging the app
+ *  into the bucket that already means "unknown browser". */
 export function platformFromEndpoint(endpoint: string): string {
   const e = (endpoint || "").toLowerCase();
+  if (e.startsWith("expopushtoken[") || e.startsWith("exponentpushtoken[")) return "expo";
   if (e.includes("push.apple.com")) return "ios";
   if (e.includes("fcm.googleapis.com") || e.includes("android")) return "fcm";
   if (e.includes("mozilla.com")) return "firefox";

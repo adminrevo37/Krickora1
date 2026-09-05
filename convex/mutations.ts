@@ -6592,6 +6592,7 @@ export const updateSiteSettings = mutation({
     maxMatesPerBooking: v.optional(v.number()),
     pushEnabledGlobal: v.optional(v.boolean()),
     emailSkipWhenPushReachable: v.optional(v.boolean()),
+    emailSkipWhenNativePushReachable: v.optional(v.boolean()), // default false — see emails.ts
     mobileGateEnabled: v.optional(v.boolean()),
     mobileGateScope: v.optional(v.string()),
     mobileGateAndroidHardWall: v.optional(v.boolean()),
