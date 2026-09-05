@@ -4,7 +4,8 @@
 import { query, mutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
-import { requireAdmin, getCallerContext } from "./lib/adminGuard";
+import { requireAdmin, getCallerContext, writeRoleAudit } from "./lib/adminGuard";
+import { enforceRateLimit } from "./lib/rateLimit";
 import { getAWSTNow } from "./lib/bookingWindow";
 import { composeName, splitName } from "./lib/names";
 
@@ -412,6 +413,23 @@ export const addAthleteToCoach = mutation({
     if (!caller.isAdmin && !isSelfCoach) {
       throw new ConvexError("Only the coach or an admin can add athletes.");
     }
+    // M2 (SECURITY review 2026-09-05b): this call inserts an athlete under ANY
+    // parent email and emails that address, and its response says whether the
+    // address has an account — an unthrottled directory oracle + mail cannon for
+    // any coach. 20 adds per rolling hour per caller is far above real use (a
+    // roster is built once) and stops a scripted sweep. `accountExists` is kept
+    // because the web UI keys its feedback + modal close on it
+    // (AthleteAllocationEditor.tsx) — see the report.
+    await enforceRateLimit(
+      ctx,
+      {
+        action: "athlete-add",
+        identifier: String(callerCustomer?._id ?? caller.email),
+        max: 20,
+        windowMs: 60 * 60_000,
+      },
+      "Too many athletes added in the last hour — please try again later."
+    );
     // Normalise the coach to their _id so athlete records store ids, not emails.
     let coachIdNorm = args.coachId;
     const coachByEmail = await ctx.db
@@ -466,6 +484,14 @@ export const addAthleteToCoach = mutation({
         parentName: account.name,
         childName,
         coachName,
+      });
+      // M2: audit who attached an athlete to whose account (roleAuditLog is the
+      // existing who-did-what-to-which-account log; never throws).
+      await writeRoleAudit(ctx, {
+        targetEmail: parentEmail,
+        field: "athleteAddedByCoach",
+        newValue: `${childName} → coach ${coachIdNorm}`,
+        changedByEmail: caller.email,
       });
       // §6.4 — if an ADMIN linked the athlete on the coach's behalf, tell the
       // coach (a coach adding to their own roster already knows → no self-ping).

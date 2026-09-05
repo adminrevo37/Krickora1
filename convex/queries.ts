@@ -1386,14 +1386,30 @@ export const getBookingPaymentState = internalQuery({
   handler: async (
     ctx,
     args
-  ): Promise<{ status: string; paymentStatus: string | null; stripeSessionId: string | null } | null> => {
+  ): Promise<{
+    status: string;
+    paymentStatus: string | null;
+    stripeSessionId: string | null;
+    topUpSessionId: string | null;
+    checkoutSessionId: string | null;
+  } | null> => {
     const booking = await ctx.db.get(args.bookingId as Id<"bookings">);
     if (!booking) return null;
     const b = booking as any;
+    const status = String(b.status ?? "");
+    // H1 (SECURITY review 2026-09-05b): `stripeSessionId` is the SETTLED session;
+    // a staged modify's unpaid top-up session lives on pendingEdit.topUpSessionId.
+    // `checkoutSessionId` is "the session currently awaiting payment", whichever
+    // field that is — the expiry/abandon actions must act on THAT one, never on the
+    // settled session of a paid booking.
+    const topUpSessionId: string | null = b.pendingEdit?.topUpSessionId ?? null;
     return {
-      status: String(b.status ?? ""),
+      status,
       paymentStatus: b.paymentStatus ?? null,
       stripeSessionId: b.stripeSessionId ?? null,
+      topUpSessionId,
+      checkoutSessionId:
+        status === "pending_edit_payment" ? topUpSessionId : (b.stripeSessionId ?? null),
     };
   },
 });

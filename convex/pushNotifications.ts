@@ -8,7 +8,40 @@ import { mutation, query, internalQuery, internalMutation } from "./_generated/s
 import { v, ConvexError } from "convex/values";
 import { internal } from "./_generated/api";
 import { isPushCategory } from "./lib/pushCategories";
-import { requireAdmin } from "./lib/adminGuard";
+import { requireAdmin, writeRoleAudit } from "./lib/adminGuard";
+
+// M3 (SECURITY review 2026-09-05b): a device row (web endpoint or Expo token)
+// belongs to the account that registered it. Re-registering the same
+// endpoint/token from a DIFFERENT account used to silently re-point the row —
+// so anyone who learned a victim's token (it is shown in their own device list
+// and travels through support screenshots) could route every push they receive,
+// door codes included, onto the victim's phone and silently stop the victim's
+// own pushes. Refuse, and record the attempt. The legitimate shared-device case
+// (sign out, someone else signs in) is handled by the clients calling
+// unsubscribePush on sign-out; a row that was NOT released that way stays with
+// its owner rather than being claimable by whoever asks next.
+async function refuseIfOwnedByAnotherAccount(
+  ctx: any,
+  existing: any,
+  callerEmail: string,
+  kind: "web" | "expo"
+): Promise<void> {
+  const ownerEmail = String(existing?.email ?? "").toLowerCase().trim();
+  if (!ownerEmail || ownerEmail === callerEmail) return;
+  console.warn(
+    `[push] ${kind} device re-point REFUSED: row owned by ${ownerEmail}, requested by ${callerEmail}`
+  );
+  await writeRoleAudit(ctx, {
+    targetEmail: ownerEmail,
+    field: kind === "expo" ? "pushDeviceRepointRefused:expo" : "pushDeviceRepointRefused:web",
+    oldValue: ownerEmail,
+    newValue: callerEmail,
+    changedByEmail: callerEmail,
+  });
+  throw new ConvexError(
+    "Notifications on this device are registered to another account. Turn notifications off in that account's profile first, then enable them here."
+  );
+}
 
 // SPEC_PUSH_NOTIFICATIONS_V2 §4 — email slugs auto-silenced the FIRST time an
 // account enables push (so the alert arrives via push, not a duplicate email).
@@ -60,6 +93,7 @@ export const subscribePush = mutation({
       .withIndex("by_endpoint", (q: any) => q.eq("endpoint", args.endpoint))
       .first();
     if (existing) {
+      await refuseIfOwnedByAnotherAccount(ctx, existing, email, "web"); // M3
       await ctx.db.patch(existing._id, {
         email,
         userId: identity?.subject,
@@ -130,9 +164,11 @@ export const registerExpoPushToken = mutation({
       .withIndex("by_endpoint", (q: any) => q.eq("endpoint", token))
       .first();
     if (existing) {
-      // A re-register can legitimately arrive from a DIFFERENT account on a
-      // shared device (or after a sign-out/sign-in): re-point the row rather than
-      // leaving the previous owner receiving this device's notifications.
+      // A re-register from the SAME account (app reinstall, token refresh path)
+      // refreshes the row. A different account is refused (M3) — the previous
+      // owner releases the device by signing out (unsubscribePush), not by
+      // being overwritten by whoever registers the token next.
+      await refuseIfOwnedByAnotherAccount(ctx, existing, email, "expo");
       await ctx.db.patch(existing._id, {
         email,
         userId: identity?.subject,

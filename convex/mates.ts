@@ -4,6 +4,8 @@ import { internal } from "./_generated/api";
 import { getCallerContext } from "./lib/adminGuard";
 import { enforceRateLimit } from "./lib/rateLimit";
 import { defaultLaneName } from "./lib/lanes";
+import { isBookingSettled } from "./lib/settlement";
+import { phoneMatchKey, findCustomersByPhone } from "./lib/phone";
 
 // ============================================================================
 // SPEC_ADD_A_MATE — friends added to a customer booking for shared front-door
@@ -37,11 +39,22 @@ export function shortName(fullName: string): string {
   return `${parts[0]} ${parts[parts.length - 1].charAt(0).toUpperCase()}.`;
 }
 
-// Digits-only, last 9 (drops country code / leading-zero differences) so
-// "04xx xxx xxx" and "+61 4xx xxx xxx" match the same stored number.
-function normalizePhone(p?: string): string {
-  const digits = (p || "").replace(/\D/g, "");
-  return digits.length > 9 ? digits.slice(-9) : digits;
+// Phone matching key — shared with the uniqueness check on the profile writers
+// (lib/phone.ts, M1) so the two can never disagree about what "same number" means.
+const normalizePhone = (p?: string) => phoneMatchKey(p);
+
+// L1 (SECURITY review 2026-09-05b): a mate may only be attached to a SETTLED
+// booking. A `pending_payment` booking already carries a minted accessCode, so
+// adding a mate to it emailed/pushed a door code before any money had moved — and
+// if that checkout was then abandoned the booking cancelled, the code stopped
+// being reserved and could be re-minted for a stranger's session while the mate
+// still held it. Uses the one settlement predicate (lib/settlement.ts):
+// pending_edit_payment counts as settled (the original money is in).
+const MATE_UNSETTLED_MSG =
+  "This booking hasn't been paid for yet — mates can be added once payment is confirmed.";
+function assertSettledForMates(booking: any): void {
+  if (booking.status === "cancelled") throw new ConvexError("This booking has been cancelled.");
+  if (!isBookingSettled(booking)) throw new ConvexError(MATE_UNSETTLED_MSG);
 }
 
 // Booking start as a Date (AWST wall-clock components → server Date for delta).
@@ -122,11 +135,23 @@ export const searchCustomerByMobile = mutation({
     const target = normalizePhone(args.phone);
     if (target.length < 8) return null; // too short to be a real mobile
     // Small directory at this facility — scan + match on normalised suffix.
-    const all = await ctx.db.query("customers").collect();
-    const match = all.find(
-      (c: any) => c.phone && normalizePhone(c.phone) === target
-    );
-    if (!match) return null;
+    const matches = await findCustomersByPhone(ctx, args.phone);
+    if (matches.length === 0) return null;
+    // M1 (SECURITY review 2026-09-05b): phone + name are self-editable and phone
+    // uniqueness was enforced nowhere, so `find()` returned whichever row was
+    // created first — an account that set its phone to a friend's number could be
+    // picked when the friend was searched for, and receive their door code. Two
+    // rows on one number is now REFUSED rather than guessed. Thrown as a
+    // ConvexError (not a new result shape) so the existing web/app UI shows it
+    // verbatim in its error flash with no client change; new self-edits can no
+    // longer create a collision (lib/phone.assertPhoneNotOnAnotherAccount), so
+    // this only fires on legacy duplicates, which an admin resolves.
+    if (matches.length > 1) {
+      throw new ConvexError(
+        "More than one account uses that mobile number, so it can't be matched safely. Ask your mate to add you from their account, or send them an invite link instead."
+      );
+    }
+    const match = matches[0];
     let selfReferenceEmail: string | null = (caller as any).email ?? null;
     let selfReferenceId: string = caller._id as any;
     if (args.forBookingId && (caller as any).role === "admin") {
@@ -268,7 +293,10 @@ export const listMateBookings = query({
       .withIndex("by_date", (q: any) => q.gte("date", todayKey))
       .filter((q: any) => q.neq(q.field("status"), "cancelled"))
       .collect();
-    const mine = bookings.filter((b: any) => isMateOnBooking(b, caller._id));
+    // L1: never show a door code for a booking whose money has not landed.
+    const mine = bookings.filter(
+      (b: any) => isMateOnBooking(b, caller._id) && isBookingSettled(b)
+    );
     const out: any[] = [];
     for (const b of mine) {
       // Owner display name (from the account that owns the booking).
@@ -333,7 +361,7 @@ export const addMateToBooking = mutation({
   },
   handler: async (ctx, args) => {
     const { booking, callerCustomer } = await authorizeMateManagement(ctx, args.bookingId);
-    if (booking.status === "cancelled") throw new ConvexError("This booking has been cancelled.");
+    assertSettledForMates(booking); // L1
     if (bookingStartMs(booking.date, booking.startHour) <= awstNowMs()) {
       throw new ConvexError("This session has already started — mates can't be added.");
     }
@@ -528,7 +556,7 @@ export const createBookingInvite = mutation({
   },
   handler: async (ctx, args) => {
     const { callerCustomer, booking } = await authorizeMateManagement(ctx, args.bookingId);
-    if (booking.status === "cancelled") throw new ConvexError("This booking has been cancelled.");
+    assertSettledForMates(booking); // L1 — the token this mints grants the door code
     // A-4: this token grants door-code access via /join, so it must be unguessable.
     // Use the Web Crypto CSPRNG (available in the Convex runtime) — 24 bytes = 192
     // bits of entropy — instead of the old Math.random()+Date.now() (low-entropy,
@@ -565,6 +593,7 @@ export const getBookingInvite = query({
     if (invite.expiresAt <= awstNowMs()) return { status: "expired" };
     const booking = await ctx.db.get(invite.bookingId);
     if (!booking || booking.status === "cancelled") return { status: "invalid" };
+    if (!isBookingSettled(booking)) return { status: "invalid" }; // L1
     const owner = booking.customerEmail
       ? await ctx.db
           .query("customers")
@@ -601,6 +630,10 @@ export const acceptBookingInvite = mutation({
 
     const booking = await ctx.db.get(invite.bookingId);
     if (!booking || booking.status === "cancelled") return { status: "invalid" };
+    // L1: an invite minted before the booking settled (or whose booking has since
+    // dropped back to awaiting payment) must not hand out the door code. Reported
+    // as "invalid" — the /join page already handles that status without changes.
+    if (!isBookingSettled(booking)) return { status: "invalid" };
     if (bookingStartMs(booking.date, booking.startHour) <= awstNowMs()) return { status: "expired" };
 
     // Owner can't join their own booking as a mate.

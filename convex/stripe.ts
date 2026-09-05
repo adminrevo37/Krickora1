@@ -218,6 +218,28 @@ export const expireUnpaidCheckout = internalAction({
       bookingId: args.bookingId,
     });
     if (!state) return { released: false, reason: "not_found" };
+    // H1 (SECURITY review 2026-09-05b): a staged modify is a PAID booking whose
+    // unpaid TOP-UP session is on pendingEdit.topUpSessionId. Give it the same
+    // quick-cancel as any other checkout: if the top-up is still unpaid at the
+    // deadline, expire its Stripe session (so it can't be paid after the edit is
+    // gone) and revert the booking to its confirmed slot. Previously this returned
+    // "paid" here and the top-up session stayed payable until Stripe's own 30-min
+    // expiry — the second H1 scenario's window.
+    if (state.status === "pending_edit_payment") {
+      if (!state.topUpSessionId || state.topUpSessionId !== args.sessionId)
+        return { released: false, reason: "superseded" };
+      if (await stripeSessionIsPaid(args.sessionId))
+        return { released: false, reason: "paid_pending_webhook" };
+      try {
+        await getStripe().checkout.sessions.expire(args.sessionId);
+      } catch {
+        /* already expired/unknown — revert anyway (idempotent). */
+      }
+      await ctx.runMutation(internal.slotHolds.releaseCheckoutBooking, {
+        bookingId: args.bookingId,
+      });
+      return { released: true, reason: "edit_abandoned" };
+    }
     // Paid or already past the awaiting-payment phase → leave it alone.
     if (state.paymentStatus === "paid") return { released: false, reason: "paid" };
     if (state.status !== "pending_payment" && state.status !== "pending")
@@ -296,13 +318,17 @@ export const cancelUnpaidCheckout = action({
     if (!isStagedEdit && state.status !== "pending_payment" && state.status !== "pending")
       throw new ConvexError("This booking is not awaiting payment.");
 
-    if (state.stripeSessionId) {
+    // H1 (SECURITY review 2026-09-05b): act on the session AWAITING payment —
+    // for a staged edit that is the top-up on pendingEdit.topUpSessionId, never
+    // `stripeSessionId` (the original, settled session — which is exactly why
+    // this action used to refuse a staged edit as "already paid").
+    if (state.checkoutSessionId) {
       // Same inverse-race guard as the timer path: don't cancel a slot whose
       // payment actually went through but whose webhook hasn't landed yet.
-      if (await stripeSessionIsPaid(state.stripeSessionId))
+      if (await stripeSessionIsPaid(state.checkoutSessionId))
         throw new ConvexError("Your payment is being confirmed — please refresh in a moment.");
       try {
-        await getStripe().checkout.sessions.expire(state.stripeSessionId);
+        await getStripe().checkout.sessions.expire(state.checkoutSessionId);
       } catch {
         /* best-effort */
       }
@@ -311,6 +337,28 @@ export const cancelUnpaidCheckout = action({
       bookingId: args.bookingId,
     });
     return { released: true };
+  },
+});
+
+// H1 (SECURITY review 2026-09-05b): best-effort expiry of a Checkout session that
+// no longer has a booking behind it — scheduled from cancelBookingCore /
+// systemCancelBooking / the abandon-revert when a staged modify's top-up session
+// is still open. A Stripe session stays payable for up to 30 min on its own; a
+// top-up paid after its booking was cancelled is caught by the webhook backstop
+// (refund_due + admin push), but closing the window at cancel time means the
+// customer is simply told the session has expired instead of paying money that
+// then needs a manual refund. Never throws: a session that is already complete or
+// expired is the desired end state.
+export const expireStripeSession = internalAction({
+  args: { sessionId: v.string() },
+  handler: async (_ctx, args): Promise<{ expired: boolean }> => {
+    try {
+      await getStripe().checkout.sessions.expire(args.sessionId);
+      return { expired: true };
+    } catch (e: any) {
+      console.warn(`[stripe] expireStripeSession ${args.sessionId}: ${e?.message ?? e}`);
+      return { expired: false };
+    }
   },
 });
 
@@ -401,6 +449,13 @@ export const createPaymentLink = action({
     });
     const paymentLink = await stripe.paymentLinks.create({
       line_items: [{ price: price.id, quantity: 1 }],
+      // Prior-H1 (BACKEND review 2026-09-05): card only, matching
+      // createCheckoutSession. Without this Stripe offers every method enabled on
+      // the account — including delayed-notification ones (bank debit etc.) whose
+      // checkout.session.completed fires with payment_status "unpaid" and the money
+      // arrives (or never arrives) days later. The webhook now also refuses to
+      // confirm on anything but payment_status "paid" (stripeWebhook.ts).
+      payment_method_types: ["card"],
       payment_intent_data: {
         description: `Cricket net hire — ${args.laneName}${variantLabel}, ${fmtAwstDateLabel(args.date)} ${formatHour(args.startHour)}-${formatHour(endHour)}${args.topUp ? " (top-up)" : ""}`.slice(0, 1000),
         metadata: {

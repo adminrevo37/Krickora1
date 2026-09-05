@@ -2,7 +2,8 @@ import { mutation, internalMutation, query } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { maybeAlertMachineDemand } from "./laneDemandMonitor";
 import { internal, components } from "./_generated/api";
-import { requireAdmin, requireAdminUnlocked, getAuthUserSafe } from "./lib/adminGuard";
+import { requireAdmin, requireAdminUnlocked, getAuthUserSafe, resolveIsAdmin } from "./lib/adminGuard";
+import { assertPhoneNotOnAnotherAccount } from "./lib/phone";
 import { issueCredit, redeemCredit, recordCreditMovement } from "./lib/credit";
 import { enforceRateLimit } from "./lib/rateLimit";
 import { recordDiscountRedemption, validateDiscount, discountAmountCents } from "./lib/discounts";
@@ -3138,6 +3139,12 @@ async function cancelBookingCore(
     if (!isOwner && !cancelIsAdmin) {
       throw new ConvexError("You can only cancel your own bookings.");
     }
+    // L7 (SECURITY review 2026-09-05b): who cancelled is the VERIFIED caller, not
+    // a client-supplied id. `args.cancelledByUserId` is still accepted (in-flight
+    // bundles send it) but ignored — a customer could otherwise make their own
+    // cancel read as admin-initiated in the cancellation analytics, and the
+    // self-cancel push suppression below keyed on the same client value.
+    const cancelledByUserId: string = identity.subject;
     // SPEC_SCHEDULE_DAY_VIEW §2.13: an admin-managed coach booking can't be
     // cancelled by the coach (or anyone non-admin) — they allocate only.
     if ((booking as any).createdByAdmin && !cancelIsAdmin) {
@@ -3212,7 +3219,7 @@ async function cancelBookingCore(
     await ctx.db.patch(args.id, {
       status: "cancelled",
       cancelledAt: new Date().toISOString(),
-      cancelledByUserId: args.cancelledByUserId,
+      cancelledByUserId,
       ...(coachLateCancelCharged ? { coachLateCancelCharged: true } : {}),
       ...(effectiveReason ? { cancelReason: effectiveReason } : {}),
       ...(effectiveNote ? { cancelNote: effectiveNote } : {}),
@@ -3292,6 +3299,17 @@ async function cancelBookingCore(
     // Release any checkout hold tied to this booking (frees it for the sweep).
     await releaseHoldForBooking(ctx, args.id.toString());
 
+    // H1 (SECURITY review 2026-09-05b): a booking cancelled MID-MODIFY still has
+    // its top-up Checkout session open on Stripe (payable for up to 30 min). Close
+    // it now so the customer cannot pay for a change to a booking that no longer
+    // exists. If they already have (webhook in flight), the expire fails harmlessly
+    // and the webhook's cancelled-booking backstop records the money + flags it.
+    if (booking.status === "pending_edit_payment" && (booking as any).pendingEdit?.topUpSessionId) {
+      await ctx.scheduler.runAfter(0, internal.stripe.expireStripeSession, {
+        sessionId: (booking as any).pendingEdit.topUpSessionId,
+      });
+    }
+
     // SPEC_WAITLIST_OFFER_REDESIGN: the slot just freed — offer it to the next
     // waitlisted member (sequential first-refusal). Auto-triggered, no admin.
     await scheduleWaitlistAdvance(ctx, {
@@ -3346,7 +3364,7 @@ async function cancelBookingCore(
       });
       // SPEC_PWA_PUSH §5.1 — booking cancellation push (customer), only when
       // cancelled by admin/system (not the customer themselves).
-      const selfCancel = args.cancelledByUserId != null && args.cancelledByUserId === booking.userId;
+      const selfCancel = cancelledByUserId === booking.userId;
       if (!booking.isCoachBooking && !selfCancel) {
         await ctx.scheduler.runAfter(0, internal.push.sendPushInternal, {
           email: booking.customerEmail,
@@ -3371,7 +3389,7 @@ async function cancelBookingCore(
       });
       await writeAllocationAudit(ctx, {
         bookingId: args.id.toString(),
-        actorUserId: args.cancelledByUserId,
+        actorUserId: cancelledByUserId,
         action: "cancel",
         before: booking.athleteSlots,
         after: booking.athleteSlots,
@@ -5563,6 +5581,17 @@ export const upsertCustomer = mutation({
       .withIndex("by_email", (q: any) => q.eq("email", normalizedEmail))
       .first();
 
+    // M1 (SECURITY review 2026-09-05b): a self-service write may not take a mobile
+    // number another account already holds (the Add-a-Mate search keys on it).
+    if (!isAdmin && args.phone) {
+      await assertPhoneNotOnAnotherAccount(
+        ctx,
+        args.phone,
+        existing?._id ?? null,
+        (existing as any)?.phone ?? null
+      );
+    }
+
     if (existing) {
       await ctx.db.patch(existing._id, {
         name: args.name,
@@ -5609,7 +5638,10 @@ export const updateCustomer = mutation({
       if (!colorAuthUser) throw new ConvexError("Not authorized");
       const colorTarget: any = await ctx.db.get(args.id);
       const colorCallerEmail = ((colorAuthUser as any).email ?? "").toLowerCase().trim();
-      const colorIsAdmin = (colorAuthUser as any).role === "admin";
+      // L7 (SECURITY review 2026-09-05b): resolve admin through the single source
+      // of truth (customers.role, Better-Auth role only as bootstrap) like every
+      // other site — this was the one place still trusting the auth role alone.
+      const colorIsAdmin = await resolveIsAdmin(ctx, colorCallerEmail, (colorAuthUser as any).role);
       if (!colorIsAdmin && (colorTarget?.email ?? "").toLowerCase() !== colorCallerEmail) {
         throw new ConvexError("Not authorized");
       }
@@ -5681,6 +5713,20 @@ export const updateCustomerByEmail = mutation({
       .query("customers")
       .withIndex("by_email", (q: any) => q.eq("email", normalizedEmail))
       .first();
+
+    // M1 (SECURITY review 2026-09-05b): phone uniqueness was enforced nowhere, so
+    // any account could set its mobile to a friend's number and be matched when
+    // the friend was searched for as a mate — receiving their door code. A
+    // non-admin self-edit now refuses a number already on another account.
+    // Admin edits are exempt (consolidating a legacy duplicate needs it).
+    if (!updIsAdminCaller && args.phone) {
+      await assertPhoneNotOnAnotherAccount(
+        ctx,
+        args.phone,
+        existing?._id ?? null,
+        (existing as any)?.phone ?? null
+      );
+    }
 
     if (existing) {
       const { email, ...updates } = args;
@@ -6078,20 +6124,32 @@ export const setBookingCheckoutSession = internalMutation({
     const booking = await ctx.db.get(args.bookingId as any);
     if (!booking) return;
     const b = booking as any;
-    // `pending_edit_payment` is included deliberately. A staged modify is an
-    // already-paid booking with an unpaid TOP-UP outstanding; without this the
-    // top-up's session id was never recorded, so `booking.stripeSessionId` still
-    // pointed at the ORIGINAL, PAID session. Anything asking "has this booking's
-    // current checkout been paid?" therefore got the wrong answer — which is why a
-    // customer could not abandon a staged change (cancelUnpaidCheckout saw a paid
-    // session and refused), and why an abandon could otherwise race a top-up that
-    // had just been paid.
-    if (
-      b.status !== "pending_payment" &&
-      b.status !== "pending" &&
-      b.status !== "pending_edit_payment"
-    )
+    // A staged modify (`pending_edit_payment`) is an already-PAID booking with an
+    // unpaid TOP-UP outstanding. Its checkout session must be recorded (so the
+    // customer can abandon the change and so an abandon can't race a top-up that
+    // was just paid — d83e20f), but it must be recorded ON THE EDIT, never over
+    // `stripeSessionId`.
+    //
+    // H1 (SECURITY review 2026-09-05b): `stripeSessionId` is the SETTLED session.
+    // The webhook's idempotency guard (BATCH 15.1, webhooks.ts) treats
+    // `paymentStatus === "paid" && stripeSessionId === <incoming session>` as a
+    // retry of money already recorded — sound only while a top-up id is never
+    // written there. d83e20f wrote it there, so a top-up paid AFTER the booking
+    // was cancelled (other tab, or an admin closure) matched the guard, no-op'd,
+    // and the cancelled-booking backstop (refund_due row + needsRefund + admin
+    // push) never ran: money in Stripe, nothing in Krickora. Holding the id on
+    // pendingEdit.topUpSessionId keeps the guard true to its premise; a paid
+    // top-up arriving after a cancel/abandon no longer matches and falls through
+    // to the backstop. It also stops listMyPayments reporting the top-up session
+    // as the booking's receipt reference.
+    if (b.status === "pending_edit_payment") {
+      if (!b.pendingEdit) return;
+      await ctx.db.patch(args.bookingId as any, {
+        pendingEdit: { ...b.pendingEdit, topUpSessionId: args.sessionId },
+      } as any);
       return;
+    }
+    if (b.status !== "pending_payment" && b.status !== "pending") return;
     await ctx.db.patch(args.bookingId as any, { stripeSessionId: args.sessionId } as any);
   },
 });
@@ -6190,49 +6248,10 @@ export const recordStripePaymentInternal = internalMutation({
   },
 });
 
-// Send booking confirmation email (callable from client for non-Stripe bookings)
-export const sendBookingEmail = mutation({
-  args: {
-    customerEmail: v.string(),
-    customerName: v.string(),
-    laneName: v.string(),
-    date: v.string(),
-    timeSlot: v.string(),
-    duration: v.string(),
-    amount: v.string(),
-    accessCode: v.string(),
-  },
-  handler: async (ctx, args) => {
-    // SEC-4: Must be authenticated; can send to self or be admin
-    const sendEmailIdentity = await ctx.auth.getUserIdentity();
-    if (!sendEmailIdentity) throw new ConvexError("Authentication required.");
-    const sendCallerEmail = sendEmailIdentity.email?.toLowerCase().trim() ?? "";
-    if (sendCallerEmail !== args.customerEmail.toLowerCase().trim()) {
-      const sendCallerCustomer = await ctx.db
-        .query("customers")
-        .withIndex("by_email", (q: any) => q.eq("email", sendCallerEmail))
-        .first();
-      if (sendCallerCustomer?.role !== "admin") {
-        throw new ConvexError("You can only send booking emails for your own bookings.");
-      }
-    }
-    await ctx.scheduler.runAfter(
-      0,
-      internal.emails.sendBookingConfirmation,
-      {
-        to: args.customerEmail,
-        customerName: args.customerName,
-        laneName: args.laneName,
-        date: args.date,
-        timeSlot: args.timeSlot,
-        duration: args.duration,
-        amount: args.amount,
-        accessCode: args.accessCode,
-      }
-    );
-    return { success: true };
-  },
-});
+// L2 (SECURITY review 2026-09-05b): `sendBookingEmail` DELETED. It let any
+// signed-in user send themselves a first-party "Booking confirmed" email with an
+// arbitrary accessCode/lane/date and had no client caller (createBooking sends
+// the real confirmation server-side). Restore from git history if ever needed.
 
 // Update a stripePayment — ADMIN ONLY
 export const updateStripePayment = mutation({

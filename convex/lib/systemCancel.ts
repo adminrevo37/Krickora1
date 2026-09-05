@@ -105,6 +105,17 @@ export async function systemCancelBooking(
   // Release any checkout hold tied to this booking.
   await releaseHoldForBooking(ctx, booking._id.toString());
 
+  // H1 (SECURITY review 2026-09-05b): mirror of cancelBookingCore — a closure or
+  // lane block landing on a booking mid-modify must close the top-up's Stripe
+  // session too, or the customer on the payment page pays for a change to a
+  // booking the sweep has just cancelled (no user error needed). A payment that
+  // beats the expiry is caught by the webhook backstop (refund_due + admin push).
+  if (booking.status === "pending_edit_payment" && booking.pendingEdit?.topUpSessionId) {
+    await ctx.scheduler.runAfter(0, internal.stripe.expireStripeSession, {
+      sessionId: booking.pendingEdit.topUpSessionId,
+    });
+  }
+
   // Remove the Google Calendar event(s).
   // CAL-3 (SECURITY review 2026-08-19): gate on PRIMARY *or* per-lane ids. This fix
   // was applied to cancelBookingCore on 2026-06-23 but never mirrored here, so a

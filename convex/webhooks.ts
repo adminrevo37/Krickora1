@@ -42,7 +42,20 @@ export const confirmBookingPayment = internalMutation({
     // webhook retry falls through to the paid-guard no-op.
     //
     // Booking edit / unified modify top-up — apply the pending change once paid.
-    if (b.status === "pending_edit_payment" && b.pendingEdit) {
+    //
+    // H1 (SECURITY review 2026-09-05b): only the edit's OWN top-up session may
+    // apply the edit. The staged top-up's session id now lives on
+    // pendingEdit.topUpSessionId (never on stripeSessionId, which stays the
+    // settled session). When that id is known and the incoming session is a
+    // different one — e.g. a late Stripe retry of the ORIGINAL session's
+    // `completed` event — do not apply the change for money that was never paid
+    // for it; fall through to the guards below, where a retry of the settled
+    // session is the same-session no-op. A pendingEdit with no topUpSessionId
+    // (staged under the previous code) keeps the old behaviour.
+    const stagedTopUpSessionId: string | undefined = b.pendingEdit?.topUpSessionId;
+    const isThisEditsTopUp =
+      !stagedTopUpSessionId || stagedTopUpSessionId === args.stripeSessionId;
+    if (b.status === "pending_edit_payment" && b.pendingEdit && isThisEditsTopUp) {
       const pe = b.pendingEdit;
       // A unified modify carries slot fields (date/time/lane); a legacy
       // duration-only edit (EditBookingModal) carries none of them.
@@ -199,9 +212,9 @@ export const confirmBookingPayment = internalMutation({
     // backstop below. A booking cancelled while MID-MODIFY keeps
     // paymentStatus:"paid" (the ORIGINAL money is still settled — only pendingEdit
     // holds the new amounts), while its top-up Stripe session stays payable for up
-    // to 30 min: nothing expires it, because BOTH expireUnpaidCheckout and
-    // cancelUnpaidCheckout deliberately refuse a paid booking. Paying that session
-    // therefore hit this guard and returned, so the backstop NEVER ran — no
+    // to 30 min (as of H1 2026-09-05b the cancel paths now schedule
+    // stripe.expireStripeSession for it, but a payment can still beat the expiry).
+    // Paying that session therefore hit this guard and returned, so the backstop NEVER ran — no
     // stripePayments row, no needsRefund, no admin alert. The money sat in Stripe,
     // invisible in Krickora, with nothing to prompt anyone to refund it. The
     // facility-closure variant needs no user error at all: an admin closes the
@@ -211,6 +224,11 @@ export const confirmBookingPayment = internalMutation({
     // including a normally-paid-then-cancelled booking, whose original payment must
     // NOT be re-flagged as needing a refund (it was already returned as credit) —
     // while letting a genuinely DIFFERENT session fall through to the backstop.
+    //
+    // PREMISE (load-bearing): `stripeSessionId` is only ever a SETTLED session.
+    // setBookingCheckoutSession must never write a staged top-up's id here — it
+    // goes on pendingEdit.topUpSessionId (H1, 2026-09-05b). d83e20f broke this for
+    // ~one day and reopened the exact hole above.
     if (b.paymentStatus === "paid" && b.stripeSessionId === args.stripeSessionId) {
       return { success: true, alreadyPaid: true };
     }

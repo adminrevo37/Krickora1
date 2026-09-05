@@ -3,9 +3,24 @@ import { convexClient } from "@convex-dev/better-auth/client/plugins";
 
 const convexSiteUrl = import.meta.env.VITE_CONVEX_SITE_URL;
 
+// L5 (SECURITY review 2026-09-05b): there is NO fallback deployment. This file
+// used to default to the retired Shipper-era `adventurous-chickadee-53.convex.site`
+// when the env var was missing, so a mis-built bundle would silently POST
+// credentials (sign-in, password reset) to a deployment we no longer run. A
+// missing VITE_CONVEX_SITE_URL is now a build/config error that fails loudly on
+// the first auth call instead of a quiet redirect of secrets.
+function requireConvexSiteUrl(): string {
+  if (!convexSiteUrl) {
+    throw new Error(
+      "VITE_CONVEX_SITE_URL is not set — refusing to send credentials anywhere. Set it in .env.local / Vercel env to the Convex site URL (https://<deployment>.convex.site)."
+    );
+  }
+  return convexSiteUrl;
+}
+
 if (!convexSiteUrl && typeof window !== "undefined") {
-  console.warn(
-    "VITE_CONVEX_SITE_URL is not set. Auth will not work. " +
+  console.error(
+    "VITE_CONVEX_SITE_URL is not set. Auth will not work — every auth call will throw. " +
     "Set it in .env.local to your Convex site URL (e.g. https://xxx.convex.site)"
   );
 }
@@ -189,7 +204,9 @@ const credentialFetch: typeof globalThis.fetch = async (input, init) => {
 };
 
 export const authClient = createAuthClient({
-  baseURL: convexSiteUrl || "https://adventurous-chickadee-53.convex.site",
+  // L5: no fallback deployment — a missing env var throws here at module load
+  // (white screen) rather than pointing sign-in at a retired deployment.
+  baseURL: requireConvexSiteUrl(),
   basePath: "/api/auth",
   plugins: [convexClient()],
   fetchOptions: {
@@ -291,7 +308,7 @@ export async function sendPasswordReset(email: string) {
     const redirectTo = typeof window !== "undefined"
       ? `${window.location.origin}/reset-password`
       : "/reset-password";
-    const baseURL = convexSiteUrl || "https://adventurous-chickadee-53.convex.site";
+    const baseURL = requireConvexSiteUrl();
     // Better Auth 1.5.x exposes the reset-request endpoint at /request-password-reset.
     // The legacy /forget-password alias is NOT registered (404) — using it silently
     // broke customer "forgot password". (Pre-existing bug found during SEC Phase 4.)
@@ -316,7 +333,7 @@ export async function sendPasswordReset(email: string) {
  */
 export async function resetPassword(token: string, newPassword: string) {
   try {
-    const baseURL = convexSiteUrl || "https://adventurous-chickadee-53.convex.site";
+    const baseURL = requireConvexSiteUrl();
     const response = await credentialFetch(`${baseURL}/api/auth/reset-password`, {
       method: "POST",
       body: JSON.stringify({ newPassword, token }),

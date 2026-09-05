@@ -567,6 +567,11 @@ export default defineSchema({
       newAccessCode: v.optional(v.string()),     // present → regenerate the door code on apply
       creditApplied: v.optional(v.number()),     // account credit to redeem on confirm (partial-cover top-up)
       actorUserId: v.optional(v.string()),       // who initiated (for the allocation audit log)
+      // H1 (SECURITY review 2026-09-05b): the Stripe Checkout session for THIS
+      // top-up. Lives on the edit, never on `bookings.stripeSessionId` — that field
+      // is the SETTLED session and the webhook's same-session idempotency guard
+      // (BATCH 15.1) is only sound while a top-up id is never written there.
+      topUpSessionId: v.optional(v.string()),
     })),
     modificationHistory: v.optional(
       v.array(

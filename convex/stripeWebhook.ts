@@ -14,6 +14,8 @@ import Stripe from "stripe";
  *
  * Events to subscribe:
  *   - checkout.session.completed
+ *   - checkout.session.async_payment_succeeded   (Prior-H1, 2026-09-05 — harmless
+ *   - checkout.session.async_payment_failed        if never enabled: card-only today)
  *   - checkout.session.expired
  *   - payment_intent.payment_failed
  */
@@ -46,92 +48,136 @@ export const stripeWebhook = httpAction(async (ctx, request) => {
     });
   }
 
+  // Prior-H1 (BACKEND review 2026-09-05): a Checkout session is only money once
+  // `payment_status === "paid"`. `checkout.session.completed` also fires for
+  // delayed-notification methods with payment_status "unpaid" (the funds arrive —
+  // or never arrive — days later via checkout.session.async_payment_succeeded /
+  // _failed), and for $0 sessions as "no_payment_required". Confirming a booking,
+  // recording a stripePayments row or bumping a top-up on anything but "paid"
+  // would hand out a door code for money that has not landed. Both session
+  // creators are card-only, so in practice only "paid" ever arrives; this is the
+  // server-side guarantee of that, not the mechanism.
+  const handlePaidCheckoutSession = async (session: Stripe.Checkout.Session) => {
+    const bookingId = session.metadata?.bookingId;
+    // A top-up (admin extended an existing, already-confirmed booking) must NOT
+    // run confirmBookingPayment — that path no-ops on an already-paid booking
+    // (so the extra payment would vanish) and would try to re-confirm/re-sync.
+    const isTopUp = session.metadata?.topup === "true";
+    if (bookingId) {
+      // Best-effort: pull the Stripe-hosted receipt URL off the charge so the
+      // customer Payments screen can link to it. Never block confirmation on it.
+      let receiptUrl: string | undefined;
+      try {
+        if (session.payment_intent) {
+          const pi = await stripe.paymentIntents.retrieve(
+            session.payment_intent as string,
+            { expand: ["latest_charge"] }
+          );
+          const charge = pi.latest_charge as Stripe.Charge | null;
+          receiptUrl = charge?.receipt_url ?? undefined;
+        }
+      } catch (e: any) {
+        console.warn("[stripe-webhook] could not fetch receipt_url:", e?.message);
+      }
+      if (isTopUp) {
+        await ctx.runMutation(internal.webhooks.recordTopUpPayment, {
+          bookingId,
+          stripeSessionId: session.id,
+          amountPaid: session.amount_total ?? 0,
+          currency: session.currency ?? "aud",
+          receiptUrl,
+        });
+      } else {
+        await ctx.runMutation(internal.webhooks.confirmBookingPayment, {
+          bookingId,
+          stripeSessionId: session.id,
+          amountPaid: session.amount_total ?? 0,
+          currency: session.currency ?? "aud",
+          receiptUrl,
+        });
+      }
+    } else {
+      console.warn("[stripe-webhook] checkout.session.completed without bookingId metadata");
+    }
+
+    // SPEC_PAYMENT_LINK_TRACKING_2026-07 — if this session was spawned by a
+    // Stripe Payment Link (admin-sent top-up / manual payment request), flip
+    // the tracked link to 'paid' and DEACTIVATE it on Stripe. Payment Links
+    // are reusable URLs that never expire — without deactivation a second
+    // open would spawn a NEW session and charge the customer again (the
+    // session-level dedupe in recordTopUpPayment can't catch a different
+    // session id). Best-effort: never fail the webhook over tracking.
+    const paymentLinkId =
+      typeof (session as any).payment_link === "string"
+        ? ((session as any).payment_link as string)
+        : ((session as any).payment_link?.id as string | undefined);
+    if (paymentLinkId) {
+      let receiptUrlForLink: string | undefined;
+      try {
+        if (session.payment_intent) {
+          const pi = await stripe.paymentIntents.retrieve(
+            session.payment_intent as string,
+            { expand: ["latest_charge"] }
+          );
+          receiptUrlForLink =
+            (pi.latest_charge as Stripe.Charge | null)?.receipt_url ?? undefined;
+        }
+      } catch {
+        /* best-effort */
+      }
+      try {
+        await ctx.runMutation(internal.paymentLinks.markPaidInternal, {
+          stripePaymentLinkId: paymentLinkId,
+          stripeSessionId: session.id,
+          receiptUrl: receiptUrlForLink,
+        });
+      } catch (e: any) {
+        console.warn("[stripe-webhook] paymentLinks.markPaid failed:", e?.message);
+      }
+      try {
+        await stripe.paymentLinks.update(paymentLinkId, { active: false });
+      } catch (e: any) {
+        console.warn("[stripe-webhook] payment link deactivate failed:", e?.message);
+      }
+    }
+  };
+
   try {
     switch (event.type) {
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
-        const bookingId = session.metadata?.bookingId;
-        // A top-up (admin extended an existing, already-confirmed booking) must NOT
-        // run confirmBookingPayment — that path no-ops on an already-paid booking
-        // (so the extra payment would vanish) and would try to re-confirm/re-sync.
-        const isTopUp = session.metadata?.topup === "true";
-        if (bookingId) {
-          // Best-effort: pull the Stripe-hosted receipt URL off the charge so the
-          // customer Payments screen can link to it. Never block confirmation on it.
-          let receiptUrl: string | undefined;
-          try {
-            if (session.payment_intent) {
-              const pi = await stripe.paymentIntents.retrieve(
-                session.payment_intent as string,
-                { expand: ["latest_charge"] }
-              );
-              const charge = pi.latest_charge as Stripe.Charge | null;
-              receiptUrl = charge?.receipt_url ?? undefined;
-            }
-          } catch (e: any) {
-            console.warn("[stripe-webhook] could not fetch receipt_url:", e?.message);
-          }
-          if (isTopUp) {
-            await ctx.runMutation(internal.webhooks.recordTopUpPayment, {
-              bookingId,
-              stripeSessionId: session.id,
-              amountPaid: session.amount_total ?? 0,
-              currency: session.currency ?? "aud",
-              receiptUrl,
-            });
-          } else {
-            await ctx.runMutation(internal.webhooks.confirmBookingPayment, {
-              bookingId,
-              stripeSessionId: session.id,
-              amountPaid: session.amount_total ?? 0,
-              currency: session.currency ?? "aud",
-              receiptUrl,
-            });
-          }
-        } else {
-          console.warn("[stripe-webhook] checkout.session.completed without bookingId metadata");
+        if (session.payment_status !== "paid") {
+          // "unpaid" = delayed method still settling (wait for
+          // async_payment_succeeded); "no_payment_required" = a $0 session, which
+          // this app never creates (createCheckoutSession refuses < A$0.50) and
+          // must not confirm anything.
+          console.warn(
+            `[stripe-webhook] checkout.session.completed ${session.id} with payment_status=${session.payment_status} — not confirming`
+          );
+          break;
         }
+        await handlePaidCheckoutSession(session);
+        break;
+      }
 
-        // SPEC_PAYMENT_LINK_TRACKING_2026-07 — if this session was spawned by a
-        // Stripe Payment Link (admin-sent top-up / manual payment request), flip
-        // the tracked link to 'paid' and DEACTIVATE it on Stripe. Payment Links
-        // are reusable URLs that never expire — without deactivation a second
-        // open would spawn a NEW session and charge the customer again (the
-        // session-level dedupe in recordTopUpPayment can't catch a different
-        // session id). Best-effort: never fail the webhook over tracking.
-        const paymentLinkId =
-          typeof (session as any).payment_link === "string"
-            ? ((session as any).payment_link as string)
-            : ((session as any).payment_link?.id as string | undefined);
-        if (paymentLinkId) {
-          let receiptUrlForLink: string | undefined;
-          try {
-            if (session.payment_intent) {
-              const pi = await stripe.paymentIntents.retrieve(
-                session.payment_intent as string,
-                { expand: ["latest_charge"] }
-              );
-              receiptUrlForLink =
-                (pi.latest_charge as Stripe.Charge | null)?.receipt_url ?? undefined;
-            }
-          } catch {
-            /* best-effort */
-          }
-          try {
-            await ctx.runMutation(internal.paymentLinks.markPaidInternal, {
-              stripePaymentLinkId: paymentLinkId,
-              stripeSessionId: session.id,
-              receiptUrl: receiptUrlForLink,
-            });
-          } catch (e: any) {
-            console.warn("[stripe-webhook] paymentLinks.markPaid failed:", e?.message);
-          }
-          try {
-            await stripe.paymentLinks.update(paymentLinkId, { active: false });
-          } catch (e: any) {
-            console.warn("[stripe-webhook] payment link deactivate failed:", e?.message);
-          }
-        }
+      case "checkout.session.async_payment_succeeded": {
+        // Delayed-notification method finally settled. Same idempotent path as a
+        // card payment (confirmBookingPayment / recordTopUpPayment no-op on a
+        // session already recorded).
+        const session = event.data.object as Stripe.Checkout.Session;
+        if (session.payment_status !== "paid") break;
+        await handlePaidCheckoutSession(session);
+        break;
+      }
+
+      case "checkout.session.async_payment_failed": {
+        // Delayed-notification payment bounced. The booking never confirmed (the
+        // completed event was ignored above), so the normal hold expiry / release
+        // sweep frees the slot; nothing to unwind here beyond logging it.
+        const session = event.data.object as Stripe.Checkout.Session;
+        console.warn(
+          `[stripe-webhook] async payment FAILED for session ${session.id} (booking ${session.metadata?.bookingId ?? "?"})`
+        );
         break;
       }
 

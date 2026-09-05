@@ -373,6 +373,12 @@ export const sendTestBroadcast = action({
     if (!identity) throw new ConvexError("Please sign in.");
     const email = (identity.email ?? "").toLowerCase().trim();
     if (!email) throw new ConvexError("Your account has no email on file.");
+    // L2 (SECURITY review 2026-09-05b): ADMIN ONLY. The only caller is the admin
+    // broadcast composer, but the server never checked — any signed-in user
+    // could send themselves first-party-branded push + email with arbitrary
+    // title/body/link (Resend volume + a phishing template in our name).
+    const isAdmin: boolean = await ctx.runQuery(internal.queries.isAdminEmail, { email });
+    if (!isAdmin) throw new ConvexError("Not authorized — admin only.");
     const title = args.title.trim() || "Test broadcast";
     const body = args.body.trim() || "(no message)";
 

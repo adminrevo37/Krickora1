@@ -84,14 +84,22 @@ export const unreadCount = query({
 });
 
 export const markRead = mutation({
+  // L3 (SECURITY review 2026-09-05b): was a bare ctx.db.get on the raw string,
+  // which resolves an id from ANY table; the owner check (`row.email === caller`)
+  // happened to be satisfied by the caller's own customers row too, and only the
+  // schema (no `readAt` on customers) stopped the patch. The id is now pinned to
+  // the notifications table via normalizeId. The arg stays v.string() (not
+  // v.id) so the web client's call signature is unchanged — the check is
+  // server-side either way.
   args: { id: v.string() },
   handler: async (ctx, args) => {
     const caller = await getCallerContext(ctx);
     const email = (caller.email ?? "").toLowerCase().trim();
     if (!email) throw new ConvexError("Please sign in.");
-    let row: any = null;
-    try { row = await ctx.db.get(args.id as any); } catch { row = null; }
-    if (!row || row.email !== email) return { ok: false };
+    const id = ctx.db.normalizeId("notifications", args.id);
+    if (!id) return { ok: false };
+    const row: any = await ctx.db.get(id);
+    if (!row || String(row.email ?? "").toLowerCase() !== email) return { ok: false };
     if (!row.readAt) await ctx.db.patch(row._id, { readAt: Date.now() });
     return { ok: true };
   },

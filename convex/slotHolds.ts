@@ -1,5 +1,6 @@
 import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import { scheduleWaitlistAdvance, CLEAR_OFFERED_SLOT } from "./waitlist";
 import { releaseDiscountReservation } from "./lib/discounts";
 
@@ -27,6 +28,18 @@ async function releaseAbandonedBooking(ctx: any, booking: any): Promise<boolean>
   // reach here for a completed edit. (Previously also required paymentStatus !== "paid",
   // which wrongly left an already-paid original wedged in pending_edit_payment.)
   if (booking.status === "pending_edit_payment") {
+    // H1 (SECURITY review 2026-09-05b): the abandoned top-up's Checkout session
+    // may still be open on Stripe. Close it as the edit is discarded — the callers
+    // that reach here from the Stripe actions have usually expired it already
+    // (idempotent), but the hold-expiry cron has not. A top-up paid after this
+    // revert is not lost (the webhook records it as a duplicate payment → account
+    // credit), but the customer should be told the session is gone, not charged.
+    const topUpSessionId: string | undefined = booking.pendingEdit?.topUpSessionId;
+    if (topUpSessionId) {
+      await ctx.scheduler.runAfter(0, internal.stripe.expireStripeSession, {
+        sessionId: topUpSessionId,
+      });
+    }
     await ctx.db.patch(booking._id, {
       status: "confirmed",
       pendingEdit: undefined,
@@ -155,11 +168,14 @@ export const releaseCheckoutBooking = internalMutation({
     // booking with no recorded session still releases (no stuck Awaiting-payment slot).
     // The OTHER caller (stripe.ts expireUnpaidCheckout) omits stripeSessionId — it
     // does its own superseded + Stripe-paid checks first — so it is unaffected.
-    if (
-      args.stripeSessionId &&
-      (booking as any).stripeSessionId &&
-      (booking as any).stripeSessionId !== args.stripeSessionId
-    ) {
+    // H1 (2026-09-05b): for a staged modify the session that can expire is the
+    // TOP-UP (pendingEdit.topUpSessionId); `stripeSessionId` is the settled
+    // original and would always mis-compare as "superseded", leaving the edit
+    // staged until the hold cron. Compare against whichever is current.
+    const b: any = booking;
+    const currentSessionId: string | undefined =
+      b.status === "pending_edit_payment" ? b.pendingEdit?.topUpSessionId : b.stripeSessionId;
+    if (args.stripeSessionId && currentSessionId && currentSessionId !== args.stripeSessionId) {
       return { released: false, reason: "superseded" };
     }
     const released = await releaseAbandonedBooking(ctx, booking);
