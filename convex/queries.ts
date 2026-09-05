@@ -882,6 +882,9 @@ export const listWaitlistAdmin = query({
         hour: e.hour,
         status: e.status ?? "waiting",
         offerExpiresAt: e.offerExpiresAt ?? null,
+        // 2026-09-06 (native admin phase 4, additive): the length the member asked for (C3), so
+        // the phone's waitlist rows can show it; the web tab ignores the field.
+        durationMinutes: e.durationMinutes ?? null,
         // OFFERED-SLOT SNAPSHOT (2026-09-05) — which lane/start/length the live
         // offer is for, straight off the entry. The admin UI previously had to
         // join `entries` to `holds` by (user, hour) to work this out, which is
