@@ -4,7 +4,8 @@ import { useQuery, useMutation, useConvex } from 'convex/react'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { useAuth } from '../hooks/useAuth'
-import { LANES, formatTime } from '../lib/booking-data'
+import { formatTime } from '../lib/booking-data'
+import { resolveLaneAt } from '../lib/lanes'
 import { formatAccessCode } from '../lib/access-code'
 import { getErrorMessage } from '../lib/errors'
 import { formatDateLong } from '../lib/dateFormat'
@@ -50,6 +51,12 @@ function AddMatePage() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [inviteLink, setInviteLink] = useState<string | null>(null)
+  // Inline "are you sure" state for Remove, keyed by mate customerId. Replaces
+  // window.confirm() — see CoachStatementTable's confirmKey (c393ebd): Chrome silently
+  // suppresses repeated native dialogs on a page, so confirm() then returns false with
+  // no prompt at all and the button looks dead. An inline two-click confirm has
+  // neither failure mode.
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null)
 
   const flash = (type: 'success' | 'error', text: string) => {
     setMessage({ type, text })
@@ -77,8 +84,15 @@ function AddMatePage() {
     )
   }
 
-  const lane = booking ? LANES.find((l) => l.id === booking.laneId) : null
-  const laneLabel = lane?.name ?? booking?.laneId ?? ''
+  // 2026-09-05 — prefer the booking-time snapshot (what the email/card said), as every
+  // other customer-facing surface does since 338b660; the static LANES lookup this page
+  // used ignored it, so a reconfigured lane read wrongly. Resolver fallback for legacy
+  // rows without a snapshot, raw id last.
+  const laneLabel = booking
+    ? (booking.laneNameSnapshot
+        ?? (() => { try { return resolveLaneAt(booking.laneId, booking.date, booking.startHour).name } catch { return booking.laneId } })()
+        ?? '')
+    : ''
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -111,7 +125,6 @@ function AddMatePage() {
   }
 
   const handleRemove = async (mateCustomerId: string, name: string) => {
-    if (!confirm(`Remove ${name} from this booking?`)) return
     setBusy(true)
     try {
       await removeMate({ bookingId: bookingId as Id<'bookings'>, mateCustomerId: mateCustomerId as Id<'customers'> })
@@ -120,6 +133,7 @@ function AddMatePage() {
       flash('error', getErrorMessage(err) ?? 'Failed to remove mate')
     } finally {
       setBusy(false)
+      setConfirmRemoveId(null)
     }
   }
 
@@ -196,13 +210,33 @@ function AddMatePage() {
             {mates.map((m: any) => (
               <div key={m.customerId} className="flex items-center justify-between">
                 <span className="text-sm text-gray-800">{m.displayName}</span>
-                <button
-                  onClick={() => handleRemove(m.customerId, m.displayName)}
-                  disabled={busy}
-                  className="text-xs text-red-500 hover:text-red-700 disabled:opacity-50"
-                >
-                  Remove
-                </button>
+                {confirmRemoveId === m.customerId ? (
+                  <span className="inline-flex gap-2 items-center whitespace-nowrap">
+                    <span className="text-xs text-red-700">Remove from this booking?</span>
+                    <button
+                      onClick={() => handleRemove(m.customerId, m.displayName)}
+                      disabled={busy}
+                      className="text-xs text-red-600 font-semibold hover:underline disabled:opacity-50"
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      onClick={() => setConfirmRemoveId(null)}
+                      disabled={busy}
+                      className="text-xs text-gray-500 hover:underline disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => setConfirmRemoveId(m.customerId)}
+                    disabled={busy}
+                    className="text-xs text-red-500 hover:text-red-700 disabled:opacity-50"
+                  >
+                    Remove
+                  </button>
+                )}
               </div>
             ))}
           </div>

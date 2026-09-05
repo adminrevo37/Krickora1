@@ -64,6 +64,12 @@ export default function MyAthletesCard() {
   const [editFirst, setEditFirst] = useState('')
   const [editLast, setEditLast] = useState('')
   const [busyId, setBusyId] = useState<string | null>(null)
+  // Inline "are you sure" state for Remove, keyed by athlete id. Replaces
+  // window.confirm() — see CoachStatementTable's confirmKey (c393ebd): Chrome silently
+  // suppresses repeated native dialogs on a page, so confirm() then returns false with
+  // no prompt at all and the button looks dead. An inline two-click confirm has
+  // neither failure mode.
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null)
   // Staged coach selections per athlete (G4). Absent → use the server value.
   const [coachDraft, setCoachDraft] = useState<Record<string, string[]>>({})
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
@@ -126,7 +132,6 @@ export default function MyAthletesCard() {
   }
 
   const handleRemove = async (athleteId: string, name: string) => {
-    if (!confirm(`Remove ${name}? Past bookings are kept; this only stops future allocations.`)) return
     setBusyId(athleteId)
     try {
       await removeAthlete({ athleteId: athleteId as Id<'athletes'> })
@@ -135,6 +140,7 @@ export default function MyAthletesCard() {
       flash('error', getErrorMessage(err) ?? 'Failed to remove')
     } finally {
       setBusyId(null)
+      setConfirmRemoveId(null)
     }
   }
 
@@ -221,13 +227,33 @@ export default function MyAthletesCard() {
                       Rename
                     </button>
                     {!a.isSelf && (
-                      <button
-                        onClick={() => handleRemove(a._id, a.name)}
-                        disabled={busyId === a._id}
-                        className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 disabled:opacity-50"
-                      >
-                        Remove
-                      </button>
+                      confirmRemoveId === a._id ? (
+                        <span className="inline-flex gap-2 items-center whitespace-nowrap">
+                          <span className="text-xs text-red-700">Remove? Past bookings are kept; only future allocations stop.</span>
+                          <button
+                            onClick={() => handleRemove(a._id, a.name)}
+                            disabled={busyId === a._id}
+                            className="text-xs text-red-600 font-semibold hover:underline disabled:opacity-50"
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            onClick={() => setConfirmRemoveId(null)}
+                            disabled={busyId === a._id}
+                            className="text-xs text-gray-500 hover:underline disabled:opacity-50"
+                          >
+                            Cancel
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmRemoveId(a._id)}
+                          disabled={busyId === a._id}
+                          className="text-xs text-red-500 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 disabled:opacity-50"
+                        >
+                          Remove
+                        </button>
+                      )
                     )}
                   </div>
                 </>

@@ -201,6 +201,17 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
       ) / 100
     : 0
 
+  // F6 (2026-09-05, ported from the app's ModifySheet 2884f86) — what was actually
+  // SETTLED on this booking. `priceInCents` is cash-when-paid: a 100%-code booking is
+  // 0, a credit-covered one is 0, a card booking is the post-discount charge. The
+  // Original/New rows stay on the FULL RATE because that is the basis the server prices
+  // the difference on (mutations.ts modifyBooking: `priceDiffCents = newPriceInCents -
+  // oldGrossCents`, whose comment says it deliberately avoids inheriting the original
+  // discount/credit into the difference). So a $0 booking moved to a $35 slot really
+  // costs nothing, and extended to $70 really costs $35. What the box was missing is
+  // the line that makes that legible: what you paid.
+  const paidCents = settledCentsForDisplay(booking, Math.round(originalPrice * 100))
+
   const hasChanges = selectedDate !== booking.date ||
     selectedStartHour !== booking.startHour ||
     effectiveDuration !== booking.duration ||
@@ -553,6 +564,9 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
             {hasChanges && (
               <div className="bg-violet-50 dark:bg-violet-900/10 rounded-xl p-3 border border-violet-200 dark:border-violet-800/50 space-y-1 text-sm">
                 <div className="flex justify-between"><span className="text-gray-500">Original</span><span className="font-medium">${originalPrice.toFixed(2)}</span></div>
+                {paidCents != null && (
+                  <div className="flex justify-between"><span className="text-blue-500">You paid</span><span className="font-medium text-blue-600">${(paidCents / 100).toFixed(2)}</span></div>
+                )}
                 <div className="flex justify-between"><span className="text-gray-500">New</span><span className="font-medium">${newPrice.toFixed(2)}</span></div>
                 {isCoach ? (
                   priceDiff !== 0 && (
@@ -686,4 +700,24 @@ export default function ModifyBookingModal({ booking, creditBalance, onClose, on
     )}
     </>
   )
+}
+
+/**
+ * F6 — the "You paid" figure for the money box, in CENTS, or null when the line adds
+ * nothing. Shown only for a customer booking that has SETTLED (`priceInCents` is
+ * cash-when-paid; a pending checkout still holds the gross it intends to charge) and only
+ * when what was paid differs from the full rate — i.e. a discount or account credit was
+ * applied, which is exactly when "Original $35.00" on a $0 booking reads as wrong.
+ * Same function, same conditions as the app's ModifySheet.settledCentsForDisplay.
+ */
+export function settledCentsForDisplay(
+  booking: { isCoachBooking?: boolean; status?: string; priceInCents?: number | null },
+  originalCents: number
+): number | null {
+  if (booking.isCoachBooking) return null
+  if (booking.status === 'pending_payment' || booking.status === 'pending_edit_payment') return null
+  const paid = booking.priceInCents
+  if (typeof paid !== 'number' || !Number.isFinite(paid)) return null
+  if (Math.round(paid) === Math.round(originalCents)) return null
+  return Math.max(0, Math.round(paid))
 }

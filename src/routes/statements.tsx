@@ -5,10 +5,26 @@ import { api } from '../../convex/_generated/api'
 import { buildCoachLedger, todayAndMonthStart } from '../lib/statementLedger'
 import CoachBalancePanel from '../components/CoachBalancePanel'
 import { formatDateLong } from '../lib/dateFormat'
+import { resolveLaneAt } from '../lib/lanes'
 
 export const Route = createFileRoute('/statements')({
   component: StatementsPage,
 })
+
+// Lane display name for a ledger booking row (2026-09-05). The ledger carries the raw
+// `laneId` ("bm1"), which this page used to print verbatim. Same rule as every other
+// customer-facing surface since the 2026-09-01 lane-name fix (338b660, payments.tsx):
+// prefer the booking's snapshot (what the lane was actually called when booked), fall
+// back to resolving against the layout for legacy rows, and only then the raw id.
+function laneLabel(b: { laneId?: string; laneNameSnapshot?: string | null; date?: string; startHour?: number } | null | undefined): string {
+  if (!b?.laneId) return '—'
+  if (b.laneNameSnapshot) return b.laneNameSnapshot
+  try {
+    return resolveLaneAt(b.laneId, b.date ?? '', b.startHour ?? 0).name
+  } catch {
+    return b.laneId
+  }
+}
 
 function StatementsPage() {
   const { user, isCoach, isAdmin, isLoading } = useAuth()
@@ -111,7 +127,7 @@ function StatementsPage() {
                     : isFuture ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-xs font-medium">Upcoming</span>
                     : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium">Booking</span>
                   const desc =
-                    r.kind === 'booking' ? `${r.lane} • ${r.label}`
+                    r.kind === 'booking' ? `${laneLabel(r.raw)} • ${r.label}`
                     : r.kind === 'payment' ? `${r.label} (${r.method})`
                     : r.raw?.note ? `${r.label} — ${r.raw.note}` : r.label
                   return (

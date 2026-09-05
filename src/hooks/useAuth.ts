@@ -111,7 +111,14 @@ export function useAuth() {
         _sessionRetry.attempt++
         void refetchSession()
       }, delay)
-    } else if (!sessionError) {
+    } else if (!sessionError && !sessionPending) {
+      // `&& !sessionPending` (2026-09-05, found porting this hook to the native app —
+      // krickora-app d6ac1dd). better-auth's `onRequest` (dist/client/query.mjs) sets
+      // `error: null` + `isPending: true` for the duration of every refetch, so a bare
+      // `else if (!sessionError)` ran on the very retry it scheduled and reset `attempt`
+      // to 0 — measured in the state-machine probe: the web retried every 2s for the
+      // whole outage and never reached 5s/15s/30s. Resetting only on a clean RESOLVE is
+      // what the comment above already promises.
       _sessionRetry.attempt = 0
       if (_sessionRetry.timer) {
         clearTimeout(_sessionRetry.timer)
@@ -433,7 +440,13 @@ export function useAuth() {
     // as betterAuthUser lands (this memo recomputes on that dep change).
     if (!betterAuthUser) {
       const cu = cachedUserRef.current
-      if (wasAuthenticatedRef.current && !isImpersonating && cu) {
+      // Keyed on `isAuthenticated` (the decision this render just made), not on
+      // `wasAuthenticatedRef` (2026-09-05, matched to the app's port d6ac1dd): the ref
+      // is only dropped in the SYNC-1 transition effect AFTER the logout render, and
+      // refs are not memo deps, so keying on it left the last user memoised on the
+      // render that decided the logout — `isAuthenticated:false` with `user` still
+      // populated — measured in the state-machine probe.
+      if (isAuthenticated && !isImpersonating && cu) {
         return {
           id: cu.id,
           name: cu.name,
@@ -476,7 +489,7 @@ export function useAuth() {
       }
     }
     return base
-  }, [betterAuthUser, customerRecord, customerRole, isImpersonating, impersonatedUser])
+  }, [betterAuthUser, customerRecord, customerRole, isImpersonating, impersonatedUser, isAuthenticated])
 
   // SPEC_AUTH_LOADING_SMOOTHING §3e — keep the optimistic user cache fresh from the
   // AUTHORITATIVE identity + profile so the next cold launch hydrates instantly with
